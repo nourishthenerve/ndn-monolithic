@@ -1,0 +1,34 @@
+# 1. Decision log
+
+Decisions D-01…D-05 were answered directly. D-06 onward are the Stage A recommended defaults, adopted so work can proceed — **each is individually overridable and none is load-bearing on the others unless noted.**
+
+| ID | Decision | Consequence |
+|---|---|---|
+| **D-01** | Build in a **new AWS member account** inside an Organization under the existing payer | Existing card, one consolidated invoice, access by role-switch, one new root email with MFA then unused. Gains **its own always-free allowances** (islamicmaps currently consumes 803129122420's). No signup credits (org members forfeit them). **SES production access must be requested in the new account** → long-lead, Phase 0 |
+| **D-02** | Legacy `nourishthenerve-api` Lambda is **decommissioned**; build is greenfield | No port, no reuse. Live brochure site may call it, so removal happens at G1 cutover. Interim non-destructive containment still lands in Phase 0 |
+| **D-03** | `clients/` (361 MB) is **disposable test/demo material** | Excluded from the new platform. **No code we write will delete it** (§6.8 — erasure stays a manual human action). Versioning still enabled as cheap insurance; you remove it by hand if you want it gone |
+| **D-04** | **English at launch**, i18n framework built for N languages, **RTL-safe primitives from day one** | No hard-coded copy anywhere, ever. Translation procurement is a long-lead item triggered when you name languages; it does not block launch |
+| **D-05** | **Chatbot deferred past launch** | FR-WEB-03 and M1.6 leave launch scope. LLM spend line = £0. Medical-device qualification leaves the critical path but **stays open** in the risk register |
+| D-06 | Serverless-first: Lambda **arm64** + API Gateway **HTTP API** | arm64 is 20% cheaper/GB-s; HTTP API ~⅓ the price of REST |
+| D-07 | **DynamoDB on-demand**, single-table design | 25 GB always-free; every §7 query proven servable in ADR-004 or we switch and cost an instance honestly |
+| D-08 | Static web on **S3 + CloudFront PriceClass_100**, API on same domain | Same-origin cookies/CORS; 1,000 free invalidations/month covers deploys |
+| D-09 | **Cognito Essentials** — TOTP for clinicians, email-OTP for patients | £0 at our scale (10,000 free MAU verified); email-OTP requires Essentials; avoids self-rolled auth on health data |
+| D-10 | **Email-primary notifications** via SES; SMS only for the 1-hour appointment reminder | Arithmetic, not preference — see Risk R-01 |
+| D-11 | SMS: app-level hard block + provider spend limit backstop + **+44 allow-list** + per-principal rate limit | C-02 demands a block, not an alert |
+| D-12 | Video: **P2P first, Cloudflare TURN fallback** (1 TB/mo free), concurrency-capped | Verified worst case ≈80–90 GB/mo. Self-hosted coturn ≈£6/mo — rejected on cost |
+| D-13 | **Stripe Checkout**, GBP, webhook-driven, idempotent | No monthly fee; per-transaction fees netted from revenue, outside C-01 |
+| D-14 | **SSM Parameter Store SecureString** for secrets, not Secrets Manager | Secrets Manager at ~6 secrets ≈ £2/mo = 15% of target envelope for no benefit we need |
+| D-15 | **AWS CDK (TypeScript)** for all infrastructure | One language across web, API, IaC, mobile (NFR-08) |
+| D-16 | **TypeScript end-to-end**, pnpm workspaces monorepo | Single toolchain; shared types are the contract |
+| D-17 | GitHub Actions with **OIDC federation** to a deploy role; no long-lived AWS keys | NFR-03; constrained to 2,000 free CI minutes/month |
+| D-18 | Observability: UptimeRobot free + ~8 CloudWatch alarms + **14-day log retention**, no dashboards/WAF/Synthetics | Log ingestion at $0.5985/GB is the sleeper cost |
+| D-19 | Pre-production confidence: local emulation + **ephemeral per-PR environments** + contract tests + **feature flags** + canary alias + post-deploy smoke with auto-rollback | Standing cost £0 — the answer to §10 |
+| D-20 | **SLO 99.9%/month**, measured by 5-minute external checks + post-deploy smoke | 43 min/month budget. Stated honestly: 5-min polling detects outages, it cannot *prove* 99.9% |
+| D-21 | **RPO ≤1h** (DynamoDB PITR), **RTO ≤4 working hours**, restore drill actually executed at M5.4 | PITR on a sub-1 GB clinical dataset costs pennies |
+| D-22 | Backups: PITR **plus** periodic export to a separate object-locked prefix | §6.6 wants protection from account compromise, not just bad code |
+| D-23 | Feature flags: **homegrown, config-driven** | Avoids a recurring SaaS line item |
+| D-24 | Add the **missing DMARC record**; keep Zoho Mail EU for inbound | Deliverability is a launch blocker under an email-primary strategy |
+| D-25 | Legacy brochure site stays live untouched until **G1 DNS cutover** | We hold DNS; we never need the other account |
+| D-26 | Mobile: **Expo / React Native**, not before G5 | C-10. Store fees ($99/yr + $25) reported, outside C-01 |
+| D-27 | **§0.6 elaboration policy adopted as written** | Full detail Phases 0–1; stubs beyond; elaborated at each gate |
+| D-28 | **Root access keys deleted by you** once an admin identity exists | I flag it; I will not touch credentials |

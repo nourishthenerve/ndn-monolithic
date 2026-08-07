@@ -1,0 +1,5 @@
+# 8. Gate checklists
+
+At every gate I run and report: full test suite (with skips explained) · requirement traceability (complete/partial/untouched) · regression diff against the previous gate · **authorisation-boundary re-audit from scratch** · destructive-code audit of the diff · **actual spend vs model across the whole C-01 envelope** · security + dependency check · a11y and i18n check on new surfaces · production health (uptime, error rate, rollbacks) · go/no-go · **elaboration of the next phase's stubs** · re-verification of `UNVERIFIED` and >90-day-old prices.
+
+Gate-specific additions: **G0** guards block a real destructive PR; alarms fire in test · **G1** apex serving new site, legacy retired, Core Web Vitals pass · **G2** negative test for every cross-tenant path · **G3** no private field reachable by a patient in any code path · **G4** real cross-network call; measured relay cost vs model · **G5** restore drill evidence; load test at 10×.
