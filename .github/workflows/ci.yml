@@ -1,0 +1,208 @@
+name: CI
+
+# C-06: there is no staging environment — this workflow is the only gate
+# between a commit and production. Every job here is a hard block; none
+# may carry continue-on-error (see docs/plan/00-conventions.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast, always-on path classification so docs-only PRs skip the full
+  # install/lint/typecheck/test toolchain (R-13: protects the 2,000
+  # free-minutes/month budget) while still getting a doc-appropriate gate.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: filter
+        uses: dorny/paths-filter@v4.0.3
+        with:
+          # some-with-excludes: a file counts if it matches at least one
+          # positive pattern and none of the negated ones. The default
+          # ('some') would make `code` true on every diff, since the bare
+          # '**' alone already satisfies "at least one pattern matches" —
+          # the negations would be silently inert.
+          predicate-quantifier: 'some-with-excludes'
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+            docs:
+              - 'docs/**'
+              - '**/*.md'
+
+  quality:
+    name: Lint, typecheck, test, coverage, audit
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.0.10
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm run typecheck
+      - name: Unit tests
+        run: pnpm run test
+      - name: Integration tests
+        run: pnpm run test:integration
+      - name: Coverage thresholds
+        run: pnpm run test:coverage
+      - name: Dependency audit
+        run: pnpm run audit
+
+  docs-lint:
+    name: Markdown lint + link check
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v24.2.0
+        with:
+          globs: 'docs/**/*.md'
+      - name: Link check (internal cross-references only)
+        uses: lycheeverse/lychee-action@v2.9.0
+        with:
+          # --offline: this repo's docs link to environments that don't
+          # exist until later gates (e.g. TASK 0.4.1's staging hostname)
+          # and to account-specific AWS console URLs — checking those over
+          # the network would make the gate flaky by design, not by bug.
+          # Offline mode still catches the real failure mode a docs "link
+          # check" exists for here: a typo'd relative path between the
+          # manifest docs (§0.5 files cross-referencing each other).
+          args: --offline --no-progress 'docs/**/*.md'
+          fail: true
+
+  # Not gated on the code/docs path filter: a secret can land in any file.
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          set -euo pipefail
+          version=8.30.1
+          curl -sSLO "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz"
+          curl -sSLO "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_checksums.txt"
+          sha256sum --ignore-missing -c "gitleaks_${version}_checksums.txt"
+          tar -xzf "gitleaks_${version}_linux_x64.tar.gz" gitleaks
+      - name: Scan full git history for secrets
+        run: ./gitleaks detect --source . --redact -v
+
+  # Closes the loop on TASK 0.1.1's own deferred test ("assume ndn-deploy
+  # from a CI dry-run"; see docs/runbooks/aws-account-baseline.md). The
+  # role ARN is not a secret (account 357601815388 is already documented
+  # in committed runbooks) so it is inlined rather than gated behind repo
+  # configuration nobody has set up yet.
+  #
+  # Deliberately NOT included in the required-checks gate below on its
+  # first landing: this is the first time this trust policy is exercised
+  # from an actual Actions run rather than a manual `simulate-principal-
+  # policy` call, so it is left informational until one green run confirms
+  # the OIDC trust condition behaves as documented. Promote it into the
+  # ci-summary gate below once proven.
+  oidc-dry-run:
+    name: OIDC deploy-role dry run (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: arn:aws:iam::357601815388:role/ndn-deploy
+          aws-region: eu-west-2
+      - name: Prove least-privilege without mutating anything
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
+          result=$(aws iam simulate-principal-policy \
+            --policy-source-arn arn:aws:iam::357601815388:role/ndn-deploy \
+            --action-names cloudformation:DescribeStacks iam:CreateUser \
+            --query 'EvaluationResults[].[EvalActionName,EvalDecision]' \
+            --output text)
+          echo "$result"
+          echo "$result" | grep -qE '^cloudformation:DescribeStacks[[:space:]]+allowed$'
+          echo "$result" | grep -qE '^iam:CreateUser[[:space:]]+implicitDeny$'
+
+  # Single required status check: the underlying jobs are conditionally
+  # skipped per path filter, which GitHub treats as passing for branch
+  # protection — that's correct for *them*, but branch protection needs
+  # one check name that's always present to point at.
+  ci-summary:
+    name: CI summary
+    needs: [changes, quality, docs-lint, secret-scan, oidc-dry-run]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+    steps:
+      - name: Print CI minutes used
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## CI minutes used this run (ubuntu runners bill 1:1)"
+            echo
+            echo "| Job | Duration |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          total=0
+          while IFS=$'\t' read -r name started completed; do
+            s=$(date -d "$started" +%s)
+            e=$(date -d "$completed" +%s)
+            d=$(( e - s ))
+            total=$(( total + d ))
+            printf '| %s | %dm%02ds |\n' "$name" "$(( d / 60 ))" "$(( d % 60 ))" >> "$GITHUB_STEP_SUMMARY"
+          done < <(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
+            --jq '.jobs[] | select(.completed_at != null) | [.name, .started_at, .completed_at] | @tsv')
+          printf '| **Total** | **%dm%02ds** |\n' "$(( total / 60 ))" "$(( total % 60 ))" >> "$GITHUB_STEP_SUMMARY"
+      - name: Gate on required jobs
+        run: |
+          set -euo pipefail
+          echo "changes:      ${{ needs.changes.result }}"
+          echo "quality:      ${{ needs.quality.result }}"
+          echo "docs-lint:    ${{ needs.docs-lint.result }}"
+          echo "secret-scan:  ${{ needs.secret-scan.result }}"
+          echo "oidc-dry-run: ${{ needs.oidc-dry-run.result }} (informational, not gating)"
+          fail=0
+          [ "${{ needs.changes.result }}" = "success" ] || fail=1
+          for r in "${{ needs.quality.result }}" "${{ needs.docs-lint.result }}" "${{ needs.secret-scan.result }}"; do
+            [ "$r" = "success" ] || [ "$r" = "skipped" ] || fail=1
+          done
+          if [ "$fail" = "1" ]; then
+            echo "One or more required CI gates failed." >&2
+            exit 1
+          fi
+          echo "All required CI gates passed (or were correctly skipped for this diff)."

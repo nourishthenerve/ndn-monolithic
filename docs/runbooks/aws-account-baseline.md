@@ -49,9 +49,11 @@ TASK 0.1.1 as written proposes IAM Identity Center (AWS SSO) with an `NDNAdmin` 
 - Root-key deletion for `803129122420` remains explicitly the owner's own action (D-28), deferred with no deadline — unaffected by anything above.
 
 ## Cost delta
+
 £0.00 — Organization, member account, OIDC provider, IAM role, and a CloudTrail trail logging only management events (no data events) are all free. The S3 log bucket itself is free tier at this volume (a handful of small management-event objects/month).
 
 ## Rollback
+
 - `ndn-deploy` role / OIDC provider: `aws --profile ndn-prod iam detach-role-policy` + `delete-role` + `delete-open-id-connect-provider` — nothing depends on them yet since no CI workflow exists to assume the role.
 - CloudTrail: `stop-logging` + `delete-trail`; the S3 bucket (versioned) can be emptied of versions and removed separately — this is the one non-trivial reversal in this pass and is intentionally decoupled from trail deletion.
 - `ndn-prod` can be closed as an AWS account if needed (Organizations console, management account). Leaving the Organization in place on `803129122420` is harmless with no SCPs attached; it can also be deleted while `ndn-prod` is the only member, if desired.
