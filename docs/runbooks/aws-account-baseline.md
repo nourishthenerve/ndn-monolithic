@@ -1,4 +1,4 @@
-# AWS account baseline — Organization + ndn-prod (TASK 0.1.1, partial)
+# AWS account baseline — Organization + ndn-prod (TASK 0.1.1)
 
 **Date:** 2026-08-08 · **Task:** [05-execution-plan.md § TASK 0.1.1](../plan/05-execution-plan.md) · **Decisions:** D-01, D-28
 
@@ -25,16 +25,33 @@ TASK 0.1.1 as written proposes IAM Identity Center (AWS SSO) with an `NDNAdmin` 
 - **`803129122420`** — root, exactly as before. Covers islamicmaps and the still-live legacy nourishthenerve resources (until decommissioned at Gate G1 / TASK 1.6.1).
 - **`ndn-prod` (`357601815388`)** — new platform infrastructure lands here. Reached via the `ndn-admin` IAM user: `aws --profile ndn-prod ...` for CLI, `https://357601815388.signin.aws.amazon.com/console` for the browser console. A future hire for nourishthenerve gets credentials scoped to this account only (e.g. a second IAM user here) — no path exists from this account back to `803129122420` or islamicmaps.
 
-## Outstanding from TASK 0.1.1 (not done in this pass)
+## GitHub OIDC provider + `ndn-deploy` role (this pass)
 
-- **MFA on `ndn-prod`'s root user** — requires an interactive browser + authenticator app step; cannot be scripted. Owner action.
-- **Move the temporary console password out of `~/ndn-prod-console-login.txt`** into a password manager, then delete the file. Owner action.
-- **GitHub OIDC provider + `ndn-deploy` role** in `ndn-prod`, scoped to `repo:nourishthenerve/ndn-monolithic` — needed before CI (TASK 0.2.1) can deploy.
-- **CloudTrail + Cost Explorer** enablement in `ndn-prod`.
-- Root-key deletion for `803129122420` remains explicitly the owner's own action (D-28) and is unaffected by anything above — this pass didn't touch it and doesn't require it.
+6. **Created the GitHub Actions OIDC identity provider** in `ndn-prod`: `arn:aws:iam::357601815388:oidc-provider/token.actions.githubusercontent.com`. The thumbprint was not copied from memory — it was fetched live from `token.actions.githubusercontent.com`'s actual TLS chain (`openssl s_client -showcerts`) and computed as the SHA-1 fingerprint of the top-of-chain CA cert presented by the server (GitHub now serves a Let's Encrypt chain, not the older DigiCert one commonly quoted in tutorials — a copied value would have been stale/wrong-length). AWS additionally auto-verifies well-known OIDC issuers like GitHub server-side, so the supplied thumbprint is not the sole safeguard.
+7. **Created role `ndn-deploy`** (`arn:aws:iam::357601815388:role/ndn-deploy`), federated trust policy allowing `sts:AssumeRoleWithWebIdentity` only when `token.actions.githubusercontent.com:aud = sts.amazonaws.com` **and** `token.actions.githubusercontent.com:sub` matches `repo:nourishthenerve/ndn-monolithic:ref:refs/heads/main` or `repo:nourishthenerve/ndn-monolithic:pull_request` (ephemeral per-PR envs, per TASK 0.6.3). No other repo's OIDC token can satisfy this condition — verified by inspection of the trust policy (the `StringLike` condition is a static allowlist; a token with any other `sub` claim fails evaluation before reaching the role's permissions). An end-to-end negative test (an actual Actions run from a different repository) is deferred to TASK 0.2.1, where CI first exists to run it from.
+8. **Attached AWS managed policy `PowerUserAccess`** to `ndn-deploy` — full access to build/deploy AWS resources (needed once CDK stacks exist, from TASK 0.4.1 onward) while explicitly excluding IAM user/group/role management. Verified with `iam simulate-principal-policy`:
+   - `cloudformation:DescribeStacks` → `allowed`
+   - `iam:CreateUser` → `implicitDeny`
+
+   This matches TASK 0.1.1's stated test exactly. No permissions boundary was added on top — `PowerUserAccess` already excludes IAM management, and `ndn-prod` holds no resources yet for a boundary to protect; revisit if that changes.
+
+## CloudTrail (this pass)
+
+9. **Created S3 bucket `ndn-prod-cloudtrail-357601815388`** (eu-west-2): versioned, all four S3 public-access-block settings on, bucket policy scoped to the `cloudtrail.amazonaws.com` service principal only (`GetBucketAcl` + `PutObject` under `AWSLogs/357601815388/*`, conditioned on `bucket-owner-full-control`).
+10. **Created trail `ndn-prod-management-events`**, multi-region, log file validation on, logging started. Event selector is the CloudTrail default: management events only (`ReadWriteType: All`), **no data events** — this is the free-tier configuration the task calls for; enabling S3/Lambda data events later would incur per-event cost.
+11. **Verified:** `get-trail-status` → `IsLogging: true`; bucket `get-public-access-block` → all four flags `true`.
+
+## Outstanding from TASK 0.1.1 (owner-only; cannot be scripted)
+
+- **MFA on `ndn-prod`'s root user** — requires an interactive browser + authenticator app step.
+- **Move the temporary console password out of `~/ndn-prod-console-login.txt`** into a password manager, then delete the file.
+- **Cost Explorer enablement** — this is a one-time console-only toggle (Billing and Cost Management → Cost Explorer → Enable) with no CLI or API equivalent (`aws ce` has no `enable`/`activate` operation); it also takes up to 24h to begin populating data after being switched on.
+- Root-key deletion for `803129122420` remains explicitly the owner's own action (D-28) and is unaffected by anything above.
 
 ## Cost delta
-£0.00 — a new Organization and member account carry no charge by themselves.
+£0.00 — Organization, member account, OIDC provider, IAM role, and a CloudTrail trail logging only management events (no data events) are all free. The S3 log bucket itself is free tier at this volume (a handful of small management-event objects/month).
 
 ## Rollback
-`ndn-prod` can be closed as an AWS account if needed (Organizations console, management account). Leaving the Organization in place on `803129122420` is harmless with no SCPs attached; it can also be deleted while `ndn-prod` is the only member, if desired.
+- `ndn-deploy` role / OIDC provider: `aws --profile ndn-prod iam detach-role-policy` + `delete-role` + `delete-open-id-connect-provider` — nothing depends on them yet since no CI workflow exists to assume the role.
+- CloudTrail: `stop-logging` + `delete-trail`; the S3 bucket (versioned) can be emptied of versions and removed separately — this is the one non-trivial reversal in this pass and is intentionally decoupled from trail deletion.
+- `ndn-prod` can be closed as an AWS account if needed (Organizations console, management account). Leaving the Organization in place on `803129122420` is harmless with no SCPs attached; it can also be deleted while `ndn-prod` is the only member, if desired.
