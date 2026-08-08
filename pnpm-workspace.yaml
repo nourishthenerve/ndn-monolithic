@@ -1,0 +1,8 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+  - 'services/*'
+  - 'infra'
+  - 'tests'
+allowBuilds:
+  unrs-resolver: true
