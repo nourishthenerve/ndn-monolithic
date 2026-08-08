@@ -43,7 +43,7 @@ TASK 0.1.1 as written proposes IAM Identity Center (AWS SSO) with an `NDNAdmin` 
 
 ## Outstanding from TASK 0.1.1 (owner-only; cannot be scripted)
 
-- **MFA on `ndn-prod`'s root user** — requires an interactive browser + authenticator app step.
+- ~~MFA on `ndn-prod`'s root user~~ — **done** (owner, 2026-08-08).
 - **Move the temporary console password out of `~/ndn-prod-console-login.txt`** into a password manager, then delete the file.
 - **Cost Explorer enablement** — this is a one-time console-only toggle (Billing and Cost Management → Cost Explorer → Enable) with no CLI or API equivalent (`aws ce` has no `enable`/`activate` operation); it also takes up to 24h to begin populating data after being switched on.
 - Root-key deletion for `803129122420` remains explicitly the owner's own action (D-28) and is unaffected by anything above.
