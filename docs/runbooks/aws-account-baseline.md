@@ -17,7 +17,7 @@ TASK 0.1.1 as written proposes IAM Identity Center (AWS SSO) with an `NDNAdmin` 
 3. **Discovered and corrected an assumption:** AWS root users cannot call `sts:AssumeRole` (confirmed via direct API error: `"Roles may not be assumed by root accounts"`). This blocks console "Switch Role" too, not just CLI. So `803129122420` root can never reach `ndn-prod` via the auto-created `OrganizationAccountAccessRole` directly.
 4. **Created `ndn-admin`**, an IAM user *inside `ndn-prod`* (not `803129122420`), with `AdministratorAccess` scoped to that account only, a console login (password-reset-required on first use), and a long-lived access key.
    - To create it, a short-lived bootstrap principal (`ndn-bootstrap-temp`) was created in `803129122420` with a single permission — `sts:AssumeRole` on `ndn-prod`'s `OrganizationAccountAccessRole` — used once to assume into `ndn-prod` and provision `ndn-admin`, then **fully deleted** (access key, inline policy, user) immediately after. `803129122420` was verified afterward to hold exactly the IAM users it held before (`dev-gm-server-user`, `prod-gm-server-user`, `test-user-gm`, `user-data.flightradar24`, `Zia` — none touched).
-   - `ndn-admin`'s access key and console password were written directly to local files, never printed into any chat transcript: CLI credentials as a new `[ndn-prod]` profile in `~/.aws/credentials` / `~/.aws/config`, console login details in `~/ndn-prod-console-login.txt` (chmod 600) — that file should be moved into a password manager and deleted.
+   - `ndn-admin`'s access key and console password were written directly to local files, never printed into any chat transcript: CLI credentials as a new `[ndn-prod]` profile in `~/.aws/credentials` / `~/.aws/config`, console login details originally in `~/ndn-prod-console-login.txt` (chmod 600) — since moved into the macOS Passwords app and the file deleted (see below).
 5. **Verified:** `aws --profile ndn-prod sts get-caller-identity` → `arn:aws:iam::357601815388:user/ndn-admin`.
 
 ## Access model going forward
@@ -43,10 +43,10 @@ TASK 0.1.1 as written proposes IAM Identity Center (AWS SSO) with an `NDNAdmin` 
 
 ## Outstanding from TASK 0.1.1 (owner-only; cannot be scripted)
 
-- **MFA on `ndn-prod`'s root user** — requires an interactive browser + authenticator app step.
-- **Move the temporary console password out of `~/ndn-prod-console-login.txt`** into a password manager, then delete the file.
-- **Cost Explorer enablement** — this is a one-time console-only toggle (Billing and Cost Management → Cost Explorer → Enable) with no CLI or API equivalent (`aws ce` has no `enable`/`activate` operation); it also takes up to 24h to begin populating data after being switched on.
-- Root-key deletion for `803129122420` remains explicitly the owner's own action (D-28) and is unaffected by anything above.
+- ~~MFA on `ndn-prod`'s root user~~ — **done** (owner, 2026-08-08).
+- ~~Move the temporary console password out of `~/ndn-prod-console-login.txt`~~ — **done**, saved to macOS Passwords app (owner, 2026-08-08).
+- ~~Cost Explorer enablement~~ — **confirmed already active**, no opt-in step required (AWS removed the manual "Enable Cost Explorer" toggle; new accounts get the cost-and-usage dashboard by default). Verified via screenshot of the `ndn-prod` console showing the live report (all $0.00, as expected for a brand-new account).
+- Root-key deletion for `803129122420` remains explicitly the owner's own action (D-28), deferred with no deadline — unaffected by anything above.
 
 ## Cost delta
 £0.00 — Organization, member account, OIDC provider, IAM role, and a CloudTrail trail logging only management events (no data events) are all free. The S3 log bucket itself is free tier at this volume (a handful of small management-event objects/month).
