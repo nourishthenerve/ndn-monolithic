@@ -45,7 +45,7 @@ pnpm 11's new install-time policy flagged `eslint@10.8.1` (published 2026-08-07,
 
 ## Verification
 
-```
+```bash
 pnpm install                                    # clean, no supply-chain policy violations
 pnpm -r run lint && pnpm -r run typecheck && pnpm -r run test   # all 10 packages green
 pnpm run format:check                           # clean after one `pnpm run format` pass
