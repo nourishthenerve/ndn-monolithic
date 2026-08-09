@@ -57,6 +57,6 @@ TASK 0.1.1 as written proposes IAM Identity Center (AWS SSO) with an `NDNAdmin` 
 ## Rollback
 
 - `ndn-deploy` role / OIDC provider: `aws --profile ndn-prod iam detach-role-policy` + `delete-role` + `delete-open-id-connect-provider` — the CI workflow's `oidc-dry-run` job assumes `ndn-ci-readonly`, not `ndn-deploy`, directly, so deleting `ndn-deploy` breaks only that job's simulate target, not its ability to authenticate.
-- `ndn-ci-readonly` role (added 2026-08-09): `aws --profile ndn-prod iam delete-role-policy --role-name ndn-ci-readonly --policy-name SimulateNdnDeployOnly` + `delete-role`.
+- `ndn-ci-readonly` role (added 2026-08-09): `aws --profile ndn-prod iam delete-role-policy --role-name ndn-ci-readonly --policy-name SimulateNdnDeployOnly` + `delete-role`. `ndn-ci-readonly` gained a second inline policy (`SimulateGuardrailPolicies`) and a new role (`ndn-break-glass`) was added in TASK 0.3.2 — see [iam-deny-guardrails.md](iam-deny-guardrails.md#rollback).
 - CloudTrail: `stop-logging` + `delete-trail`; the S3 bucket (versioned) can be emptied of versions and removed separately — this is the one non-trivial reversal in this pass and is intentionally decoupled from trail deletion.
 - `ndn-prod` can be closed as an AWS account if needed (Organizations console, management account). Leaving the Organization in place on `803129122420` is harmless with no SCPs attached; it can also be deleted while `ndn-prod` is the only member, if desired.

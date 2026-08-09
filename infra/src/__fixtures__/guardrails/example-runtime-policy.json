@@ -1,0 +1,37 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "dynamodb:DeleteItem",
+        "dynamodb:DeleteTable"
+      ],
+      "Effect": "Deny",
+      "Resource": [
+        "arn:aws:s3:::ndn-example-media",
+        "arn:aws:s3:::ndn-example-media/*",
+        "arn:aws:dynamodb:eu-west-2:357601815388:table/ndn-example-data"
+      ],
+      "Sid": "DenyDestructivePrimitives"
+    },
+    {
+      "Sid": "BaselineRuntimeAllow",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:s3:::ndn-example-media",
+        "arn:aws:s3:::ndn-example-media/*",
+        "arn:aws:dynamodb:eu-west-2:357601815388:table/ndn-example-data"
+      ]
+    }
+  ]
+}
