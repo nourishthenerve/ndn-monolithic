@@ -23,6 +23,7 @@
     "@eslint/js": "10.0.1",
     "@ndn/eslint-plugin-no-destructive": "workspace:*",
     "@vitest/coverage-v8": "4.1.10",
+    "esbuild": "0.28.2",
     "eslint": "10.8.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-import-resolver-typescript": "4.4.5",
