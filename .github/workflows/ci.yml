@@ -147,31 +147,27 @@ jobs:
   # match a push-to-main subject, and there is nothing on main yet that
   # needs this check (no deploy job exists before TASK 0.4.1).
   #
-  # Deliberately NOT included in the required-checks gate below on its
-  # first landing: this is the first time either trust policy is
-  # exercised from an actual Actions run rather than a manual
-  # `simulate-principal-policy` call, so it is left informational until
-  # one green run confirms both OIDC trust conditions behave as
-  # documented. Promote it into the ci-summary gate below once proven.
+  # First landed NOT included in the required-checks gate below, since it
+  # was the first time either trust policy was exercised from an actual
+  # Actions run rather than a manual `simulate-principal-policy` call. It
+  # failed on every real run: GitHub's *current default* OIDC sub claim
+  # embeds immutable org/repo IDs — `repo:nourishthenerve@252558973/
+  # ndn-monolithic@1327118618:pull_request`, not the plain-name
+  # `repo:nourishthenerve/ndn-monolithic:pull_request` both this role's and
+  # ndn-deploy's trust policies were written against (confirmed by decoding
+  # a real issued token and cross-checked against `GET /repos/{owner}/
+  # {repo}/actions/oidc/customization/sub`, which reports `use_default:
+  # true` and exposes the exact prefix GitHub now issues). Both trust
+  # policies were corrected against the live AWS account to match; now
+  # gated in ci-summary below.
   oidc-dry-run:
-    name: OIDC deploy-role dry run (informational)
+    name: OIDC deploy-role dry run
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       id-token: write
     steps:
-      - name: DEBUG - decode the real OIDC token claims (temporary, removed once diagnosed)
-        run: |
-          set -euo pipefail
-          token=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r '.value')
-          payload=$(echo "$token" | cut -d. -f2 | tr '_-' '/+')
-          case $(( ${#payload} % 4 )) in
-            2) payload="${payload}==" ;;
-            3) payload="${payload}=" ;;
-          esac
-          echo "$payload" | base64 -d | jq .
       - uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: arn:aws:iam::357601815388:role/ndn-ci-readonly
@@ -230,10 +226,13 @@ jobs:
           echo "quality:      ${{ needs.quality.result }}"
           echo "docs-lint:    ${{ needs.docs-lint.result }}"
           echo "secret-scan:  ${{ needs.secret-scan.result }}"
-          echo "oidc-dry-run: ${{ needs.oidc-dry-run.result }} (informational, not gating)"
+          echo "oidc-dry-run: ${{ needs.oidc-dry-run.result }}"
           fail=0
           [ "${{ needs.changes.result }}" = "success" ] || fail=1
-          for r in "${{ needs.quality.result }}" "${{ needs.docs-lint.result }}" "${{ needs.secret-scan.result }}"; do
+          # oidc-dry-run only runs on pull_request (its trust condition
+          # doesn't match a push-to-main subject) — skipped is correct,
+          # not a gap, on push events.
+          for r in "${{ needs.quality.result }}" "${{ needs.docs-lint.result }}" "${{ needs.secret-scan.result }}" "${{ needs.oidc-dry-run.result }}"; do
             [ "$r" = "success" ] || [ "$r" = "skipped" ] || fail=1
           done
           if [ "$fail" = "1" ]; then
