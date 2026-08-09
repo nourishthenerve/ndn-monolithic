@@ -9,7 +9,8 @@
   },
   "packageManager": "pnpm@11.20.0",
   "scripts": {
-    "lint": "pnpm -r run lint",
+    "lint": "pnpm -r run lint && node scripts/check-no-disable-comments.mjs",
+    "lint:no-destructive": "eslint --no-ignore infra/src/__fixtures__/no-destructive",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "test:integration": "pnpm --filter @ndn/tests run test:integration",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@ndn/eslint-plugin-no-destructive": "workspace:*",
     "@vitest/coverage-v8": "4.1.10",
     "eslint": "10.8.0",
     "eslint-config-prettier": "10.1.8",
