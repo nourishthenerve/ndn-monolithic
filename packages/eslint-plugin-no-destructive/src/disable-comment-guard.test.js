@@ -45,11 +45,33 @@ describe('findForbiddenDisableComments', () => {
       'new DeleteObjectCommand({}); // eslint-disable-line ndn/no-destructive-primitives',
     );
     expect(violations).toEqual([
-      {
-        line: 1,
-        text: 'new DeleteObjectCommand({}); // eslint-disable-line ndn/no-destructive-primitives',
-      },
+      { line: 1, text: '// eslint-disable-line ndn/no-destructive-primitives' },
     ]);
+  });
+
+  it('ignores prose that merely mentions eslint-disable syntax as an example', () => {
+    // Regression test: this exact pattern (a real `//` comment whose body
+    // *describes* directive syntax, e.g. via a backtick-quoted example)
+    // false-positived under the previous line-regex implementation,
+    // because it matched "eslint-disable" anywhere in the line rather than
+    // requiring it to start the comment's own body.
+    expect(
+      findForbiddenDisableComments(
+        '// silently dropped by a bare `/* eslint-disable */` or `/* eslint-disable ndn/no-destructive-primitives */`',
+      ),
+    ).toEqual([]);
+  });
+
+  it('ignores directive-shaped text inside a string literal', () => {
+    // Regression test: RuleTester-style fixtures pass directive text as
+    // *string content* (e.g. this file's own tests above), not as a real
+    // comment — the previous line-regex implementation couldn't tell the
+    // difference; the TypeScript-scanner-based one can.
+    expect(
+      findForbiddenDisableComments(
+        "const code = '/* eslint-disable ndn/no-destructive-primitives */';",
+      ),
+    ).toEqual([]);
   });
 
   it('flags a block-level eslint-disable naming this rule', () => {
