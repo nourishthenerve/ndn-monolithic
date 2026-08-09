@@ -12,8 +12,8 @@
 | `quality` | code changed | install (cached) → lint → typecheck → unit → integration → coverage thresholds → dependency audit |
 | `docs-lint` | docs changed | markdownlint + offline internal-link check |
 | `secret-scan` | always | gitleaks over full git history |
-| `oidc-dry-run` | `pull_request` only, informational | proves `ndn-deploy` still has exactly the access TASK 0.1.1 granted it, via a separate read-only role (see [Security fix](#security-fix-tighten-ndn-deploys-oidc-trust-2026-08-09) below) |
-| `ci-summary` | always | single required status check; gates on the four above (not `oidc-dry-run`, see below) and prints CI minutes used to the job summary |
+| `oidc-dry-run` | `pull_request` only | proves `ndn-deploy` still has exactly the access TASK 0.1.1 granted it, via a separate read-only role (see [Security fix](#security-fix-tighten-ndn-deploys-oidc-trust-2026-08-09) below) |
+| `ci-summary` | always | single required status check; gates on all five above and prints CI minutes used to the job summary |
 
 ## Scope consolidation: this task absorbs three stale plan references
 
@@ -86,6 +86,23 @@ Discovered while opening the TASK 0.3.1 PR: every workflow run since this task i
 
 Neither fix touches anything TASK 0.3.1 added; both are pre-existing gaps in this task's own deliverable.
 
+## Follow-up fix: `oidc-dry-run`'s trust policies were written against the wrong sub claim format (2026-08-09)
+
+`oidc-dry-run` failed on every real Actions run since it landed (`Not authorized to perform sts:AssumeRoleWithWebIdentity`), including its very first live exercise — expected to possibly happen per the Design decisions note above, but not diagnosed until now. Rather than guess (the trust policy's `sub`/`aud` conditions looked correct against GitHub's commonly-documented token format), a temporary debug step was added to a scratch PR to decode and print the actual issued token's claims.
+
+**Root cause:** the real `sub` claim is `repo:nourishthenerve@252558973/ndn-monolithic@1327118618:pull_request` — GitHub embeds immutable numeric org/repo IDs in the subject (`org@id/repo@id`), not the plain `repo:nourishthenerve/ndn-monolithic:pull_request` both `ndn-ci-readonly`'s and `ndn-deploy`'s trust policies (TASK 0.1.1, TASK 0.2.1's own security fix above) were written against. Confirmed this is GitHub's **current platform default**, not an opt-in setting that could instead be turned off: `GET /repos/nourishthenerve/ndn-monolithic/actions/oidc/customization/sub` returns `"use_default": true` and reports the exact prefix (`repo:nourishthenerve@252558973/ndn-monolithic@1327118618`) that every token will carry.
+
+**Fix:** both roles' trust policies updated on `ndn-prod` (`357601815388`) via `aws iam update-assume-role-policy`, replacing the plain-name subject with the immutable-ID one:
+
+```text
+ndn-ci-readonly: repo:nourishthenerve@252558973/ndn-monolithic@1327118618:pull_request
+ndn-deploy:      repo:nourishthenerve@252558973/ndn-monolithic@1327118618:ref:refs/heads/main
+```
+
+`ndn-deploy`'s copy of this bug was **latent, not yet visible**: no deploy job exists before TASK 0.4.1, so nothing had ever actually tried to assume it from a live run. Caught and fixed proactively while investigating `ndn-ci-readonly`'s identical, already-visible failure — worth being aware TASK 0.4.1 would otherwise have hit this exact same error on its first real deploy attempt.
+
+**Verified:** live re-run of `oidc-dry-run` after the fix — first-ever green run, `aws sts get-caller-identity` and both `simulate-principal-policy` assertions all pass. `needs.oidc-dry-run.result` is now included in `ci-summary`'s gate condition (`success` or `skipped` — skipped stays correct on `push` events, since the job is still `pull_request`-only by trust-policy design), closing out Owner action #1 below. The temporary debug step (decoding the token via `ACTIONS_ID_TOKEN_REQUEST_URL`/`ACTIONS_ID_TOKEN_REQUEST_TOKEN`, base64-decoding the JWT payload) was removed once the real cause was confirmed; it never touched AWS and printed only claims already visible to anyone who can open a PR against this repo (actor, repo, ref — no secrets).
+
 ## Verification
 
 Every step the workflow runs was run for real, locally, on this machine, after all edits:
@@ -121,7 +138,7 @@ A repo-level security pass was run once `gh` was authenticated, covering everyth
 
 ## Owner actions
 
-1. **Watch the first real Actions run**, specifically the `oidc-dry-run` job (now PR-triggered, assuming `ndn-ci-readonly`). If it's green, move `needs.oidc-dry-run.result` into `ci-summary`'s failure condition (currently deliberately excluded — see Design decisions) so a future break in either OIDC trust policy actually blocks merges instead of just being visible.
+1. ~~**Watch the first real Actions run**, specifically the `oidc-dry-run` job...~~ **Done (2026-08-09).** It failed on every real run — see the OIDC follow-up fix above — now fixed and promoted into `ci-summary`'s required gate.
 2. **The cross-repo OIDC negative test** ("a token from another repository is rejected") named in TASK 0.1.1's Tests line still can't be automated from inside this repo — proving it requires an actual Actions run *from a different GitHub repository* attempting to assume `ndn-deploy`. Not attempted here; the trust policy's `StringLike` condition was inspected and confirmed static-allowlist-only. Flagging as a permanent gap rather than silently dropping it.
 3. **When a second collaborator gets repo access**, revisit both deferred decisions above together: the GitHub Team upgrade (unlocks branch protection — at that point "no direct pushes to `main`" stops being enforceable by discipline alone) and org-level 2FA enforcement (protects every repo in the org, not just this one). Neither is urgent at one collaborator; both become materially more important at two.
 4. **If/when branch protection is enabled**: require the `CI summary` status check (job name `ci-summary` in workflow `CI`) before merging, and require the branch to be up to date. This is what makes TASK 0.2.1's DoD ("cannot merge without green CI") literally true — until it's set, the workflow runs and reports but doesn't technically block anything.
@@ -134,7 +151,6 @@ A repo-level security pass was run once `gh` was authenticated, covering everyth
 
 - Branch protection itself — the account owner explicitly chose to stay on GitHub Free (see above), so this stays undone by decision, not by gap.
 - Org-level 2FA enforcement — explicitly deferred by the account owner (see above), not an oversight.
-- Promoting `oidc-dry-run` to a required gate (owner action, above, pending first green run).
 - The cross-repo OIDC negative test (owner action, above — structurally can't be scripted from here).
 - Canary deploy, smoke test, auto-rollback, ephemeral per-PR environments — TASK 0.6.x. This task has nothing to deploy yet (first CDK stack is TASK 0.4.1); `quality`/`docs-lint`/`secret-scan` are the entire gate for now.
 - Any change to `apps/web`/`apps/mobile` framework choice, or CDK application code — untouched, per TASK 0.1.2's own deferral.
@@ -145,4 +161,5 @@ Revert the branch/PR for the workflow/docs changes — nothing outside the repo 
 
 - `ndn-deploy`'s trust policy: restore the `pull_request` clause via `aws --profile ndn-prod iam update-assume-role-policy` — not recommended, this reintroduces the vulnerability described above.
 - `ndn-ci-readonly` role: `aws --profile ndn-prod iam delete-role-policy --role-name ndn-ci-readonly --policy-name SimulateNdnDeployOnly` then `iam delete-role --role-name ndn-ci-readonly`.
+- Both roles' `sub` claim fix (2026-08-09): reverting to the plain-name subject via `iam update-assume-role-policy` would restore the original `Not authorized` failure — not recommended, the immutable-ID subject is the correct, currently-required format.
 - Dependabot alerts/security-updates: `DELETE /vulnerability-alerts` / `DELETE /automated-security-fixes` via `gh api` — not recommended, both are free and strictly additive security coverage.
