@@ -12,7 +12,7 @@
 | `quality` | code changed | install (cached) → lint → typecheck → unit → integration → coverage thresholds → dependency audit |
 | `docs-lint` | docs changed | markdownlint + offline internal-link check |
 | `secret-scan` | always | gitleaks over full git history |
-| `oidc-dry-run` | `pull_request` only | proves `ndn-deploy` still has exactly the access TASK 0.1.1 granted it, via a separate read-only role (see [Security fix](#security-fix-tighten-ndn-deploys-oidc-trust-2026-08-09) below) |
+| `oidc-dry-run` | `pull_request` only | proves `ndn-deploy` still has exactly the access TASK 0.1.1 granted it, via a separate read-only role (see [Security fix](#security-fix-tighten-ndn-deploys-oidc-trust-2026-08-09) below); since TASK 0.3.2, also proves the IAM deny guardrail against the real policy simulator (see [Follow-up](#follow-up-oidc-dry-run-gains-a-guardrail-simulator-step-task-032-2026-08-09) below) |
 | `ci-summary` | always | single required status check; gates on all five above and prints CI minutes used to the job summary |
 
 ## Scope consolidation: this task absorbs three stale plan references
@@ -102,6 +102,10 @@ ndn-deploy:      repo:nourishthenerve@252558973/ndn-monolithic@1327118618:ref:re
 `ndn-deploy`'s copy of this bug was **latent, not yet visible**: no deploy job exists before TASK 0.4.1, so nothing had ever actually tried to assume it from a live run. Caught and fixed proactively while investigating `ndn-ci-readonly`'s identical, already-visible failure — worth being aware TASK 0.4.1 would otherwise have hit this exact same error on its first real deploy attempt.
 
 **Verified:** live re-run of `oidc-dry-run` after the fix — first-ever green run, `aws sts get-caller-identity` and both `simulate-principal-policy` assertions all pass. `needs.oidc-dry-run.result` is now included in `ci-summary`'s gate condition (`success` or `skipped` — skipped stays correct on `push` events, since the job is still `pull_request`-only by trust-policy design), closing out Owner action #1 below. The temporary debug step (decoding the token via `ACTIONS_ID_TOKEN_REQUEST_URL`/`ACTIONS_ID_TOKEN_REQUEST_TOKEN`, base64-decoding the JWT payload) was removed once the real cause was confirmed; it never touched AWS and printed only claims already visible to anyone who can open a PR against this repo (actor, repo, ref — no secrets).
+
+## Follow-up: `oidc-dry-run` gains a guardrail-simulator step (TASK 0.3.2, 2026-08-09)
+
+A second step was added to this job: `actions/checkout` (new to this job — its `permissions:` block needed `contents: read` restated alongside `id-token: write`, the exact "job-level permissions replace, not merge" gotcha this file's [Follow-up fix](#follow-up-fix-ci-has-been-red-on-every-run-since-this-task-landed-2026-08-09) above already documents for the `changes` job), then a real `aws iam simulate-custom-policy` call proving TASK 0.3.2's destructive-action Deny statement against a checked-in example policy fixture. `ndn-ci-readonly` gained one more narrowly-scoped permission (`iam:SimulateCustomPolicy`) for this. Full detail, including why this step is safe to gate on immediately (unlike this job's *original* step, which needed to observe one real run first) and how it stays honest as `guardrails.ts` evolves: [iam-deny-guardrails.md](iam-deny-guardrails.md#automated-real-iam-simulator-in-ci-githubworkflowsciyml-oidc-dry-run-job-every-pr).
 
 ## Verification
 

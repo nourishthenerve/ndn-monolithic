@@ -166,8 +166,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      # id-token: write alone would drop the workflow-level `contents: read`
+      # (job-level permissions replace, not merge — the same gotcha the
+      # `changes` job's own comment above documents) and the new guardrail
+      # step below needs to read the fixture file via actions/checkout.
+      contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v7.0.1
       - uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: arn:aws:iam::357601815388:role/ndn-ci-readonly
@@ -184,6 +190,35 @@ jobs:
           echo "$result"
           echo "$result" | grep -qE '^cloudformation:DescribeStacks[[:space:]]+allowed$'
           echo "$result" | grep -qE '^iam:CreateUser[[:space:]]+implicitDeny$'
+      # TASK 0.3.2 (IAM deny guardrails): proves guardrails.ts's Deny
+      # statement against the real IAM policy evaluation engine, not a
+      # mock of it — ndn-ci-readonly holds iam:SimulateCustomPolicy
+      # (resource "*": this action evaluates an arbitrary policy document
+      # you pass in, so there is no existing entity to scope it to; it
+      # performs no action and touches no real resource). The policy
+      # document is the checked-in fixture infra/src/__fixtures__/
+      # guardrails/example-runtime-policy.json — guardrails.test.ts's
+      # freshness test fails the `quality` job if it ever drifts from
+      # guardrails.ts's actual output, so a stale fixture can't quietly
+      # make this step meaningless.
+      - name: Prove the destructive-action guardrail against the real IAM engine
+        run: |
+          set -euo pipefail
+          jq -c '[tojson]' infra/src/__fixtures__/guardrails/example-runtime-policy.json \
+            > /tmp/guardrail-policy-input-list.json
+          result=$(aws iam simulate-custom-policy \
+            --policy-input-list file:///tmp/guardrail-policy-input-list.json \
+            --action-names s3:DeleteObject s3:DeleteObjectVersion dynamodb:DeleteItem dynamodb:DeleteTable s3:PutObject dynamodb:PutItem \
+            --resource-arns arn:aws:s3:::ndn-example-media/example-key arn:aws:dynamodb:eu-west-2:357601815388:table/ndn-example-data \
+            --query 'EvaluationResults[].[EvalActionName,EvalDecision]' \
+            --output text)
+          echo "$result"
+          for action in s3:DeleteObject s3:DeleteObjectVersion dynamodb:DeleteItem dynamodb:DeleteTable; do
+            echo "$result" | grep -qE "^${action}[[:space:]]+explicitDeny\$"
+          done
+          for action in s3:PutObject dynamodb:PutItem; do
+            echo "$result" | grep -qE "^${action}[[:space:]]+allowed\$"
+          done
 
   # Single required status check: the underlying jobs are conditionally
   # skipped per path filter, which GitHub treats as passing for branch
