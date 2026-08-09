@@ -14,5 +14,12 @@
     // in this repo, not an attempt at a heading.
     "MD036": false,
     "MD024": { "siblings_only": true },
+    // Added to markdownlint after this config was written (not present in
+    // the version used to verify TASK 0.2.1 locally, but already live in
+    // the pinned markdownlint-cli2-action — the drift was in the *rule
+    // set*, not an unpinned dependency). Fires on nearly every table in
+    // this repo's existing padded-pipe style, which is a legitimate,
+    // deliberate readability choice, not a defect.
+    "MD060": false,
   },
 }
