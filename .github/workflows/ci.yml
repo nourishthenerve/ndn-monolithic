@@ -119,19 +119,34 @@ jobs:
         run: ./gitleaks detect --source . --redact -v
 
   # Closes the loop on TASK 0.1.1's own deferred test ("assume ndn-deploy
-  # from a CI dry-run"; see docs/runbooks/aws-account-baseline.md). The
-  # role ARN is not a secret (account 357601815388 is already documented
-  # in committed runbooks) so it is inlined rather than gated behind repo
-  # configuration nobody has set up yet.
+  # from a CI dry-run"; see docs/runbooks/aws-account-baseline.md) — with
+  # one correction made during a security review (TASK 0.2.1 follow-up).
+  # ndn-deploy's trust policy originally accepted the generic
+  # `repo:...:pull_request` OIDC subject, which is not scoped by author or
+  # fork: anyone able to open a PR against this repo could assume a
+  # PowerUserAccess role on account 357601815388 from their own PR branch.
+  # ndn-deploy's trust is now `ref:refs/heads/main` only. PR-time checks
+  # instead assume ndn-ci-readonly, a role trusted only for `pull_request`
+  # and holding exactly one permission — `iam:SimulatePrincipalPolicy`
+  # scoped to ndn-deploy's ARN — so this job proves ndn-deploy's
+  # least-privilege from a distance, without a PR run ever holding
+  # ndn-deploy's actual credentials. Role ARNs are not secrets (account
+  # 357601815388 is already documented in committed runbooks) so they are
+  # inlined rather than gated behind repo configuration nobody has set up.
+  #
+  # Runs on pull_request only: ndn-ci-readonly's trust condition doesn't
+  # match a push-to-main subject, and there is nothing on main yet that
+  # needs this check (no deploy job exists before TASK 0.4.1).
   #
   # Deliberately NOT included in the required-checks gate below on its
-  # first landing: this is the first time this trust policy is exercised
-  # from an actual Actions run rather than a manual `simulate-principal-
-  # policy` call, so it is left informational until one green run confirms
-  # the OIDC trust condition behaves as documented. Promote it into the
-  # ci-summary gate below once proven.
+  # first landing: this is the first time either trust policy is
+  # exercised from an actual Actions run rather than a manual
+  # `simulate-principal-policy` call, so it is left informational until
+  # one green run confirms both OIDC trust conditions behave as
+  # documented. Promote it into the ci-summary gate below once proven.
   oidc-dry-run:
     name: OIDC deploy-role dry run (informational)
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -139,9 +154,9 @@ jobs:
     steps:
       - uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
-          role-to-assume: arn:aws:iam::357601815388:role/ndn-deploy
+          role-to-assume: arn:aws:iam::357601815388:role/ndn-ci-readonly
           aws-region: eu-west-2
-      - name: Prove least-privilege without mutating anything
+      - name: Prove ndn-deploy's least-privilege without ever holding its credentials
         run: |
           set -euo pipefail
           aws sts get-caller-identity
