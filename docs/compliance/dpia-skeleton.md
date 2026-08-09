@@ -6,7 +6,7 @@ This is a skeleton, not a completed Data Protection Impact Assessment. Full comp
 
 Tracks the data-protection design decisions the plan has already made so the DPO completing the full DPIA is working from an accurate starting point, not a blank page.
 
-## Schema separation (TASK 0.3.4)
+## Schema separation (TASK 0.3.4) — implemented 2026-08-09
 
 Every person record is split into two independently addressable attribute sets:
 
@@ -14,6 +14,8 @@ Every person record is split into two independently addressable attribute sets:
 - `personal{}` — name, contact details, marketing preferences.
 
 This split exists so that a future, human-authorised, field-level erasure of specific non-clinical fields needs no schema migration. See `docs/plan/04-data-model-rbac.md` and `docs/plan/05-execution-plan.md` (TASK 0.3.4).
+
+The generic primitive lives in `services/api/src/person-record.ts`: `PersonRecord<Clinical, Personal>` plus `projectClinical`/`projectPersonal`/`withClinical`/`withPersonal`, proven independently addressable by `person-record.test.ts` (replacing one set never touches the other, by reference). No real entity is wired onto it yet and no erasure method exists — see `docs/runbooks/schema-separation-lawful-erasure.md`. The R-04 tension below is unchanged by this: the primitive makes a future erasure *cheap*, it does not authorise one.
 
 ## Open tension — R-04
 
