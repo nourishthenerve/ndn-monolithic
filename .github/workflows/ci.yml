@@ -25,6 +25,15 @@ jobs:
     name: Detect changed paths
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    # dorny/paths-filter resolves a pull_request's changed files via the
+    # GitHub REST API (listFiles), not a local git diff — that call 403s
+    # ("Resource not accessible by integration") without pull-requests:
+    # read, which the workflow-level `contents: read` block doesn't grant.
+    # Job-level permissions replace, not merge with, the workflow-level
+    # block, so contents: read has to be restated here too.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
       docs: ${{ steps.filter.outputs.docs }}
