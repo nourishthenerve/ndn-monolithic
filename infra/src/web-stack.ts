@@ -28,6 +28,7 @@ import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
 
 import { CERTIFICATE_ARN, DOMAIN_NAME } from './config.js';
+import { createLogGroup } from './log-retention.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -65,6 +66,10 @@ export class WebStack extends Stack {
       environment: {
         DEPLOY_VERSION: props.deployVersion ?? 'local',
       },
+      // TASK 0.5.2 (R-11): explicit log group so retention is 14 days from
+      // the first deploy — Lambda's own auto-created group defaults to
+      // "never expire".
+      logGroup: createLogGroup(this, 'HealthFunctionLogGroup', '/ndn/health-function'),
     });
 
     const httpApi = new HttpApi(this, 'HttpApi');

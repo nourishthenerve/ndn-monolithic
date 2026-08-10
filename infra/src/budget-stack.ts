@@ -5,15 +5,20 @@
 // AWS Cost Anomaly Detection (catches an unexpected spend *pattern* even
 // while comfortably under the cap). See docs/runbooks/budgets-cost-alarms.md.
 
-import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Stack, type StackProps } from 'aws-cdk-lib';
 import { CfnBudget } from 'aws-cdk-lib/aws-budgets';
 import { CfnAnomalyMonitor, CfnAnomalySubscription } from 'aws-cdk-lib/aws-ce';
+import { ComparisonOperator, MathExpression, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
+import { Topic } from 'aws-cdk-lib/aws-sns';
+import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Construct } from 'constructs';
 
 import {
   ALERT_EMAIL,
   COST_ALLOCATION_TAG_KEY,
   COST_ALLOCATION_TAG_VALUE,
+  LOG_INGESTION_ALARM_THRESHOLD_BYTES,
   MONTHLY_BUDGET_LIMIT_USD,
 } from './config.js';
 
@@ -90,7 +95,40 @@ export class BudgetStack extends Stack {
       resourceTags,
     });
 
+    // TASK 0.5.2 (R-11): "log-volume alarm" — the fourth mitigation the risk
+    // register names alongside 14-day retention, sampling, and no debug
+    // logging. CloudWatch Alarms only support SNS as an action target (no
+    // direct email, unlike Budgets/Anomaly Detection above), so this needs
+    // its own topic.
+    const logAlarmTopic = new Topic(this, 'LogIngestionAlarmTopic', {
+      topicName: 'ndn-log-ingestion-alarm',
+    });
+    logAlarmTopic.addSubscription(new EmailSubscription(ALERT_EMAIL));
+
+    // A SEARCH math expression, not a metric on one named log group: it
+    // sums IncomingBytes across every log group in the account, including
+    // ones created after this stack was — the same "no manual maintenance
+    // as new things enter the bill" reasoning as the SERVICE-dimensioned
+    // anomaly monitor above.
+    const logIngestionBytesPerDay = new MathExpression({
+      expression: 'SEARCH(\'{AWS/Logs,LogGroupName} MetricName="IncomingBytes"\', \'Sum\', 86400)',
+      usingMetrics: {},
+      period: Duration.days(1),
+      label: 'Total log ingestion (bytes/day)',
+    });
+
+    const logIngestionAlarm = logIngestionBytesPerDay.createAlarm(this, 'LogIngestionVolumeAlarm', {
+      alarmName: 'ndn-log-ingestion-volume',
+      threshold: LOG_INGESTION_ALARM_THRESHOLD_BYTES,
+      evaluationPeriods: 1,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      // A quiet account-wide day (nothing logged) is not a breach.
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    });
+    logIngestionAlarm.addAlarmAction(new SnsAction(logAlarmTopic));
+
     new CfnOutput(this, 'BudgetName', { value: 'ndn-monthly-cost-cap' });
     new CfnOutput(this, 'AnomalyMonitorArn', { value: monitor.attrMonitorArn });
+    new CfnOutput(this, 'LogIngestionAlarmName', { value: logIngestionAlarm.alarmName });
   }
 }

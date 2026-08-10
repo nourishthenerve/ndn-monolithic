@@ -34,3 +34,11 @@ export const MONTHLY_BUDGET_LIMIT_USD = 24.21;
 // "cost allocation tags on every resource" (TASK 0.5.1).
 export const COST_ALLOCATION_TAG_KEY = 'Project';
 export const COST_ALLOCATION_TAG_VALUE = 'nourishthenerve';
+
+// TASK 0.5.2 (R-11): "log-volume alarm" — early warning if CloudWatch Logs
+// ingestion grows well past 03-cost-model.md's ~2GB/month baseline
+// (~67MB/day) before it quietly eats into the £20 cap. Set at ~5x that
+// baseline: a month sustained at this rate would cost ~$6.28
+// (350MB/day * 30 / 1e9 GB * $0.5985/GB) — already a meaningful slice of
+// the $24.21 budget (TASK 0.5.1) without tripping on ordinary variance.
+export const LOG_INGESTION_ALARM_THRESHOLD_BYTES = 350_000_000;
