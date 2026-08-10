@@ -16,3 +16,21 @@ export const DOMAIN_NAME = 'next.nourishthenerve.com';
 // added to the nourishthenerve.com hosted zone in 803129122420.
 export const CERTIFICATE_ARN =
   'arn:aws:acm:us-east-1:357601815388:certificate/b1f9e01e-ab10-43b8-944a-6c0ccfffacb5';
+
+// TASK 0.5.1: where budget and cost-anomaly alerts go. Same address the
+// account's root user was created with (docs/runbooks/aws-account-baseline.md)
+// — already the one contact point this account's owner monitors.
+export const ALERT_EMAIL = 'mohammed.zia33+ndnprod@gmail.com';
+
+// C-01's cap, stated in £ (NFR-02). AWS bills this account in USD (confirmed
+// via `aws ce get-cost-and-usage` — Unit: "USD"), so the budget itself must
+// be denominated in USD: converted at the same planning rate
+// docs/plan/00-index.md and 03-cost-model.md use throughout, £1 = $1.2105
+// (the 10%-adverse-buffered ECB rate C-01 requires), giving $24.21.
+export const MONTHLY_BUDGET_LIMIT_USD = 24.21;
+
+// Applied to every resource in every stack (Tags.of(app), see bin/app.ts) so
+// Cost Explorer can break spend down by project — the execution plan's
+// "cost allocation tags on every resource" (TASK 0.5.1).
+export const COST_ALLOCATION_TAG_KEY = 'Project';
+export const COST_ALLOCATION_TAG_VALUE = 'nourishthenerve';
