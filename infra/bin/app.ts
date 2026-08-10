@@ -7,6 +7,7 @@ import {
   COST_ALLOCATION_TAG_VALUE,
   REGION,
 } from '../src/config.js';
+import { enforceLogRetention } from '../src/log-retention.js';
 import { WebStack } from '../src/web-stack.js';
 
 const app = new App();
@@ -15,6 +16,11 @@ const app = new App();
 // see budget-stack.ts for the three resources that need it passed
 // explicitly instead.
 Tags.of(app).add(COST_ALLOCATION_TAG_KEY, COST_ALLOCATION_TAG_VALUE);
+
+// TASK 0.5.2 (R-11): app-wide safety net — any log group in any stack below
+// that doesn't go through log-retention.ts's createLogGroup() still gets
+// capped at 14 days rather than defaulting to infinite retention.
+enforceLogRetention(app);
 
 new WebStack(app, 'NdnWebStack', {
   env: { account: ACCOUNT_ID, region: REGION },

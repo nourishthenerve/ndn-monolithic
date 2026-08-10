@@ -10,7 +10,11 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
 import { BudgetStack } from './budget-stack.js';
-import { ALERT_EMAIL, MONTHLY_BUDGET_LIMIT_USD } from './config.js';
+import {
+  ALERT_EMAIL,
+  LOG_INGESTION_ALARM_THRESHOLD_BYTES,
+  MONTHLY_BUDGET_LIMIT_USD,
+} from './config.js';
 
 function synth() {
   const app = new App();
@@ -97,10 +101,41 @@ describe('BudgetStack — cost anomaly detection', () => {
   });
 });
 
+describe('BudgetStack — log ingestion volume alarm (TASK 0.5.2, R-11)', () => {
+  it('alarms when account-wide log ingestion exceeds the threshold, summed across all log groups', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ndn-log-ingestion-volume',
+      ComparisonOperator: 'GreaterThanThreshold',
+      Threshold: LOG_INGESTION_ALARM_THRESHOLD_BYTES,
+      EvaluationPeriods: 1,
+      TreatMissingData: 'notBreaching',
+      Metrics: Match.arrayWith([
+        Match.objectLike({
+          Expression: Match.stringLikeRegexp('SEARCH.*AWS/Logs.*IncomingBytes'),
+        }),
+      ]),
+    });
+  });
+
+  it('notifies the alert email via SNS when the alarm fires', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: ALERT_EMAIL,
+    });
+    const [topicLogicalId] = Object.keys(template.findResources('AWS::SNS::Topic'));
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmActions: Match.arrayWith([{ Ref: topicLogicalId }]),
+    });
+  });
+});
+
 describe('BudgetStack — outputs', () => {
-  it('exposes the budget name and anomaly monitor ARN', () => {
+  it('exposes the budget name, anomaly monitor ARN, and log alarm name', () => {
     const template = synth();
     template.hasOutput('BudgetName', {});
     template.hasOutput('AnomalyMonitorArn', {});
+    template.hasOutput('LogIngestionAlarmName', {});
   });
 });

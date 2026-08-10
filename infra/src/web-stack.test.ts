@@ -172,6 +172,20 @@ describe('WebStack — health Lambda', () => {
       RouteKey: 'GET /health',
     });
   });
+
+  it('sends logs to an explicit log group with 14-day retention (TASK 0.5.2, R-11)', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/health-function',
+      RetentionInDays: 14,
+    });
+    const [logGroupLogicalId] = Object.keys(template.findResources('AWS::Logs::LogGroup'));
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      LoggingConfig: Match.objectLike({
+        LogGroup: { Ref: logGroupLogicalId },
+      }),
+    });
+  });
 });
 
 describe('WebStack — outputs', () => {
