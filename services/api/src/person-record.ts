@@ -9,7 +9,7 @@
 // below only ever read or replace their own half — updating one can never
 // touch the other. Do NOT add an erasure method here: the DPO/solicitor
 // sign-off that would authorise one (R-04, LL-06) has not happened.
-import type { BaseRecord } from './types.js';
+import type { BaseRecord } from '@ndn/shared-types';
 
 export interface PersonRecord<Clinical, Personal> extends BaseRecord {
   readonly clinical: Clinical;

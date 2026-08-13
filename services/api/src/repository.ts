@@ -4,11 +4,12 @@
 // by findById. No method here removes an item from the store (00-conventions.md's
 // prohibition; docs/plan/05-execution-plan.md TASK 0.3.3's DoD: "no
 // repository method exists that removes a row").
+import type { BaseRecord } from '@ndn/shared-types';
+
 import type { AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { KeyValueStore } from './store.js';
-import type { BaseRecord } from './types.js';
 
 export class Repository<T extends BaseRecord> {
   constructor(

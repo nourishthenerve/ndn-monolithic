@@ -1,3 +1,4 @@
+import type { BaseRecord } from '@ndn/shared-types';
 import { describe, expect, it } from 'vitest';
 
 import { InMemoryAuditLog } from './audit.js';
@@ -5,7 +6,6 @@ import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 import { Repository } from './repository.js';
 import { InMemoryStore } from './store.js';
-import type { BaseRecord } from './types.js';
 
 interface Patient extends BaseRecord {
   name: string;
