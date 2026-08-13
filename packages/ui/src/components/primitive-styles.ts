@@ -31,7 +31,8 @@ body {
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.625rem 1.25rem;
+  padding-block: 0.625rem;
+  padding-inline: 1.25rem;
   border-radius: 0.375rem;
   border: 1px solid transparent;
   font-family: var(--ndn-font-family-base);
@@ -79,7 +80,8 @@ body {
 }
 
 .ndn-input {
-  padding: 0.625rem 0.75rem;
+  padding-block: 0.625rem;
+  padding-inline: 0.75rem;
   border: 1px solid var(--ndn-color-text-muted);
   border-radius: 0.375rem;
   font-size: 1rem;
@@ -111,19 +113,20 @@ body {
 
 .ndn-skip-link {
   position: absolute;
-  left: 0.5rem;
-  top: -3rem;
+  inset-inline-start: 0.5rem;
+  inset-block-start: -3rem;
   z-index: 100;
-  padding: 0.625rem 1rem;
+  padding-block: 0.625rem;
+  padding-inline: 1rem;
   background-color: var(--ndn-color-brand);
   color: #ffffff;
   border-radius: 0.375rem;
   text-decoration: none;
-  transition: top var(--ndn-motion-duration-fast) ease;
+  transition: inset-block-start var(--ndn-motion-duration-fast) ease;
 }
 
 .ndn-skip-link:focus {
-  top: 0.5rem;
+  inset-block-start: 0.5rem;
 }
 
 .${visuallyHiddenClassName} {

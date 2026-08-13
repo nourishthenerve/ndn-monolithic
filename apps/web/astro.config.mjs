@@ -8,4 +8,11 @@ import { defineConfig } from 'astro/config';
 export default defineConfig({
   output: 'static',
   integrations: [react()],
+  // TASK 1.1.2: `/` has no content of its own — every real page lives
+  // under a locale prefix (`apps/web/src/pages/[locale]/`). In static
+  // output with no adapter, Astro serves this as an HTML
+  // <meta http-equiv="refresh"> redirect (no server-side 301 available).
+  redirects: {
+    '/': '/en',
+  },
 });
