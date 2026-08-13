@@ -2,6 +2,9 @@ node_modules/
 dist/
 coverage/
 cdk.out/
+.astro/
+test-results/
+playwright-report/
 .env
 .env.*
 *.log

@@ -243,8 +243,14 @@ export class WebStack extends Stack {
     // assets, and stays versioned regardless. See docs/runbooks/
     // iac-baseline.md for why guardrails.ts's runtime-role deny isn't
     // wired to this bucket.
+    //
+    // TASK 1.1.1: source is now apps/web's real `astro build` output
+    // (packages/ui's design system rendered for real), not 0.4.1's
+    // placeholder page — `apps/web/dist` must exist on disk before `cdk
+    // synth`/`cdk deploy` runs (CI's deploy and pr-environment jobs both
+    // run `pnpm --filter @ndn/web run build` first; see ci.yml).
     new BucketDeployment(this, 'SiteDeployment', {
-      sources: [Source.asset(`${moduleDir}../assets/site`)],
+      sources: [Source.asset(`${moduleDir}../../apps/web/dist`)],
       destinationBucket: siteBucket,
       distribution,
       distributionPaths: ['/*'],

@@ -4,6 +4,14 @@ packages:
   - 'services/*'
   - 'infra'
   - 'tests'
+# TASK 1.1.1: nanoid@3.3.17 (GHSA-2v37-7h3g-55p8, high) is a transitive
+# devDependency reached via postcss (vite, pulled in by both vitest and
+# Astro) — never invoked with attacker-controlled input in this repo, but
+# `pnpm audit --audit-level=high` (00-conventions.md's required gate,
+# TASK 0.2.1) doesn't distinguish dev from prod. Pinned past the patched
+# version rather than left to fail CI on every future PR.
+overrides:
+  nanoid: '^3.3.18'
 allowBuilds:
   esbuild: true
   unrs-resolver: true
