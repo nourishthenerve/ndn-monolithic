@@ -11,15 +11,31 @@ export interface RouteEntry {
   readonly locale: Locale;
   /** Absolute path including the locale prefix, e.g. `/en` or `/en/about`. */
   readonly path: string;
+  /**
+   * i18n key for this route's primary-nav label (TASK 1.2.1's `Nav.astro`
+   * reads it). Unset for routes that must pass the a11y gate above but
+   * aren't a top-level nav item — e.g. a future blog post or workshop
+   * detail page.
+   */
+  readonly navLabelKey?: string;
 }
 
-// Segment relative to a locale prefix; '' means the locale index itself
-// (`/en`). No leading or trailing slash.
-const routeSegments: readonly string[] = [''];
+interface RouteSegment {
+  /** Relative to a locale prefix; '' means the locale index itself (`/en`). No leading or trailing slash. */
+  readonly segment: string;
+  readonly navLabelKey?: string;
+}
+
+const routeSegments: readonly RouteSegment[] = [
+  { segment: '', navLabelKey: 'nav.home' },
+  { segment: 'about', navLabelKey: 'nav.about' },
+  { segment: 'services', navLabelKey: 'nav.services' },
+];
 
 export const routes: readonly RouteEntry[] = supportedLocales.flatMap((locale) =>
-  routeSegments.map((segment) => ({
+  routeSegments.map(({ segment, navLabelKey }) => ({
     locale,
     path: segment === '' ? `/${locale}` : `/${locale}/${segment}`,
+    navLabelKey,
   })),
 );

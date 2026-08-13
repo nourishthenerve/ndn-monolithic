@@ -1,0 +1,78 @@
+---
+// TASK 1.2.1: primary site navigation, built from packages/ui primitives
+// only. Reads routes.ts rather than a hard-coded list — a route only
+// shows up here if it opts in via `navLabelKey`, so a future non-nav
+// route (a blog post, a workshop detail page) can still register for
+// 1.1.3's a11y gate without also cluttering primary nav.
+import { t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Link } from '@ndn/ui';
+
+import { routes } from '../routes.js';
+import { siteName } from '../site-config.js';
+
+interface Props {
+  readonly locale: Locale;
+}
+
+const { locale } = Astro.props;
+
+const navRoutes = routes.filter(
+  (route): route is (typeof routes)[number] & { navLabelKey: string } =>
+    route.locale === locale && route.navLabelKey !== undefined,
+);
+
+// TASK 1.2.1: a plain `set:html` string, not a literal `<style>...</style>`
+// block — same reason index.astro's rootCss/primitiveStylesCss already use
+// this shape (see BaseLayout.astro): astro-eslint-parser hands the i18n
+// lint rule (packages/eslint-plugin-i18n) raw `<style>` text content as
+// `AstroRawText`, which it can't distinguish from real page copy.
+const navStylesCss = `
+.ndn-nav-header {
+  border-block-end: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.ndn-nav-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 1rem;
+  padding-inline: 1rem;
+}
+
+.ndn-nav-brand {
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--ndn-color-text);
+}
+
+.ndn-nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+`;
+---
+
+<header class="ndn-nav-header">
+  <nav aria-label={t('nav.primaryLabel', undefined, locale)}>
+    <a class="ndn-nav-brand" href={`/${locale}`}>{siteName}</a>
+    <ul class="ndn-nav-list">
+      {
+        navRoutes.map((route) => (
+          <li>
+            <Link href={route.path}>{t(route.navLabelKey, undefined, locale)}</Link>
+          </li>
+        ))
+      }
+    </ul>
+  </nav>
+</header>
+
+<style set:html={navStylesCss} />

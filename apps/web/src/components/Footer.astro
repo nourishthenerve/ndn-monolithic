@@ -1,0 +1,64 @@
+---
+// TASK 1.2.1: footer built from packages/ui primitives only. Social links
+// come from config/social-links.ts (a checked-in, Zod-validated array) —
+// "configurable" means editing that file, not this markup.
+import { t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading, Link, visuallyHiddenClassName } from '@ndn/ui';
+
+import { socialLinks } from '../config/social-links.js';
+import { siteName } from '../site-config.js';
+
+interface Props {
+  readonly locale: Locale;
+}
+
+const { locale } = Astro.props;
+const year = new Date().getFullYear();
+
+// TASK 1.2.1: see Nav.astro's comment on why this is `set:html`, not a
+// literal `<style>...</style>` block.
+const footerStylesCss = `
+footer {
+  border-block-start: 1px solid rgba(0, 0, 0, 0.08);
+  padding-block: 1.5rem;
+  padding-inline: 1rem;
+}
+
+.ndn-footer-social-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  list-style: none;
+  margin-block: 0 1rem;
+  margin-inline: 0;
+  padding: 0;
+}
+
+.ndn-footer-copyright {
+  margin: 0;
+  color: var(--ndn-color-text-muted);
+  font-size: 0.875rem;
+}
+`;
+---
+
+<footer>
+  <Heading level={2} className={visuallyHiddenClassName}>
+    {t('footer.socialHeading', undefined, locale)}
+  </Heading>
+  <ul class="ndn-footer-social-list">
+    {
+      socialLinks.map((link) => (
+        <li>
+          <Link href={link.href} external>
+            {link.label}
+          </Link>
+        </li>
+      ))
+    }
+  </ul>
+  <p class="ndn-footer-copyright">{t('footer.copyright', { year, siteName }, locale)}</p>
+</footer>
+
+<style set:html={footerStylesCss} />

@@ -1,76 +1,36 @@
 ---
-// TASK 1.1.2: locale-prefixed routing (`/en/...`) so a second language is
-// additive routing/catalogue work later, not a URL-scheme change (D-04).
-// Replaces TASK 1.1.1's un-prefixed apps/web/src/pages/index.astro — the
-// root path now redirects here (astro.config.mjs's `redirects`).
-import { localeDirection, supportedLocales, t } from '@ndn/i18n';
+// TASK 1.1.2 hand-authored this page's own <html>/<head>/skip-link
+// boilerplate before BaseLayout existed; TASK 1.2.1 introduces
+// BaseLayout, and every page (including this one) now renders through it.
+import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import {
-  Button,
-  Card,
-  colorSchemeCssVariables,
-  Heading,
-  Input,
-  Link as UiLink,
-  primitiveStylesCss,
-  reducedMotionGlobalCss,
-  SkipLink,
-  typeTokenCssVariables,
-  VisuallyHidden,
-} from '@ndn/ui';
+import { Button, Card, Heading, Input, Link as UiLink, VisuallyHidden } from '@ndn/ui';
 
+import BaseLayout from '../../layouts/BaseLayout.astro';
 import { siteName } from '../../site-config.js';
-
-// TASK 1.1.3: `<main>` below carries tabindex="-1" so it is
-// programmatically focusable. Without it, activating the skip link scrolls
-// the viewport but leaves keyboard focus behind on the link itself, so the
-// very next Tab press re-enters the header instead of continuing into page
-// content — caught by tests/pr-env/keyboard.test.ts against a real
-// browser. tabindex="-1" does not add `<main>` to the normal Tab order.
 
 export function getStaticPaths() {
   return supportedLocales.map((locale) => ({ params: { locale } }));
 }
 
 const { locale } = Astro.params as { locale: Locale };
-const dir = localeDirection(locale);
-
-const rootVariables = { ...colorSchemeCssVariables('light'), ...typeTokenCssVariables() };
-const rootCss = `:root {\n${Object.entries(rootVariables)
-  .map(([name, value]) => `  ${name}: ${value};`)
-  .join('\n')}\n}`;
 ---
 
-<!doctype html>
-<html lang={locale} dir={dir}>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{siteName}</title>
-    <meta name="description" content={t('site.description', undefined, locale)} />
-    <style set:html={rootCss} />
-    <style set:html={reducedMotionGlobalCss} />
-    <style set:html={primitiveStylesCss} />
-  </head>
-  <body>
-    <SkipLink>{t('common.skipToContent', undefined, locale)}</SkipLink>
-    <main id="main" tabindex="-1">
-      <Heading level={1}>{siteName}</Heading>
-      <p>{t('site.description', undefined, locale)}</p>
+<BaseLayout locale={locale} title={siteName} description={t('site.description', undefined, locale)}>
+  <Heading level={1}>{siteName}</Heading>
+  <p>{t('site.description', undefined, locale)}</p>
 
-      <Card>
-        <Heading level={2}>{t('home.getInTouch', undefined, locale)}</Heading>
-        <Input
-          label={t('home.emailLabel', undefined, locale)}
-          type="email"
-          name="email"
-          autocomplete="email"
-        />
-        <Button type="submit">{t('common.send', undefined, locale)}</Button>
-        <p><UiLink href={`/${locale}/about`}>{t('common.learnMoreAboutUs', undefined, locale)}</UiLink></p>
-      </Card>
+  <Card>
+    <Heading level={2}>{t('common.getInTouch', undefined, locale)}</Heading>
+    <Input
+      label={t('home.emailLabel', undefined, locale)}
+      type="email"
+      name="email"
+      autocomplete="email"
+    />
+    <Button type="submit">{t('common.send', undefined, locale)}</Button>
+    <p><UiLink href={`/${locale}/about`}>{t('common.learnMoreAboutUs', undefined, locale)}</UiLink></p>
+  </Card>
 
-      <VisuallyHidden>{t('common.endOfPage', undefined, locale)}</VisuallyHidden>
-    </main>
-  </body>
-</html>
+  <VisuallyHidden>{t('common.endOfPage', undefined, locale)}</VisuallyHidden>
+</BaseLayout>
