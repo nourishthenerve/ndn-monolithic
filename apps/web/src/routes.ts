@@ -7,6 +7,8 @@
 import { supportedLocales } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 
+import { legalPages } from './config/legal-pages.js';
+
 export interface RouteEntry {
   readonly locale: Locale;
   /** Absolute path including the locale prefix, e.g. `/en` or `/en/about`. */
@@ -30,6 +32,11 @@ const routeSegments: readonly RouteSegment[] = [
   { segment: '', navLabelKey: 'nav.home' },
   { segment: 'about', navLabelKey: 'nav.about' },
   { segment: 'services', navLabelKey: 'nav.services' },
+  // TASK 1.2.2: legal pages aren't primary-nav items (no navLabelKey) —
+  // they're linked from Footer.astro instead — but still registered here so
+  // 1.1.3's a11y/keyboard gate covers them. Derived from legal-pages.ts
+  // rather than listed by hand, so the two configs can't drift apart.
+  ...legalPages.map((page): RouteSegment => ({ segment: `legal/${page.slug}` })),
 ];
 
 export const routes: readonly RouteEntry[] = supportedLocales.flatMap((locale) =>

@@ -1,0 +1,33 @@
+---
+// TASK 1.2.2: an explicit, visibly-marked banner — not a code comment —
+// stating a legal page hasn't cleared legal review yet (LL-05/LL-06,
+// docs/plan/08-long-lead.md). `role="note"` marks it as supplementary
+// content for assistive tech without claiming a landmark it isn't.
+import { t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+
+interface Props {
+  readonly locale: Locale;
+}
+
+const { locale } = Astro.props;
+
+// `set:html`, not a literal `<style>...</style>` block — same reason
+// Nav.astro's navStylesCss uses this shape (see BaseLayout.astro's comment).
+const bannerStylesCss = `
+.ndn-placeholder-banner {
+  border: 1px solid var(--ndn-color-error);
+  border-radius: 4px;
+  padding-block: 0.75rem;
+  padding-inline: 1rem;
+  margin-block-end: 1.5rem;
+  color: var(--ndn-color-error);
+}
+`;
+---
+
+<p class="ndn-placeholder-banner" role="note">
+  <strong>{t('legal.placeholderNotice', undefined, locale)}</strong>
+</p>
+
+<style set:html={bannerStylesCss} />

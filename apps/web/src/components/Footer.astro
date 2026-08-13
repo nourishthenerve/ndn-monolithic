@@ -6,6 +6,7 @@ import { t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link, visuallyHiddenClassName } from '@ndn/ui';
 
+import { legalPages } from '../config/legal-pages.js';
 import { socialLinks } from '../config/social-links.js';
 import { siteName } from '../site-config.js';
 
@@ -25,7 +26,8 @@ footer {
   padding-inline: 1rem;
 }
 
-.ndn-footer-social-list {
+.ndn-footer-social-list,
+.ndn-footer-legal-list {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
@@ -58,6 +60,20 @@ footer {
       ))
     }
   </ul>
+
+  <Heading level={2} className={visuallyHiddenClassName}>
+    {t('legal.footerHeading', undefined, locale)}
+  </Heading>
+  <ul class="ndn-footer-legal-list">
+    {
+      legalPages.map((page) => (
+        <li>
+          <Link href={`/${locale}/legal/${page.slug}`}>{t(page.footerLabelKey, undefined, locale)}</Link>
+        </li>
+      ))
+    }
+  </ul>
+
   <p class="ndn-footer-copyright">{t('footer.copyright', { year, siteName }, locale)}</p>
 </footer>
 
