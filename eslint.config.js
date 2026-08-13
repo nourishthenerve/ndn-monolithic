@@ -15,6 +15,9 @@ export default tseslint.config(
       '**/dist/**',
       '**/coverage/**',
       '**/cdk.out/**',
+      // Astro's auto-generated type declarations (content.d.ts, types.d.ts)
+      // — a build artifact, not source; same treatment as dist/cdk.out.
+      '**/.astro/**',
       'infra/src/__fixtures__/no-destructive/**',
     ],
   },

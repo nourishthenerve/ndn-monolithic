@@ -73,6 +73,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run typecheck
+      # TASK 1.1.1: packages/ui's own `test` script chains a real-browser
+      # Playwright spec (reduced-motion) after vitest — cached by lockfile
+      # hash (R-13) since the browser version tracks @playwright/test's.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright's Chromium browser
+        run: pnpm --filter @ndn/ui exec playwright install --with-deps chromium
       - name: Unit tests
         run: pnpm run test
       - name: Integration tests
@@ -265,6 +275,10 @@ jobs:
           node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # TASK 1.1.1: same requirement as the quality job — the BucketDeployment
+      # asset is apps/web's build output, which must exist before cdk deploy.
+      - name: Build apps/web (astro build)
+        run: pnpm --filter @ndn/web run build
       - uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: arn:aws:iam::357601815388:role/ndn-deploy-pr
@@ -337,6 +351,10 @@ jobs:
           node-version: '22'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # TASK 1.1.1: same requirement as the quality job — the BucketDeployment
+      # asset is apps/web's build output, which must exist before cdk deploy.
+      - name: Build apps/web (astro build)
+        run: pnpm --filter @ndn/web run build
       - uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: arn:aws:iam::357601815388:role/ndn-deploy
