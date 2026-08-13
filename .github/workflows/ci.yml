@@ -220,6 +220,99 @@ jobs:
             echo "$result" | grep -qE "^${action}[[:space:]]+allowed\$"
           done
 
+  # TASK 0.6.3: the ephemeral-environment half of D-19's pre-production
+  # confidence stack (R-08). Deploys a uniquely-named, PR-scoped stack
+  # (NdnWebStackPr<number>, infra/bin/app.ts's PR_NUMBER branch), proves it
+  # for real — integration + contract + a11y against the live URL — then
+  # destroys it, in the same run, even on failure, via always().
+  #
+  # ndn-deploy-pr's own IAM policy (docs/runbooks/
+  # ephemeral-pr-environments.md) can only assume the same CDK bootstrap
+  # roles ndn-deploy already uses for production — it holds no
+  # PowerUserAccess and no permissions of its own beyond that. The
+  # `--exclusively` flag on every cdk command below is a second,
+  # workflow-level layer of the same boundary: this job's own intent is
+  # never to touch NdnWebStack/NdnBudgetStack, even though the underlying
+  # bootstrap roles technically could reach them (see the runbook's
+  # documented trade-off — reusing that shared, unscoped bootstrap path was
+  # a deliberate, sign-off-required decision, not an oversight).
+  #
+  # Landed informational-only for now (excluded from ci-summary's required
+  # gate below) — same "watch the first real run before promoting" pattern
+  # ci-pipeline.md already used for oidc-dry-run's own first landing: this
+  # is the first time ndn-deploy-pr's OIDC trust and a full live CloudFront
+  # deploy/destroy cycle are exercised from an actual Actions run rather
+  # than a local admin-profile proof.
+  pr-environment:
+    name: Ephemeral PR environment
+    needs: [changes, quality]
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # CloudFront distribution create/delete each take up to ~15 minutes
+    # (docs/runbooks/iac-baseline.md) — deploy, wait, test, and destroy
+    # together can approach that twice over.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PR_NUMBER: ${{ github.event.number }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.0.10
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: arn:aws:iam::357601815388:role/ndn-deploy-pr
+          aws-region: eu-west-2
+      - name: cdk deploy (this PR's ephemeral stack only)
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          npx cdk deploy "NdnWebStackPr${PR_NUMBER}" --exclusively --require-approval never \
+            --outputs-file /tmp/pr-env-outputs.json
+      - name: Wait for the distribution to actually serve, then export its URL
+        run: |
+          set -euo pipefail
+          domain=$(jq -r '.[].DistributionDomainName' /tmp/pr-env-outputs.json)
+          echo "PR_ENV_BASE_URL=https://${domain}" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 20); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "https://${domain}/health" || true)
+            [ "$status" = "200" ] && break
+            echo "waiting for https://${domain}/health (attempt ${attempt}, got ${status:-none})"
+            sleep 15
+          done
+          curl -sf "https://${domain}/health"
+      - name: Integration + contract + a11y tests against the live stack
+        run: pnpm run test:pr-env
+      # TASK 0.6.3 DoD: "destroys it in the same run (including on
+      # failure, via always())" — this step and the one below both run
+      # regardless of whether deploy/wait/test above succeeded.
+      - name: cdk destroy (always — even if the steps above failed)
+        if: always()
+        working-directory: infra
+        run: npx cdk destroy "NdnWebStackPr${PR_NUMBER}" --exclusively --force
+      - name: Assert this PR's stack leaves zero standing cost
+        if: always()
+        run: |
+          set -euo pipefail
+          # Scoped to exactly this PR's own stack name, not every
+          # NdnWebStackPr* stack in the account — a second PR's job can be
+          # mid-deploy concurrently (different ref, so not cancelled by
+          # this workflow's own concurrency group), and that stack existing
+          # is correct, not a leak this run should fail on.
+          status=$(aws cloudformation describe-stacks --stack-name "NdnWebStackPr${PR_NUMBER}" \
+            --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+          if [ "$status" != "NOT_FOUND" ] && [ "$status" != "DELETE_COMPLETE" ]; then
+            echo "NdnWebStackPr${PR_NUMBER} still exists (status: ${status}) — not zero standing cost." >&2
+            exit 1
+          fi
+          echo "NdnWebStackPr${PR_NUMBER}: ${status} — zero standing cost confirmed."
+
   # TASK 0.4.1: first real deploy job. CI is the only gate (C-06) — a green
   # `quality` run on push to main is what takes the CDK stack (S3 site
   # bucket, CloudFront, HTTP API + health Lambda — see infra/src/web-stack.ts)
@@ -258,7 +351,7 @@ jobs:
   # one check name that's always present to point at.
   ci-summary:
     name: CI summary
-    needs: [changes, quality, docs-lint, secret-scan, oidc-dry-run, deploy]
+    needs: [changes, quality, docs-lint, secret-scan, oidc-dry-run, pr-environment, deploy]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -289,17 +382,21 @@ jobs:
       - name: Gate on required jobs
         run: |
           set -euo pipefail
-          echo "changes:      ${{ needs.changes.result }}"
-          echo "quality:      ${{ needs.quality.result }}"
-          echo "docs-lint:    ${{ needs.docs-lint.result }}"
-          echo "secret-scan:  ${{ needs.secret-scan.result }}"
-          echo "oidc-dry-run: ${{ needs.oidc-dry-run.result }}"
-          echo "deploy:       ${{ needs.deploy.result }}"
+          echo "changes:        ${{ needs.changes.result }}"
+          echo "quality:        ${{ needs.quality.result }}"
+          echo "docs-lint:      ${{ needs.docs-lint.result }}"
+          echo "secret-scan:    ${{ needs.secret-scan.result }}"
+          echo "oidc-dry-run:   ${{ needs.oidc-dry-run.result }}"
+          # TASK 0.6.3: informational only, not yet gated — see the
+          # pr-environment job's own header comment for why (same
+          # first-landing pattern as oidc-dry-run originally used).
+          echo "pr-environment: ${{ needs.pr-environment.result }} (informational — not yet gating)"
+          echo "deploy:         ${{ needs.deploy.result }}"
           fail=0
           [ "${{ needs.changes.result }}" = "success" ] || fail=1
-          # oidc-dry-run runs on pull_request only; deploy runs on push to
-          # main only (and only when code changed) — each is `skipped` on
-          # the other's trigger by design, not a gap.
+          # oidc-dry-run and pr-environment run on pull_request only; deploy
+          # runs on push to main only (and only when code changed) — each
+          # is `skipped` on the other's trigger by design, not a gap.
           for r in "${{ needs.quality.result }}" "${{ needs.docs-lint.result }}" "${{ needs.secret-scan.result }}" "${{ needs.oidc-dry-run.result }}" "${{ needs.deploy.result }}"; do
             [ "$r" = "success" ] || [ "$r" = "skipped" ] || fail=1
           done

@@ -21,6 +21,17 @@ function synth() {
   return Template.fromStack(stack);
 }
 
+function synthEphemeral() {
+  const app = new App();
+  const stack = new WebStack(app, 'TestWebStackPr123', {
+    env: { account: '357601815388', region: 'eu-west-2' },
+    deployVersion: 'test-sha',
+    ephemeral: true,
+    prLabel: 'pr-123',
+  });
+  return Template.fromStack(stack);
+}
+
 describe('WebStack — site bucket', () => {
   it('is private, versioned, and SSL-enforced', () => {
     const template = synth();
@@ -333,5 +344,51 @@ describe('WebStack — outputs', () => {
   it('exposes the CodeDeploy deployment group name for post-deploy verification', () => {
     const template = synth();
     template.hasOutput('HealthDeploymentGroupName', {});
+  });
+});
+
+describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
+  it('has no CloudFront alias and no custom viewer certificate — avoids colliding with the prod distribution', () => {
+    const template = synthEphemeral();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Aliases: Match.absent(),
+        // No ViewerCertificate at all means CloudFront falls back to its
+        // own default *.cloudfront.net certificate — the same absence
+        // production's Aliases/certificate pairing never exercises.
+        ViewerCertificate: Match.absent(),
+      }),
+    });
+  });
+
+  it('does not import the production ACM certificate', () => {
+    const template = synthEphemeral();
+    const distributions = template.findResources('AWS::CloudFront::Distribution');
+    const [distribution] = Object.values(distributions);
+    expect(JSON.stringify((distribution as { Properties: unknown }).Properties)).not.toContain(
+      'AcmCertificateArn',
+    );
+  });
+
+  it('scopes both explicit log group names to the given PR label, not the fixed production names', () => {
+    const template = synthEphemeral();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/pr-123/health-function',
+      RetentionInDays: 14,
+    });
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/pr-123/smoke-test-function',
+      RetentionInDays: 14,
+    });
+  });
+
+  it('production mode is unaffected — still the fixed domain, certificate, and log group names', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({ Aliases: [DOMAIN_NAME] }),
+    });
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/health-function',
+    });
   });
 });

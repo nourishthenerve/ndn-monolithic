@@ -41,6 +41,24 @@ const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 export interface WebStackProps extends StackProps {
   /** Deploying commit SHA, surfaced by /health. Falls back to 'local'. */
   readonly deployVersion?: string;
+  /**
+   * TASK 0.6.3: true for a short-lived per-PR stack. Ephemeral stacks skip
+   * the custom domain/certificate entirely (CloudFront rejects a second
+   * distribution aliasing the same domain — this would collide with prod's
+   * `next.nourishthenerve.com`) and serve on their own unique
+   * `*.cloudfront.net` domain instead. Defaults to false (production shape,
+   * unchanged).
+   */
+  readonly ephemeral?: boolean;
+  /**
+   * TASK 0.6.3: a short, unique label (e.g. `pr-123`) mixed into explicit
+   * log group names so two ephemeral stacks deployed concurrently (two
+   * open PRs) never collide — CloudWatch Logs group names are a flat
+   * per-account/region namespace, not scoped by CloudFormation stack.
+   * Required when `ephemeral` is true; ignored otherwise (production keeps
+   * its fixed, documented `/ndn/*` names).
+   */
+  readonly prLabel?: string;
 }
 
 export class WebStack extends Stack {
@@ -56,11 +74,15 @@ export class WebStack extends Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
-    const certificate: ICertificate = Certificate.fromCertificateArn(
-      this,
-      'Certificate',
-      CERTIFICATE_ARN,
-    );
+    // TASK 0.6.3: an ephemeral stack has no custom domain, so it has no
+    // matching ACM certificate either — CloudFront ties ViewerCertificate
+    // to the exact set of Aliases, so the two are skipped together.
+    const certificate: ICertificate | undefined = props.ephemeral
+      ? undefined
+      : Certificate.fromCertificateArn(this, 'Certificate', CERTIFICATE_ARN);
+
+    const logGroupName = (baseName: string): string =>
+      props.ephemeral && props.prLabel ? `/ndn/${props.prLabel}/${baseName}` : `/ndn/${baseName}`;
 
     const healthFunction = new NodejsFunction(this, 'HealthFunction', {
       entry: `${moduleDir}../../services/api/src/health.ts`,
@@ -75,7 +97,7 @@ export class WebStack extends Stack {
       // TASK 0.5.2 (R-11): explicit log group so retention is 14 days from
       // the first deploy — Lambda's own auto-created group defaults to
       // "never expire".
-      logGroup: createLogGroup(this, 'HealthFunctionLogGroup', '/ndn/health-function'),
+      logGroup: createLogGroup(this, 'HealthFunctionLogGroup', logGroupName('health-function')),
     });
 
     // TASK 0.6.2: publishing a Version + Alias, and routing every caller
@@ -94,12 +116,70 @@ export class WebStack extends Stack {
       integration: new HttpLambdaIntegration('HealthIntegration', healthAlias),
     });
 
+    const securityHeaders = new ResponseHeadersPolicy(this, 'SecurityHeaders', {
+      securityHeadersBehavior: {
+        strictTransportSecurity: {
+          override: true,
+          accessControlMaxAge: Duration.days(365),
+          includeSubdomains: true,
+          preload: true,
+        },
+        contentTypeOptions: { override: true },
+        frameOptions: { override: true, frameOption: HeadersFrameOption.DENY },
+        referrerPolicy: {
+          override: true,
+          referrerPolicy: HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+        },
+        contentSecurityPolicy: {
+          override: true,
+          contentSecurityPolicy:
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'",
+        },
+      },
+    });
+
+    const distribution = new Distribution(this, 'Distribution', {
+      priceClass: PriceClass.PRICE_CLASS_100,
+      // TASK 0.6.3: ephemeral stacks serve on CloudFront's own
+      // *.cloudfront.net domain (always unique per distribution, already
+      // TLS-covered) rather than next.nourishthenerve.com — see the
+      // `certificate` comment above.
+      domainNames: props.ephemeral ? undefined : [DOMAIN_NAME],
+      certificate,
+      defaultRootObject: 'index.html',
+      defaultBehavior: {
+        origin: S3BucketOrigin.withOriginAccessControl(siteBucket),
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        responseHeadersPolicy: securityHeaders,
+      },
+      additionalBehaviors: {
+        // Same-origin API (ADR 0003/D-08): /health is proxied through
+        // CloudFront to the HTTP API rather than called cross-origin.
+        // R-14: no-store — matches "no patient data traverses CloudFront"
+        // even though /health itself carries none.
+        '/health': {
+          origin: new HttpOrigin(
+            `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
+          ),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          responseHeadersPolicy: securityHeaders,
+        },
+      },
+    });
+
     // TASK 0.6.2: the AfterAllowTraffic hook (see docs/runbooks/rollback.md)
     // — runs once CodeDeploy has finished shifting traffic to the new
     // version, hits the live custom domain (proving DNS + cert + CDN +
     // origin + the new code all actually work), and reports Failed/
     // Succeeded back to CodeDeploy. A Failed report is what triggers the
-    // automatic alias rollback.
+    // automatic alias rollback. TASK 0.6.3: an ephemeral stack has no
+    // custom domain to hit, so it targets the distribution's own
+    // *.cloudfront.net domain instead — moot in practice, since CodeDeploy
+    // only invokes this hook on an *update* to an existing alias, and every
+    // ephemeral stack is created fresh and destroyed within the same CI
+    // run, never updated.
     const smokeTestFunction = new NodejsFunction(this, 'SmokeTestFunction', {
       entry: `${moduleDir}../../services/api/src/smoke-test.ts`,
       handler: 'handler',
@@ -108,9 +188,13 @@ export class WebStack extends Stack {
       memorySize: 128,
       timeout: Duration.seconds(30),
       environment: {
-        SITE_DOMAIN: DOMAIN_NAME,
+        SITE_DOMAIN: props.ephemeral ? distribution.distributionDomainName : DOMAIN_NAME,
       },
-      logGroup: createLogGroup(this, 'SmokeTestFunctionLogGroup', '/ndn/smoke-test-function'),
+      logGroup: createLogGroup(
+        this,
+        'SmokeTestFunctionLogGroup',
+        logGroupName('smoke-test-function'),
+      ),
     });
 
     // TASK 0.6.2: CloudWatch alarms scoped to the alias (not the bare
@@ -151,55 +235,6 @@ export class WebStack extends Stack {
       deploymentConfig: LambdaDeploymentConfig.CANARY_10PERCENT_5MINUTES,
       alarms: [healthAliasErrorsAlarm, healthAliasLatencyAlarm],
       postHook: smokeTestFunction,
-    });
-
-    const securityHeaders = new ResponseHeadersPolicy(this, 'SecurityHeaders', {
-      securityHeadersBehavior: {
-        strictTransportSecurity: {
-          override: true,
-          accessControlMaxAge: Duration.days(365),
-          includeSubdomains: true,
-          preload: true,
-        },
-        contentTypeOptions: { override: true },
-        frameOptions: { override: true, frameOption: HeadersFrameOption.DENY },
-        referrerPolicy: {
-          override: true,
-          referrerPolicy: HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
-        },
-        contentSecurityPolicy: {
-          override: true,
-          contentSecurityPolicy:
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'",
-        },
-      },
-    });
-
-    const distribution = new Distribution(this, 'Distribution', {
-      priceClass: PriceClass.PRICE_CLASS_100,
-      domainNames: [DOMAIN_NAME],
-      certificate,
-      defaultRootObject: 'index.html',
-      defaultBehavior: {
-        origin: S3BucketOrigin.withOriginAccessControl(siteBucket),
-        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        responseHeadersPolicy: securityHeaders,
-      },
-      additionalBehaviors: {
-        // Same-origin API (ADR 0003/D-08): /health is proxied through
-        // CloudFront to the HTTP API rather than called cross-origin.
-        // R-14: no-store — matches "no patient data traverses CloudFront"
-        // even though /health itself carries none.
-        '/health': {
-          origin: new HttpOrigin(
-            `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
-          ),
-          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          allowedMethods: AllowedMethods.ALLOW_GET_HEAD,
-          cachePolicy: CachePolicy.CACHING_DISABLED,
-          responseHeadersPolicy: securityHeaders,
-        },
-      },
     });
 
     // Pruning superseded build assets on each deploy is ordinary deploy

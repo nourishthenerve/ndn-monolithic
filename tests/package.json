@@ -7,6 +7,14 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:pr-env": "vitest run --config vitest.pr-env.config.ts"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.20.1",
+    "axe-core": "^4.13.0",
+    "jsdom": "^30.0.1",
+    "zod": "^4.4.3"
   }
 }
