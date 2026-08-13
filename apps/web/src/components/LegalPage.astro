@@ -1,0 +1,47 @@
+---
+// TASK 1.2.2: shared body for every `/legal/*` page — each file under
+// pages/[locale]/legal/ is a thin per-slug wrapper around this component,
+// so the placeholder banner and the "get in touch" CTA are guaranteed
+// present on all five pages rather than re-authored five times with room
+// for one copy to quietly drop the banner.
+import { t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Button, Card, Heading } from '@ndn/ui';
+
+import type { LegalPageSlug } from '../config/legal-pages.js';
+import { legalPages } from '../config/legal-pages.js';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { siteName } from '../site-config.js';
+
+import PlaceholderBanner from './PlaceholderBanner.astro';
+
+interface Props {
+  readonly slug: LegalPageSlug;
+  readonly locale: Locale;
+}
+
+const { slug, locale } = Astro.props;
+
+const page = legalPages.find((entry) => entry.slug === slug);
+if (!page) {
+  throw new Error(`legal-pages config is missing the "${slug}" entry`);
+}
+
+const heading = t(page.headingKey, undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t(page.descriptionKey, undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+  <PlaceholderBanner locale={locale} />
+  <p>{t(page.bodyKey, undefined, locale)}</p>
+
+  <Card>
+    <Heading level={2}>{t('common.getInTouch', undefined, locale)}</Heading>
+    <p>{t('common.contactCtaBody', undefined, locale)}</p>
+    <Button>{t('common.contactCta', undefined, locale)}</Button>
+  </Card>
+</BaseLayout>

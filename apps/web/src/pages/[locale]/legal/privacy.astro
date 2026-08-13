@@ -1,0 +1,15 @@
+---
+// TASK 1.2.2: thin per-slug wrapper — see LegalPage.astro for the shared body.
+import { supportedLocales } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+
+import LegalPage from '../../../components/LegalPage.astro';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+---
+
+<LegalPage slug="privacy" locale={locale} />

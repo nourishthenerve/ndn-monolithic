@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./routes.js": "./src/routes.ts",
-    "./social-links.js": "./src/config/social-links.ts"
+    "./social-links.js": "./src/config/social-links.ts",
+    "./legal-pages.js": "./src/config/legal-pages.ts"
   },
   "scripts": {
     "lint": "eslint .",
