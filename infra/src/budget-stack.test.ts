@@ -13,6 +13,7 @@ import { BudgetStack } from './budget-stack.js';
 import {
   ALERT_EMAIL,
   LOG_INGESTION_ALARM_THRESHOLD_BYTES,
+  MONITORED_LOG_GROUP_NAMES,
   MONTHLY_BUDGET_LIMIT_USD,
 } from './config.js';
 
@@ -102,8 +103,14 @@ describe('BudgetStack — cost anomaly detection', () => {
 });
 
 describe('BudgetStack — log ingestion volume alarm (TASK 0.5.2, R-11)', () => {
-  it('alarms when account-wide log ingestion exceeds the threshold, summed across all log groups', () => {
+  it('alarms when ingestion across every monitored log group exceeds the threshold, summed — not SEARCH()', () => {
     const template = synth();
+    // AWS rejects any alarm math expression containing SEARCH() (confirmed
+    // against the real API — see docs/runbooks/rollback.md), so this must
+    // be a sum of named per-log-group metrics instead.
+    const expectedExpression = MONITORED_LOG_GROUP_NAMES.map(
+      (_, index) => `FILL(m${index}, 0)`,
+    ).join(' + ');
     template.hasResourceProperties('AWS::CloudWatch::Alarm', {
       AlarmName: 'ndn-log-ingestion-volume',
       ComparisonOperator: 'GreaterThanThreshold',
@@ -111,9 +118,19 @@ describe('BudgetStack — log ingestion volume alarm (TASK 0.5.2, R-11)', () => 
       EvaluationPeriods: 1,
       TreatMissingData: 'notBreaching',
       Metrics: Match.arrayWith([
-        Match.objectLike({
-          Expression: Match.stringLikeRegexp('SEARCH.*AWS/Logs.*IncomingBytes'),
-        }),
+        Match.objectLike({ Expression: expectedExpression }),
+        ...MONITORED_LOG_GROUP_NAMES.map((logGroupName) =>
+          Match.objectLike({
+            MetricStat: Match.objectLike({
+              Metric: Match.objectLike({
+                Namespace: 'AWS/Logs',
+                MetricName: 'IncomingBytes',
+                Dimensions: [{ Name: 'LogGroupName', Value: logGroupName }],
+              }),
+              Stat: 'Sum',
+            }),
+          }),
+        ),
       ]),
     });
   });

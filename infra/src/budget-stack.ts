@@ -8,7 +8,12 @@
 import { CfnOutput, Duration, Stack, type StackProps } from 'aws-cdk-lib';
 import { CfnBudget } from 'aws-cdk-lib/aws-budgets';
 import { CfnAnomalyMonitor, CfnAnomalySubscription } from 'aws-cdk-lib/aws-ce';
-import { ComparisonOperator, MathExpression, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+import {
+  ComparisonOperator,
+  MathExpression,
+  Metric,
+  TreatMissingData,
+} from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { Topic } from 'aws-cdk-lib/aws-sns';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
@@ -19,6 +24,7 @@ import {
   COST_ALLOCATION_TAG_KEY,
   COST_ALLOCATION_TAG_VALUE,
   LOG_INGESTION_ALARM_THRESHOLD_BYTES,
+  MONITORED_LOG_GROUP_NAMES,
   MONTHLY_BUDGET_LIMIT_USD,
 } from './config.js';
 
@@ -105,14 +111,37 @@ export class BudgetStack extends Stack {
     });
     logAlarmTopic.addSubscription(new EmailSubscription(ALERT_EMAIL));
 
-    // A SEARCH math expression, not a metric on one named log group: it
-    // sums IncomingBytes across every log group in the account, including
-    // ones created after this stack was — the same "no manual maintenance
-    // as new things enter the bill" reasoning as the SERVICE-dimensioned
-    // anomaly monitor above.
+    // A named metric per log group in MONITORED_LOG_GROUP_NAMES
+    // (config.ts), summed — not a SEARCH() expression. AWS's PutMetricAlarm
+    // API rejects any alarm math expression containing SEARCH, bare or
+    // wrapped in an aggregate function, even though the CloudWatch console
+    // accepts it for dashboard widgets — confirmed against the real API,
+    // not just CDK synth, after this collapsed every deploy since this
+    // alarm first landed (docs/runbooks/rollback.md). A log group forgotten
+    // here under-counts rather than fails loudly — see config.ts for why
+    // that's the accepted trade-off over standing up a metric-publishing
+    // Lambda for a £0.00 guard.
+    const perLogGroupMetrics = Object.fromEntries(
+      MONITORED_LOG_GROUP_NAMES.map((logGroupName, index) => [
+        `m${index}`,
+        new Metric({
+          namespace: 'AWS/Logs',
+          metricName: 'IncomingBytes',
+          dimensionsMap: { LogGroupName: logGroupName },
+          statistic: 'Sum',
+          period: Duration.days(1),
+        }),
+      ]),
+    );
+
     const logIngestionBytesPerDay = new MathExpression({
-      expression: 'SEARCH(\'{AWS/Logs,LogGroupName} MetricName="IncomingBytes"\', \'Sum\', 86400)',
-      usingMetrics: {},
+      // FILL(m, 0): a log group with zero bytes that day must not make the
+      // whole sum "missing" — metric math otherwise drops the period
+      // entirely if any one input metric has no datapoint.
+      expression: Object.keys(perLogGroupMetrics)
+        .map((id) => `FILL(${id}, 0)`)
+        .join(' + '),
+      usingMetrics: perLogGroupMetrics,
       period: Duration.days(1),
       label: 'Total log ingestion (bytes/day)',
     });
