@@ -233,8 +233,9 @@ jobs:
   # TASK 0.6.3: the ephemeral-environment half of D-19's pre-production
   # confidence stack (R-08). Deploys a uniquely-named, PR-scoped stack
   # (NdnWebStackPr<number>, infra/bin/app.ts's PR_NUMBER branch), proves it
-  # for real — integration + contract + a11y against the live URL — then
-  # destroys it, in the same run, even on failure, via always().
+  # for real — integration + contract + a11y + keyboard (TASK 1.1.3) against
+  # the live URL — then destroys it, in the same run, even on failure, via
+  # always().
   #
   # ndn-deploy-pr's own IAM policy (docs/runbooks/
   # ephemeral-pr-environments.md) can only assume the same CDK bootstrap
@@ -279,6 +280,17 @@ jobs:
       # asset is apps/web's build output, which must exist before cdk deploy.
       - name: Build apps/web (astro build)
         run: pnpm --filter @ndn/web run build
+      # TASK 1.1.3: tests/pr-env/a11y-full.test.ts + keyboard.test.ts run
+      # under Playwright against this PR's live URL (test:pr-env, below) —
+      # same cache-by-lockfile-hash pattern the quality job already uses
+      # for @ndn/ui's reduced-motion suite (TASK 1.1.1).
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright's Chromium browser
+        run: pnpm --filter @ndn/tests exec playwright install --with-deps chromium
       - uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: arn:aws:iam::357601815388:role/ndn-deploy-pr
@@ -301,7 +313,7 @@ jobs:
             sleep 15
           done
           curl -sf "https://${domain}/health"
-      - name: Integration + contract + a11y tests against the live stack
+      - name: Integration + contract + a11y + keyboard tests against the live stack
         run: pnpm run test:pr-env
       # TASK 0.6.3 DoD: "destroys it in the same run (including on
       # failure, via always())" — this step and the one below both run

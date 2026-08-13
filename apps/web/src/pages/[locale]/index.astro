@@ -21,6 +21,13 @@ import {
 
 import { siteName } from '../../site-config.js';
 
+// TASK 1.1.3: `<main>` below carries tabindex="-1" so it is
+// programmatically focusable. Without it, activating the skip link scrolls
+// the viewport but leaves keyboard focus behind on the link itself, so the
+// very next Tab press re-enters the header instead of continuing into page
+// content — caught by tests/pr-env/keyboard.test.ts against a real
+// browser. tabindex="-1" does not add `<main>` to the normal Tab order.
+
 export function getStaticPaths() {
   return supportedLocales.map((locale) => ({ params: { locale } }));
 }
@@ -47,7 +54,7 @@ const rootCss = `:root {\n${Object.entries(rootVariables)
   </head>
   <body>
     <SkipLink>{t('common.skipToContent', undefined, locale)}</SkipLink>
-    <main id="main">
+    <main id="main" tabindex="-1">
       <Heading level={1}>{siteName}</Heading>
       <p>{t('site.description', undefined, locale)}</p>
 

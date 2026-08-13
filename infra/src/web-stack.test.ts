@@ -127,6 +127,60 @@ describe('WebStack — CloudFront distribution', () => {
     });
   });
 
+  it('rewrites clean URLs to index.html on the default (S3) behavior only, not on /health', () => {
+    const template = synth();
+    const [functionLogicalId] = Object.keys(template.findResources('AWS::CloudFront::Function'));
+    template.hasResourceProperties('AWS::CloudFront::Function', {
+      FunctionConfig: Match.objectLike({ Runtime: 'cloudfront-js-2.0' }),
+    });
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        DefaultCacheBehavior: Match.objectLike({
+          FunctionAssociations: [
+            Match.objectLike({
+              EventType: 'viewer-request',
+              FunctionARN: { 'Fn::GetAtt': [functionLogicalId, 'FunctionARN'] },
+            }),
+          ],
+        }),
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: '/health',
+            FunctionAssociations: Match.absent(),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it("TASK 1.1.3: the rewrite function's actual logic appends index.html for clean URLs, leaving real files alone", () => {
+    const template = synth();
+    const [resource] = Object.values(template.findResources('AWS::CloudFront::Function'));
+    if (!resource) {
+      throw new Error('no AWS::CloudFront::Function resource found in the synthesized template');
+    }
+    const source: string = resource.Properties.FunctionCode;
+
+    // The synthesized inline code is plain JS (CloudFront's JS-2.0 runtime
+    // is a restricted subset, but this handler only uses string methods
+    // that behave identically under Node) — run it for real, evaluating
+    // the exact deployed function body rather than asserting on source
+    // text, so a logic regression is actually caught, not just a string
+    // match going stale.
+    const handler = new Function(`${source}\nreturn handler(arguments[0]);`) as (event: {
+      request: { uri: string };
+    }) => { uri: string };
+
+    const rewrite = (uri: string): string => handler({ request: { uri } }).uri;
+
+    expect(rewrite('/')).toBe('/index.html');
+    expect(rewrite('/en')).toBe('/en/index.html');
+    expect(rewrite('/en/')).toBe('/en/index.html');
+    expect(rewrite('/en/about')).toBe('/en/about/index.html');
+    expect(rewrite('/assets/site.css')).toBe('/assets/site.css');
+    expect(rewrite('/favicon.ico')).toBe('/favicon.ico');
+  });
+
   it('attaches the security headers policy to both behaviors', () => {
     const template = synth();
     const [headersPolicyLogicalId] = Object.keys(

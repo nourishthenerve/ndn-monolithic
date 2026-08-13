@@ -14,10 +14,14 @@ import {
   AllowedMethods,
   CachePolicy,
   Distribution,
+  FunctionCode,
+  FunctionEventType,
+  FunctionRuntime,
   HeadersFrameOption,
   HeadersReferrerPolicy,
   PriceClass,
   ResponseHeadersPolicy,
+  Function as CloudFrontFunction,
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
@@ -138,6 +142,32 @@ export class WebStack extends Stack {
       },
     });
 
+    // TASK 1.1.3: `defaultRootObject` only rewrites the true root ('/') —
+    // it does not cascade to sub-paths. Against the S3 REST origin (OAC,
+    // not the separate "static website hosting" endpoint, which is the one
+    // that supports implicit per-prefix index documents), a request for
+    // `/en` looks for an object literally named `en`; only `en/index.html`
+    // exists, so without this rewrite every route but the root 403s —
+    // caught by tests/pr-env/a11y-full.test.ts/keyboard.test.ts the first
+    // time either was pointed at a real deployed stack rather than `/`.
+    const urlRewriteFunction = new CloudFrontFunction(this, 'UrlRewriteFunction', {
+      runtime: FunctionRuntime.JS_2_0,
+      code: FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+
+  if (uri.endsWith('/')) {
+    request.uri += 'index.html';
+  } else if (!uri.slice(uri.lastIndexOf('/') + 1).includes('.')) {
+    request.uri += '/index.html';
+  }
+
+  return request;
+}
+`),
+    });
+
     const distribution = new Distribution(this, 'Distribution', {
       priceClass: PriceClass.PRICE_CLASS_100,
       // TASK 0.6.3: ephemeral stacks serve on CloudFront's own
@@ -151,6 +181,12 @@ export class WebStack extends Stack {
         origin: S3BucketOrigin.withOriginAccessControl(siteBucket),
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         responseHeadersPolicy: securityHeaders,
+        // Only the S3 origin's behavior needs the clean-URL rewrite — the
+        // /health behavior below is a Lambda route, not a static file, and
+        // is matched by CloudFront before this default behavior applies.
+        functionAssociations: [
+          { function: urlRewriteFunction, eventType: FunctionEventType.VIEWER_REQUEST },
+        ],
       },
       additionalBehaviors: {
         // Same-origin API (ADR 0003/D-08): /health is proxied through
