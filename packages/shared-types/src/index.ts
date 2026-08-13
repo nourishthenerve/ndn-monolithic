@@ -1,3 +1,2 @@
-export function placeholder(): string {
-  return '@ndn/shared-types';
-}
+export * from './content.js';
+export * from './types.js';

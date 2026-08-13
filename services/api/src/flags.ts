@@ -10,7 +10,7 @@ import type { Clock } from './clock.js';
 
 // Every flag any part of the system reads goes through this union so a
 // typo in a flag name is a compile error, not a silently-false runtime read.
-export type FlagName = 'sms.enabled' | 'sms.killSwitchEngaged';
+export type FlagName = 'sms.enabled' | 'sms.killSwitchEngaged' | 'content.readApi.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

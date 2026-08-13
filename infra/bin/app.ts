@@ -8,6 +8,7 @@ import {
   PR_STACK_ID_PREFIX,
   REGION,
 } from '../src/config.js';
+import { DataStack } from '../src/data-stack.js';
 import { enforceLogRetention } from '../src/log-retention.js';
 import { WebStack } from '../src/web-stack.js';
 
@@ -47,6 +48,15 @@ if (prNumber) {
   });
 
   new BudgetStack(app, 'NdnBudgetStack', {
+    env: { account: ACCOUNT_ID, region: REGION },
+  });
+
+  // TASK 1.3.1: production only, same as BudgetStack above — an ephemeral
+  // per-PR stack (0.6.3) doesn't need its own table; DataStack's resources
+  // aren't behind the PR-environment integration/a11y suite today, so
+  // standing one up per PR would only add cost/time with no test coverage
+  // exercising it.
+  new DataStack(app, 'NdnDataStack', {
     env: { account: ACCOUNT_ID, region: REGION },
   });
 }

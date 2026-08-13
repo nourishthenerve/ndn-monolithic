@@ -3,11 +3,12 @@
 // forms): each version is its own immutable key, so version N+1 can never
 // mutate version N, and writing an already-existing version throws instead
 // of silently overwriting it.
+import type { BaseRecord } from '@ndn/shared-types';
+
 import type { AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { KeyValueStore } from './store.js';
-import type { BaseRecord } from './types.js';
 
 export interface VersionedRecord extends BaseRecord {
   readonly version: number;
