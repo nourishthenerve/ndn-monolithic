@@ -7,6 +7,7 @@ export * from './tokens/type.js';
 export * from './components/primitive-styles.js';
 export * from './components/Button.js';
 export * from './components/Card.js';
+export * from './components/CookieBanner.js';
 export * from './components/Heading.js';
 export * from './components/Input.js';
 export * from './components/Link.js';

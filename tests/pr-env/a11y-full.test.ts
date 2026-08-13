@@ -13,6 +13,13 @@ import { getBaseUrl } from './env.js';
 // gate silently staying green — routes.ts's own DoD is what prevents that.
 for (const route of routes) {
   test(`${route.path} has no automatically-detectable axe violations`, async ({ page }) => {
+    // TASK 1.2.3: pre-record consent so this scan covers the steady state
+    // every returning visitor sees — the banner's own first-visit
+    // accessibility is asserted separately in cookie-consent.test.ts.
+    // `{ content }`, not a closure — see keyboard.test.ts's own comment.
+    await page.addInitScript({
+      content: "document.cookie = 'ndn_consent=essential%2Canalytics; path=/; max-age=31536000';",
+    });
     await page.goto(`${getBaseUrl()}${route.path}`);
 
     const results = await new AxeBuilder({ page }).analyze();

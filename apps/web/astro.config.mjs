@@ -16,4 +16,17 @@ export default defineConfig({
   // failing axe's `html-has-lang`/`region` checks against the live
   // ephemeral env. `apps/web/src/pages/index.astro` hand-authors the same
   // client-side meta-refresh instead, with full control over both.
+  vite: {
+    build: {
+      // TASK 1.2.3: Astro/Vite's default 4096-byte threshold would
+      // otherwise inline a small hoisted <script> (e.g.
+      // BaseLayout.astro's cookie-consent wiring) directly into every
+      // page's HTML as a bare <script>...</script> — confirmed empirically
+      // via a real `astro build` before this was added. The CloudFront
+      // CSP's script-src (falls back to default-src 'self', no
+      // 'unsafe-inline') would silently block that. 0 forces every script
+      // and asset to a real, same-origin, content-hashed file instead.
+      assetsInlineLimit: 0,
+    },
+  },
 });

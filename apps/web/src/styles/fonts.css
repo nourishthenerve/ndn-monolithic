@@ -1,0 +1,34 @@
+/* TASK 1.2.3: self-hosted Inter (Latin subset, OFL-1.1 — see
+ * ../assets/fonts/LICENSE.txt), replacing the legacy site's http://
+ * Google Fonts dependency. No external font `<link>`/`@import` anywhere —
+ * this file is imported by BaseLayout.astro, and Vite resolves each
+ * `url()` below against ../assets/fonts, copying the referenced .woff2
+ * into the build output as a same-origin, content-hashed asset. Weights
+ * match packages/ui's tokens/type.ts fontWeight tokens (regular/medium/
+ * bold) exactly — a fourth weight would need a fourth @font-face, not a
+ * change to this comment's claim of "the weights actually used".
+ */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/inter-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../assets/fonts/inter-latin-500-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../assets/fonts/inter-latin-700-normal.woff2') format('woff2');
+}

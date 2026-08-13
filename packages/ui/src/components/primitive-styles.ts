@@ -140,4 +140,48 @@ body {
   white-space: nowrap;
   border: 0;
 }
+
+.ndn-cookie-banner {
+  position: fixed;
+  inset-inline: 0;
+  inset-block-end: 0;
+  z-index: 200;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 1rem;
+  padding-inline: 1.5rem;
+  background-color: #ffffff;
+  border-block-start: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.ndn-cookie-banner-message {
+  flex: 1 1 20rem;
+  margin: 0;
+  color: var(--ndn-color-text);
+  font-size: 0.875rem;
+}
+
+.ndn-cookie-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Author-stylesheet class rules always beat the user-agent stylesheet's
+ * own \`[hidden] { display: none }\`, even at equal (0,1,0) specificity —
+ * author origin outranks user-agent origin in the cascade regardless of a
+ * specificity tie. Without this explicit override, \`.ndn-cookie-banner\`'s
+ * own \`display: flex\` above would silently defeat the native \`hidden\`
+ * attribute apps/web's wiring script relies on — confirmed as a real,
+ * reproducing bug (banner stayed visible after accept/reject) against a
+ * live \`astro preview\` before this rule was added. \`(0,2,0)\`, higher than
+ * \`.ndn-cookie-banner\` alone, so it wins whenever the attribute is set. */
+.ndn-cookie-banner[hidden] {
+  display: none;
+}
 `;

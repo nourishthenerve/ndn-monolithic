@@ -1,4 +1,6 @@
+import * as astroParser from 'astro-eslint-parser';
 import { RuleTester } from 'eslint';
+import tseslint from 'typescript-eslint';
 import { describe, it } from 'vitest';
 
 import rule from './no-hardcoded-strings.js';
@@ -75,6 +77,69 @@ describe('ndnI18n/no-hardcoded-strings', () => {
         {
           code: 'const el = <button title="Close">{icon}</button>;',
           errors: [{ messageId: 'hardcodedAttribute', data: { text: 'Close', attribute: 'title' } }],
+        },
+      ],
+    });
+  });
+});
+
+// TASK 1.2.3: the `<script>`/`<style>` exemption is specific to how the
+// *real* astro-eslint-parser categorises those tag bodies (`AstroRawText`
+// — see no-hardcoded-strings.js's own comment) — plain JSX has no such
+// node type, so the espree-based suite above can't exercise it. Spinning
+// up the real parser here, exactly as eslint.config.js configures it for
+// `.astro` files, is the only way to prove this against the actual
+// behaviour that broke BaseLayout.astro's cookie-consent script.
+const astroRuleTester = new RuleTester({
+  languageOptions: {
+    parser: astroParser,
+    parserOptions: {
+      parser: tseslint.parser,
+      extraFileExtensions: ['.astro'],
+      sourceType: 'module',
+    },
+  },
+});
+
+describe('ndnI18n/no-hardcoded-strings — real .astro parsing', () => {
+  it('does not flag code/comments inside <script>/<style>, but still flags real template copy', () => {
+    astroRuleTester.run('no-hardcoded-strings', rule, {
+      valid: [
+        `---
+const x = 1;
+---
+<html>
+<body>
+<script>
+  // a comment with plenty of letters in it
+  import { setConsent } from '../scripts/consent.js';
+  setConsent(['analytics']);
+</script>
+</body>
+</html>
+`,
+        `---
+---
+<html>
+<body>
+<style>
+  .ndn-cookie-banner { color: red; }
+</style>
+</body>
+</html>
+`,
+      ],
+      invalid: [
+        {
+          code: `---
+---
+<html>
+<body>
+<p>Hard-coded copy</p>
+</body>
+</html>
+`,
+          errors: [{ messageId: 'hardcodedText', data: { text: 'Hard-coded copy' } }],
         },
       ],
     });

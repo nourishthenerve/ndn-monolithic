@@ -18,6 +18,7 @@ import { localeDirection, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import {
   colorSchemeCssVariables,
+  CookieBanner,
   primitiveStylesCss,
   reducedMotionGlobalCss,
   SkipLink,
@@ -26,6 +27,13 @@ import {
 
 import Footer from '../components/Footer.astro';
 import Nav from '../components/Nav.astro';
+// TASK 1.2.3: a real imported .css file, not a `set:html` template string
+// like the others below — Vite's CSS pipeline resolves fonts.css's
+// relative `url()`s against ../assets/fonts, copying each .woff2 into the
+// build output as a same-origin, content-hashed asset. That processing
+// only runs for an actual `import`, so this one can't be folded into the
+// primitiveStylesCss/rootCss pattern.
+import '../styles/fonts.css';
 
 interface Props {
   readonly locale: Locale;
@@ -87,5 +95,44 @@ body > footer {
     </main>
     <Nav locale={locale} />
     <Footer locale={locale} />
+    <CookieBanner
+      id="ndn-cookie-consent"
+      hidden
+      label={t('cookies.banner.label', undefined, locale)}
+      message={t('cookies.banner.message', undefined, locale)}
+      acceptLabel={t('cookies.banner.accept', undefined, locale)}
+      rejectLabel={t('cookies.banner.reject', undefined, locale)}
+      policyLabel={t('cookies.banner.policyLink', undefined, locale)}
+      policyHref={`/${locale}/legal/cookies`}
+    />
+    <script>
+      // TASK 1.2.3: a plain, externally-bundled module script (Astro
+      // hoists and dedupes this across every page into one shared file) —
+      // not a client:* island. See CookieBanner.tsx's own comment for
+      // why: an island's inline bootstrap script would be silently
+      // blocked by the CloudFront CSP's script-src. Starts hidden (the
+      // `hidden` attribute above) so a returning visitor who already
+      // recorded a choice never sees a flash of the banner if this script
+      // is slow to run; only ever reveals it, never assumes a decision
+      // either way if `#ndn-cookie-consent` is missing.
+      import { hasStoredConsent, setConsent } from '../scripts/consent.js';
+
+      const banner = document.getElementById('ndn-cookie-consent');
+      if (banner) {
+        if (!hasStoredConsent()) {
+          banner.hidden = false;
+        }
+
+        banner.querySelector('[data-cookie-action="accept"]')?.addEventListener('click', () => {
+          setConsent(['analytics']);
+          banner.hidden = true;
+        });
+
+        banner.querySelector('[data-cookie-action="reject"]')?.addEventListener('click', () => {
+          setConsent([]);
+          banner.hidden = true;
+        });
+      }
+    </script>
   </body>
 </html>
