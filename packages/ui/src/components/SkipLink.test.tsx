@@ -39,11 +39,11 @@ describe('SkipLink', () => {
     );
     expect(focusVisibleBody.trim().length).toBeGreaterThan(0);
     const skipLinkFocusBody = getCssRuleBody(primitiveStylesCss, '.ndn-skip-link:focus');
-    expect(skipLinkFocusBody).toContain('top:');
+    expect(skipLinkFocusBody).toContain('inset-block-start:');
   });
 
-  it('is off-screen (negative top) until focused', () => {
+  it('is off-screen (negative inset-block-start) until focused', () => {
     const offscreenBody = getCssRuleBody(primitiveStylesCss, '.ndn-skip-link');
-    expect(offscreenBody).toMatch(/top:\s*-/);
+    expect(offscreenBody).toMatch(/inset-block-start:\s*-/);
   });
 });

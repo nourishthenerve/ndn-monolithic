@@ -5,8 +5,8 @@ import { primitiveStylesCss } from '../src/components/primitive-styles.js';
 import { motionTokens, reducedMotionGlobalCss } from '../src/tokens/motion.js';
 
 // The skip link is the one component whose transition is actually
-// observable pre-interaction (`.ndn-skip-link`'s `top` slides on
-// `:focus`) — see primitive-styles.ts.
+// observable pre-interaction (`.ndn-skip-link`'s `inset-block-start`
+// slides on `:focus`) — see primitive-styles.ts.
 const pageHtml = `<!doctype html>
 <html>
 <head><style>${reducedMotionGlobalCss}\n${primitiveStylesCss}</style></head>
