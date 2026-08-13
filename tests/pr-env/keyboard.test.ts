@@ -27,6 +27,17 @@ async function visibleFocusables(all: Locator): Promise<Locator[]> {
 
 for (const route of routes) {
   test(`${route.path} — skip link, tab order, and no focus trap`, async ({ page }) => {
+    // TASK 1.2.3: pre-record consent so the cookie banner (shown only on a
+    // genuine first visit — see cookie-consent.test.ts, which owns that
+    // state) never adds unaccounted-for focusables to this walkthrough.
+    // An init script, not a post-goto cookie write, so it's in place
+    // before the page's own wiring script ever runs — no race with it.
+    // `{ content }`, not a closure, so this file doesn't need `dom` added
+    // to tsconfig's `lib` just for a `document` reference that only ever
+    // runs inside the browser.
+    await page.addInitScript({
+      content: "document.cookie = 'ndn_consent=essential%2Canalytics; path=/; max-age=31536000';",
+    });
     await page.goto(`${getBaseUrl()}${route.path}`);
 
     const focusables = await visibleFocusables(page.locator(focusableSelector));

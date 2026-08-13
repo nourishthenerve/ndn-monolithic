@@ -31,6 +31,35 @@ function hasTranslatableContent(text) {
   return HAS_LETTER.test(text);
 }
 
+// `<script>`/`<style>` tag bodies aren't further parsed as JS/CSS by
+// astro-eslint-parser — it emits their raw source as a single opaque
+// `AstroRawText` node, the exact same node type real template copy
+// outside any recognised tag also gets (e.g. `.astro`'s the raw text
+// astro-eslint-parser can't otherwise categorise, per this file's other
+// comment on `AstroRawText`). Confirmed by inspecting the parser's own
+// output directly: a `<script>` containing plain code (no strings at all)
+// still produces one `AstroRawText` whose `.value` is the entire script
+// body. Without this guard, TASK 1.2.3's cookie-consent wiring script (the
+// first real `<script>` block in this codebase) fails every build, since
+// code and comments always contain letters. `JSXText` never needs this
+// check — real JSX/TSX parses a literal `<script>`'s children as
+// `JSXText` too, but nothing here targets `.tsx`'s `<script>` elements
+// (apps/web ships zero client JS via that path; see ADR-0017), so the
+// distinction is deliberately narrow rather than broadened to match.
+/** @param {any} node */
+function isRawScriptOrStyleBody(node) {
+  const parent = node.parent;
+  if (!parent || parent.type !== 'JSXElement') {
+    return false;
+  }
+  const name = parent.openingElement && parent.openingElement.name;
+  return (
+    name !== undefined &&
+    name.type === 'JSXIdentifier' &&
+    (name.name === 'script' || name.name === 'style')
+  );
+}
+
 /** @param {any} node */
 function isStaticStringLike(node) {
   if (!node) {
@@ -85,6 +114,14 @@ const rule = {
       }
     }
 
+    /** @param {any} node */
+    function checkRawText(node) {
+      if (isRawScriptOrStyleBody(node)) {
+        return;
+      }
+      checkText(node);
+    }
+
     return {
       // Plain static text in a template is `JSXText` when nested inside a
       // JSXElement's children, but astro-eslint-parser emits the
@@ -92,7 +129,7 @@ const rule = {
       // discriminant) for text elsewhere in the template — both need the
       // same check, or most real .astro copy silently escapes this rule.
       JSXText: checkText,
-      AstroRawText: checkText,
+      AstroRawText: checkRawText,
       /** @param {any} node */
       JSXExpressionContainer(node) {
         // Attribute-valued containers (label={'...'}) are handled by the

@@ -43,5 +43,10 @@
   "legal.clinicalDisclaimer.heading": "Clinical disclaimer",
   "legal.clinicalDisclaimer.description": "This public website does not provide diagnosis or treatment — placeholder pending legal review.",
   "legal.clinicalDisclaimer.body": "Nothing on this public website constitutes a diagnosis, a treatment, or medical advice, and it does not replace an assessment by a qualified clinician. Full clinical-disclaimer wording is pending legal review.",
-  "legal.clinicalDisclaimer.footerLabel": "Clinical disclaimer"
+  "legal.clinicalDisclaimer.footerLabel": "Clinical disclaimer",
+  "cookies.banner.label": "Cookie consent",
+  "cookies.banner.message": "We use essential cookies to run this site, and optional analytics cookies to help us understand how it's used.",
+  "cookies.banner.policyLink": "Read our cookie policy",
+  "cookies.banner.accept": "Accept all",
+  "cookies.banner.reject": "Reject non-essential"
 }
