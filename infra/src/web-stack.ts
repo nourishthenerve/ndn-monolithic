@@ -21,7 +21,13 @@ import {
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
-import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { Alarm, ComparisonOperator, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+import {
+  LambdaApplication,
+  LambdaDeploymentConfig,
+  LambdaDeploymentGroup,
+} from 'aws-cdk-lib/aws-codedeploy';
+import { Alias, Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
@@ -72,11 +78,79 @@ export class WebStack extends Stack {
       logGroup: createLogGroup(this, 'HealthFunctionLogGroup', '/ndn/health-function'),
     });
 
+    // TASK 0.6.2: publishing a Version + Alias, and routing every caller
+    // (API Gateway below, CodeDeploy's traffic shift) through the alias
+    // rather than the bare function, is what makes canary/rollback possible
+    // at all — DoD's "Do NOT allow a deploy path that bypasses the alias."
+    const healthAlias = new Alias(this, 'HealthAlias', {
+      aliasName: 'live',
+      version: healthFunction.currentVersion,
+    });
+
     const httpApi = new HttpApi(this, 'HttpApi');
     httpApi.addRoutes({
       path: '/health',
       methods: [HttpMethod.GET],
-      integration: new HttpLambdaIntegration('HealthIntegration', healthFunction),
+      integration: new HttpLambdaIntegration('HealthIntegration', healthAlias),
+    });
+
+    // TASK 0.6.2: the AfterAllowTraffic hook (see docs/runbooks/rollback.md)
+    // — runs once CodeDeploy has finished shifting traffic to the new
+    // version, hits the live custom domain (proving DNS + cert + CDN +
+    // origin + the new code all actually work), and reports Failed/
+    // Succeeded back to CodeDeploy. A Failed report is what triggers the
+    // automatic alias rollback.
+    const smokeTestFunction = new NodejsFunction(this, 'SmokeTestFunction', {
+      entry: `${moduleDir}../../services/api/src/smoke-test.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(30),
+      environment: {
+        SITE_DOMAIN: DOMAIN_NAME,
+      },
+      logGroup: createLogGroup(this, 'SmokeTestFunctionLogGroup', '/ndn/smoke-test-function'),
+    });
+
+    // TASK 0.6.2: CloudWatch alarms scoped to the alias (not the bare
+    // function) so they reflect only traffic actually reaching the new
+    // version during the canary window. Wired into the deployment group
+    // below as the "stop and roll back automatically" trigger — separate
+    // from, and faster than, the AfterAllowTraffic smoke test.
+    const healthAliasErrorsAlarm = new Alarm(this, 'HealthAliasErrorsAlarm', {
+      alarmDescription: 'Health Lambda alias is erroring during a canary deployment',
+      metric: healthAlias.metricErrors({ period: Duration.minutes(1) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    });
+
+    const healthAliasLatencyAlarm = new Alarm(this, 'HealthAliasLatencyAlarm', {
+      alarmDescription: 'Health Lambda alias latency is elevated during a canary deployment',
+      // Function timeout is 5s; 3s is comfortably inside that while still
+      // catching real degradation rather than ordinary cold-start jitter.
+      metric: healthAlias.metricDuration({ period: Duration.minutes(1) }),
+      threshold: Duration.seconds(3).toMilliseconds(),
+      evaluationPeriods: 1,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    });
+
+    const healthDeploymentApplication = new LambdaApplication(this, 'HealthApplication');
+
+    // TASK 0.6.2: this is what makes `cdk deploy` (CI's `deploy` job) shift
+    // 10% of traffic to the new version, wait 5 minutes while the alarms
+    // above watch it, then shift the rest — and automatically revert the
+    // alias if either alarm trips or the smoke test reports Failed. See
+    // docs/runbooks/rollback.md for how this was proven for real.
+    const healthDeploymentGroup = new LambdaDeploymentGroup(this, 'HealthDeploymentGroup', {
+      application: healthDeploymentApplication,
+      alias: healthAlias,
+      deploymentConfig: LambdaDeploymentConfig.CANARY_10PERCENT_5MINUTES,
+      alarms: [healthAliasErrorsAlarm, healthAliasLatencyAlarm],
+      postHook: smokeTestFunction,
     });
 
     const securityHeaders = new ResponseHeadersPolicy(this, 'SecurityHeaders', {
@@ -144,5 +218,8 @@ export class WebStack extends Stack {
     new CfnOutput(this, 'DistributionDomainName', { value: distribution.distributionDomainName });
     new CfnOutput(this, 'SiteBucketName', { value: siteBucket.bucketName });
     new CfnOutput(this, 'HttpApiUrl', { value: httpApi.apiEndpoint });
+    new CfnOutput(this, 'HealthDeploymentGroupName', {
+      value: healthDeploymentGroup.deploymentGroupName,
+    });
   }
 }

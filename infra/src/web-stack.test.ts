@@ -188,11 +188,150 @@ describe('WebStack — health Lambda', () => {
   });
 });
 
+describe('WebStack — canary deployment (TASK 0.6.2)', () => {
+  it('publishes a version and routes it through a "live" alias', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Alias', { Name: 'live' });
+  });
+
+  it('routes API Gateway through the alias, not the bare function — no deploy path bypasses it', () => {
+    const template = synth();
+    const [aliasLogicalId] = Object.keys(template.findResources('AWS::Lambda::Alias'));
+    template.hasResourceProperties('AWS::ApiGatewayV2::Integration', {
+      IntegrationUri: { Ref: aliasLogicalId },
+    });
+    template.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction',
+      FunctionName: { Ref: aliasLogicalId },
+      Principal: 'apigateway.amazonaws.com',
+    });
+  });
+
+  it('alarms on alias errors and elevated latency, scoped to the alias — not the bare function', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      MetricName: 'Errors',
+      Namespace: 'AWS/Lambda',
+      Statistic: 'Sum',
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+      Threshold: 1,
+      TreatMissingData: 'notBreaching',
+      Dimensions: Match.arrayWith([
+        Match.objectLike({
+          Name: 'Resource',
+          Value: Match.objectLike({ 'Fn::Join': Match.arrayWith([Match.arrayWith([':live'])]) }),
+        }),
+      ]),
+    });
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      MetricName: 'Duration',
+      Namespace: 'AWS/Lambda',
+      Statistic: 'Average',
+      ComparisonOperator: 'GreaterThanThreshold',
+      // Under the 5s function timeout — catches real degradation, not
+      // ordinary cold-start jitter.
+      Threshold: 3000,
+      TreatMissingData: 'notBreaching',
+    });
+  });
+
+  it('deploys via a canary that shifts 10% of traffic, waits 5 minutes, then the rest', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
+      DeploymentConfigName: 'CodeDeployDefault.LambdaCanary10Percent5Minutes',
+      DeploymentStyle: {
+        DeploymentType: 'BLUE_GREEN',
+        DeploymentOption: 'WITH_TRAFFIC_CONTROL',
+      },
+    });
+  });
+
+  it('wires both alarms into the deployment group and rolls back automatically on failure or an alarm', () => {
+    const template = synth();
+    const [errorsAlarmId, latencyAlarmId] = Object.keys(
+      template.findResources('AWS::CloudWatch::Alarm'),
+    );
+    template.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
+      AlarmConfiguration: {
+        Enabled: true,
+        Alarms: Match.arrayWith([
+          { Name: { Ref: errorsAlarmId } },
+          { Name: { Ref: latencyAlarmId } },
+        ]),
+      },
+      // DoD: "rollback demonstrated, not described" — CodeDeploy stops and
+      // reverts the alias on either a failed lifecycle hook or a tripped
+      // alarm, not just a deployment error.
+      AutoRollbackConfiguration: {
+        Enabled: true,
+        Events: Match.arrayWith(['DEPLOYMENT_FAILURE', 'DEPLOYMENT_STOP_ON_ALARM']),
+      },
+    });
+  });
+
+  it('runs a post-traffic smoke test against the live domain, wired as the AfterAllowTraffic hook', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Architectures: ['arm64'],
+      Runtime: 'nodejs22.x',
+      Handler: 'index.handler',
+      Environment: { Variables: { SITE_DOMAIN: DOMAIN_NAME } },
+    });
+
+    const [smokeTestLogicalId] = Object.entries(template.findResources('AWS::Lambda::Function'))
+      .filter(([, resource]) =>
+        JSON.stringify((resource as { Properties: unknown }).Properties).includes('SITE_DOMAIN'),
+      )
+      .map(([id]) => id);
+    template.hasResource('AWS::Lambda::Alias', {
+      Properties: Match.objectLike({ Name: 'live' }),
+      UpdatePolicy: Match.objectLike({
+        CodeDeployLambdaAliasUpdate: Match.objectLike({
+          AfterAllowTrafficHook: { Ref: smokeTestLogicalId },
+        }),
+      }),
+    });
+  });
+
+  it('grants the smoke test only PutLifecycleEventHookExecutionStatus on the deployment group — no broader access', () => {
+    const template = synth();
+    const [deploymentGroupLogicalId] = Object.keys(
+      template.findResources('AWS::CodeDeploy::DeploymentGroup'),
+    );
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: 'Allow',
+            Action: 'codedeploy:PutLifecycleEventHookExecutionStatus',
+            Resource: Match.objectLike({
+              'Fn::Join': Match.arrayWith([Match.arrayWith([{ Ref: deploymentGroupLogicalId }])]),
+            }),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('sends smoke-test logs to an explicit log group with 14-day retention (R-11)', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/smoke-test-function',
+      RetentionInDays: 14,
+    });
+  });
+});
+
 describe('WebStack — outputs', () => {
   it('exposes the values the manual DNS step needs', () => {
     const template = synth();
     template.hasOutput('DistributionDomainName', {});
     template.hasOutput('SiteBucketName', {});
     template.hasOutput('HttpApiUrl', {});
+  });
+
+  it('exposes the CodeDeploy deployment group name for post-deploy verification', () => {
+    const template = synth();
+    template.hasOutput('HealthDeploymentGroupName', {});
   });
 });

@@ -11,5 +11,8 @@
   "devDependencies": {
     "@types/aws-lambda": "^8.10.162",
     "@types/node": "^22.20.1"
+  },
+  "dependencies": {
+    "@aws-sdk/client-codedeploy": "^3.1108.0"
   }
 }
