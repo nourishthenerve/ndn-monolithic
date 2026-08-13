@@ -6,7 +6,7 @@ Planning rate **£1 = $1.2105**. All figures ex-VAT. New account ⇒ its own alw
 |---|---|---|---|---|
 | Route 53 hosted zone | $0.50 | $0.50 | $0.50 | $0.50/zone |
 | Route 53 queries | $0.02 | $0.03 | $0.04 | ~100k/mo @ $0.40/M |
-| Domain renewal (amortised) | $1.17 | $1.17 | $1.17 | ~$14/yr ÷ 12 — **UNVERIFIED** |
+| Domain renewal (amortised) | $1.33 | $1.33 | $1.33 | $16.00/yr ÷ 12 — verified 2026-08-13 at G0 via `aws route53domains list-prices --tld com` |
 | ACM certificates | $0 | $0 | $0 | Public certs free |
 | CloudFront | $0 | $0 | $0 | Within always-free 1 TB + 10M req |
 | S3 storage + requests | $0.10 | $0.30 | $0.53 | 20 GB @ $0.024 + requests |
@@ -23,8 +23,8 @@ Planning rate **£1 = $1.2105**. All figures ex-VAT. New account ⇒ its own alw
 | EventBridge / SQS / Budgets | $0 | $0 | $0 | Within free allowances (≤2 budgets) |
 | Cloudflare TURN | $0 | $0 | $0 | ≈85 GB ≪ 1,000 GB free |
 | UptimeRobot / Turnstile / GitHub | $0 | $0 | $0 | Free tiers |
-| **Total USD** | **$3.11** | **$6.65** | **$9.69** | |
-| **Total GBP** | **£2.57** | **£5.49** | **£8.00** | |
+| **Total USD** | **$3.27** | **$6.81** | **$9.85** | |
+| **Total GBP** | **£2.70** | **£5.63** | **£8.14** | |
 
 **Headroom against the £12–14 target: £4–6/month. Against the £20 cap: £12/month.**
 **After free tiers expire:** unchanged — every allowance relied on is *always-free*, not a 12-month offer. The only expiry risk is a future AWS pricing change, re-verified at each gate (§14.12).
