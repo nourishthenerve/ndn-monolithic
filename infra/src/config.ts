@@ -42,3 +42,14 @@ export const COST_ALLOCATION_TAG_VALUE = 'nourishthenerve';
 // (350MB/day * 30 / 1e9 GB * $0.5985/GB) — already a meaningful slice of
 // the $24.21 budget (TASK 0.5.1) without tripping on ordinary variance.
 export const LOG_INGESTION_ALARM_THRESHOLD_BYTES = 350_000_000;
+
+// TASK 0.5.2 fix (see docs/runbooks/rollback.md): every log group name ever
+// passed to createLogGroup(), in one place. budget-stack.ts sums each
+// group's IncomingBytes into a single alarm. This list needs a new entry
+// whenever a new createLogGroup() call lands — AWS's PutMetricAlarm API
+// rejects any alarm math expression containing a SEARCH() (confirmed
+// against the real API, not just CDK synth), so a dynamically-discovered,
+// zero-maintenance version of this alarm isn't achievable without a
+// separate metric-publishing Lambda, which is more infrastructure than
+// this £0.00-cost guard has earned so far.
+export const MONITORED_LOG_GROUP_NAMES = ['/ndn/health-function', '/ndn/smoke-test-function'];
