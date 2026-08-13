@@ -1,0 +1,27 @@
+---
+// TASK 1.1.2: `/` has no content of its own — every real page lives under
+// a locale prefix (apps/web/src/pages/[locale]/). Hand-authored rather
+// than Astro's built-in `redirects` config (astro.config.mjs explains
+// why): this version sets `<html lang>` and wraps the fallback content in
+// a `<main>` landmark, both of which the auto-generated stub lacks.
+import { defaultLocale, localeDirection, t } from '@ndn/i18n';
+
+const target = `/${defaultLocale}`;
+---
+
+<!doctype html>
+<html lang={defaultLocale} dir={localeDirection(defaultLocale)}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{t('common.redirecting', undefined, defaultLocale)}</title>
+    <meta http-equiv="refresh" content={`0;url=${target}`} />
+    <meta name="robots" content="noindex" />
+    <link rel="canonical" href={target} />
+  </head>
+  <body>
+    <main id="main">
+      <p><a href={target}>{t('common.continueToSite', undefined, defaultLocale)}</a></p>
+    </main>
+  </body>
+</html>

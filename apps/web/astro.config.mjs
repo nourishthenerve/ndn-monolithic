@@ -9,10 +9,11 @@ export default defineConfig({
   output: 'static',
   integrations: [react()],
   // TASK 1.1.2: `/` has no content of its own — every real page lives
-  // under a locale prefix (`apps/web/src/pages/[locale]/`). In static
-  // output with no adapter, Astro serves this as an HTML
-  // <meta http-equiv="refresh"> redirect (no server-side 301 available).
-  redirects: {
-    '/': '/en',
-  },
+  // under a locale prefix (`apps/web/src/pages/[locale]/`). NOT using the
+  // built-in `redirects` config here: its auto-generated stub has no way
+  // to set `<html lang>` or a landmark region (`RedirectConfig` is just
+  // `string | { status, destination }`, no markup hook) — confirmed
+  // failing axe's `html-has-lang`/`region` checks against the live
+  // ephemeral env. `apps/web/src/pages/index.astro` hand-authors the same
+  // client-side meta-refresh instead, with full control over both.
 });

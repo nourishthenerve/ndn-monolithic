@@ -5,5 +5,7 @@
   "common.learnMoreAboutUs": "Learn more about us",
   "common.endOfPage": "You have reached the end of the page.",
   "home.getInTouch": "Get in touch",
-  "home.emailLabel": "Email address"
+  "home.emailLabel": "Email address",
+  "common.redirecting": "Redirecting…",
+  "common.continueToSite": "Continue to the site"
 }
