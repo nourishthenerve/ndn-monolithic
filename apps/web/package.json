@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./routes.js": "./src/routes.ts"
+    "./routes.js": "./src/routes.ts",
+    "./social-links.js": "./src/config/social-links.ts"
   },
   "scripts": {
     "lint": "eslint .",
@@ -19,7 +20,8 @@
     "@ndn/ui": "workspace:*",
     "astro": "^7.2.1",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

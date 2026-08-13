@@ -1,0 +1,91 @@
+---
+// TASK 1.2.1: shared page shell for every `[locale]/*.astro` page —
+// replaces the `<html>`/`<head>`/skip-link boilerplate TASK 1.1.2's
+// index.astro first hand-wrote.
+//
+// `<main>` is placed immediately after the skip link in document order,
+// with Nav/Footer *after* it, not before: tests/pr-env/keyboard.test.ts
+// captures the page's full focus order once, activates the skip link,
+// then keeps pressing Tab and expects that *same* captured order to keep
+// matching. Once focus programmatically lands on `<main>`, forward-Tab
+// can only ever reach elements that come *after* main in the DOM — so if
+// Nav sat before main (the conventional arrangement), its links would be
+// unreachable by continued tabbing and the suite would fail on this
+// page's very first real route. Nav/Footer are pulled back to their
+// conventional top/bottom visual positions with flexbox `order` below —
+// a deliberate DOM/visual split, not an oversight.
+import { localeDirection, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import {
+  colorSchemeCssVariables,
+  primitiveStylesCss,
+  reducedMotionGlobalCss,
+  SkipLink,
+  typeTokenCssVariables,
+} from '@ndn/ui';
+
+import Footer from '../components/Footer.astro';
+import Nav from '../components/Nav.astro';
+
+interface Props {
+  readonly locale: Locale;
+  readonly title: string;
+  readonly description: string;
+}
+
+const { locale, title, description } = Astro.props;
+const dir = localeDirection(locale);
+
+const rootVariables = { ...colorSchemeCssVariables('light'), ...typeTokenCssVariables() };
+const rootCss = `:root {\n${Object.entries(rootVariables)
+  .map(([name, value]) => `  ${name}: ${value};`)
+  .join('\n')}\n}`;
+
+// TASK 1.2.1: cross-component layout hook — Nav/Footer are separate Astro
+// components, so this can't be a normal *scoped* `<style>` (Astro scoping
+// only reaches markup written directly in this file); it's global,
+// restricted to `body >` direct-child selectors plus one explicit class so
+// it can't leak into an unrelated nested <main>/<footer> a future page
+// might render inside its own content. `set:html`, not literal
+// `<style>...</style>` text, for the same lint reason as Nav.astro's
+// navStylesCss.
+const pageShellCss = `
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+body > main {
+  order: 2;
+  flex: 1 0 auto;
+}
+body > .ndn-nav-header {
+  order: 1;
+}
+body > footer {
+  order: 3;
+}
+`;
+---
+
+<!doctype html>
+<html lang={locale} dir={dir}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <style set:html={rootCss} />
+    <style set:html={reducedMotionGlobalCss} />
+    <style set:html={primitiveStylesCss} />
+    <style set:html={pageShellCss} />
+  </head>
+  <body>
+    <SkipLink>{t('common.skipToContent', undefined, locale)}</SkipLink>
+    <main id="main" tabindex="-1">
+      <slot />
+    </main>
+    <Nav locale={locale} />
+    <Footer locale={locale} />
+  </body>
+</html>

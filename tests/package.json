@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
+    "@ndn/i18n": "workspace:*",
     "@ndn/web": "workspace:*",
     "@playwright/test": "^1.62.1",
     "@types/node": "^22.20.1",

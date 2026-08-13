@@ -1,0 +1,31 @@
+---
+// TASK 1.2.1: first page built on BaseLayout from the start.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Button, Card, Heading } from '@ndn/ui';
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { siteName } from '../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('services.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('services.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+  <p>{t('services.intro', undefined, locale)}</p>
+
+  <Card>
+    <Heading level={2}>{t('common.getInTouch', undefined, locale)}</Heading>
+    <p>{t('common.contactCtaBody', undefined, locale)}</p>
+    <Button>{t('common.contactCta', undefined, locale)}</Button>
+  </Card>
+</BaseLayout>
