@@ -180,9 +180,17 @@ Zero standing cost, proven for real — the exact mechanism the CI job's own fin
 - **A scheduled/periodic sweep for orphaned stacks** — `always()` steps reliably run on ordinary failures and on this workflow's own `cancel-in-progress` cancellations, but not if a runner is hard-killed mid-job. Not built here; the DoD's literal bar (assert the stack is gone within the same run) is met either way.
 - **Promoting `pr-environment` into `ci-summary`'s required gate** — owner action below, once its first live run is confirmed green.
 
+## Paused (owner decision, 2026-08-13)
+
+The `pr-environment` job is currently disabled (`ci.yml`'s `if:` condition has `&& false` appended). Rationale: the job was already informational-only (see above — never in `ci-summary`'s required-gate loop), but a full CloudFront distribution create → test → destroy cycle still costs ~15–30 minutes of wall-clock CI time on every PR. During this phase of the plan (many small, sequential milestone-task PRs — see `docs/plan/05-execution-plan.md`'s Phase 1 task list), that wait isn't worth paying on every PR for a check that was already advisory.
+
+**Re-enable before the go-live gate** (the cutover in TASK 1.6.1, or whichever milestone review precedes the service going live to real clients) — at that point also action the "Owner actions" item below to promote it into the required loop, since a check worth gating on at launch is a check worth actually running.
+
+**To re-enable:** delete the `&& false` from `pr-environment`'s `if:` condition in `.github/workflows/ci.yml` (the line has a comment pointing back here).
+
 ## Owner actions
 
-1. **Watch the first real `pr-environment` run** on an actual PR, then promote it into `ci-summary`'s required gate (move it into the `for r in ...` loop) — same follow-up `ci-pipeline.md` already did for `oidc-dry-run`.
+1. **Watch the first real `pr-environment` run** on an actual PR, then promote it into `ci-summary`'s required gate (move it into the `for r in ...` loop) — same follow-up `ci-pipeline.md` already did for `oidc-dry-run`. Do this at the same time as re-enabling the job (above), not before.
 2. **Revisit the IAM design trade-off above** before granting a second collaborator write access to this repository.
 
 ## Rollback

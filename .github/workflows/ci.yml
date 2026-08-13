@@ -257,7 +257,16 @@ jobs:
   pr-environment:
     name: Ephemeral PR environment
     needs: [changes, quality]
-    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
+    # PAUSED 2026-08-13 (owner decision, see docs/runbooks/
+    # ephemeral-pr-environments.md's "Paused" section): this job is
+    # already informational-only (excluded from ci-summary's required-gate
+    # loop below), but a full CloudFront distribution create+test+destroy
+    # still costs ~15-30 min of wall-clock CI time on every PR — not worth
+    # paying during this phase of many small milestone PRs. Re-enable
+    # before the go-live gate by deleting "&& false" below; the runbook's
+    # own "Owner actions" already calls for promoting this job into the
+    # required-gate loop at that same point, so do both together.
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true' && false
     runs-on: ubuntu-latest
     # CloudFront distribution create/delete each take up to ~15 minutes
     # (docs/runbooks/iac-baseline.md) — deploy, wait, test, and destroy
