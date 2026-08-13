@@ -5,6 +5,7 @@ import {
   ACCOUNT_ID,
   COST_ALLOCATION_TAG_KEY,
   COST_ALLOCATION_TAG_VALUE,
+  PR_STACK_ID_PREFIX,
   REGION,
 } from '../src/config.js';
 import { enforceLogRetention } from '../src/log-retention.js';
@@ -22,11 +23,30 @@ Tags.of(app).add(COST_ALLOCATION_TAG_KEY, COST_ALLOCATION_TAG_VALUE);
 // capped at 14 days rather than defaulting to infinite retention.
 enforceLogRetention(app);
 
-new WebStack(app, 'NdnWebStack', {
-  env: { account: ACCOUNT_ID, region: REGION },
-  deployVersion: process.env.GITHUB_SHA ?? 'local',
-});
+// TASK 0.6.3: CI's pr-environment job sets PR_NUMBER (github.event.number)
+// so a single `cdk deploy`/`cdk destroy` invocation targets exactly one
+// short-lived, uniquely-named stack — WebStack only, no BudgetStack (a
+// per-PR budget/alarm makes no sense for a stack that's gone within the
+// same run) — and never the production stacks. ndn-deploy-pr's own IAM
+// policy independently enforces this same boundary by ARN pattern
+// (docs/runbooks/ephemeral-pr-environments.md); this branch is what makes
+// the CDK app agree with that boundary rather than merely not violate it.
+const prNumber = process.env.PR_NUMBER;
 
-new BudgetStack(app, 'NdnBudgetStack', {
-  env: { account: ACCOUNT_ID, region: REGION },
-});
+if (prNumber) {
+  new WebStack(app, `${PR_STACK_ID_PREFIX}${prNumber}`, {
+    env: { account: ACCOUNT_ID, region: REGION },
+    deployVersion: process.env.GITHUB_SHA ?? 'local',
+    ephemeral: true,
+    prLabel: `pr-${prNumber}`,
+  });
+} else {
+  new WebStack(app, 'NdnWebStack', {
+    env: { account: ACCOUNT_ID, region: REGION },
+    deployVersion: process.env.GITHUB_SHA ?? 'local',
+  });
+
+  new BudgetStack(app, 'NdnBudgetStack', {
+    env: { account: ACCOUNT_ID, region: REGION },
+  });
+}

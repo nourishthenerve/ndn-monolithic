@@ -53,3 +53,10 @@ export const LOG_INGESTION_ALARM_THRESHOLD_BYTES = 350_000_000;
 // separate metric-publishing Lambda, which is more infrastructure than
 // this £0.00-cost guard has earned so far.
 export const MONITORED_LOG_GROUP_NAMES = ['/ndn/health-function', '/ndn/smoke-test-function'];
+
+// TASK 0.6.3: every ephemeral per-PR stack's CDK app id is this prefix plus
+// the PR number (bin/app.ts). Also the literal ARN-pattern prefix the
+// ndn-deploy-pr IAM role's policy is scoped to on the real account
+// (docs/runbooks/ephemeral-pr-environments.md) — kept as one named constant
+// so the two never drift apart silently.
+export const PR_STACK_ID_PREFIX = 'NdnWebStackPr';

@@ -14,6 +14,7 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
     "test:integration": "pnpm --filter @ndn/tests run test:integration",
+    "test:pr-env": "pnpm --filter @ndn/tests run test:pr-env",
     "test:coverage": "vitest run --coverage",
     "audit": "pnpm audit --audit-level=high",
     "format": "prettier --write .",
