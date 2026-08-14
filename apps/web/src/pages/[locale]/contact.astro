@@ -1,0 +1,75 @@
+---
+// TASK 1.4.1 (FR-WEB-04, C-11): the first working contact form this
+// platform has ever had — the legacy site's own `POST /form` 404s
+// (docs/runbooks/legacy-estate.md). Static output only (ADR-0017): the
+// form's real work — Turnstile verification, rate limiting, SES send —
+// happens at runtime in services/api/src/contact-form-handler.ts, reached
+// via a same-origin `/contact` fetch from apps/web/src/scripts/
+// contact-form.ts, not at build time.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Button, Heading, Input } from '@ndn/ui';
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { siteName, turnstileSiteKey } from '../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('contact.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('contact.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+  <p>{t('contact.intro', undefined, locale)}</p>
+
+  <form id="ndn-contact-form">
+    <Input
+      name="name"
+      type="text"
+      label={t('contact.form.nameLabel', undefined, locale)}
+      required
+      maxLength={200}
+    />
+    <Input
+      name="email"
+      type="email"
+      label={t('contact.form.emailLabel', undefined, locale)}
+      required
+      maxLength={320}
+    />
+    <div class="ndn-input-wrapper">
+      <label class="ndn-input-label" for="ndn-contact-message">
+        {t('contact.form.messageLabel', undefined, locale)}
+      </label>
+      <textarea id="ndn-contact-message" class="ndn-input" name="message" required maxlength={5000}
+      ></textarea>
+    </div>
+
+    <div class="cf-turnstile" data-sitekey={turnstileSiteKey}></div>
+
+    <Button type="submit">{t('common.send', undefined, locale)}</Button>
+
+    <p
+      id="ndn-contact-form-status"
+      role="status"
+      hidden
+      data-success-message={t('contact.form.success', undefined, locale)}
+      data-rate-limited-message={t('contact.form.rateLimited', undefined, locale)}
+      data-error-message={t('contact.form.error', undefined, locale)}
+    ></p>
+  </form>
+
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  <script>
+    import { initContactForm } from '../../scripts/contact-form.js';
+
+    initContactForm();
+  </script>
+</BaseLayout>
