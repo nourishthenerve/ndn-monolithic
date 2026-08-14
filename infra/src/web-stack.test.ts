@@ -9,7 +9,7 @@ import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
-import { DOMAIN_NAME } from './config.js';
+import { APEX_DOMAIN_NAME, DOMAIN_NAME, WWW_DOMAIN_NAME } from './config.js';
 import { DataStack } from './data-stack.js';
 import { WebStack } from './web-stack.js';
 
@@ -163,11 +163,11 @@ describe('WebStack — CloudFront distribution', () => {
     });
   });
 
-  it('serves the staging hostname only, over TLS, at PriceClass_100', () => {
+  it('serves the staging hostname plus the apex/www alternate domain names (TASK 1.6.1 prep), over TLS, at PriceClass_100', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
-        Aliases: [DOMAIN_NAME],
+        Aliases: [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
         PriceClass: 'PriceClass_100',
         DefaultRootObject: 'index.html',
         DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: 'redirect-to-https' }),
@@ -852,7 +852,9 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
   it('production mode is unaffected — still the fixed domain, certificate, and log group names', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({ Aliases: [DOMAIN_NAME] }),
+      DistributionConfig: Match.objectLike({
+        Aliases: [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
+      }),
     });
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/ndn/health-function',

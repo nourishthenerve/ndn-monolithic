@@ -42,11 +42,13 @@ import type { Construct } from 'constructs';
 
 import {
   ADMIN_API_TOKEN_PARAMETER_NAME,
+  APEX_DOMAIN_NAME,
   CERTIFICATE_ARN,
   CONTACT_FORM_FROM_EMAIL,
   CONTACT_FORM_TO_EMAIL,
   DOMAIN_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
+  WWW_DOMAIN_NAME,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
@@ -491,7 +493,12 @@ function handler(event) {
       // *.cloudfront.net domain (always unique per distribution, already
       // TLS-covered) rather than next.nourishthenerve.com — see the
       // `certificate` comment above.
-      domainNames: props.ephemeral ? undefined : [DOMAIN_NAME],
+      // TASK 1.6.1: apex/www added as alternate domain names ahead of the
+      // actual DNS cutover — additive and DNS-invisible on its own, since
+      // nothing resolves either hostname to this distribution yet. Real
+      // traffic only moves once the G1 cutover runbook's manual DNS step
+      // repoints the 803129122420 zone. See docs/runbooks/g1-cutover.md.
+      domainNames: props.ephemeral ? undefined : [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
       certificate,
       defaultRootObject: 'index.html',
       defaultBehavior: {
