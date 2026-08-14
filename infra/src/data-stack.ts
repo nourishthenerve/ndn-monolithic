@@ -25,7 +25,7 @@
 import { fileURLToPath } from 'node:url';
 
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
-import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
+import { CorsHttpMethod, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AttributeType, BillingMode, ProjectionType, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
@@ -33,7 +33,11 @@ import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 
-import { ADMIN_API_TOKEN_PARAMETER_NAME } from './config.js';
+import {
+  ADMIN_API_TOKEN_PARAMETER_NAME,
+  DOMAIN_NAME,
+  TURNSTILE_SECRET_PARAMETER_NAME,
+} from './config.js';
 import { attachDestructiveActionGuardrail } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 
@@ -173,7 +177,21 @@ export class DataStack extends Stack {
       }),
     );
 
-    const httpApi = new HttpApi(this, 'ContentHttpApi');
+    const httpApi = new HttpApi(this, 'ContentHttpApi', {
+      // TASK 1.4.2: testimonial submission is a live browser fetch (unlike
+      // content, which apps/web only ever calls at `astro build` time —
+      // see apps/web/src/blog/content-client.ts) — this API's own
+      // execute-api.amazonaws.com origin differs from the site's own
+      // origin, so a browser POST needs CORS. Scoped to the site's own
+      // origin only; update DOMAIN_NAME here alongside TASK 1.6.1's G1
+      // cutover, same convention apps/web/src/site-config.ts's siteUrl
+      // documents.
+      corsPreflight: {
+        allowOrigins: [`https://${DOMAIN_NAME}`],
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
+        allowHeaders: ['content-type'],
+      },
+    });
     httpApi.addRoutes({
       path: '/content',
       methods: [HttpMethod.GET],
@@ -203,6 +221,164 @@ export class DataStack extends Stack {
       path: '/content/{id}/unpublish',
       methods: [HttpMethod.POST],
       integration: contentAuthoringIntegration,
+    });
+
+    // TASK 1.4.2: testimonials — same table (docs/plan/05-execution-plan.md's
+    // own cost line: "same table, no new resource type"), two more
+    // functions/roles. TestimonialSubmissionFunction is the public write
+    // path (Turnstile + rate-limited, see services/api/src/testimonial-submission.ts)
+    // reachable by a live browser fetch, hence the CORS config on httpApi
+    // above; TestimonialModerationFunction is the admin-token-gated read/
+    // publish/reject path, reusing the same ADMIN_API_TOKEN as content
+    // authoring.
+    const testimonialSubmissionLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/testimonial-submission-function`
+      : '/ndn/testimonial-submission-function';
+
+    const testimonialSubmissionRole = new Role(this, 'TestimonialSubmissionFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const testimonialSubmissionFunction = new NodejsFunction(
+      this,
+      'TestimonialSubmissionFunction',
+      {
+        entry: `${moduleDir}../../services/api/src/testimonial-submission-handler.ts`,
+        handler: 'handler',
+        runtime: Runtime.NODEJS_22_X,
+        architecture: Architecture.ARM_64,
+        memorySize: 128,
+        timeout: Duration.seconds(10),
+        role: testimonialSubmissionRole,
+        environment: {
+          TESTIMONIAL_TABLE_NAME: this.table.tableName,
+          TURNSTILE_SECRET_PARAMETER_NAME,
+        },
+        logGroup: createLogGroup(
+          this,
+          'TestimonialSubmissionFunctionLogGroup',
+          testimonialSubmissionLogGroupName,
+        ),
+      },
+    );
+
+    // Precise write actions only — same reasoning ContentAuthoringWrite
+    // documents above: DynamoContentStore/DynamoTestimonialStore's real
+    // writes go through TransactWriteCommand (needs both actions), never
+    // table.grantWriteData()'s broader DeleteItem-including grant.
+    testimonialSubmissionRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'TestimonialSubmissionWrite',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'],
+        resources: [this.table.tableArn],
+      }),
+    );
+    attachDestructiveActionGuardrail(testimonialSubmissionRole, {
+      buckets: [],
+      tables: [this.table],
+    });
+    testimonialSubmissionRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadTurnstileSecret',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: TURNSTILE_SECRET_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+
+    httpApi.addRoutes({
+      path: '/testimonials',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration(
+        'TestimonialSubmissionIntegration',
+        testimonialSubmissionFunction,
+      ),
+    });
+
+    const testimonialModerationLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/testimonial-moderation-function`
+      : '/ndn/testimonial-moderation-function';
+
+    const testimonialModerationRole = new Role(this, 'TestimonialModerationFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const testimonialModerationFunction = new NodejsFunction(
+      this,
+      'TestimonialModerationFunction',
+      {
+        entry: `${moduleDir}../../services/api/src/testimonial-moderation-handler.ts`,
+        handler: 'handler',
+        runtime: Runtime.NODEJS_22_X,
+        architecture: Architecture.ARM_64,
+        memorySize: 128,
+        timeout: Duration.seconds(5),
+        role: testimonialModerationRole,
+        environment: {
+          TESTIMONIAL_TABLE_NAME: this.table.tableName,
+          ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+        },
+        logGroup: createLogGroup(
+          this,
+          'TestimonialModerationFunctionLogGroup',
+          testimonialModerationLogGroupName,
+        ),
+      },
+    );
+
+    this.table.grantReadData(testimonialModerationRole);
+    testimonialModerationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'TestimonialModerationWrite',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+      }),
+    );
+    attachDestructiveActionGuardrail(testimonialModerationRole, {
+      buckets: [],
+      tables: [this.table],
+    });
+    testimonialModerationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadAdminApiToken',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+
+    const testimonialModerationIntegration = new HttpLambdaIntegration(
+      'TestimonialModerationIntegration',
+      testimonialModerationFunction,
+    );
+    httpApi.addRoutes({
+      path: '/testimonials',
+      methods: [HttpMethod.GET],
+      integration: testimonialModerationIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/testimonials/{id}/publish',
+      methods: [HttpMethod.POST],
+      integration: testimonialModerationIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/testimonials/{id}/reject',
+      methods: [HttpMethod.POST],
+      integration: testimonialModerationIntegration,
     });
 
     new CfnOutput(this, 'TableName', { value: this.table.tableName });

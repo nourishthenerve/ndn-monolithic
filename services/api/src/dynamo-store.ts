@@ -14,7 +14,11 @@
 // attributes `pk`/`sk`; GSI2's key attributes are `gsi2pk`/`gsi2sk`,
 // present only on keyword-projection rows (a sparse index) so GSI2 never
 // returns a content item's own META row.
-import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  DynamoDBClient,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
   GetCommand,
@@ -22,11 +26,12 @@ import {
   QueryCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { ContentItem } from '@ndn/shared-types';
+import type { ContentItem, Testimonial } from '@ndn/shared-types';
 
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
 import type { KeyValueStore } from './store.js';
+import type { TestimonialStore } from './testimonial-repository.js';
 
 const META_SORT_KEY = 'META';
 const CONTENT_PK = (id: string) => `CONTENT#${id}`;
@@ -34,6 +39,15 @@ const CONTENT_PK = (id: string) => `CONTENT#${id}`;
 // partition key — same format, two different attributes (`sk` vs `gsi2pk`).
 const KEYWORD_KEY = (keyword: string) => `KEYWORD#${keyword}`;
 const GSI2_INDEX_NAME = 'GSI2';
+
+// TASK 1.4.2: same table, same GSI2, a different entity type — single-table
+// design's whole point. `TESTIMONIAL#<id>` never collides with `CONTENT#<id>`
+// (distinct pk prefixes), and the "all testimonials" projection's gsi2pk
+// (`TESTIMONIAL_INDEX#all`) can't collide with a content keyword's gsi2pk
+// (always `KEYWORD#...`) either.
+const TESTIMONIAL_PK = (id: string) => `TESTIMONIAL#${id}`;
+const TESTIMONIAL_INDEX_SORT_KEY = 'INDEX';
+const TESTIMONIAL_INDEX_GSI2PK = 'TESTIMONIAL_INDEX#all';
 
 function defaultDocumentClient(): DynamoDBDocumentClient {
   return DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -201,5 +215,115 @@ export class DynamoContentStore implements ContentStore {
         ],
       }),
     );
+  }
+}
+
+export interface DynamoTestimonialStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+// TASK 1.4.2: mirrors DynamoContentStore's shape, but the "list everything"
+// projection is a single fixed row per testimonial (its entity type never
+// changes) rather than one row per keyword — see this file's own
+// TESTIMONIAL_INDEX_GSI2PK comment and testimonial-repository.ts's header
+// comment for why a status-keyed projection would go stale instead.
+export class DynamoTestimonialStore implements TestimonialStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoTestimonialStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async get(id: string): Promise<Testimonial | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: TESTIMONIAL_PK(id), sk: META_SORT_KEY },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Testimonial>(result.Item);
+  }
+
+  async create(item: Testimonial): Promise<void> {
+    const mainItem = { ...item, pk: TESTIMONIAL_PK(item.id), sk: META_SORT_KEY };
+    const indexItem = {
+      pk: TESTIMONIAL_PK(item.id),
+      sk: TESTIMONIAL_INDEX_SORT_KEY,
+      gsi2pk: TESTIMONIAL_INDEX_GSI2PK,
+      gsi2sk: TESTIMONIAL_PK(item.id),
+    };
+
+    try {
+      await this.client.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: this.tableName,
+                Item: mainItem,
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
+            },
+            { Put: { TableName: this.tableName, Item: indexItem } },
+          ],
+        }),
+      );
+    } catch (error) {
+      if (error instanceof TransactionCanceledException) {
+        throw new AppError('RECORD_ALREADY_EXISTS', `testimonial ${item.id} already exists`);
+      }
+      throw error;
+    }
+  }
+
+  // TASK 1.4.2 DoD: "a second write attempt to an existing consent object
+  // throws rather than overwriting." A plain overwrite of the main item,
+  // conditioned on the stored `consent` attribute matching exactly what
+  // this write is about to write back — every real caller (publish/reject)
+  // only ever echoes `consent` unchanged, so this never fires outside a bug.
+  async update(item: Testimonial): Promise<void> {
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: { ...item, pk: TESTIMONIAL_PK(item.id), sk: META_SORT_KEY },
+          ConditionExpression: 'consent = :expectedConsent',
+          ExpressionAttributeValues: { ':expectedConsent': item.consent },
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'CONSENT_IMMUTABLE',
+          `testimonial ${item.id} consent is immutable once recorded`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async listAllIds(): Promise<string[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI2_INDEX_NAME,
+        KeyConditionExpression: 'gsi2pk = :indexKey',
+        ExpressionAttributeValues: { ':indexKey': TESTIMONIAL_INDEX_GSI2PK },
+      }),
+    );
+    const ids: string[] = [];
+    for (const row of result.Items ?? []) {
+      const pk = row.pk;
+      if (typeof pk === 'string' && pk.startsWith('TESTIMONIAL#')) {
+        ids.push(pk.slice('TESTIMONIAL#'.length));
+      }
+    }
+    return ids;
   }
 }

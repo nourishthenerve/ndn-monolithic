@@ -15,7 +15,9 @@ export type FlagName =
   | 'sms.killSwitchEngaged'
   | 'content.readApi.enabled'
   | 'content.authoring.enabled'
-  | 'contact.form.enabled';
+  | 'contact.form.enabled'
+  | 'testimonials.submission.enabled'
+  | 'testimonials.moderationQueue.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */
