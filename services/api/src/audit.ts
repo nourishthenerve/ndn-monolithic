@@ -12,6 +12,10 @@
 // status transition, same discipline, named precisely for the same reason.
 // TASK 1.5.1: 'cancel' is workshop's own equivalent — a workshop is never
 // deleted, only ever transitioned to 'cancelled'.
+// TASK 1.5.2: 'confirm' is a registration's own equivalent of 'publish' —
+// a status transition fired by the Stripe webhook, not an admin. Registration
+// reuses 'cancel' rather than adding a distinct verb: same status name
+// (Registration.status is also 'cancelled'), same meaning (never deleted).
 export type AuditAction =
   | 'create'
   | 'update'
@@ -19,7 +23,8 @@ export type AuditAction =
   | 'publish'
   | 'unpublish'
   | 'reject'
-  | 'cancel';
+  | 'cancel'
+  | 'confirm';
 
 export interface AuditEvent {
   readonly at: string;

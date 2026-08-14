@@ -8,8 +8,9 @@ import {
   PutCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { BaseRecord, ContentItem, Testimonial, Workshop } from '@ndn/shared-types';
+import type { BaseRecord, ContentItem, Registration, Testimonial, Workshop } from '@ndn/shared-types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -17,8 +18,11 @@ import { InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
 import {
   DynamoContentStore,
+  DynamoRegistrationStore,
   DynamoStore,
   DynamoTestimonialStore,
+  DynamoWebhookEventStore,
+  DynamoWorkshopCapacityStore,
   DynamoWorkshopStore,
   singleItemKeys,
 } from './dynamo-store.js';
@@ -457,5 +461,143 @@ describe('DynamoWorkshopStore', () => {
       Item: expect.objectContaining({ pk: 'WORKSHOP#workshop-1', sk: 'META', status: 'cancelled' }),
     });
     expect(call?.ConditionExpression).toBeUndefined();
+  });
+});
+
+function buildRegistration(overrides: Partial<Registration> = {}): Registration {
+  return {
+    id: 'registration-1',
+    workshopId: 'workshop-1',
+    status: 'pending',
+    attendeeEmail: 'attendee@example.com',
+    stripeCheckoutSessionId: 'cs_test_1',
+    created_at: '2026-06-01T00:00:00.000Z',
+    updated_at: '2026-06-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('DynamoRegistrationStore', () => {
+  const store = new DynamoRegistrationStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('get() reads by WORKSHOP#<id>/REGISTRATION#<id> and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: { pk: 'WORKSHOP#workshop-1', sk: 'REGISTRATION#registration-1', ...buildRegistration() },
+    });
+
+    const result = await store.get('workshop-1', 'registration-1');
+    expect(result).toMatchObject({ id: 'registration-1', status: 'pending' });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'WORKSHOP#workshop-1', sk: 'REGISTRATION#registration-1' },
+    });
+  });
+
+  it('create() conditionally puts the row, scoped under the workshop pk', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(buildRegistration());
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({
+        pk: 'WORKSHOP#workshop-1',
+        sk: 'REGISTRATION#registration-1',
+      }),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() translates a failed condition check (duplicate id) into AppError', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.create(buildRegistration())).rejects.toThrow(AppError);
+  });
+
+  it('update() overwrites the row with a plain PutCommand, no ConditionExpression', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.update(buildRegistration({ status: 'confirmed' }));
+
+    const call = ddbMock.commandCalls(PutCommand)[0]?.args[0].input;
+    expect(call).toMatchObject({
+      Item: expect.objectContaining({ status: 'confirmed' }),
+    });
+    expect(call?.ConditionExpression).toBeUndefined();
+  });
+});
+
+describe('DynamoWorkshopCapacityStore', () => {
+  const store = new DynamoWorkshopCapacityStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('tryReserve() atomically increments registeredCount on the WORKSHOP#<id>/CAPACITY row, conditioned on staying under capacity', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+    await expect(store.tryReserve('workshop-1', 10)).resolves.toBe(true);
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Key: { pk: 'WORKSHOP#workshop-1', sk: 'CAPACITY' },
+      UpdateExpression: 'SET registeredCount = if_not_exists(registeredCount, :zero) + :one',
+      ConditionExpression: 'attribute_not_exists(registeredCount) OR registeredCount < :capacity',
+      ExpressionAttributeValues: { ':zero': 0, ':one': 1, ':capacity': 10 },
+    });
+  });
+
+  it('tryReserve() returns false (not a thrown error) when the condition fails (at capacity)', async () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.tryReserve('workshop-1', 10)).resolves.toBe(false);
+  });
+
+  it('release() atomically decrements registeredCount, conditioned on it being above zero', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+    await store.release('workshop-1');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'WORKSHOP#workshop-1', sk: 'CAPACITY' },
+      UpdateExpression: 'SET registeredCount = registeredCount - :one',
+      ConditionExpression: 'attribute_exists(registeredCount) AND registeredCount > :zero',
+    });
+  });
+
+  it('release() is a no-op (does not throw) when there is nothing to release', async () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.release('workshop-1')).resolves.toBeUndefined();
+  });
+});
+
+describe('DynamoWebhookEventStore', () => {
+  const store = new DynamoWebhookEventStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('tryClaim() conditionally puts a STRIPE_EVENT#<id> row and returns true on the first claim', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await expect(store.tryClaim('evt_1')).resolves.toBe(true);
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: { pk: 'STRIPE_EVENT#evt_1', sk: 'RECEIVED' },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('tryClaim() returns false (not a thrown error) when the event id was already claimed', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.tryClaim('evt_1')).resolves.toBe(false);
   });
 });

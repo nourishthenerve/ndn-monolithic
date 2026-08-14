@@ -270,8 +270,80 @@ describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
   });
 });
 
+describe('DataStack — workshop checkout function (TASK 1.5.2)', () => {
+  it('is wired to the table name and Stripe secret key parameter name via environment, and routed at POST /workshops/{id}/checkout', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          WORKSHOP_TABLE_NAME: Match.anyValue(),
+          STRIPE_SECRET_KEY_PARAMETER_NAME: '/ndn/stripe-secret-key',
+        }),
+      },
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /workshops/{id}/checkout',
+    });
+  });
+
+  it('grants PutItem/UpdateItem but never DeleteItem on its identity policy, and denies it via the guardrail', () => {
+    const template = synth();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const checkoutPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'WorkshopCheckoutFunctionRole',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+
+    const allowActions = checkoutPolicy.Properties.PolicyDocument.Statement.filter(
+      (statement) => statement.Effect === 'Allow',
+    ).flatMap((statement) => ([] as string[]).concat(statement.Action as string | string[]));
+
+    expect(allowActions).toContain('dynamodb:PutItem');
+    expect(allowActions).toContain('dynamodb:UpdateItem');
+    expect(allowActions).toContain('ssm:GetParameter');
+    expect(allowActions).not.toContain('dynamodb:DeleteItem');
+
+    const denyStatement = checkoutPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Effect === 'Deny',
+    );
+    expect(denyStatement).toMatchObject({
+      Sid: 'DenyDestructivePrimitives',
+      Action: expect.arrayContaining(['dynamodb:DeleteItem']),
+    });
+  });
+
+  it('scopes the SSM read to exactly the Stripe secret key parameter, not every parameter', () => {
+    const template = synth();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const checkoutPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'ReadStripeSecretKey',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const ssmStatement = checkoutPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Sid === 'ReadStripeSecretKey',
+    );
+
+    expect(ssmStatement?.Action).toBe('ssm:GetParameter');
+    const resourceJson = JSON.stringify(ssmStatement?.Resource);
+    expect(resourceJson).toContain('parameter/ndn/stripe-secret-key');
+    expect(resourceJson).not.toContain('parameter/*');
+  });
+
+  it('has an explicit 14-day-retention log group', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/workshop-checkout-function',
+      RetentionInDays: 14,
+    });
+  });
+});
+
 // TASK 1.5.1: the media-upload function (POST /workshops/media-upload-url)
 // is defined in web-stack.ts instead, co-located with MediaBucket — see
 // this stack's own comment at the end of the constructor for why a
 // cross-stack version here produces a circular CloudFormation dependency.
-// Its tests live in web-stack.test.ts.
+// Its tests live in web-stack.test.ts. TASK 1.5.2's stripe-webhook function
+// is likewise defined in web-stack.ts (a stable custom-domain URL for the
+// Stripe dashboard) — its tests live there too.

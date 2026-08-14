@@ -32,6 +32,7 @@ import {
   LambdaDeploymentConfig,
   LambdaDeploymentGroup,
 } from 'aws-cdk-lib/aws-codedeploy';
+import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Alias, Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -46,6 +47,8 @@ import {
   CONTACT_FORM_TO_EMAIL,
   DOMAIN_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
+  STRIPE_SECRET_KEY_PARAMETER_NAME,
+  STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
 } from './config.js';
 import { attachDestructiveActionGuardrail } from './guardrails.js';
@@ -74,6 +77,16 @@ export interface WebStackProps extends StackProps {
    * its fixed, documented `/ndn/*` names).
    */
   readonly prLabel?: string;
+  /**
+   * TASK 1.5.2: `NdnDataStack`'s table (data-stack.ts), passed in so the
+   * Stripe webhook function here can confirm/cancel registrations —
+   * infra/bin/app.ts wires this for the production stack only. Optional
+   * because no `DataStack` is deployed alongside an ephemeral per-PR stack
+   * (0.6.3's own comment on why); when absent, the webhook function/route/
+   * CloudFront behavior are skipped entirely rather than deployed
+   * non-functional.
+   */
+  readonly table?: ITable;
 }
 
 export class WebStack extends Stack {
@@ -297,6 +310,107 @@ export class WebStack extends Stack {
       integration: new HttpLambdaIntegration('MediaUploadIntegration', mediaUploadFunction),
     });
 
+    // TASK 1.5.2 (ADR-0010): the Stripe webhook function/route — placed
+    // here (not alongside the checkout function in data-stack.ts) so it's
+    // reachable at a stable custom-domain URL (`https://next.nourishthenerve.com/stripe/webhook`,
+    // proxied through this distribution below, same shape as `/contact`)
+    // for registering in the Stripe dashboard — a raw
+    // `execute-api.amazonaws.com` URL is fine functionally but isn't
+    // guaranteed stable if `NdnDataStack`'s HttpApi is ever recreated. This
+    // is the one function in this stack that needs `NdnDataStack`'s table
+    // (`props.table`, a cross-stack reference wired by infra/bin/app.ts) —
+    // a one-directional WebStack -> DataStack dependency, not the circular
+    // shape `MediaUploadFunction`'s own comment above describes (DataStack
+    // needs nothing back from WebStack for this). No ephemeral per-PR stack
+    // deploys a DataStack (0.6.3's own comment), so `props.table` is
+    // undefined there and this whole block — function, route, CloudFront
+    // behavior — is skipped rather than deployed non-functional.
+    let stripeWebhookFunction: NodejsFunction | undefined;
+    if (props.table) {
+      const stripeWebhookRole = new Role(this, 'StripeWebhookFunctionRole', {
+        assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+      });
+
+      stripeWebhookFunction = new NodejsFunction(this, 'StripeWebhookFunction', {
+        entry: `${moduleDir}../../services/api/src/stripe-webhook-handler.ts`,
+        handler: 'handler',
+        runtime: Runtime.NODEJS_22_X,
+        architecture: Architecture.ARM_64,
+        memorySize: 128,
+        timeout: Duration.seconds(10),
+        role: stripeWebhookRole,
+        environment: {
+          WORKSHOP_TABLE_NAME: props.table.tableName,
+          STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
+          STRIPE_SECRET_KEY_PARAMETER_NAME,
+          CONTACT_FORM_FROM_EMAIL,
+        },
+        logGroup: createLogGroup(
+          this,
+          'StripeWebhookFunctionLogGroup',
+          logGroupName('stripe-webhook-function'),
+        ),
+      });
+
+      props.table.grantReadData(stripeWebhookRole);
+      // Precise write actions only — same reasoning WorkshopCheckoutWrite
+      // (data-stack.ts) documents: DynamoRegistrationStore.update and the
+      // webhook-idempotency row both use PutCommand, capacity release uses
+      // UpdateCommand — never table.grantWriteData()'s broader
+      // DeleteItem-including grant.
+      stripeWebhookRole.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'StripeWebhookWrite',
+          effect: Effect.ALLOW,
+          actions: ['dynamodb:PutItem', 'dynamodb:UpdateItem'],
+          resources: [props.table.tableArn],
+        }),
+      );
+      attachDestructiveActionGuardrail(stripeWebhookRole, { buckets: [], tables: [props.table] });
+      stripeWebhookRole.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'ReadStripeSecrets',
+          effect: Effect.ALLOW,
+          actions: ['ssm:GetParameter'],
+          resources: [
+            Stack.of(this).formatArn({
+              service: 'ssm',
+              resource: 'parameter',
+              resourceName: STRIPE_WEBHOOK_SECRET_PARAMETER_NAME.replace(/^\//, ''),
+            }),
+            Stack.of(this).formatArn({
+              service: 'ssm',
+              resource: 'parameter',
+              resourceName: STRIPE_SECRET_KEY_PARAMETER_NAME.replace(/^\//, ''),
+            }),
+          ],
+        }),
+      );
+      // Scoped to exactly the one verified sending identity, same shape
+      // SendContactFormEmail above — the registration-confirmation email
+      // reuses this identity, not a second one.
+      stripeWebhookRole.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'SendRegistrationConfirmationEmail',
+          effect: Effect.ALLOW,
+          actions: ['ses:SendEmail'],
+          resources: [
+            Stack.of(this).formatArn({
+              service: 'ses',
+              resource: 'identity',
+              resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+            }),
+          ],
+        }),
+      );
+
+      httpApi.addRoutes({
+        path: '/stripe/webhook',
+        methods: [HttpMethod.POST],
+        integration: new HttpLambdaIntegration('StripeWebhookIntegration', stripeWebhookFunction),
+      });
+    }
+
     const securityHeaders = new ResponseHeadersPolicy(this, 'SecurityHeaders', {
       securityHeadersBehavior: {
         strictTransportSecurity: {
@@ -313,14 +427,19 @@ export class WebStack extends Stack {
         },
         contentSecurityPolicy: {
           override: true,
-          // TASK 1.4.1: script-src/frame-src now name the Turnstile origin
+          // TASK 1.4.1: script-src/frame-src name the Turnstile origin
           // explicitly — default-src 'self' alone would otherwise block
           // both the widget script and the challenge iframe it embeds.
-          // Scoped to exactly this one origin, not widened generally.
+          // TASK 1.5.2: script-src/frame-src also name Stripe's origins —
+          // a future Stripe.js `redirectToCheckout()` call needs
+          // `https://js.stripe.com`, and the Checkout page itself (if ever
+          // embedded rather than top-level-navigated to) needs
+          // `https://checkout.stripe.com`. Both scoped to exactly these
+          // origins, not widened generally.
           contentSecurityPolicy:
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
-            "script-src 'self' https://challenges.cloudflare.com; " +
-            'frame-src https://challenges.cloudflare.com; ' +
+            "script-src 'self' https://challenges.cloudflare.com https://js.stripe.com; " +
+            'frame-src https://challenges.cloudflare.com https://checkout.stripe.com; ' +
             "object-src 'none'; frame-ancestors 'none'",
         },
       },
@@ -424,6 +543,23 @@ function handler(event) {
           viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           responseHeadersPolicy: securityHeaders,
         },
+        // TASK 1.5.2: same same-origin proxy shape as /health and
+        // /contact — Stripe posts to this domain's own /stripe/webhook
+        // path. Only present when `props.table` was given (see this
+        // constructor's own TASK 1.5.2 comment further up).
+        ...(stripeWebhookFunction
+          ? {
+              '/stripe/webhook': {
+                origin: new HttpOrigin(
+                  `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
+                ),
+                viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                allowedMethods: AllowedMethods.ALLOW_ALL,
+                cachePolicy: CachePolicy.CACHING_DISABLED,
+                responseHeadersPolicy: securityHeaders,
+              },
+            }
+          : {}),
       },
     });
 

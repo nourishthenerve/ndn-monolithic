@@ -36,6 +36,7 @@ import type { Construct } from 'constructs';
 import {
   ADMIN_API_TOKEN_PARAMETER_NAME,
   DOMAIN_NAME,
+  STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
 } from './config.js';
 import { attachDestructiveActionGuardrail } from './guardrails.js';
@@ -498,6 +499,78 @@ export class DataStack extends Stack {
       path: '/workshops/{id}/cancel',
       methods: [HttpMethod.POST],
       integration: workshopAuthoringIntegration,
+    });
+
+    // TASK 1.5.2 (ADR-0010): POST /workshops/{id}/checkout — same table,
+    // one more function/role. Needs table read (look up the workshop),
+    // dynamodb:PutItem (DynamoRegistrationStore.create — a plain
+    // ConditionExpression-guarded PutCommand, not TransactWriteItems, since
+    // a registration row has no companion projection row to write
+    // alongside it) and dynamodb:UpdateItem (DynamoWorkshopCapacityStore's
+    // atomic reserve/release against the WORKSHOP#<id>/CAPACITY row) plus
+    // ssm:GetParameter on the Stripe secret key. The webhook function
+    // (STRIPE_WEBHOOK_SECRET_PARAMETER_NAME, confirm/cancel + email) lives
+    // in web-stack.ts instead — see that file's own TASK 1.5.2 comment for
+    // why (a stable custom-domain URL for the Stripe dashboard).
+    const workshopCheckoutLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/workshop-checkout-function`
+      : '/ndn/workshop-checkout-function';
+
+    const workshopCheckoutRole = new Role(this, 'WorkshopCheckoutFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const workshopCheckoutFunction = new NodejsFunction(this, 'WorkshopCheckoutFunction', {
+      entry: `${moduleDir}../../services/api/src/stripe-checkout-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: workshopCheckoutRole,
+      environment: {
+        WORKSHOP_TABLE_NAME: this.table.tableName,
+        STRIPE_SECRET_KEY_PARAMETER_NAME,
+      },
+      logGroup: createLogGroup(
+        this,
+        'WorkshopCheckoutFunctionLogGroup',
+        workshopCheckoutLogGroupName,
+      ),
+    });
+
+    this.table.grantReadData(workshopCheckoutRole);
+    // Precise write actions only — same reasoning ContentAuthoringWrite/
+    // WorkshopAuthoringWrite document above, never table.grantWriteData()'s
+    // broader DeleteItem-including grant.
+    workshopCheckoutRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WorkshopCheckoutWrite',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem', 'dynamodb:UpdateItem'],
+        resources: [this.table.tableArn],
+      }),
+    );
+    attachDestructiveActionGuardrail(workshopCheckoutRole, { buckets: [], tables: [this.table] });
+    workshopCheckoutRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadStripeSecretKey',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: STRIPE_SECRET_KEY_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+
+    httpApi.addRoutes({
+      path: '/workshops/{id}/checkout',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('WorkshopCheckoutIntegration', workshopCheckoutFunction),
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

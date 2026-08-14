@@ -42,21 +42,28 @@ if (prNumber) {
     prLabel: `pr-${prNumber}`,
   });
 } else {
-  new WebStack(app, 'NdnWebStack', {
-    env: { account: ACCOUNT_ID, region: REGION },
-    deployVersion: process.env.GITHUB_SHA ?? 'local',
-  });
-
-  new BudgetStack(app, 'NdnBudgetStack', {
-    env: { account: ACCOUNT_ID, region: REGION },
-  });
-
-  // TASK 1.3.1: production only, same as BudgetStack above — an ephemeral
+  // TASK 1.3.1: production only, same as BudgetStack below — an ephemeral
   // per-PR stack (0.6.3) doesn't need its own table; DataStack's resources
   // aren't behind the PR-environment integration/a11y suite today, so
   // standing one up per PR would only add cost/time with no test coverage
-  // exercising it.
-  new DataStack(app, 'NdnDataStack', {
+  // exercising it. TASK 1.5.2: created before WebStack (reordered from this
+  // file's previous WebStack-then-DataStack sequence) so its table can be
+  // passed into WebStack's own props below — WebStack's Stripe webhook
+  // function needs it (see web-stack.ts's own TASK 1.5.2 comment); nothing
+  // here flows the other way, so this is a one-directional cross-stack
+  // reference, not the circular shape MediaUploadFunction's comment
+  // documents.
+  const dataStack = new DataStack(app, 'NdnDataStack', {
+    env: { account: ACCOUNT_ID, region: REGION },
+  });
+
+  new WebStack(app, 'NdnWebStack', {
+    env: { account: ACCOUNT_ID, region: REGION },
+    deployVersion: process.env.GITHUB_SHA ?? 'local',
+    table: dataStack.table,
+  });
+
+  new BudgetStack(app, 'NdnBudgetStack', {
     env: { account: ACCOUNT_ID, region: REGION },
   });
 }
