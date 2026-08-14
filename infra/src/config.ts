@@ -11,11 +11,27 @@ export const REGION = 'eu-west-2';
 // Gate G1 (TASK 1.6.1). See docs/plan/05-execution-plan.md TASK 0.4.1.
 export const DOMAIN_NAME = 'next.nourishthenerve.com';
 
-// Requested via `aws acm request-certificate` (region us-east-1, required
-// for CloudFront) against the ndn-prod account; validated via a DNS CNAME
-// added to the nourishthenerve.com hosted zone in 803129122420.
+// TASK 1.6.1: the two hostnames DNS still points at the legacy account's
+// CloudFront distribution as of this task's prep step. Added as alternate
+// domain names on NdnWebStack's existing distribution ahead of the actual
+// DNS cutover (additive, DNS-invisible — no traffic moves until the G1
+// cutover runbook's manual DNS step runs). See docs/runbooks/g1-cutover.md.
+export const APEX_DOMAIN_NAME = 'nourishthenerve.com';
+export const WWW_DOMAIN_NAME = 'www.nourishthenerve.com';
+
+// TASK 1.6.1: re-requested (not reused/extended — ACM certs are immutable,
+// SANs can't be added to an existing one) to cover next./apex/www in one
+// cert, same CloudFront-requires-a-single-certificate constraint that
+// applies to DOMAIN_NAME below. Region us-east-1 (required for CloudFront),
+// against the ndn-prod account; all three SANs DNS-validated via CNAMEs
+// added to the nourishthenerve.com hosted zone in 803129122420 (the next.
+// SAN's validation CNAME already existed from TASK 0.4.1 and needed no
+// change — ACM reuses the same challenge token for a domain it has already
+// validated). The TASK 0.4.1 certificate
+// (arn:.../b1f9e01e-ab10-43b8-944a-6c0ccfffacb5) is left in place, unused,
+// rather than deleted — harmless and free, see that task's rollback note.
 export const CERTIFICATE_ARN =
-  'arn:aws:acm:us-east-1:357601815388:certificate/b1f9e01e-ab10-43b8-944a-6c0ccfffacb5';
+  'arn:aws:acm:us-east-1:357601815388:certificate/c7f37883-1f9e-4abc-94b3-18fb028cf9e2';
 
 // TASK 0.5.1: where budget and cost-anomaly alerts go. Same address the
 // account's root user was created with (docs/runbooks/aws-account-baseline.md)
