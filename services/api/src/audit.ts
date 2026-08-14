@@ -8,7 +8,9 @@
 // packages/shared-types/src/content.ts) and doesn't go through
 // Repository<T>'s active|deleted lifecycle, so the audit trail names the
 // transition precisely rather than collapsing it into a generic 'update'.
-export type AuditAction = 'create' | 'update' | 'soft-delete' | 'publish' | 'unpublish';
+// TASK 1.4.2: 'reject' is testimonial's own equivalent of 'unpublish' — a
+// status transition, same discipline, named precisely for the same reason.
+export type AuditAction = 'create' | 'update' | 'soft-delete' | 'publish' | 'unpublish' | 'reject';
 
 export interface AuditEvent {
   readonly at: string;

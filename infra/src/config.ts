@@ -56,6 +56,8 @@ export const MONITORED_LOG_GROUP_NAMES = [
   '/ndn/health-function',
   '/ndn/smoke-test-function',
   '/ndn/contact-form-function',
+  '/ndn/testimonial-submission-function',
+  '/ndn/testimonial-moderation-function',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret

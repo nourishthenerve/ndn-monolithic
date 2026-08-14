@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ContentItem } from './content.js';
+import type { Testimonial } from './testimonial.js';
 import type { BaseRecord, RecordStatus } from './types.js';
 
 describe('shared-types', () => {
@@ -24,5 +25,22 @@ describe('shared-types', () => {
       updated_at: '2026-01-01T00:00:00.000Z',
     };
     expect(item.status).toBe('draft');
+  });
+
+  it('Testimonial overrides BaseRecord.status with its own lifecycle, never "deleted"', () => {
+    const testimonial: Testimonial = {
+      id: 'testimonial-1',
+      status: 'pending_review',
+      quote: { en: 'This service changed my recovery.' },
+      attribution: { display: 'firstNameOnly', name: 'Jordan' },
+      consent: {
+        textVersion: '2026-08-14',
+        consentedAt: '2026-01-01T00:00:00.000Z',
+        submitterContactHash: 'abc123',
+      },
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    };
+    expect(testimonial.status).toBe('pending_review');
   });
 });

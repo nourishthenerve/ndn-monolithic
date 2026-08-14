@@ -1,0 +1,142 @@
+---
+// TASK 1.4.2: the public testimonials page — published testimonials
+// (fetched at `astro build` time, ADR-0017: no SSR, same pattern
+// apps/web/src/blog/index.astro established) plus a submission form.
+// Submission is a runtime browser fetch straight to
+// infra/src/data-stack.ts's ContentHttpApi (scripts/testimonial-form.ts),
+// reusing 1.4.1's Turnstile widget — the same site key, same challenge —
+// so no second Cloudflare setup exists.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Button, Card, Heading } from '@ndn/ui';
+
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName, turnstileSiteKey } from '../../../site-config.js';
+import { fetchPublishedTestimonials } from '../../../testimonials/testimonial-client.js';
+
+export async function getStaticPaths() {
+  const testimonials = await fetchPublishedTestimonials();
+  return supportedLocales.map((locale) => ({ params: { locale }, props: { testimonials } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const { testimonials } = Astro.props as {
+  testimonials: Awaited<ReturnType<typeof fetchPublishedTestimonials>>;
+};
+
+const heading = t('testimonials.index.heading', undefined, locale);
+
+function attributionLabel(testimonial: (typeof testimonials)[number]): string {
+  if (testimonial.attribution.display === 'anonymous') {
+    return t('testimonials.form.attributionDisplay.anonymous', undefined, locale);
+  }
+  return testimonial.attribution.name ?? '';
+}
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('testimonials.index.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+  <p>{t('testimonials.index.intro', undefined, locale)}</p>
+
+  {
+    testimonials.length === 0 ? (
+      <p>{t('testimonials.index.empty', undefined, locale)}</p>
+    ) : (
+      testimonials.map((testimonial) => (
+        <Card>
+          <blockquote>
+            <p>{testimonial.quote[locale] ?? Object.values(testimonial.quote)[0]}</p>
+            <footer>{attributionLabel(testimonial)}</footer>
+          </blockquote>
+        </Card>
+      ))
+    )
+  }
+
+  <Heading level={2}>{t('testimonials.form.heading', undefined, locale)}</Heading>
+
+  <form id="ndn-testimonial-form">
+    <div class="ndn-input-wrapper">
+      <label class="ndn-input-label" for="ndn-testimonial-quote">
+        {t('testimonials.form.quoteLabel', undefined, locale)}
+      </label>
+      <textarea id="ndn-testimonial-quote" class="ndn-input" name="quote" required maxlength={2000}
+      ></textarea>
+    </div>
+
+    <div class="ndn-input-wrapper">
+      <label class="ndn-input-label" for="ndn-testimonial-attribution-display">
+        {t('testimonials.form.attributionDisplayLabel', undefined, locale)}
+      </label>
+      <select
+        id="ndn-testimonial-attribution-display"
+        class="ndn-input"
+        name="attributionDisplay"
+        required
+      >
+        <option value="full">
+          {t('testimonials.form.attributionDisplay.full', undefined, locale)}
+        </option>
+        <option value="firstNameOnly" selected>
+          {t('testimonials.form.attributionDisplay.firstNameOnly', undefined, locale)}
+        </option>
+        <option value="anonymous">
+          {t('testimonials.form.attributionDisplay.anonymous', undefined, locale)}
+        </option>
+      </select>
+    </div>
+
+    <div class="ndn-input-wrapper">
+      <label class="ndn-input-label" for="ndn-testimonial-attribution-name">
+        {t('testimonials.form.attributionNameLabel', undefined, locale)}
+      </label>
+      <input
+        id="ndn-testimonial-attribution-name"
+        class="ndn-input"
+        type="text"
+        name="attributionName"
+        maxlength={200}
+      />
+    </div>
+
+    <div class="ndn-input-wrapper">
+      <label class="ndn-input-label" for="ndn-testimonial-contact-email">
+        {t('testimonials.form.contactEmailLabel', undefined, locale)}
+      </label>
+      <input
+        id="ndn-testimonial-contact-email"
+        class="ndn-input"
+        type="email"
+        name="contactEmail"
+        required
+        maxlength={320}
+      />
+    </div>
+
+    <p>{t('testimonials.form.consentNotice', undefined, locale)}</p>
+
+    <div class="cf-turnstile" data-sitekey={turnstileSiteKey}></div>
+
+    <Button type="submit">{t('testimonials.form.submit', undefined, locale)}</Button>
+
+    <p
+      id="ndn-testimonial-form-status"
+      role="status"
+      hidden
+      data-success-message={t('testimonials.form.success', undefined, locale)}
+      data-rate-limited-message={t('testimonials.form.rateLimited', undefined, locale)}
+      data-error-message={t('testimonials.form.error', undefined, locale)}
+    ></p>
+  </form>
+
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  <script>
+    import { initTestimonialForm } from '../../../scripts/testimonial-form.js';
+
+    initTestimonialForm();
+  </script>
+</BaseLayout>

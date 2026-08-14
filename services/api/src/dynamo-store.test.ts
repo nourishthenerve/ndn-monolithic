@@ -1,4 +1,7 @@
-import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
   GetCommand,
@@ -6,13 +9,18 @@ import {
   QueryCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { BaseRecord, ContentItem } from '@ndn/shared-types';
+import type { BaseRecord, ContentItem, Testimonial } from '@ndn/shared-types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
-import { DynamoContentStore, DynamoStore, singleItemKeys } from './dynamo-store.js';
+import {
+  DynamoContentStore,
+  DynamoStore,
+  DynamoTestimonialStore,
+  singleItemKeys,
+} from './dynamo-store.js';
 import { AppError } from './errors.js';
 import { Repository } from './repository.js';
 
@@ -229,5 +237,122 @@ describe('DynamoContentStore', () => {
 
     const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
     expect(call?.TransactItems?.every((entry) => entry.Delete === undefined)).toBe(true);
+  });
+});
+
+function buildTestimonial(overrides: Partial<Testimonial> = {}): Testimonial {
+  return {
+    id: 'testimonial-1',
+    status: 'pending_review',
+    quote: { en: 'This service changed my recovery.' },
+    attribution: { display: 'firstNameOnly', name: 'Jordan' },
+    consent: {
+      textVersion: '2026-08-14',
+      consentedAt: '2026-01-01T00:00:00.000Z',
+      submitterContactHash: 'hash-1',
+    },
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('DynamoTestimonialStore', () => {
+  const store = new DynamoTestimonialStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('get() reads the META row and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: { pk: 'TESTIMONIAL#testimonial-1', sk: 'META', ...buildTestimonial() },
+    });
+
+    const result = await store.get('testimonial-1');
+    expect(result).toMatchObject({ id: 'testimonial-1', status: 'pending_review' });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'TESTIMONIAL#testimonial-1', sk: 'META' },
+    });
+  });
+
+  it('create() atomically writes the main item and one fixed "all testimonials" index row', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await store.create(buildTestimonial());
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems).toHaveLength(2);
+    expect(call?.TransactItems?.[0]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({ pk: 'TESTIMONIAL#testimonial-1', sk: 'META' }),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+    expect(call?.TransactItems?.[1]?.Put).toMatchObject({
+      Item: {
+        pk: 'TESTIMONIAL#testimonial-1',
+        sk: 'INDEX',
+        gsi2pk: 'TESTIMONIAL_INDEX#all',
+        gsi2sk: 'TESTIMONIAL#testimonial-1',
+      },
+    });
+  });
+
+  it('create() translates a cancelled transaction (duplicate id) into AppError', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+
+    await expect(store.create(buildTestimonial())).rejects.toThrow(AppError);
+  });
+
+  it('listAllIds() queries GSI2 for the fixed index key and extracts ids from the returned pks', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { pk: 'TESTIMONIAL#testimonial-1', sk: 'INDEX' },
+        { pk: 'TESTIMONIAL#testimonial-2', sk: 'INDEX' },
+      ],
+    });
+
+    const ids = await store.listAllIds();
+    expect(ids).toEqual(['testimonial-1', 'testimonial-2']);
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI2',
+      KeyConditionExpression: 'gsi2pk = :indexKey',
+      ExpressionAttributeValues: { ':indexKey': 'TESTIMONIAL_INDEX#all' },
+    });
+  });
+
+  it('listAllIds() returns an empty array when nothing has ever been created', async () => {
+    ddbMock.on(QueryCommand).resolves({});
+    expect(await store.listAllIds()).toEqual([]);
+  });
+
+  it('update() overwrites the main item, conditioned on consent matching the value being written', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    const item = buildTestimonial({ status: 'published' });
+    await store.update(item);
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({
+        pk: 'TESTIMONIAL#testimonial-1',
+        sk: 'META',
+        status: 'published',
+      }),
+      ConditionExpression: 'consent = :expectedConsent',
+      ExpressionAttributeValues: { ':expectedConsent': item.consent },
+    });
+  });
+
+  it('update() translates a failed condition check (consent tampered with) into AppError', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.update(buildTestimonial())).rejects.toThrow(AppError);
   });
 });
