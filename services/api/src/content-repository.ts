@@ -34,6 +34,20 @@ export interface ContentStore {
    * already exists.
    */
   create(item: ContentItem): Promise<void>;
+  /**
+   * TASK 1.3.2: overwrites the main item and re-puts (never removes) one
+   * GSI2 projection row per keyword `item.keywords` currently lists —
+   * including ones already indexed, which is a harmless idempotent rewrite.
+   * A keyword dropped from `item.keywords` since the last write keeps its
+   * existing GSI2 row: `DeleteItem` is completely unavailable to this store
+   * (banned outright by ndn/no-destructive-primitives, no infra/-Deny
+   * carve-out like s3:DeleteObject* has — see guardrails.ts and TASK 0.3.1),
+   * so a stale projection can only ever be fixed forward, never removed.
+   * Assumes `item.id` already exists — callers (ContentRepository.update/
+   * publish/unpublish) load-then-write, same division of responsibility as
+   * Repository<T>.update/store.put (repository.ts, store.ts).
+   */
+  update(item: ContentItem): Promise<void>;
   /** Content ids tagged with `keyword`, in no particular order. */
   queryIdsByKeyword(keyword: string): Promise<string[]>;
 }
@@ -51,19 +65,46 @@ export class InMemoryContentStore implements ContentStore {
       throw new AppError('RECORD_ALREADY_EXISTS', `content ${item.id} already exists`);
     }
     this.items.set(item.id, item);
+    this.indexKeywords(item);
+  }
+
+  async update(item: ContentItem): Promise<void> {
+    this.items.set(item.id, item);
+    this.indexKeywords(item);
+  }
+
+  async queryIdsByKeyword(keyword: string): Promise<string[]> {
+    return [...(this.keywordIndex.get(keyword) ?? [])];
+  }
+
+  private indexKeywords(item: ContentItem): void {
     for (const keyword of item.keywords) {
       const ids = this.keywordIndex.get(keyword) ?? new Set<string>();
       ids.add(item.id);
       this.keywordIndex.set(keyword, ids);
     }
   }
-
-  async queryIdsByKeyword(keyword: string): Promise<string[]> {
-    return [...(this.keywordIndex.get(keyword) ?? [])];
-  }
 }
 
 export type CreateContentInput = Omit<ContentItem, 'created_at' | 'updated_at'>;
+
+/** Patchable by TASK 1.3.2's `PATCH /content/:id` — never `status` (publish/unpublish own that transition exclusively). */
+export type UpdateContentInput = Partial<Pick<ContentItem, 'keywords' | 'translations'>>;
+
+// TASK 1.3.2: every item is implicitly discoverable by its own
+// `contentType` (e.g. every blog post by the keyword "blog") — reuses
+// GSI2's existing keyword -> content projection (TASK 1.3.1) rather than a
+// new index or a table Scan, which single-table design reserves for a real
+// access pattern GSI (04-data-model-rbac.md: "GSI1/3/4 land with the
+// Phase 2/3 tasks that first need them"). This is what lets the public
+// site list/build every published post (apps/web's blog pages) with the
+// same `GET /content?keyword=` the read API already exposes.
+function withContentTypeKeyword(
+  keywords: readonly string[],
+  contentType: ContentItem['contentType'],
+): string[] {
+  return keywords.includes(contentType) ? [...keywords] : [...keywords, contentType];
+}
 
 export class ContentRepository {
   constructor(
@@ -74,7 +115,12 @@ export class ContentRepository {
 
   async create(actor: string, data: CreateContentInput): Promise<ContentItem> {
     const now = this.clock.now().toISOString();
-    const item: ContentItem = { ...data, created_at: now, updated_at: now };
+    const item: ContentItem = {
+      ...data,
+      keywords: withContentTypeKeyword(data.keywords, data.contentType),
+      created_at: now,
+      updated_at: now,
+    };
     await this.store.create(item);
     await this.audit.write({
       at: now,
@@ -95,6 +141,73 @@ export class ContentRepository {
     const ids = await this.store.queryIdsByKeyword(keyword);
     const items = await Promise.all(ids.map((id) => this.store.get(id)));
     return items.filter((item): item is ContentItem => item?.status === 'published');
+  }
+
+  /**
+   * Edits keywords/translations only — never `status` (00-conventions.md's
+   * no-delete rule extends here too: this is not how a post is removed or
+   * hidden, see publish/unpublish below). Throws AppError('RECORD_NOT_FOUND')
+   * if `id` doesn't exist.
+   */
+  async update(actor: string, id: string, patch: UpdateContentInput): Promise<ContentItem> {
+    const existing = await this.requireExists(id);
+    const now = this.clock.now().toISOString();
+    const record: ContentItem = {
+      ...existing,
+      ...patch,
+      keywords: patch.keywords
+        ? withContentTypeKeyword(patch.keywords, existing.contentType)
+        : existing.keywords,
+      status: existing.status,
+      created_at: existing.created_at,
+      updated_at: now,
+    };
+    await this.store.update(record);
+    await this.audit.write({
+      at: now,
+      actor,
+      action: 'update',
+      entityType: 'Content',
+      entityId: id,
+    });
+    return record;
+  }
+
+  /** Transitions `status` to 'published'. Never removes the row — see store.update's own comment. */
+  async publish(actor: string, id: string): Promise<ContentItem> {
+    return this.transitionStatus(actor, id, 'published', 'publish');
+  }
+
+  /**
+   * Transitions `status` to 'unpublished'. This is the *only* effect —
+   * "unpublish" never calls anything delete-shaped, and the row stays
+   * `findById`-able (by id) and admin-visible throughout, even though
+   * `findPublishedByKeyword` immediately excludes it.
+   */
+  async unpublish(actor: string, id: string): Promise<ContentItem> {
+    return this.transitionStatus(actor, id, 'unpublished', 'unpublish');
+  }
+
+  private async transitionStatus(
+    actor: string,
+    id: string,
+    status: ContentItem['status'],
+    action: 'publish' | 'unpublish',
+  ): Promise<ContentItem> {
+    const existing = await this.requireExists(id);
+    const now = this.clock.now().toISOString();
+    const record: ContentItem = { ...existing, status, updated_at: now };
+    await this.store.update(record);
+    await this.audit.write({ at: now, actor, action, entityType: 'Content', entityId: id });
+    return record;
+  }
+
+  private async requireExists(id: string): Promise<ContentItem> {
+    const existing = await this.store.get(id);
+    if (!existing) {
+      throw new AppError('RECORD_NOT_FOUND', `content ${id} not found`);
+    }
+    return existing;
   }
 }
 

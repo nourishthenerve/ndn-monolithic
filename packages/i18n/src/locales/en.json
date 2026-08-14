@@ -48,5 +48,16 @@
   "cookies.banner.message": "We use essential cookies to run this site, and optional analytics cookies to help us understand how it's used.",
   "cookies.banner.policyLink": "Read our cookie policy",
   "cookies.banner.accept": "Accept all",
-  "cookies.banner.reject": "Reject non-essential"
+  "cookies.banner.reject": "Reject non-essential",
+  "nav.blog": "Blog",
+  "blog.index.heading": "Blog",
+  "blog.index.description": "Articles from Nourish the Nerve's clinicians on neuro-rehabilitation.",
+  "blog.index.empty": "No posts yet — check back soon.",
+  "blog.index.readMore": "Read more",
+  "notFound.heading": "Page not found",
+  "notFound.description": "The page you're looking for doesn't exist.",
+  "notFound.body": "Sorry, we couldn't find that page. It may have moved or no longer exists.",
+  "notFound.blogHeading": "This post is no longer available",
+  "notFound.blogBody": "Sorry, this blog post has been unpublished or removed from the site.",
+  "notFound.backToHome": "Back to home"
 }

@@ -60,3 +60,12 @@ export const MONITORED_LOG_GROUP_NAMES = ['/ndn/health-function', '/ndn/smoke-te
 // (docs/runbooks/ephemeral-pr-environments.md) — kept as one named constant
 // so the two never drift apart silently.
 export const PR_STACK_ID_PREFIX = 'NdnWebStackPr';
+
+// TASK 1.3.2: the SSM SecureString holding ADMIN_API_TOKEN (D-14). Created
+// out-of-band (`aws ssm put-parameter --type SecureString`), same reasoning
+// CERTIFICATE_ARN documents above — never committed as a value, only this
+// name. One constant shared by data-stack.ts (grants ssm:GetParameter and
+// sets the Lambda's ADMIN_TOKEN_PARAMETER_NAME env var) and
+// content-authoring-handler.ts's own fallback default, so the two can't
+// drift apart silently. See docs/runbooks/content-authoring.md.
+export const ADMIN_API_TOKEN_PARAMETER_NAME = '/ndn/admin-api-token';

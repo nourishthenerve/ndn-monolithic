@@ -32,6 +32,13 @@ const routeSegments: readonly RouteSegment[] = [
   { segment: '', navLabelKey: 'nav.home' },
   { segment: 'about', navLabelKey: 'nav.about' },
   { segment: 'services', navLabelKey: 'nav.services' },
+  // TASK 1.3.2: only the fixed listing page, not individual posts —
+  // `blog/[slug].astro`'s pages are generated per published post
+  // (getStaticPaths, apps/web/src/blog/content-client.ts) and don't have a
+  // stable id known ahead of any content existing, so they can't be listed
+  // here the way a fixed route can. See this file's own navLabelKey comment
+  // below for why that's fine for 1.1.3's a11y gate too.
+  { segment: 'blog', navLabelKey: 'nav.blog' },
   // TASK 1.2.2: legal pages aren't primary-nav items (no navLabelKey) —
   // they're linked from Footer.astro instead — but still registered here so
   // 1.1.3's a11y/keyboard gate covers them. Derived from legal-pages.ts

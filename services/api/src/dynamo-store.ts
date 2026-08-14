@@ -174,4 +174,32 @@ export class DynamoContentStore implements ContentStore {
     }
     return ids;
   }
+
+  // TASK 1.3.2: same TransactWriteItems shape as create() — the main item
+  // plus one Put per current keyword — but every Put here is a plain
+  // overwrite (no `attribute_not_exists` condition; the item is expected to
+  // already exist) and a keyword dropped since the last write keeps its old
+  // row rather than being removed. See ContentStore.update's own comment
+  // (content-repository.ts) for why: DeleteItem is unavailable to this
+  // store, full stop.
+  async update(item: ContentItem): Promise<void> {
+    const mainItem = { ...item, pk: CONTENT_PK(item.id), sk: META_SORT_KEY };
+    const keywordItems = item.keywords.map((keyword) => ({
+      pk: CONTENT_PK(item.id),
+      sk: KEYWORD_KEY(keyword),
+      gsi2pk: KEYWORD_KEY(keyword),
+      gsi2sk: CONTENT_PK(item.id),
+    }));
+
+    await this.client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          { Put: { TableName: this.tableName, Item: mainItem } },
+          ...keywordItems.map((Item) => ({
+            Put: { TableName: this.tableName, Item },
+          })),
+        ],
+      }),
+    );
+  }
 }

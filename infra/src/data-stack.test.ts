@@ -105,3 +105,88 @@ describe('DataStack — content read function', () => {
     });
   });
 });
+
+describe('DataStack — content authoring function', () => {
+  it('is wired to the table name and admin token parameter name via environment', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({
+          CONTENT_TABLE_NAME: Match.anyValue(),
+          ADMIN_TOKEN_PARAMETER_NAME: '/ndn/admin-api-token',
+        }),
+      },
+    });
+  });
+
+  it('routes all four authoring endpoints to the same function', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'POST /content' });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'PATCH /content/{id}',
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /content/{id}/publish',
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /content/{id}/unpublish',
+    });
+  });
+
+  it('has an explicit 14-day-retention log group', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/content-authoring-function',
+      RetentionInDays: 14,
+    });
+  });
+
+  it('grants PutItem/TransactWriteItems but never DeleteItem on its identity policy', () => {
+    const template = synth();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const authoringPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'ContentAuthoringFunctionRole',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+
+    const allowActions = authoringPolicy.Properties.PolicyDocument.Statement.filter(
+      (statement) => statement.Effect === 'Allow',
+    ).flatMap((statement) => ([] as string[]).concat(statement.Action as string | string[]));
+
+    expect(allowActions).toContain('dynamodb:PutItem');
+    expect(allowActions).toContain('dynamodb:TransactWriteItems');
+    expect(allowActions).toContain('ssm:GetParameter');
+    expect(allowActions).not.toContain('dynamodb:DeleteItem');
+
+    const denyStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Effect === 'Deny',
+    );
+    expect(denyStatement).toMatchObject({
+      Sid: 'DenyDestructivePrimitives',
+      Action: expect.arrayContaining(['dynamodb:DeleteItem']),
+    });
+  });
+
+  it('scopes the SSM read to exactly the admin token parameter, not every parameter', () => {
+    const template = synth();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const authoringPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes('ReadAdminApiToken'),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const ssmStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Sid === 'ReadAdminApiToken',
+    );
+
+    expect(ssmStatement?.Action).toBe('ssm:GetParameter');
+    // A CloudFormation intrinsic (Fn::Join with the account/region
+    // pseudo-parameters), not a literal string — resolved at deploy time
+    // to arn:aws:ssm:<region>:<account>:parameter/ndn/admin-api-token.
+    // Serialising it is the simplest way to prove the parameter *name*
+    // segment is baked in literally, rather than a wildcard covering every
+    // parameter in the account.
+    const resourceJson = JSON.stringify(ssmStatement?.Resource);
+    expect(resourceJson).toContain('parameter/ndn/admin-api-token');
+    expect(resourceJson).not.toContain('parameter/*');
+  });
+});

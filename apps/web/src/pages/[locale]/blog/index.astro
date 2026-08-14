@@ -1,0 +1,61 @@
+---
+// TASK 1.3.2: the blog listing page. Built statically at `astro build`
+// time from a single fetch (ADR-0017: no SSR) — see
+// apps/web/src/blog/content-client.ts's own comment for why this can
+// never fail the build (an unreachable content API, e.g. the ephemeral PR
+// environment where NdnDataStack isn't deployed at all, just means zero
+// posts today).
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Card, Heading, Link } from '@ndn/ui';
+
+import { fetchPublishedBlogPosts } from '../../../blog/content-client.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export async function getStaticPaths() {
+  const posts = await fetchPublishedBlogPosts();
+  return supportedLocales.map((locale) => ({ params: { locale }, props: { posts } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const { posts } = Astro.props as {
+  posts: Awaited<ReturnType<typeof fetchPublishedBlogPosts>>;
+};
+
+// A post not yet translated into this locale doesn't appear on this
+// locale's listing — moot while `supportedLocales` is `['en']` only (every
+// post that passes content-authoring.ts's Zod validation already has an
+// `en` entry), but correct once a second locale exists.
+const postsForLocale = posts
+  .map((post) => ({ post, translation: post.translations[locale] }))
+  .filter(
+    (entry): entry is { post: (typeof posts)[number]; translation: NonNullable<typeof entry.translation> } =>
+      entry.translation !== undefined,
+  );
+
+const heading = t('blog.index.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('blog.index.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+  {
+    postsForLocale.length === 0 ? (
+      <p>{t('blog.index.empty', undefined, locale)}</p>
+    ) : (
+      postsForLocale.map(({ post, translation }) => (
+        <Card>
+          <Heading level={2}>{translation.title}</Heading>
+          <p>{translation.excerpt}</p>
+          <Link href={`/${locale}/blog/${post.id}`}>
+            {t('blog.index.readMore', undefined, locale)}
+          </Link>
+        </Card>
+      ))
+    )
+  }
+</BaseLayout>

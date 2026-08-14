@@ -3,7 +3,12 @@
 // Repository/VersionedRepository write through; InMemoryAuditLog is today's
 // implementation (no DynamoDB table exists yet — see store.ts). It exposes
 // no method that removes an entry, by construction.
-export type AuditAction = 'create' | 'update' | 'soft-delete';
+// TASK 1.3.2: 'publish'/'unpublish' are their own actions, not folded into
+// 'update' — content.status is domain-specific (draft|published|unpublished,
+// packages/shared-types/src/content.ts) and doesn't go through
+// Repository<T>'s active|deleted lifecycle, so the audit trail names the
+// transition precisely rather than collapsing it into a generic 'update'.
+export type AuditAction = 'create' | 'update' | 'soft-delete' | 'publish' | 'unpublish';
 
 export interface AuditEvent {
   readonly at: string;
