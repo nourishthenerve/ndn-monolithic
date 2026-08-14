@@ -16,7 +16,10 @@
   "dependencies": {
     "@aws-sdk/client-codedeploy": "^3.1108.0",
     "@aws-sdk/client-dynamodb": "^3.1109.0",
+    "@aws-sdk/client-ssm": "^3.1109.0",
     "@aws-sdk/lib-dynamodb": "^3.1109.0",
-    "@ndn/shared-types": "workspace:*"
+    "@ndn/i18n": "workspace:*",
+    "@ndn/shared-types": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

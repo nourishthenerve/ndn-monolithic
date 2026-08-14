@@ -13,8 +13,14 @@
 // This stack owns its own small HttpApi for GET /content (TASK 1.3.1 step
 // 5, "minimal read API only") rather than extending web-stack.ts's — no
 // CloudFront behavior routes to it yet, so it isn't reachable from the
-// public site; that wiring is deferred to whichever task first needs the
-// public site to actually consume content (see 1.3.2's blog pages).
+// public site. TASK 1.3.2's blog pages consume it by calling the API's own
+// execute-api.amazonaws.com URL directly at `astro build` time instead
+// (see docs/runbooks/content-authoring.md) — same-origin CloudFront
+// proxying stays deferred, since nothing needs a runtime browser call.
+//
+// TASK 1.3.2 adds the write side alongside it: ContentAuthoringFunction,
+// its own least-privilege role (read + exactly the write actions it uses,
+// not the broader grantWriteData()), and the four authoring routes.
 
 import { fileURLToPath } from 'node:url';
 
@@ -22,11 +28,12 @@ import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-
 import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AttributeType, BillingMode, ProjectionType, Table } from 'aws-cdk-lib/aws-dynamodb';
-import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 
+import { ADMIN_API_TOKEN_PARAMETER_NAME } from './config.js';
 import { attachDestructiveActionGuardrail } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 
@@ -99,11 +106,103 @@ export class DataStack extends Stack {
     // and a deployed runtime role.
     attachDestructiveActionGuardrail(contentReadRole, { buckets: [], tables: [this.table] });
 
+    // TASK 1.3.2: the write side. A separate function/role from
+    // ContentReadFunction — the read path stays exactly "read the table,
+    // write its own logs" (comment above); this one additionally needs to
+    // write content and read the admin token.
+    const authoringLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/content-authoring-function`
+      : '/ndn/content-authoring-function';
+
+    const contentAuthoringRole = new Role(this, 'ContentAuthoringFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const contentAuthoringFunction = new NodejsFunction(this, 'ContentAuthoringFunction', {
+      entry: `${moduleDir}../../services/api/src/content-authoring-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      role: contentAuthoringRole,
+      environment: {
+        CONTENT_TABLE_NAME: this.table.tableName,
+        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+      },
+      logGroup: createLogGroup(this, 'ContentAuthoringFunctionLogGroup', authoringLogGroupName),
+    });
+
+    this.table.grantReadData(contentAuthoringRole);
+    // Precise write actions only — deliberately not table.grantWriteData(),
+    // whose action list includes dynamodb:DeleteItem (an Allow the
+    // guardrail below denies right back, but the narrower grant means
+    // there's no delete permission on this role's own identity policy to
+    // begin with, not just one blocked by a second layer). ContentStore's
+    // real writes (dynamo-store.ts) all go through TransactWriteCommand,
+    // which needs both actions: TransactWriteItems for the transaction
+    // itself, PutItem for what's inside it (AWS's IAM reference for
+    // TransactWriteItems — permission is checked per enclosed operation
+    // too, not just the transaction as a whole).
+    contentAuthoringRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ContentAuthoringWrite',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'],
+        resources: [this.table.tableArn],
+      }),
+    );
+
+    // TASK 0.3.2's guardrail against this role too — defence in depth even
+    // though the identity policy above never grants DeleteItem in the
+    // first place (see the comment on the write grant just above).
+    attachDestructiveActionGuardrail(contentAuthoringRole, { buckets: [], tables: [this.table] });
+
+    contentAuthoringRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadAdminApiToken',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+
     const httpApi = new HttpApi(this, 'ContentHttpApi');
     httpApi.addRoutes({
       path: '/content',
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration('ContentReadIntegration', contentReadFunction),
+    });
+
+    const contentAuthoringIntegration = new HttpLambdaIntegration(
+      'ContentAuthoringIntegration',
+      contentAuthoringFunction,
+    );
+    httpApi.addRoutes({
+      path: '/content',
+      methods: [HttpMethod.POST],
+      integration: contentAuthoringIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/content/{id}',
+      methods: [HttpMethod.PATCH],
+      integration: contentAuthoringIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/content/{id}/publish',
+      methods: [HttpMethod.POST],
+      integration: contentAuthoringIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/content/{id}/unpublish',
+      methods: [HttpMethod.POST],
+      integration: contentAuthoringIntegration,
     });
 
     new CfnOutput(this, 'TableName', { value: this.table.tableName });

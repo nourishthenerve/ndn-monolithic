@@ -1,0 +1,61 @@
+---
+// TASK 1.3.2: closes a pre-existing gap — no 404 page existed at all
+// before this task (a missing S3 key behind CloudFront's OAC origin
+// returned a raw 403 XML body). web-stack.ts's new `errorResponses`
+// mapping (403 and 404 alike, since that's what a private S3 origin
+// actually returns for a missing key) is what makes CloudFront serve this
+// page instead. Root-level and hand-authored, not under `[locale]/` — same
+// reasoning as `pages/index.astro`: CloudFront's custom error response
+// serves one fixed static file for every unmatched path site-wide,
+// regardless of which locale prefix the visitor was trying to reach, so
+// there's no `Astro.params.locale` to render with. English is the only
+// content this page carries (defaultLocale, matching index.astro's own
+// redirect precedent).
+//
+// "an unpublished post's URL resolves to a 'no longer available' page,
+// not a raw 404" (TASK 1.3.2 step 5): CloudFront serves this exact page
+// for a missing `/blog/*` URL too — the address bar the browser shows is
+// the only place that still carries the original path, so the small
+// inline script below reads `window.location.pathname` to choose
+// blog-specific copy over the generic message.
+import { defaultLocale, localeDirection, t } from '@ndn/i18n';
+
+const homeHref = `/${defaultLocale}`;
+---
+
+<!doctype html>
+<html lang={defaultLocale} dir={localeDirection(defaultLocale)}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{t('notFound.heading', undefined, defaultLocale)}</title>
+    <meta name="description" content={t('notFound.description', undefined, defaultLocale)} />
+    <meta name="robots" content="noindex" />
+  </head>
+  <body>
+    <main id="main">
+      <div data-not-found-generic>
+        <h1>{t('notFound.heading', undefined, defaultLocale)}</h1>
+        <p>{t('notFound.body', undefined, defaultLocale)}</p>
+      </div>
+      <div data-not-found-blog hidden>
+        <h1>{t('notFound.blogHeading', undefined, defaultLocale)}</h1>
+        <p>{t('notFound.blogBody', undefined, defaultLocale)}</p>
+      </div>
+      <p><a href={homeHref}>{t('notFound.backToHome', undefined, defaultLocale)}</a></p>
+    </main>
+    <script>
+      // A plain externally-bundled module script, not a client:* island —
+      // same reasoning BaseLayout.astro's cookie-consent wiring documents:
+      // an island's inline bootstrap would be silently blocked by the
+      // CloudFront CSP's script-src.
+      const isBlogPath = window.location.pathname.includes('/blog/');
+      const generic = document.querySelector('[data-not-found-generic]');
+      const blog = document.querySelector('[data-not-found-blog]');
+      if (isBlogPath && generic instanceof HTMLElement && blog instanceof HTMLElement) {
+        generic.hidden = true;
+        blog.hidden = false;
+      }
+    </script>
+  </body>
+</html>

@@ -14,6 +14,7 @@ import {
   AllowedMethods,
   CachePolicy,
   Distribution,
+  type ErrorResponse,
   FunctionCode,
   FunctionEventType,
   FunctionRuntime,
@@ -168,8 +169,22 @@ function handler(event) {
 `),
     });
 
+    // TASK 1.3.2: closes a pre-existing gap — nothing mapped a missing
+    // object to a real page before this task, so any unmatched path (a
+    // typo, an unpublished blog post's URL) returned the S3 origin's raw
+    // 403 XML body straight through CloudFront. The private OAC origin
+    // returns 403 (not 404) for a missing key — both codes are mapped here
+    // to the same static page (apps/web/src/pages/404.astro), served with
+    // a real 404 status so it isn't indexed as a working page.
+    const notFoundErrorResponses: ErrorResponse[] = [403, 404].map((httpStatus) => ({
+      httpStatus,
+      responseHttpStatus: 404,
+      responsePagePath: '/404.html',
+    }));
+
     const distribution = new Distribution(this, 'Distribution', {
       priceClass: PriceClass.PRICE_CLASS_100,
+      errorResponses: notFoundErrorResponses,
       // TASK 0.6.3: ephemeral stacks serve on CloudFront's own
       // *.cloudfront.net domain (always unique per distribution, already
       // TLS-covered) rather than next.nourishthenerve.com — see the

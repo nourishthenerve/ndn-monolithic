@@ -1,0 +1,64 @@
+---
+// TASK 1.3.2 steps 3-4: per-language title/description(reusing the
+// excerpt)/canonical URL, plus hreflang for every populated locale. Built
+// statically per published post (ADR-0017: no SSR) — getStaticPaths fetches
+// once and fans out to one path per (locale, post) pair, only for locales
+// that post is actually translated into.
+//
+// Publishing/unpublishing a post takes effect on the content API
+// immediately; this pre-rendered HTML only reflects that on the *next*
+// `astro build` + deploy (see docs/runbooks/content-authoring.md's "What
+// was deliberately not built here"). An id that was never published, or
+// was unpublished before the last build, simply has no static path here —
+// apps/web/src/pages/404.astro is what a visitor sees instead of a raw
+// CloudFront/S3 403.
+import { supportedLocales } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import type { BlogPost } from '../../../blog/content-client.js';
+import { fetchPublishedBlogPosts } from '../../../blog/content-client.js';
+import { buildHreflangLinks } from '../../../blog/seo.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName, siteUrl } from '../../../site-config.js';
+
+export async function getStaticPaths() {
+  const posts = await fetchPublishedBlogPosts();
+  return posts.flatMap((post) => {
+    const populatedLocales = supportedLocales.filter((locale) => post.translations[locale]);
+    return populatedLocales.map((locale) => ({
+      params: { locale, slug: post.id },
+      props: { post, populatedLocales },
+    }));
+  });
+}
+
+const { locale, slug } = Astro.params as { locale: Locale; slug: string };
+const { post, populatedLocales } = Astro.props as { post: BlogPost; populatedLocales: Locale[] };
+
+const translation = post.translations[locale];
+if (!translation) {
+  // Unreachable given getStaticPaths above only ever generates a path for
+  // a locale the post has a translation for — a loud failure here would
+  // mean that invariant broke, not a normal "content not ready" state.
+  throw new Error(`blog/[slug].astro: no "${locale}" translation on post "${slug}"`);
+}
+
+const urlForLocale = (l: string) => `${siteUrl}/${l}/blog/${slug}`;
+const canonicalHref = urlForLocale(locale);
+const hreflangLinks = buildHreflangLinks(populatedLocales, urlForLocale);
+const bodyParagraphs = translation.body.split(/\n{2,}/);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${translation.title} — ${siteName}`}
+  description={translation.excerpt}
+  canonicalHref={canonicalHref}
+  hreflangLinks={hreflangLinks}
+>
+  <article>
+    <Heading level={1}>{translation.title}</Heading>
+    {bodyParagraphs.map((paragraph) => <p>{paragraph}</p>)}
+  </article>
+</BaseLayout>

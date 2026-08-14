@@ -200,4 +200,34 @@ describe('DynamoContentStore', () => {
     ddbMock.on(QueryCommand).resolves({});
     expect(await store.queryIdsByKeyword('nonexistent')).toEqual([]);
   });
+
+  it('update() overwrites the main item and re-puts one row per current keyword, with no ConditionExpression', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    const item = buildContentItem({ keywords: ['nutrition'], status: 'unpublished' });
+    await store.update(item);
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems).toHaveLength(2);
+    expect(call?.TransactItems?.[0]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({ pk: 'CONTENT#content-1', sk: 'META', status: 'unpublished' }),
+    });
+    expect(call?.TransactItems?.[0]?.Put?.ConditionExpression).toBeUndefined();
+    expect(call?.TransactItems?.[1]?.Put).toMatchObject({
+      Item: {
+        pk: 'CONTENT#content-1',
+        sk: 'KEYWORD#nutrition',
+        gsi2pk: 'KEYWORD#nutrition',
+        gsi2sk: 'CONTENT#content-1',
+      },
+    });
+  });
+
+  it('update() never issues a DeleteItemCommand for a keyword dropped since the last write', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await store.update(buildContentItem({ keywords: ['diet'] }));
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems?.every((entry) => entry.Delete === undefined)).toBe(true);
+  });
 });

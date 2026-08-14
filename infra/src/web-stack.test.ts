@@ -109,6 +109,26 @@ describe('WebStack — CloudFront distribution', () => {
     });
   });
 
+  it('maps a missing S3 object (403 and 404 alike) to /404.html, served with a real 404 status', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CustomErrorResponses: Match.arrayWith([
+          Match.objectLike({
+            ErrorCode: 403,
+            ResponseCode: 404,
+            ResponsePagePath: '/404.html',
+          }),
+          Match.objectLike({
+            ErrorCode: 404,
+            ResponseCode: 404,
+            ResponsePagePath: '/404.html',
+          }),
+        ]),
+      }),
+    });
+  });
+
   it('proxies /health to the HTTP API same-origin, with caching disabled', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {

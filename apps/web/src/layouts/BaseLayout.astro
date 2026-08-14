@@ -39,9 +39,13 @@ interface Props {
   readonly locale: Locale;
   readonly title: string;
   readonly description: string;
+  /** TASK 1.3.2: self-referencing canonical for pages that need one (e.g. a blog post). Omitted elsewhere — every other page today has exactly one URL, so a canonical would be a no-op. */
+  readonly canonicalHref?: string;
+  /** TASK 1.3.2: `apps/web/src/blog/seo.ts`'s output — one `<link rel="alternate">` per populated locale, `x-default` only once 2+ locales exist. */
+  readonly hreflangLinks?: readonly { hreflang: string; href: string }[];
 }
 
-const { locale, title, description } = Astro.props;
+const { locale, title, description, canonicalHref, hreflangLinks } = Astro.props;
 const dir = localeDirection(locale);
 
 const rootVariables = { ...colorSchemeCssVariables('light'), ...typeTokenCssVariables() };
@@ -83,6 +87,8 @@ body > footer {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
+    {canonicalHref && <link rel="canonical" href={canonicalHref} />}
+    {hreflangLinks?.map((link) => <link rel="alternate" hreflang={link.hreflang} href={link.href} />)}
     <style set:html={rootCss} />
     <style set:html={reducedMotionGlobalCss} />
     <style set:html={primitiveStylesCss} />

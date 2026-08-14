@@ -84,6 +84,101 @@ describe('ContentRepository.create', () => {
     expect(methodNames).not.toContain('delete');
     expect(methodNames).not.toContain('remove');
   });
+
+  it('is also discoverable by its own contentType, without being asked for it', async () => {
+    const { repository } = buildRepository();
+    const item = await repository.create('editor-1', buildInput({ keywords: ['nutrition'] }));
+
+    expect(item.keywords).toEqual(['nutrition', 'blog']);
+    const found = await repository.findPublishedByKeyword('blog');
+    expect(found.map((entry) => entry.id)).toEqual(['content-1']);
+  });
+
+  it('does not duplicate the contentType keyword if the caller already included it', async () => {
+    const { repository } = buildRepository();
+    const item = await repository.create('editor-1', buildInput({ keywords: ['blog', 'diet'] }));
+    expect(item.keywords).toEqual(['blog', 'diet']);
+  });
+});
+
+describe('ContentRepository.update', () => {
+  it('patches keywords/translations, bumps updated_at, and writes an audit entry', async () => {
+    const { repository, audit } = buildRepository();
+    await repository.create('editor-1', buildInput());
+
+    const updated = await repository.update('editor-2', 'content-1', {
+      translations: { en: { title: 'New title', body: 'New body', excerpt: 'New excerpt' } },
+    });
+
+    expect(updated.translations.en.title).toBe('New title');
+    expect(updated.created_at).toBe('2026-01-01T00:00:00.000Z');
+    expect(audit.list()).toContainEqual(
+      expect.objectContaining({ actor: 'editor-2', action: 'update', entityId: 'content-1' }),
+    );
+  });
+
+  it('never changes status', async () => {
+    const { repository } = buildRepository();
+    await repository.create('editor-1', buildInput({ status: 'draft' }));
+    const updated = await repository.update('editor-1', 'content-1', { keywords: ['diet'] });
+    expect(updated.status).toBe('draft');
+  });
+
+  it('re-tags the contentType keyword when keywords are patched', async () => {
+    const { repository } = buildRepository();
+    await repository.create('editor-1', buildInput());
+    const updated = await repository.update('editor-1', 'content-1', { keywords: ['diet'] });
+    expect(updated.keywords).toEqual(['diet', 'blog']);
+  });
+
+  it('remains discoverable under a keyword removed from the patch — no delete primitive exists to clean it up', async () => {
+    const { repository } = buildRepository();
+    await repository.create('editor-1', buildInput({ keywords: ['nutrition'] }));
+    await repository.update('editor-1', 'content-1', { keywords: ['diet'] });
+
+    const stillFound = await repository.findPublishedByKeyword('nutrition');
+    expect(stillFound.map((entry) => entry.id)).toEqual(['content-1']);
+  });
+
+  it('throws AppError for an id that does not exist', async () => {
+    const { repository } = buildRepository();
+    await expect(repository.update('editor-1', 'missing', { keywords: ['diet'] })).rejects.toThrow(
+      AppError,
+    );
+  });
+});
+
+describe('ContentRepository.publish/unpublish', () => {
+  it('publish transitions status to published and audits the transition', async () => {
+    const { repository, audit } = buildRepository();
+    await repository.create('editor-1', buildInput({ status: 'draft' }));
+
+    const published = await repository.publish('editor-2', 'content-1');
+
+    expect(published.status).toBe('published');
+    expect(audit.list()).toContainEqual(
+      expect.objectContaining({ actor: 'editor-2', action: 'publish', entityId: 'content-1' }),
+    );
+  });
+
+  it('unpublish transitions status to unpublished, never removing the row', async () => {
+    const { repository, audit } = buildRepository();
+    await repository.create('editor-1', buildInput({ status: 'published', keywords: ['diet'] }));
+
+    const unpublished = await repository.unpublish('editor-2', 'content-1');
+
+    expect(unpublished.status).toBe('unpublished');
+    expect(await repository.findById('content-1')).toMatchObject({ status: 'unpublished' });
+    expect(await repository.findPublishedByKeyword('diet')).toEqual([]);
+    expect(audit.list()).toContainEqual(
+      expect.objectContaining({ actor: 'editor-2', action: 'unpublish', entityId: 'content-1' }),
+    );
+  });
+
+  it('throws AppError publishing an id that does not exist', async () => {
+    const { repository } = buildRepository();
+    await expect(repository.publish('editor-1', 'missing')).rejects.toThrow(AppError);
+  });
 });
 
 describe('ContentRepository.findById', () => {
