@@ -190,3 +190,88 @@ describe('DataStack — content authoring function', () => {
     expect(resourceJson).not.toContain('parameter/*');
   });
 });
+
+describe('DataStack — workshop read function (TASK 1.5.1)', () => {
+  it('is wired to the table name via environment and routed at GET /workshops', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'GET /workshops' });
+    const policies = template.findResources('AWS::IAM::Policy');
+    const readPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'WorkshopReadFunctionRole',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const allowActions = readPolicy.Properties.PolicyDocument.Statement.filter(
+      (statement) => statement.Effect === 'Allow',
+    ).flatMap((statement) => ([] as string[]).concat(statement.Action as string | string[]));
+    expect(allowActions).toContain('dynamodb:Query');
+    expect(allowActions).toContain('dynamodb:GetItem');
+    expect(allowActions).not.toContain('dynamodb:PutItem');
+    expect(allowActions).not.toContain('dynamodb:DeleteItem');
+  });
+
+  it('has an explicit 14-day-retention log group', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/workshop-read-function',
+      RetentionInDays: 14,
+    });
+  });
+});
+
+describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
+  it('routes all four authoring endpoints to the same function', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'POST /workshops' });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'PATCH /workshops/{id}',
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /workshops/{id}/publish',
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /workshops/{id}/cancel',
+    });
+  });
+
+  it('grants PutItem/TransactWriteItems but never DeleteItem on its identity policy, and denies it via the guardrail', () => {
+    const template = synth();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const authoringPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'WorkshopAuthoringFunctionRole',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+
+    const allowActions = authoringPolicy.Properties.PolicyDocument.Statement.filter(
+      (statement) => statement.Effect === 'Allow',
+    ).flatMap((statement) => ([] as string[]).concat(statement.Action as string | string[]));
+
+    expect(allowActions).toContain('dynamodb:PutItem');
+    expect(allowActions).toContain('dynamodb:TransactWriteItems');
+    expect(allowActions).toContain('ssm:GetParameter');
+    expect(allowActions).not.toContain('dynamodb:DeleteItem');
+
+    const denyStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Effect === 'Deny',
+    );
+    expect(denyStatement).toMatchObject({
+      Sid: 'DenyDestructivePrimitives',
+      Action: expect.arrayContaining(['dynamodb:DeleteItem']),
+    });
+  });
+
+  it('has an explicit 14-day-retention log group', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/workshop-authoring-function',
+      RetentionInDays: 14,
+    });
+  });
+});
+
+// TASK 1.5.1: the media-upload function (POST /workshops/media-upload-url)
+// is defined in web-stack.ts instead, co-located with MediaBucket — see
+// this stack's own comment at the end of the constructor for why a
+// cross-stack version here produces a circular CloudFormation dependency.
+// Its tests live in web-stack.test.ts.

@@ -37,3 +37,13 @@ export const blogContentType = 'blog';
 // The matching secret key lives server-side only (SSM SecureString,
 // infra/src/config.ts's TURNSTILE_SECRET_PARAMETER_NAME), never here.
 export const turnstileSiteKey = '1x00000000000000000000AA';
+
+// TASK 1.5.1: workshop posters are served same-origin, via
+// web-stack.ts's `/media/*` CloudFront behavior (Origin Access Control,
+// no signed URLs — ADR-0005 note in that file) — a relative path is
+// correct on every domain this site is ever deployed to (next./apex,
+// staging, an ephemeral PR env), unlike `siteUrl`/`contentApiUrl` above
+// which are absolute and must be updated by hand at G1 cutover.
+export function workshopPosterUrl(posterKey: string): string {
+  return `/media/${posterKey}`;
+}

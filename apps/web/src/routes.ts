@@ -39,6 +39,11 @@ const routeSegments: readonly RouteSegment[] = [
   // here the way a fixed route can. See this file's own navLabelKey comment
   // below for why that's fine for 1.1.3's a11y gate too.
   { segment: 'blog', navLabelKey: 'nav.blog' },
+  // TASK 1.5.1: only the fixed listing page, same reasoning as 'blog'
+  // above — `workshops/[slug].astro`'s pages are generated per published
+  // workshop (getStaticPaths, apps/web/src/workshops/workshop-client.ts)
+  // and don't have a stable id known ahead of any workshop existing.
+  { segment: 'workshops', navLabelKey: 'nav.workshops' },
   { segment: 'testimonials', navLabelKey: 'nav.testimonials' },
   { segment: 'contact', navLabelKey: 'nav.contact' },
   // TASK 1.2.2: legal pages aren't primary-nav items (no navLabelKey) —

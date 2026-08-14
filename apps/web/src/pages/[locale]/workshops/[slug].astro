@@ -1,0 +1,92 @@
+---
+// TASK 1.5.1: the per-workshop detail page. Built statically per published,
+// upcoming workshop (ADR-0017: no SSR) — getStaticPaths fetches once and
+// fans out to one path per (locale, workshop) pair, only for locales that
+// workshop is actually translated into. Mirrors
+// apps/web/src/pages/[locale]/blog/[slug].astro's shape closely, including
+// its hreflang handling.
+//
+// A workshop's poster/date/price are formatted here rather than passed as
+// raw strings interpolated into JSX text, so packages/eslint-plugin-i18n's
+// `ndn/no-hardcoded-strings` rule (apps/web-scoped) never sees a literal
+// currency/punctuation string to flag — see that rule's own TemplateLiteral
+// handling for why a computed Identifier expression avoids the question
+// entirely.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { buildHreflangLinks } from '../../../blog/seo.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName, siteUrl, workshopPosterUrl } from '../../../site-config.js';
+import type { Workshop } from '../../../workshops/workshop-client.js';
+import { fetchPublishedWorkshops } from '../../../workshops/workshop-client.js';
+
+export async function getStaticPaths() {
+  const workshops = await fetchPublishedWorkshops();
+  return workshops.flatMap((workshop) => {
+    const populatedLocales = supportedLocales.filter((locale) => workshop.details[locale]);
+    return populatedLocales.map((locale) => ({
+      params: { locale, slug: workshop.id },
+      props: { workshop, populatedLocales },
+    }));
+  });
+}
+
+const { locale, slug } = Astro.params as { locale: Locale; slug: string };
+const { workshop, populatedLocales } = Astro.props as {
+  workshop: Workshop;
+  populatedLocales: Locale[];
+};
+
+const detail = workshop.details[locale];
+if (!detail) {
+  // Unreachable given getStaticPaths above only ever generates a path for
+  // a locale the workshop has a detail entry for — a loud failure here
+  // would mean that invariant broke, not a normal "content not ready"
+  // state (same posture blog/[slug].astro takes).
+  throw new Error(`workshops/[slug].astro: no "${locale}" detail on workshop "${slug}"`);
+}
+
+const urlForLocale = (l: string) => `${siteUrl}/${l}/workshops/${slug}`;
+const canonicalHref = urlForLocale(locale);
+const hreflangLinks = buildHreflangLinks(populatedLocales, urlForLocale);
+
+const formattedDate = new Intl.DateTimeFormat(locale, {
+  dateStyle: 'long',
+  timeStyle: 'short',
+}).format(new Date(workshop.dateTimeUtc));
+const formattedPrice = new Intl.NumberFormat(locale, {
+  style: 'currency',
+  currency: 'GBP',
+}).format(workshop.priceMinorUnits / 100);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${detail.title} — ${siteName}`}
+  description={detail.description}
+  canonicalHref={canonicalHref}
+  hreflangLinks={hreflangLinks}
+>
+  <article>
+    {
+      workshop.posterKey && (
+        <img
+          src={workshopPosterUrl(workshop.posterKey)}
+          alt={t('workshops.index.posterAlt', { title: detail.title }, locale)}
+        />
+      )
+    }
+    <Heading level={1}>{detail.title}</Heading>
+    <p>{detail.description}</p>
+    <dl>
+      <dt>{t('workshops.detail.dateLabel', undefined, locale)}</dt>
+      <dd>{formattedDate}</dd>
+      <dt>{t('workshops.detail.priceLabel', undefined, locale)}</dt>
+      <dd>{formattedPrice}</dd>
+      <dt>{t('workshops.detail.capacityLabel', undefined, locale)}</dt>
+      <dd>{workshop.capacity}</dd>
+    </dl>
+  </article>
+</BaseLayout>

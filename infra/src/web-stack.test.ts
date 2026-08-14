@@ -88,10 +88,59 @@ describe('WebStack — site bucket', () => {
   });
 });
 
+describe('WebStack — media bucket (TASK 1.5.1)', () => {
+  it('is private, versioned, and SSL-enforced, same as the site bucket', () => {
+    const template = synth();
+    const buckets = template.findResources('AWS::S3::Bucket');
+    const bucketProperties = Object.values(buckets).map(
+      (bucket) => (bucket as { Properties: Record<string, unknown> }).Properties,
+    );
+    expect(
+      bucketProperties.filter(
+        (properties) =>
+          JSON.stringify(
+            (properties as { VersioningConfiguration?: unknown }).VersioningConfiguration,
+          ) === JSON.stringify({ Status: 'Enabled' }),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('never auto-deletes on stack destroy', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::S3::Bucket', 2);
+    const buckets = template.findResources('AWS::S3::Bucket');
+    for (const bucket of Object.values(buckets)) {
+      expect(bucket).toMatchObject({
+        UpdateReplacePolicy: 'Retain',
+        DeletionPolicy: 'Retain',
+      });
+    }
+  });
+
+  it('is exposed as a bucket only CloudFront (via OAC) can read — no public or wildcard access', () => {
+    const template = synth();
+    const policies = template.findResources('AWS::S3::BucketPolicy');
+    for (const policy of Object.values(policies)) {
+      const statements = (
+        policy as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } }
+      ).Properties.PolicyDocument.Statement;
+      const allowStatements = statements.filter((s) => s.Effect === 'Allow');
+      expect(allowStatements).toHaveLength(1);
+      expect(allowStatements[0]).toMatchObject({
+        Action: 's3:GetObject',
+        Principal: { Service: 'cloudfront.amazonaws.com' },
+      });
+    }
+  });
+});
+
 describe('WebStack — CloudFront distribution', () => {
   it('uses Origin Access Control for the S3 origin (no OAI, no public origin)', () => {
     const template = synth();
-    template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1);
+    // TASK 1.5.1: one for the site bucket, one for the media bucket — see
+    // the dedicated 'WebStack — media bucket' describe block above for the
+    // media bucket's own OAC-only assertions.
+    template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 2);
     template.hasResourceProperties('AWS::CloudFront::OriginAccessControl', {
       OriginAccessControlConfig: Match.objectLike({ SigningBehavior: 'always' }),
     });
@@ -155,6 +204,21 @@ describe('WebStack — CloudFront distribution', () => {
           Match.objectLike({
             PathPattern: '/contact',
             CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad',
+            ViewerProtocolPolicy: 'redirect-to-https',
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('proxies /media/* to the media bucket via a second OAC origin, over TLS', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 2);
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: '/media/*',
             ViewerProtocolPolicy: 'redirect-to-https',
           }),
         ]),
@@ -342,6 +406,81 @@ describe('WebStack — contact form Lambda (TASK 1.4.1)', () => {
   });
 });
 
+describe('WebStack — media upload Lambda (TASK 1.5.1)', () => {
+  it('is reachable via a POST /workshops/media-upload-url route on the HTTP API', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /workshops/media-upload-url',
+    });
+  });
+
+  it('runs on arm64 / Node 22, with the media bucket name and admin token parameter name wired through', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Architectures: ['arm64'],
+      Runtime: 'nodejs22.x',
+      Environment: {
+        Variables: Match.objectLike({
+          MEDIA_BUCKET_NAME: Match.anyValue(),
+          ADMIN_TOKEN_PARAMETER_NAME: '/ndn/admin-api-token',
+        }),
+      },
+    });
+  });
+
+  it('grants s3:PutObject scoped to the workshops/ prefix only, and denies s3:DeleteObject* via the guardrail', () => {
+    const template = synth();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const uploadPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'MediaUploadPutWorkshopPosters',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+
+    const putStatement = uploadPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Sid === 'MediaUploadPutWorkshopPosters',
+    );
+    expect(putStatement?.Action).toBe('s3:PutObject');
+    expect(JSON.stringify(putStatement?.Resource)).toContain('/workshops/*');
+
+    const denyStatement = uploadPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Effect === 'Deny',
+    );
+    // Action wrapped alongside Effect: 'Deny' in the same object literal
+    // (not asserted as a bare array) so this assertion itself satisfies
+    // ndn/no-destructive-primitives' allowlist — see guardrails.test.ts's
+    // own comment on the same pattern.
+    expect(denyStatement).toMatchObject({
+      Sid: 'DenyDestructivePrimitives',
+      Effect: 'Deny',
+      Action: expect.arrayContaining(['s3:DeleteObject', 's3:DeleteObjectVersion']),
+    });
+  });
+
+  it('grants exactly ssm:GetParameter on the admin token parameter', () => {
+    const template = synth();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const uploadPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes('ReadAdminApiToken'),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const ssmStatement = uploadPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Sid === 'ReadAdminApiToken',
+    );
+    expect(ssmStatement?.Action).toBe('ssm:GetParameter');
+    const resourceJson = JSON.stringify(ssmStatement?.Resource);
+    expect(resourceJson).toContain('parameter/ndn/admin-api-token');
+    expect(resourceJson).not.toContain('parameter/*');
+  });
+
+  it('sends logs to an explicit log group with 14-day retention', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/media-upload-function',
+      RetentionInDays: 14,
+    });
+  });
+});
+
 describe('WebStack — health Lambda', () => {
   it('runs on arm64 / Node 22, with the deploy version wired through', () => {
     const template = synth();
@@ -514,6 +653,7 @@ describe('WebStack — outputs', () => {
     const template = synth();
     template.hasOutput('DistributionDomainName', {});
     template.hasOutput('SiteBucketName', {});
+    template.hasOutput('MediaBucketName', {});
     template.hasOutput('HttpApiUrl', {});
   });
 

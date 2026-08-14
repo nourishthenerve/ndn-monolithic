@@ -10,7 +10,16 @@
 // transition precisely rather than collapsing it into a generic 'update'.
 // TASK 1.4.2: 'reject' is testimonial's own equivalent of 'unpublish' — a
 // status transition, same discipline, named precisely for the same reason.
-export type AuditAction = 'create' | 'update' | 'soft-delete' | 'publish' | 'unpublish' | 'reject';
+// TASK 1.5.1: 'cancel' is workshop's own equivalent — a workshop is never
+// deleted, only ever transitioned to 'cancelled'.
+export type AuditAction =
+  | 'create'
+  | 'update'
+  | 'soft-delete'
+  | 'publish'
+  | 'unpublish'
+  | 'reject'
+  | 'cancel';
 
 export interface AuditEvent {
   readonly at: string;

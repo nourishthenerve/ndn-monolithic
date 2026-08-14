@@ -381,6 +381,136 @@ export class DataStack extends Stack {
       integration: testimonialModerationIntegration,
     });
 
+    // TASK 1.5.1: workshops — same table, one more entity. Public read
+    // (GET /workshops) and admin-token-gated authoring
+    // (create/update/publish/cancel), same pattern as content/testimonials:
+    // a read-only role and a table-write role, both guardrailed. The
+    // presigned-upload endpoint for poster images lives in web-stack.ts
+    // instead — see this constructor's own comment further down for why.
+    const workshopReadLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/workshop-read-function`
+      : '/ndn/workshop-read-function';
+
+    const workshopReadRole = new Role(this, 'WorkshopReadFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const workshopReadFunction = new NodejsFunction(this, 'WorkshopReadFunction', {
+      entry: `${moduleDir}../../services/api/src/workshop-read-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      role: workshopReadRole,
+      environment: {
+        WORKSHOP_TABLE_NAME: this.table.tableName,
+      },
+      logGroup: createLogGroup(this, 'WorkshopReadFunctionLogGroup', workshopReadLogGroupName),
+    });
+
+    this.table.grantReadData(workshopReadRole);
+    attachDestructiveActionGuardrail(workshopReadRole, { buckets: [], tables: [this.table] });
+
+    httpApi.addRoutes({
+      path: '/workshops',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration('WorkshopReadIntegration', workshopReadFunction),
+    });
+
+    const workshopAuthoringLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/workshop-authoring-function`
+      : '/ndn/workshop-authoring-function';
+
+    const workshopAuthoringRole = new Role(this, 'WorkshopAuthoringFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const workshopAuthoringFunction = new NodejsFunction(this, 'WorkshopAuthoringFunction', {
+      entry: `${moduleDir}../../services/api/src/workshop-authoring-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      role: workshopAuthoringRole,
+      environment: {
+        WORKSHOP_TABLE_NAME: this.table.tableName,
+        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+      },
+      logGroup: createLogGroup(
+        this,
+        'WorkshopAuthoringFunctionLogGroup',
+        workshopAuthoringLogGroupName,
+      ),
+    });
+
+    this.table.grantReadData(workshopAuthoringRole);
+    // Precise write actions only — same reasoning ContentAuthoringWrite/
+    // TestimonialSubmissionWrite document above: DynamoWorkshopStore's real
+    // writes go through TransactWriteCommand (create) and PutCommand
+    // (update), never table.grantWriteData()'s broader DeleteItem-including
+    // grant.
+    workshopAuthoringRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WorkshopAuthoringWrite',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'],
+        resources: [this.table.tableArn],
+      }),
+    );
+    attachDestructiveActionGuardrail(workshopAuthoringRole, { buckets: [], tables: [this.table] });
+    workshopAuthoringRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadAdminApiToken',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+
+    const workshopAuthoringIntegration = new HttpLambdaIntegration(
+      'WorkshopAuthoringIntegration',
+      workshopAuthoringFunction,
+    );
+    httpApi.addRoutes({
+      path: '/workshops',
+      methods: [HttpMethod.POST],
+      integration: workshopAuthoringIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/workshops/{id}',
+      methods: [HttpMethod.PATCH],
+      integration: workshopAuthoringIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/workshops/{id}/publish',
+      methods: [HttpMethod.POST],
+      integration: workshopAuthoringIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/workshops/{id}/cancel',
+      methods: [HttpMethod.POST],
+      integration: workshopAuthoringIntegration,
+    });
+
+    // TASK 1.5.1 step 3's presigned-upload endpoint (POST
+    // /workshops/media-upload-url) lives in web-stack.ts instead, right
+    // next to MediaBucket — it needs `s3:PutObject` against that bucket and
+    // nothing from this table, and defining it here would need
+    // web-stack.ts's bucket passed in as a cross-stack prop. That
+    // reference, combined with the guardrail's bucket-policy half naming
+    // this stack's role back in web-stack.ts's own template, produces a
+    // real circular CloudFormation dependency (WebStack -> DataStack ->
+    // WebStack) — confirmed by attempting exactly that shape here first.
+    // Co-locating the function with the bucket avoids the cycle entirely.
+
     new CfnOutput(this, 'TableName', { value: this.table.tableName });
     new CfnOutput(this, 'ContentHttpApiUrl', { value: httpApi.apiEndpoint });
   }

@@ -1,0 +1,68 @@
+---
+// TASK 1.5.1: the workshop listing page. Built statically at `astro build`
+// time from a single fetch (ADR-0017: no SSR), same pattern
+// apps/web/src/pages/[locale]/blog/index.astro established — an
+// unreachable workshops API (e.g. the ephemeral PR environment, where
+// NdnDataStack isn't deployed at all) just means zero workshops today, not
+// a failed build.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Card, Heading, Link } from '@ndn/ui';
+
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName, workshopPosterUrl } from '../../../site-config.js';
+import { fetchPublishedWorkshops } from '../../../workshops/workshop-client.js';
+
+export async function getStaticPaths() {
+  const workshops = await fetchPublishedWorkshops();
+  return supportedLocales.map((locale) => ({ params: { locale }, props: { workshops } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const { workshops } = Astro.props as {
+  workshops: Awaited<ReturnType<typeof fetchPublishedWorkshops>>;
+};
+
+// A workshop not yet translated into this locale doesn't appear on this
+// locale's listing — same rule apps/web/src/pages/[locale]/blog/index.astro
+// applies to posts.
+const workshopsForLocale = workshops
+  .map((workshop) => ({ workshop, detail: workshop.details[locale] }))
+  .filter(
+    (entry): entry is { workshop: (typeof workshops)[number]; detail: NonNullable<typeof entry.detail> } =>
+      entry.detail !== undefined,
+  );
+
+const heading = t('workshops.index.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('workshops.index.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+  {
+    workshopsForLocale.length === 0 ? (
+      <p>{t('workshops.index.empty', undefined, locale)}</p>
+    ) : (
+      workshopsForLocale.map(({ workshop, detail }) => (
+        <Card>
+          {workshop.posterKey && (
+            <img
+              src={workshopPosterUrl(workshop.posterKey)}
+              alt={t('workshops.index.posterAlt', { title: detail.title }, locale)}
+              width="320"
+              loading="lazy"
+            />
+          )}
+          <Heading level={2}>{detail.title}</Heading>
+          <p>{detail.description}</p>
+          <Link href={`/${locale}/workshops/${workshop.id}`}>
+            {t('workshops.index.viewDetails', undefined, locale)}
+          </Link>
+        </Card>
+      ))
+    )
+  }
+</BaseLayout>
