@@ -9,7 +9,7 @@ import {
   QueryCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { BaseRecord, ContentItem, Testimonial } from '@ndn/shared-types';
+import type { BaseRecord, ContentItem, Testimonial, Workshop } from '@ndn/shared-types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -19,6 +19,7 @@ import {
   DynamoContentStore,
   DynamoStore,
   DynamoTestimonialStore,
+  DynamoWorkshopStore,
   singleItemKeys,
 } from './dynamo-store.js';
 import { AppError } from './errors.js';
@@ -354,5 +355,107 @@ describe('DynamoTestimonialStore', () => {
       .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
 
     await expect(store.update(buildTestimonial())).rejects.toThrow(AppError);
+  });
+});
+
+function buildWorkshop(overrides: Partial<Workshop> = {}): Workshop {
+  return {
+    id: 'workshop-1',
+    status: 'published',
+    dateTimeUtc: '2026-07-01T10:00:00.000Z',
+    capacity: 20,
+    priceMinorUnits: 2500,
+    details: { en: { title: 'Balance & Falls Prevention', description: 'A hands-on workshop.' } },
+    created_at: '2026-06-01T00:00:00.000Z',
+    updated_at: '2026-06-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('DynamoWorkshopStore', () => {
+  const store = new DynamoWorkshopStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('get() reads the META row and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: { pk: 'WORKSHOP#workshop-1', sk: 'META', ...buildWorkshop() },
+    });
+
+    const result = await store.get('workshop-1');
+    expect(result).toMatchObject({ id: 'workshop-1', status: 'published' });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'WORKSHOP#workshop-1', sk: 'META' },
+    });
+  });
+
+  it('create() atomically writes the main item and one fixed "all workshops" index row', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await store.create(buildWorkshop());
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems).toHaveLength(2);
+    expect(call?.TransactItems?.[0]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({ pk: 'WORKSHOP#workshop-1', sk: 'META' }),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+    expect(call?.TransactItems?.[1]?.Put).toMatchObject({
+      Item: {
+        pk: 'WORKSHOP#workshop-1',
+        sk: 'INDEX',
+        gsi2pk: 'WORKSHOP_INDEX#all',
+        gsi2sk: 'WORKSHOP#workshop-1',
+      },
+    });
+  });
+
+  it('create() translates a cancelled transaction (duplicate id) into AppError', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+
+    await expect(store.create(buildWorkshop())).rejects.toThrow(AppError);
+  });
+
+  it('listAllIds() queries GSI2 for the fixed index key and extracts ids from the returned pks', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { pk: 'WORKSHOP#workshop-1', sk: 'INDEX' },
+        { pk: 'WORKSHOP#workshop-2', sk: 'INDEX' },
+      ],
+    });
+
+    const ids = await store.listAllIds();
+    expect(ids).toEqual(['workshop-1', 'workshop-2']);
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI2',
+      KeyConditionExpression: 'gsi2pk = :indexKey',
+      ExpressionAttributeValues: { ':indexKey': 'WORKSHOP_INDEX#all' },
+    });
+  });
+
+  it('listAllIds() returns an empty array when nothing has ever been created', async () => {
+    ddbMock.on(QueryCommand).resolves({});
+    expect(await store.listAllIds()).toEqual([]);
+  });
+
+  it('update() overwrites the main item with a plain PutCommand, no ConditionExpression', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    const item = buildWorkshop({ status: 'cancelled' });
+    await store.update(item);
+
+    const call = ddbMock.commandCalls(PutCommand)[0]?.args[0].input;
+    expect(call).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({ pk: 'WORKSHOP#workshop-1', sk: 'META', status: 'cancelled' }),
+    });
+    expect(call?.ConditionExpression).toBeUndefined();
   });
 });

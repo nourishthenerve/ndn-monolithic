@@ -17,7 +17,8 @@ export type FlagName =
   | 'content.authoring.enabled'
   | 'contact.form.enabled'
   | 'testimonials.submission.enabled'
-  | 'testimonials.moderationQueue.enabled';
+  | 'testimonials.moderationQueue.enabled'
+  | 'workshops.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

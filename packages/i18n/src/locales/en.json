@@ -87,5 +87,14 @@
   "testimonials.form.submit": "Submit for review",
   "testimonials.form.success": "Thank you — your testimonial has been submitted and is awaiting review.",
   "testimonials.form.rateLimited": "You've submitted a few testimonials already — please wait a while before submitting another.",
-  "testimonials.form.error": "Sorry, something went wrong submitting your testimonial. Please try again shortly."
+  "testimonials.form.error": "Sorry, something went wrong submitting your testimonial. Please try again shortly.",
+  "nav.workshops": "Workshops",
+  "workshops.index.heading": "Workshops",
+  "workshops.index.description": "Upcoming neuro-rehabilitation workshops from Nourish the Nerve.",
+  "workshops.index.empty": "No upcoming workshops yet — check back soon.",
+  "workshops.index.viewDetails": "View details",
+  "workshops.index.posterAlt": "Poster for {title}",
+  "workshops.detail.dateLabel": "Date and time",
+  "workshops.detail.priceLabel": "Price",
+  "workshops.detail.capacityLabel": "Places available"
 }

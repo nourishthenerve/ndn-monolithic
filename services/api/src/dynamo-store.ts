@@ -26,12 +26,13 @@ import {
   QueryCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { ContentItem, Testimonial } from '@ndn/shared-types';
+import type { ContentItem, Testimonial, Workshop } from '@ndn/shared-types';
 
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
 import type { KeyValueStore } from './store.js';
 import type { TestimonialStore } from './testimonial-repository.js';
+import type { WorkshopStore } from './workshop-repository.js';
 
 const META_SORT_KEY = 'META';
 const CONTENT_PK = (id: string) => `CONTENT#${id}`;
@@ -48,6 +49,15 @@ const GSI2_INDEX_NAME = 'GSI2';
 const TESTIMONIAL_PK = (id: string) => `TESTIMONIAL#${id}`;
 const TESTIMONIAL_INDEX_SORT_KEY = 'INDEX';
 const TESTIMONIAL_INDEX_GSI2PK = 'TESTIMONIAL_INDEX#all';
+
+// TASK 1.5.1: same table, same GSI2, a third entity type. `WORKSHOP#<id>`
+// can't collide with `CONTENT#<id>`/`TESTIMONIAL#<id>` (distinct pk
+// prefixes), and the "all workshops" projection's fixed gsi2pk
+// (`WORKSHOP_INDEX#all`) can't collide with a content keyword's
+// `KEYWORD#...` or the testimonial index's `TESTIMONIAL_INDEX#all` either.
+const WORKSHOP_PK = (id: string) => `WORKSHOP#${id}`;
+const WORKSHOP_INDEX_SORT_KEY = 'INDEX';
+const WORKSHOP_INDEX_GSI2PK = 'WORKSHOP_INDEX#all';
 
 function defaultDocumentClient(): DynamoDBDocumentClient {
   return DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -322,6 +332,99 @@ export class DynamoTestimonialStore implements TestimonialStore {
       const pk = row.pk;
       if (typeof pk === 'string' && pk.startsWith('TESTIMONIAL#')) {
         ids.push(pk.slice('TESTIMONIAL#'.length));
+      }
+    }
+    return ids;
+  }
+}
+
+export interface DynamoWorkshopStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+// TASK 1.5.1: mirrors DynamoTestimonialStore's shape — a single fixed "all
+// workshops" projection row per workshop, filtered by status and by
+// "hasn't happened yet" in application code (workshop-repository.ts).
+// `update()` is a plain overwrite (no consent-style immutability guard —
+// workshops have no equivalent field).
+export class DynamoWorkshopStore implements WorkshopStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoWorkshopStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async get(id: string): Promise<Workshop | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: WORKSHOP_PK(id), sk: META_SORT_KEY },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Workshop>(result.Item);
+  }
+
+  async create(item: Workshop): Promise<void> {
+    const mainItem = { ...item, pk: WORKSHOP_PK(item.id), sk: META_SORT_KEY };
+    const indexItem = {
+      pk: WORKSHOP_PK(item.id),
+      sk: WORKSHOP_INDEX_SORT_KEY,
+      gsi2pk: WORKSHOP_INDEX_GSI2PK,
+      gsi2sk: WORKSHOP_PK(item.id),
+    };
+
+    try {
+      await this.client.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: this.tableName,
+                Item: mainItem,
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
+            },
+            { Put: { TableName: this.tableName, Item: indexItem } },
+          ],
+        }),
+      );
+    } catch (error) {
+      if (error instanceof TransactionCanceledException) {
+        throw new AppError('RECORD_ALREADY_EXISTS', `workshop ${item.id} already exists`);
+      }
+      throw error;
+    }
+  }
+
+  async update(item: Workshop): Promise<void> {
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: { ...item, pk: WORKSHOP_PK(item.id), sk: META_SORT_KEY },
+      }),
+    );
+  }
+
+  async listAllIds(): Promise<string[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI2_INDEX_NAME,
+        KeyConditionExpression: 'gsi2pk = :indexKey',
+        ExpressionAttributeValues: { ':indexKey': WORKSHOP_INDEX_GSI2PK },
+      }),
+    );
+    const ids: string[] = [];
+    for (const row of result.Items ?? []) {
+      const pk = row.pk;
+      if (typeof pk === 'string' && pk.startsWith('WORKSHOP#')) {
+        ids.push(pk.slice('WORKSHOP#'.length));
       }
     }
     return ids;

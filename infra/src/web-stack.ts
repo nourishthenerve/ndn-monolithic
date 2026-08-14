@@ -40,6 +40,7 @@ import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
 
 import {
+  ADMIN_API_TOKEN_PARAMETER_NAME,
   CERTIFICATE_ARN,
   CONTACT_FORM_FROM_EMAIL,
   CONTACT_FORM_TO_EMAIL,
@@ -47,6 +48,7 @@ import {
   SES_EMAIL_IDENTITY_DOMAIN,
   TURNSTILE_SECRET_PARAMETER_NAME,
 } from './config.js';
+import { attachDestructiveActionGuardrail } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
@@ -75,6 +77,16 @@ export interface WebStackProps extends StackProps {
 }
 
 export class WebStack extends Stack {
+  /**
+   * TASK 1.5.1: workshop poster images — versioned, private (OAC-only,
+   * never a public bucket/listing), `RemovalPolicy.RETAIN` like every other
+   * protected resource in this repo. Exposed so infra/bin/app.ts can pass
+   * it into DataStack, whose MediaUploadFunction is the only role ever
+   * granted `s3:PutObject` against it (never DeleteObject) — see
+   * data-stack.ts's own TASK 1.5.1 comment.
+   */
+  public readonly mediaBucket: Bucket;
+
   constructor(scope: Construct, id: string, props: WebStackProps) {
     super(scope, id, props);
 
@@ -86,6 +98,22 @@ export class WebStack extends Stack {
       // auto-deleted by code, even on `cdk destroy` of this stack.
       removalPolicy: RemovalPolicy.RETAIN,
     });
+
+    // TASK 1.5.1: same shape as siteBucket — versioned, private, retained.
+    // Workshop posters are deliberately public marketing collateral once
+    // published (served via the `/media/*` CloudFront behavior below,
+    // Origin Access Control only, no signed URLs), but the bucket itself
+    // stays exactly as locked-down as ADR-0005 requires: no public bucket,
+    // no public listing, no object public by default. See
+    // docs/plan/05-execution-plan.md TASK 1.5.1's own note on this
+    // distinction.
+    const mediaBucket = new Bucket(this, 'MediaBucket', {
+      versioned: true,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    this.mediaBucket = mediaBucket;
 
     // TASK 0.6.3: an ephemeral stack has no custom domain, so it has no
     // matching ACM certificate either — CloudFront ties ViewerCertificate
@@ -197,6 +225,76 @@ export class WebStack extends Stack {
       path: '/contact',
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration('ContactFormIntegration', contactFormFunction),
+    });
+
+    // TASK 1.5.1 step 3: the presigned-upload endpoint for workshop
+    // posters — co-located with MediaBucket (rather than in
+    // infra/src/data-stack.ts, alongside the other workshop Lambdas) so its
+    // role and the bucket's guardrail resource policy live in the same
+    // stack. A cross-stack version was tried first and produces a real
+    // circular CloudFormation dependency: DataStack would need
+    // mediaBucket's ARN (WebStack -> DataStack... no, DataStack ->
+    // WebStack for the bucket), while the guardrail's bucket-policy half
+    // needs the role's ARN written into *this* stack's bucket policy
+    // (WebStack -> DataStack for the role) — two opposite-direction
+    // references, an unresolvable cycle. This function needs no DynamoDB
+    // access at all, so keeping it here avoids the cycle entirely.
+    const mediaUploadRole = new Role(this, 'MediaUploadFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const mediaUploadFunction = new NodejsFunction(this, 'MediaUploadFunction', {
+      entry: `${moduleDir}../../services/api/src/media-upload-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      role: mediaUploadRole,
+      environment: {
+        MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+      },
+      logGroup: createLogGroup(this, 'MediaUploadFunctionLogGroup', logGroupName('media-upload-function')),
+    });
+
+    // Scoped to the workshops/ prefix only (media-upload.ts's
+    // WORKSHOP_MEDIA_PREFIX) — TASK 1.5.1's own DoD: "the runtime role gets
+    // PutObject only, never DeleteObject," narrowed further than the
+    // guardrail's own bucket-wide Deny to the one prefix this function's
+    // presigned URLs ever target.
+    mediaUploadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'MediaUploadPutWorkshopPosters',
+        effect: Effect.ALLOW,
+        actions: ['s3:PutObject'],
+        resources: [`${mediaBucket.bucketArn}/workshops/*`],
+      }),
+    );
+    // TASK 1.5.1 step 1: "Attach 0.3.2's attachDestructiveActionGuardrail
+    // to the runtime role against this bucket immediately." Bucket-wide
+    // (not just workshops/*), matching every other guardrail call in this
+    // repo.
+    attachDestructiveActionGuardrail(mediaUploadRole, { buckets: [mediaBucket], tables: [] });
+    mediaUploadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadAdminApiToken',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+
+    httpApi.addRoutes({
+      path: '/workshops/media-upload-url',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('MediaUploadIntegration', mediaUploadFunction),
     });
 
     const securityHeaders = new ResponseHeadersPolicy(this, 'SecurityHeaders', {
@@ -315,6 +413,17 @@ function handler(event) {
           cachePolicy: CachePolicy.CACHING_DISABLED,
           responseHeadersPolicy: securityHeaders,
         },
+        // TASK 1.5.1: workshop posters, served same-origin from this
+        // distribution's own domain via a second OAC origin — no signed
+        // URLs (ADR-0005 note above), no cachePolicy override (defaults to
+        // CACHING_OPTIMIZED, same as the default S3 behavior: these are
+        // public, content-hashed-by-key static images, safe to cache at
+        // the edge, unlike /health and /contact which must never cache).
+        '/media/*': {
+          origin: S3BucketOrigin.withOriginAccessControl(mediaBucket),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          responseHeadersPolicy: securityHeaders,
+        },
       },
     });
 
@@ -407,6 +516,7 @@ function handler(event) {
 
     new CfnOutput(this, 'DistributionDomainName', { value: distribution.distributionDomainName });
     new CfnOutput(this, 'SiteBucketName', { value: siteBucket.bucketName });
+    new CfnOutput(this, 'MediaBucketName', { value: mediaBucket.bucketName });
     new CfnOutput(this, 'HttpApiUrl', { value: httpApi.apiEndpoint });
     new CfnOutput(this, 'HealthDeploymentGroupName', {
       value: healthDeploymentGroup.deploymentGroupName,
