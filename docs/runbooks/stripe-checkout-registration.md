@@ -1,0 +1,45 @@
+# Stripe Checkout, idempotent webhooks, registration confirmation email (TASK 1.5.2)
+
+**Date:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.5.2](../plan/05-execution-plan.md) · **Requirements:** FR-WEB-02 · **Decisions:** D-13, ADR-0010 · **Depends on:** 1.5.1, 1.4.1, 0.6.1
+
+## What this covers
+
+Workshop registration and payment: a public `POST /workshops/:id/checkout` that reserves capacity and creates a Stripe Checkout Session, an idempotent `POST /stripe/webhook` that confirms or releases that reservation, and a confirmation email on success. Registrations are never deleted — `pending → confirmed` or `pending → cancelled` are the only transitions, same discipline TASK 1.3.2/1.4.2/1.5.1 established for content/testimonials/workshops.
+
+## What was built
+
+- **`packages/shared-types/src/registration.ts`** — `Registration`: `status: 'pending' | 'confirmed' | 'cancelled'` (never `'deleted'`), `workshopId`, `attendeeEmail`, `stripeCheckoutSessionId`.
+- **`services/api/src/registration-repository.ts`** — `RegistrationStore`/`InMemoryRegistrationStore` + `RegistrationRepository` (`create`/`confirm`/`cancel`/`findById`/`reserveCapacity`/`releaseCapacity`). `confirm`/`cancel` are no-ops (no audit write, no capacity change) once a registration has already left `pending`. `WorkshopCapacityStore`/`InMemoryWorkshopCapacityStore` — an atomic per-workshop reservation counter, same "conditional update, no read-then-write gap" shape as TASK 0.5.3's `SpendCounterStore`, deliberately **not** a `registeredCount` field on `Workshop` itself: `WorkshopRepository.update()`'s plain read-modify-write overwrite (an admin editing schedule/price/etc.) would otherwise race a concurrent atomic increment and silently revert it. Stored instead as a separate `WORKSHOP#<id>` / `CAPACITY` row.
+- **`services/api/src/stripe-checkout.ts`** / **`stripe-checkout-handler.ts`** — `POST /workshops/{id}/checkout`: looks up the workshop (must be `published` and not yet happened), reserves capacity, creates a Stripe Checkout Session (`client_reference_id: REGISTRATION#<id>`, `metadata.workshopId`), then writes the `pending` registration row with the real session id. If the Stripe API call itself fails, the capacity reservation is released rather than leaked. Flag-gated (`payments.stripeCheckout.enabled`), no admin token (public endpoint) — the audit trail's `actor` is a hashed source IP, same convention as the contact form/testimonial submission.
+- **`services/api/src/stripe-webhook.ts`** / **`stripe-webhook-handler.ts`** — `POST /stripe/webhook`: verifies the Stripe signature (invalid → 400, nothing mutated) before an idempotency gate (`WebhookEventStore.tryClaim(event.id)`, a conditional put of `STRIPE_EVENT#<event.id>`) short-circuits any re-delivery to 200 without reprocessing. `checkout.session.completed` confirms the registration and sends exactly one confirmation email (`ses.ts`'s new `createSesRegistrationEmailSender`, reusing TASK 1.4.1's verified sending identity); `checkout.session.expired` cancels the registration and releases its capacity reservation. Kept SDK-free/HTTP-free, matching the task's own given interface: `createStripeWebhookHandler(deps): (rawBody, signatureHeader) => Promise<{ statusCode: 200 | 400 }>`. `stripe-webhook-handler.ts` is the only place that extracts the *literal* raw request body (signature verification fails against a re-serialised JSON string) and calls the real `stripe.webhooks.constructEvent`.
+- **`services/api/src/dynamo-store.ts`** — `DynamoRegistrationStore` (plain conditional `PutCommand`, no `TransactWriteItems` — a registration row has no companion projection row), `DynamoWorkshopCapacityStore` (atomic `UpdateCommand` against the `CAPACITY` row, `ConditionExpression` guarding both the reserve-under-cap and release-above-zero directions), `DynamoWebhookEventStore` (conditional `PutCommand` for the idempotency row).
+- **`services/api/src/ses.ts`** — `createSesRegistrationEmailSender`, additive alongside TASK 1.4.1's `createSesContactEmailSender`, same verified identity.
+- **`infra/src/data-stack.ts`** — `WorkshopCheckoutFunction`: table read + precise `PutItem`/`UpdateItem` (never `DeleteItem`, denied again via the guardrail) + `ssm:GetParameter` on the Stripe secret key. Routed at `POST /workshops/{id}/checkout` on the existing `ContentHttpApi` (already CORS-configured for the site origin).
+- **`infra/src/web-stack.ts`** — `StripeWebhookFunction`, in this stack rather than `data-stack.ts` — see the dedicated section below. CSP extended with `https://js.stripe.com` (script-src) and `https://checkout.stripe.com` (frame-src).
+- **`infra/src/config.ts`** — `STRIPE_SECRET_KEY_PARAMETER_NAME`, `STRIPE_WEBHOOK_SECRET_PARAMETER_NAME` (both SSM SecureStrings, provisioned out-of-band, see "Required manual step" below).
+
+## Why `StripeWebhookFunction` lives in `web-stack.ts`, and the cross-stack reference that requires
+
+Every other workshop route lives in `data-stack.ts` alongside the table it reads/writes. The webhook is the exception: Stripe's dashboard needs a stable URL to send events to, and `web-stack.ts`'s custom domain (`https://next.nourishthenerve.com`, behind CloudFront/ACM) is that stable URL — `data-stack.ts`'s `ContentHttpApi` has no custom domain of its own and is only ever called directly at its raw `execute-api.amazonaws.com` URL.
+
+That means `WebStack` needs `NdnDataStack`'s table. Unlike TASK 1.5.1's `MediaUploadFunction` cycle (where the guardrail's bucket-policy half needed the *role's* ARN written back into the *other* stack's template, producing a real two-way dependency), this is one-directional: `WebStack` reads `DataStack.table`, and `DataStack` needs nothing back from `WebStack` for this function. `infra/bin/app.ts` now creates `DataStack` first and passes `table: dataStack.table` into `WebStack`'s props — CDK resolves this as an ordinary cross-stack reference (same account/region, same `App`), no `DependencyCycle`.
+
+`table` is optional on `WebStackProps` precisely because of this: no `DataStack` is deployed alongside an ephemeral per-PR stack (TASK 0.6.3's own reasoning — its resources aren't behind the PR-environment test suite). When `table` is absent, the webhook function, its route, and its CloudFront behavior are skipped entirely rather than deployed non-functional.
+
+## Required manual steps before this is usable in `ndn-prod`
+
+- **LL-03 (Stripe account verification/KYC)** must be resolved before a real (even test-mode) payment can be proven end-to-end — flagged in `08-long-lead.md`, blocking `M1.5`. This task's code is built and tested against Stripe's documented test-mode payload shapes regardless; no test in this repo calls the real Stripe API.
+- `aws ssm put-parameter --type SecureString --name /ndn/stripe-secret-key --value <sk_test_or_live_...>` — the Stripe API secret key.
+- `aws ssm put-parameter --type SecureString --name /ndn/stripe-webhook-secret --value <whsec_...>` — the signing secret for the specific webhook endpoint registered in the Stripe dashboard, pointed at `https://next.nourishthenerve.com/stripe/webhook` (and, at TASK 1.6.1's G1 cutover, updated to the apex domain).
+- Reused as-is, not re-provisioned: TASK 1.4.1's verified `nourishthenerve.com` SES sending identity (the registration confirmation email).
+
+## What was deliberately not built here
+
+- **No `DELETE` endpoint anywhere, and no write path that empties a row.** A `checkout.session.expired` webhook only ever transitions a registration to `cancelled`; it stays `findById`-able.
+- **No apps/web checkout button/page.** This task is the backend Stripe integration only — wiring a "Register" call to `POST /workshops/:id/checkout` from `apps/web/src/pages/[locale]/workshops/[slug].astro` is not part of this task's file list and was left for a follow-up.
+- **No rate limiting/Turnstile on `POST /workshops/:id/checkout`**, unlike the contact form/testimonial submission — capacity itself bounds abuse (a workshop can only ever be over-reserved up to its own `capacity`, and every unpaid reservation self-releases via Stripe's own Checkout Session expiry, typically 24h), and the task's own dependency list doesn't call for reusing `rate-limiter.ts`/Turnstile here.
+- **Real-time capacity display on the public pages.** Same static-build limitation `content-authoring.md`/`testimonials.md`/`workshops.md` carry: `apps/web` is built at `astro build` time (ADR-0017), so remaining capacity shown on a page reflects the last deploy, not the live count.
+
+## Cost
+
+£0.00 recurring infra (two more Lambdas/routes on already-provisioned HTTP APIs, one more DynamoDB write pattern on the existing table). Stripe's own per-transaction processing fees are excluded from the C-01 budget envelope, netted from workshop revenue per the execution plan's own cost note.

@@ -10,6 +10,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
 import { DOMAIN_NAME } from './config.js';
+import { DataStack } from './data-stack.js';
 import { WebStack } from './web-stack.js';
 
 function synth() {
@@ -17,6 +18,22 @@ function synth() {
   const stack = new WebStack(app, 'TestWebStack', {
     env: { account: '357601815388', region: 'eu-west-2' },
     deployVersion: 'test-sha',
+  });
+  return Template.fromStack(stack);
+}
+
+// TASK 1.5.2: the Stripe webhook function only exists when a `table` prop
+// is given (mirrors production's DataStack -> WebStack wiring in
+// infra/bin/app.ts) — same App so CDK resolves the cross-stack reference.
+function synthWithTable() {
+  const app = new App();
+  const dataStack = new DataStack(app, 'TestDataStackForWebStack', {
+    env: { account: '357601815388', region: 'eu-west-2' },
+  });
+  const stack = new WebStack(app, 'TestWebStackWithTable', {
+    env: { account: '357601815388', region: 'eu-west-2' },
+    deployVersion: 'test-sha',
+    table: dataStack.table,
   });
   return Template.fromStack(stack);
 }
@@ -338,6 +355,26 @@ describe('WebStack — security headers policy', () => {
     expect(csp).toContain('frame-src https://challenges.cloudflare.com');
     expect(csp).toContain("default-src 'self'");
   });
+
+  it('allows the Stripe origins for script-src and frame-src (TASK 1.5.2)', () => {
+    const template = synth();
+    const [policy] = Object.values(
+      template.findResources('AWS::CloudFront::ResponseHeadersPolicy'),
+    );
+    const csp = (
+      policy as {
+        Properties: {
+          ResponseHeadersPolicyConfig: {
+            SecurityHeadersConfig: { ContentSecurityPolicy: { ContentSecurityPolicy: string } };
+          };
+        };
+      }
+    ).Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy
+      .ContentSecurityPolicy;
+
+    expect(csp).toContain('https://js.stripe.com');
+    expect(csp).toContain('https://checkout.stripe.com');
+  });
 });
 
 describe('WebStack — contact form Lambda (TASK 1.4.1)', () => {
@@ -476,6 +513,120 @@ describe('WebStack — media upload Lambda (TASK 1.5.1)', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/ndn/media-upload-function',
+      RetentionInDays: 14,
+    });
+  });
+});
+
+describe('WebStack — Stripe webhook Lambda (TASK 1.5.2)', () => {
+  it('is absent (no function, no route) when no table prop is given — e.g. an ephemeral per-PR stack', () => {
+    const template = synth();
+    const routes = template.findResources('AWS::ApiGatewayV2::Route');
+    const routeKeys = Object.values(routes).map(
+      (route) => (route as { Properties: { RouteKey: string } }).Properties.RouteKey,
+    );
+    expect(routeKeys).not.toContain('POST /stripe/webhook');
+  });
+
+  it('is reachable via a POST /stripe/webhook route on the HTTP API when a table is given', () => {
+    const template = synthWithTable();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /stripe/webhook',
+    });
+  });
+
+  it('runs on arm64 / Node 22, with the table name and both Stripe secret parameter names wired through', () => {
+    const template = synthWithTable();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Architectures: ['arm64'],
+      Runtime: 'nodejs22.x',
+      Environment: {
+        Variables: Match.objectLike({
+          WORKSHOP_TABLE_NAME: Match.anyValue(),
+          STRIPE_WEBHOOK_SECRET_PARAMETER_NAME: '/ndn/stripe-webhook-secret',
+          STRIPE_SECRET_KEY_PARAMETER_NAME: '/ndn/stripe-secret-key',
+        }),
+      },
+    });
+  });
+
+  it('grants PutItem/UpdateItem but never DeleteItem on its identity policy, and denies it via the guardrail', () => {
+    const template = synthWithTable();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const webhookPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'StripeWebhookFunctionRole',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+
+    const allowActions = webhookPolicy.Properties.PolicyDocument.Statement.filter(
+      (statement) => statement.Effect === 'Allow',
+    ).flatMap((statement) => ([] as string[]).concat(statement.Action as string | string[]));
+
+    expect(allowActions).toContain('dynamodb:PutItem');
+    expect(allowActions).toContain('dynamodb:UpdateItem');
+    expect(allowActions).toContain('ssm:GetParameter');
+    expect(allowActions).toContain('ses:SendEmail');
+    expect(allowActions).not.toContain('dynamodb:DeleteItem');
+
+    const denyStatement = webhookPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Effect === 'Deny',
+    );
+    expect(denyStatement).toMatchObject({
+      Sid: 'DenyDestructivePrimitives',
+      Action: expect.arrayContaining(['dynamodb:DeleteItem']),
+    });
+  });
+
+  it('grants ses:SendEmail scoped to the one verified identity, same as the contact form', () => {
+    const template = synthWithTable();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const webhookPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'SendRegistrationConfirmationEmail',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const sesStatement = webhookPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Sid === 'SendRegistrationConfirmationEmail',
+    );
+    expect(sesStatement?.Action).toBe('ses:SendEmail');
+    expect(JSON.stringify(sesStatement?.Resource)).toContain('identity/nourishthenerve.com');
+  });
+
+  it('scopes the SSM read to exactly the two Stripe secret parameters, not every parameter', () => {
+    const template = synthWithTable();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const webhookPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes('ReadStripeSecrets'),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const ssmStatement = webhookPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Sid === 'ReadStripeSecrets',
+    );
+    const resourceJson = JSON.stringify(ssmStatement?.Resource);
+    expect(resourceJson).toContain('parameter/ndn/stripe-webhook-secret');
+    expect(resourceJson).toContain('parameter/ndn/stripe-secret-key');
+    expect(resourceJson).not.toContain('parameter/*');
+  });
+
+  it('proxies /stripe/webhook to the HTTP API same-origin, with caching disabled and all methods allowed', () => {
+    const template = synthWithTable();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: '/stripe/webhook',
+            CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad',
+            ViewerProtocolPolicy: 'redirect-to-https',
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('has an explicit 14-day-retention log group', () => {
+    const template = synthWithTable();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/stripe-webhook-function',
       RetentionInDays: 14,
     });
   });

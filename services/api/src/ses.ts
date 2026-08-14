@@ -41,3 +41,52 @@ export function createSesContactEmailSender(options: SesContactEmailSenderOption
     );
   };
 }
+
+// TASK 1.5.2: registration confirmation email, sent once a Stripe
+// `checkout.session.completed` webhook confirms a workshop registration
+// (stripe-webhook.ts). Reuses the same verified `nourishthenerve.com`
+// sending identity as createSesContactEmailSender above — no second SES
+// identity, no second verification step.
+export interface RegistrationConfirmationEmailInput {
+  readonly to: string;
+  readonly workshopTitle: string;
+  readonly dateTimeUtc: string;
+}
+
+export type RegistrationEmailSender = (
+  input: RegistrationConfirmationEmailInput,
+) => Promise<void>;
+
+export interface SesRegistrationEmailSenderOptions {
+  readonly fromAddress: string;
+  /** Defaults to a real client — tests inject a mocked one (aws-sdk-client-mock) instead. */
+  readonly client?: SESv2Client;
+}
+
+export function createSesRegistrationEmailSender(
+  options: SesRegistrationEmailSenderOptions,
+): RegistrationEmailSender {
+  const client = options.client ?? new SESv2Client({});
+
+  return async (input) => {
+    await client.send(
+      new SendEmailCommand({
+        FromEmailAddress: options.fromAddress,
+        Destination: { ToAddresses: [input.to] },
+        Content: {
+          Simple: {
+            Subject: { Data: `You're registered: ${input.workshopTitle}` },
+            Body: {
+              Text: {
+                Data:
+                  `Your registration for "${input.workshopTitle}" is confirmed.\n\n` +
+                  `Date/time (UTC): ${input.dateTimeUtc}\n\n` +
+                  'See you there.',
+              },
+            },
+          },
+        },
+      }),
+    );
+  };
+}

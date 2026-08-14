@@ -208,6 +208,9 @@ importers:
       '@ndn/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      stripe:
+        specifier: ^22.5.0
+        version: 22.5.0(@types/node@22.20.1)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -3126,6 +3129,15 @@ packages:
   strip-indent@3.0.0:
     resolution: {integrity: sha512-laJTa3Jb+VQpaC6DseHhF7dXVqHTfJPCRDaEbid/drOhgitgYku/letMUqOXFoWV0zIIUbjpdH2t+tYj4bQMRQ==}
     engines: {node: '>=8'}
+
+  stripe@22.5.0:
+    resolution: {integrity: sha512-QVwMwriC0bbySx6R4dpsvJ0W//GojC1kwWVS6rPSoVqDUIZX4Hy3TaUrd2AZeXEAaKbfWIjQjvo3vKAReHZ0vQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@types/node': '>=18'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
 
   supports-color@7.2.0:
     resolution: {integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==}
@@ -6809,6 +6821,10 @@ snapshots:
   strip-indent@3.0.0:
     dependencies:
       min-indent: 1.0.1
+
+  stripe@22.5.0(@types/node@22.20.1):
+    optionalDependencies:
+      '@types/node': 22.20.1
 
   supports-color@7.2.0:
     dependencies:

@@ -58,6 +58,8 @@ export const MONITORED_LOG_GROUP_NAMES = [
   '/ndn/contact-form-function',
   '/ndn/testimonial-submission-function',
   '/ndn/testimonial-moderation-function',
+  '/ndn/workshop-checkout-function',
+  '/ndn/stripe-webhook-function',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret
@@ -100,3 +102,16 @@ export const PR_STACK_ID_PREFIX = 'NdnWebStackPr';
 // content-authoring-handler.ts's own fallback default, so the two can't
 // drift apart silently. See docs/runbooks/content-authoring.md.
 export const ADMIN_API_TOKEN_PARAMETER_NAME = '/ndn/admin-api-token';
+
+// TASK 1.5.2 (ADR-0010): the SSM SecureStrings holding the Stripe API
+// secret key and the webhook signing secret — same out-of-band
+// `aws ssm put-parameter --type SecureString` convention every other
+// secret in this file documents; a Stripe account/webhook endpoint is a
+// manual step for the site owner (LL-03, docs/plan/08-long-lead.md), not
+// something CDK can provision. STRIPE_SECRET_KEY_PARAMETER_NAME is read by
+// both the checkout function (creates Checkout Sessions) and the webhook
+// function (constructs a Stripe client to verify events); the webhook
+// signing secret is distinct per Stripe endpoint and read only by the
+// webhook function.
+export const STRIPE_SECRET_KEY_PARAMETER_NAME = '/ndn/stripe-secret-key';
+export const STRIPE_WEBHOOK_SECRET_PARAMETER_NAME = '/ndn/stripe-webhook-secret';

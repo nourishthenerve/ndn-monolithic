@@ -18,7 +18,8 @@ export type FlagName =
   | 'contact.form.enabled'
   | 'testimonials.submission.enabled'
   | 'testimonials.moderationQueue.enabled'
-  | 'workshops.enabled';
+  | 'workshops.enabled'
+  | 'payments.stripeCheckout.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

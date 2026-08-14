@@ -25,12 +25,15 @@ import {
   PutCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { ContentItem, Testimonial, Workshop } from '@ndn/shared-types';
+import type { ContentItem, Registration, Testimonial, Workshop } from '@ndn/shared-types';
 
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
+import type { RegistrationStore, WorkshopCapacityStore } from './registration-repository.js';
 import type { KeyValueStore } from './store.js';
+import type { WebhookEventStore } from './stripe-webhook.js';
 import type { TestimonialStore } from './testimonial-repository.js';
 import type { WorkshopStore } from './workshop-repository.js';
 
@@ -58,6 +61,23 @@ const TESTIMONIAL_INDEX_GSI2PK = 'TESTIMONIAL_INDEX#all';
 const WORKSHOP_PK = (id: string) => `WORKSHOP#${id}`;
 const WORKSHOP_INDEX_SORT_KEY = 'INDEX';
 const WORKSHOP_INDEX_GSI2PK = 'WORKSHOP_INDEX#all';
+
+// TASK 1.5.2: same table, same WORKSHOP#<id> pk prefix, two more sort keys
+// under it. `REGISTRATION#<id>` rows are ordinary registration records
+// (DynamoRegistrationStore); the single `CAPACITY` row per workshop is a
+// deliberately separate item from the workshop's own `META` row — see
+// registration-repository.ts's own header comment for why (a lost-update
+// race between an admin's plain-overwrite edit and this store's atomic
+// increment/decrement if the two shared a row).
+const REGISTRATION_SK = (id: string) => `REGISTRATION#${id}`;
+const WORKSHOP_CAPACITY_SORT_KEY = 'CAPACITY';
+
+// TASK 1.5.2: webhook idempotency rows. A distinct pk prefix (`STRIPE_EVENT#`)
+// can't collide with any entity's own pk (`CONTENT#`/`TESTIMONIAL#`/
+// `WORKSHOP#`) — no gsi2pk/gsi2sk, so these never surface in a GSI2 query
+// either.
+const STRIPE_EVENT_PK = (eventId: string) => `STRIPE_EVENT#${eventId}`;
+const STRIPE_EVENT_SORT_KEY = 'RECEIVED';
 
 function defaultDocumentClient(): DynamoDBDocumentClient {
   return DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -428,5 +448,163 @@ export class DynamoWorkshopStore implements WorkshopStore {
       }
     }
     return ids;
+  }
+}
+
+export interface DynamoRegistrationStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+// TASK 1.5.2: `PK = WORKSHOP#<id>` / `SK = REGISTRATION#<id>` — same table,
+// a sort key under the workshop's own partition rather than a new pk
+// prefix, per the execution plan's own key shape for this entity.
+export class DynamoRegistrationStore implements RegistrationStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoRegistrationStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async get(workshopId: string, id: string): Promise<Registration | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: WORKSHOP_PK(workshopId), sk: REGISTRATION_SK(id) },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Registration>(result.Item);
+  }
+
+  async create(item: Registration): Promise<void> {
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: { ...item, pk: WORKSHOP_PK(item.workshopId), sk: REGISTRATION_SK(item.id) },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError('RECORD_ALREADY_EXISTS', `registration ${item.id} already exists`);
+      }
+      throw error;
+    }
+  }
+
+  async update(item: Registration): Promise<void> {
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: { ...item, pk: WORKSHOP_PK(item.workshopId), sk: REGISTRATION_SK(item.id) },
+      }),
+    );
+  }
+}
+
+export interface DynamoWorkshopCapacityStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+// TASK 1.5.2: `PK = WORKSHOP#<id>` / `SK = CAPACITY` — a single atomic
+// counter row per workshop, deliberately separate from that workshop's own
+// `META` row (registration-repository.ts's own header comment explains
+// why). `UpdateCommand`, not `PutCommand`: an atomic ConditionExpression-
+// guarded increment/decrement, same shape sms-spend-cap.ts's real
+// implementation would take (0.5.3 never deployed a real DynamoDB-backed
+// SpendCounterStore — this is that same pattern's first real exercise).
+export class DynamoWorkshopCapacityStore implements WorkshopCapacityStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoWorkshopCapacityStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async tryReserve(workshopId: string, capacity: number): Promise<boolean> {
+    try {
+      await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: WORKSHOP_PK(workshopId), sk: WORKSHOP_CAPACITY_SORT_KEY },
+          UpdateExpression: 'SET registeredCount = if_not_exists(registeredCount, :zero) + :one',
+          ConditionExpression:
+            'attribute_not_exists(registeredCount) OR registeredCount < :capacity',
+          ExpressionAttributeValues: { ':zero': 0, ':one': 1, ':capacity': capacity },
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async release(workshopId: string): Promise<void> {
+    try {
+      await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: WORKSHOP_PK(workshopId), sk: WORKSHOP_CAPACITY_SORT_KEY },
+          UpdateExpression: 'SET registeredCount = registeredCount - :one',
+          ConditionExpression: 'attribute_exists(registeredCount) AND registeredCount > :zero',
+          ExpressionAttributeValues: { ':one': 1, ':zero': 0 },
+        }),
+      );
+    } catch (error) {
+      // Nothing to release (already zero, or never reserved) — a no-op,
+      // same contract InMemoryWorkshopCapacityStore.release documents.
+      if (error instanceof ConditionalCheckFailedException) {
+        return;
+      }
+      throw error;
+    }
+  }
+}
+
+export interface DynamoWebhookEventStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+// TASK 1.5.2: `PK = STRIPE_EVENT#<event.id>` / `SK = RECEIVED` — a
+// conditional Put is exactly "atomically record that this id has been
+// seen": the first delivery's Put succeeds, every re-delivery's Put fails
+// the `attribute_not_exists` condition and is treated as already-claimed.
+export class DynamoWebhookEventStore implements WebhookEventStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoWebhookEventStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async tryClaim(eventId: string): Promise<boolean> {
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: { pk: STRIPE_EVENT_PK(eventId), sk: STRIPE_EVENT_SORT_KEY },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        return false;
+      }
+      throw error;
+    }
   }
 }
