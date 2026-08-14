@@ -59,5 +59,15 @@
   "notFound.body": "Sorry, we couldn't find that page. It may have moved or no longer exists.",
   "notFound.blogHeading": "This post is no longer available",
   "notFound.blogBody": "Sorry, this blog post has been unpublished or removed from the site.",
-  "notFound.backToHome": "Back to home"
+  "notFound.backToHome": "Back to home",
+  "nav.contact": "Contact",
+  "contact.heading": "Contact us",
+  "contact.description": "Get in touch with Nourish the Nerve — send us a message and we'll get back to you.",
+  "contact.intro": "Have a question or want to book an appointment? Fill in the form below and we'll get back to you.",
+  "contact.form.nameLabel": "Your name",
+  "contact.form.emailLabel": "Email address",
+  "contact.form.messageLabel": "Message",
+  "contact.form.success": "Thanks — your message has been sent. We'll get back to you soon.",
+  "contact.form.rateLimited": "You've sent a few messages already — please wait a while before sending another.",
+  "contact.form.error": "Sorry, something went wrong sending your message. Please try again shortly."
 }

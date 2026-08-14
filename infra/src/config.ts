@@ -52,7 +52,36 @@ export const LOG_INGESTION_ALARM_THRESHOLD_BYTES = 350_000_000;
 // zero-maintenance version of this alarm isn't achievable without a
 // separate metric-publishing Lambda, which is more infrastructure than
 // this £0.00-cost guard has earned so far.
-export const MONITORED_LOG_GROUP_NAMES = ['/ndn/health-function', '/ndn/smoke-test-function'];
+export const MONITORED_LOG_GROUP_NAMES = [
+  '/ndn/health-function',
+  '/ndn/smoke-test-function',
+  '/ndn/contact-form-function',
+];
+
+// TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret
+// key (D-14) — same out-of-band `aws ssm put-parameter --type SecureString`
+// convention ADMIN_API_TOKEN_PARAMETER_NAME documents above; a Turnstile
+// account/widget is a manual step for the site owner (docs/runbooks/
+// contact-form.md), not something CDK can provision. Shared by
+// web-stack.ts (grants ssm:GetParameter and sets the Lambda's
+// TURNSTILE_SECRET_PARAMETER_NAME env var) and contact-form-handler.ts's
+// own fallback default.
+export const TURNSTILE_SECRET_PARAMETER_NAME = '/ndn/turnstile-secret-key';
+
+// TASK 1.4.1 (ADR-0009): the contact-form relay's From/To addresses. From
+// is under the verified `nourishthenerve.com` domain identity (docs/
+// runbooks/ses-production-access.md); To is the existing Zoho inbox staff
+// already read. Not secret — plain deployment constants, same as
+// ALERT_EMAIL above.
+export const CONTACT_FORM_FROM_EMAIL = 'noreply@nourishthenerve.com';
+export const CONTACT_FORM_TO_EMAIL = 'contact@nourishthenerve.com';
+
+// TASK 1.4.1: the SES domain identity verified in docs/runbooks/
+// ses-production-access.md — deliberately the apex `nourishthenerve.com`,
+// not DOMAIN_NAME (`next.nourishthenerve.com`, this stack's own staging
+// CloudFront alias, unrelated to what SES verified). web-stack.ts scopes
+// ContactFormFunction's ses:SendEmail grant to exactly this identity's ARN.
+export const SES_EMAIL_IDENTITY_DOMAIN = 'nourishthenerve.com';
 
 // TASK 0.6.3: every ephemeral per-PR stack's CDK app id is this prefix plus
 // the PR number (bin/app.ts). Also the literal ARN-pattern prefix the

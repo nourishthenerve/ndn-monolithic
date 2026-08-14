@@ -32,13 +32,21 @@ import {
   LambdaDeploymentConfig,
   LambdaDeploymentGroup,
 } from 'aws-cdk-lib/aws-codedeploy';
+import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Alias, Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
 
-import { CERTIFICATE_ARN, DOMAIN_NAME } from './config.js';
+import {
+  CERTIFICATE_ARN,
+  CONTACT_FORM_FROM_EMAIL,
+  CONTACT_FORM_TO_EMAIL,
+  DOMAIN_NAME,
+  SES_EMAIL_IDENTITY_DOMAIN,
+  TURNSTILE_SECRET_PARAMETER_NAME,
+} from './config.js';
 import { createLogGroup } from './log-retention.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
@@ -121,6 +129,76 @@ export class WebStack extends Stack {
       integration: new HttpLambdaIntegration('HealthIntegration', healthAlias),
     });
 
+    // TASK 1.4.1: the contact form's Lambda + route. A separate function
+    // and role from HealthFunction — this one needs ssm:GetParameter (the
+    // Turnstile secret, D-14) and ses:SendEmail, neither of which the
+    // health check should ever hold. No DynamoDB/S3 access at all, so
+    // guardrails.ts's destructive-action guardrail (scoped to buckets/
+    // tables) doesn't apply here — see data-stack.ts for where it does.
+    const contactFormRole = new Role(this, 'ContactFormFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const contactFormFunction = new NodejsFunction(this, 'ContactFormFunction', {
+      entry: `${moduleDir}../../services/api/src/contact-form-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: contactFormRole,
+      environment: {
+        TURNSTILE_SECRET_PARAMETER_NAME,
+        CONTACT_FORM_FROM_EMAIL,
+        CONTACT_FORM_TO_EMAIL,
+      },
+      logGroup: createLogGroup(
+        this,
+        'ContactFormFunctionLogGroup',
+        logGroupName('contact-form-function'),
+      ),
+    });
+
+    contactFormRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadTurnstileSecret',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: TURNSTILE_SECRET_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+
+    // Scoped to exactly the one verified sending identity (SES supports
+    // resource-level permissions on `identity/*` ARNs) — ses:SendEmail is
+    // also the narrowest action this function needs, nothing broader (no
+    // SendRawEmail, no template management).
+    contactFormRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendContactFormEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+        ],
+      }),
+    );
+
+    httpApi.addRoutes({
+      path: '/contact',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('ContactFormIntegration', contactFormFunction),
+    });
+
     const securityHeaders = new ResponseHeadersPolicy(this, 'SecurityHeaders', {
       securityHeadersBehavior: {
         strictTransportSecurity: {
@@ -137,8 +215,15 @@ export class WebStack extends Stack {
         },
         contentSecurityPolicy: {
           override: true,
+          // TASK 1.4.1: script-src/frame-src now name the Turnstile origin
+          // explicitly — default-src 'self' alone would otherwise block
+          // both the widget script and the challenge iframe it embeds.
+          // Scoped to exactly this one origin, not widened generally.
           contentSecurityPolicy:
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+            "script-src 'self' https://challenges.cloudflare.com; " +
+            'frame-src https://challenges.cloudflare.com; ' +
+            "object-src 'none'; frame-ancestors 'none'",
         },
       },
     });
@@ -214,6 +299,19 @@ function handler(event) {
           ),
           viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           allowedMethods: AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          responseHeadersPolicy: securityHeaders,
+        },
+        // TASK 1.4.1: same same-origin proxy shape as /health — the browser
+        // posts to this domain's own /contact path, so the submission is
+        // same-origin (no CORS needed) and covered by the CSP above. Shares
+        // the /health origin (same HttpApi, both routes on it).
+        '/contact': {
+          origin: new HttpOrigin(
+            `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
+          ),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_ALL,
           cachePolicy: CachePolicy.CACHING_DISABLED,
           responseHeadersPolicy: securityHeaders,
         },

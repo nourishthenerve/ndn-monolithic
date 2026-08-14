@@ -147,6 +147,21 @@ describe('WebStack — CloudFront distribution', () => {
     });
   });
 
+  it('proxies /contact to the HTTP API same-origin, with caching disabled and all methods allowed', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: '/contact',
+            CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad',
+            ViewerProtocolPolicy: 'redirect-to-https',
+          }),
+        ]),
+      }),
+    });
+  });
+
   it('rewrites clean URLs to index.html on the default (S3) behavior only, not on /health', () => {
     const template = synth();
     const [functionLogicalId] = Object.keys(template.findResources('AWS::CloudFront::Function'));
@@ -236,6 +251,93 @@ describe('WebStack — security headers policy', () => {
           ContentSecurityPolicy: Match.objectLike({ Override: true }),
         }),
       }),
+    });
+  });
+
+  it('allows the Turnstile origin for script-src and frame-src, and nothing else added to default-src', () => {
+    const template = synth();
+    const [policy] = Object.values(
+      template.findResources('AWS::CloudFront::ResponseHeadersPolicy'),
+    );
+    const csp = (
+      policy as {
+        Properties: {
+          ResponseHeadersPolicyConfig: {
+            SecurityHeadersConfig: { ContentSecurityPolicy: { ContentSecurityPolicy: string } };
+          };
+        };
+      }
+    ).Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy
+      .ContentSecurityPolicy;
+
+    expect(csp).toContain("script-src 'self' https://challenges.cloudflare.com");
+    expect(csp).toContain('frame-src https://challenges.cloudflare.com');
+    expect(csp).toContain("default-src 'self'");
+  });
+});
+
+describe('WebStack — contact form Lambda (TASK 1.4.1)', () => {
+  it('is reachable via a POST /contact route on the HTTP API', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /contact',
+    });
+  });
+
+  it('runs on arm64 / Node 22, with the Turnstile parameter name and From/To addresses wired through', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Architectures: ['arm64'],
+      Runtime: 'nodejs22.x',
+      Environment: {
+        Variables: Match.objectLike({
+          TURNSTILE_SECRET_PARAMETER_NAME: '/ndn/turnstile-secret-key',
+          CONTACT_FORM_FROM_EMAIL: 'noreply@nourishthenerve.com',
+          CONTACT_FORM_TO_EMAIL: 'contact@nourishthenerve.com',
+        }),
+      },
+    });
+  });
+
+  it('grants exactly ssm:GetParameter on the Turnstile secret parameter, and ses:SendEmail scoped to the one verified identity', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: 'Allow',
+            Action: 'ssm:GetParameter',
+            Resource: Match.objectLike({
+              'Fn::Join': Match.arrayWith([
+                Match.arrayWith([Match.stringLikeRegexp('parameter/ndn/turnstile-secret-key')]),
+              ]),
+            }),
+          }),
+        ]),
+      }),
+    });
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: 'Allow',
+            Action: 'ses:SendEmail',
+            Resource: Match.objectLike({
+              'Fn::Join': Match.arrayWith([
+                Match.arrayWith([Match.stringLikeRegexp('identity/nourishthenerve.com')]),
+              ]),
+            }),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('sends logs to an explicit log group with 14-day retention', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/contact-form-function',
+      RetentionInDays: 14,
     });
   });
 });

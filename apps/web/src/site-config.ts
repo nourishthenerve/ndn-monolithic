@@ -28,3 +28,12 @@ export const contentApiUrl = 'https://m4ptz0to5m.execute-api.eu-west-2.amazonaws
 // — reusing GSI2's existing keyword -> content projection to list every
 // post without a new index or a table Scan.
 export const blogContentType = 'blog';
+
+// TASK 1.4.1: Cloudflare Turnstile's own well-known, publicly documented
+// "always passes" test site key — not secret, safe to build into static
+// HTML. [Owner action] Replace with the real site key from a Turnstile
+// widget created in the Cloudflare dashboard before flipping
+// `contact.form.enabled` on for real; see docs/runbooks/contact-form.md.
+// The matching secret key lives server-side only (SSM SecureString,
+// infra/src/config.ts's TURNSTILE_SECRET_PARAMETER_NAME), never here.
+export const turnstileSiteKey = '1x00000000000000000000AA';

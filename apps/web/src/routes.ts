@@ -39,6 +39,7 @@ const routeSegments: readonly RouteSegment[] = [
   // here the way a fixed route can. See this file's own navLabelKey comment
   // below for why that's fine for 1.1.3's a11y gate too.
   { segment: 'blog', navLabelKey: 'nav.blog' },
+  { segment: 'contact', navLabelKey: 'nav.contact' },
   // TASK 1.2.2: legal pages aren't primary-nav items (no navLabelKey) —
   // they're linked from Footer.astro instead — but still registered here so
   // 1.1.3's a11y/keyboard gate covers them. Derived from legal-pages.ts
