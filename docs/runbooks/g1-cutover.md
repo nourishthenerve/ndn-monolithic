@@ -2,7 +2,9 @@
 
 **Date started:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Decisions:** D-02, D-08, D-25 · **Risks:** R-06 · **Depends on:** 0.0.2, 1.1.1–1.5.2
 
-**Status: prep complete, DNS cutover not yet executed.** This is the highest-risk task in the plan — it repoints the live `nourishthenerve.com` apex/`www` off the legacy site and, after an observation window, irreversibly deletes the legacy Lambda. Per the task's own step ordering, the DNS cutover (step 4 below) and the Lambda decommission (step 7) are **explicitly held for the site owner's go-ahead**, not executed as part of this prep pass. Everything below that point is documented but not yet run.
+**Status: certificate issued, CloudFront alias step FAILED and rolled back, DNS cutover not yet executed.** This is the highest-risk task in the plan — it repoints the live `nourishthenerve.com` apex/`www` off the legacy site and, after an observation window, irreversibly deletes the legacy Lambda. Per the task's own step ordering, the DNS cutover (step 4 below) and the Lambda decommission (step 7) are **explicitly held for the site owner's go-ahead**, not executed as part of this prep pass.
+
+**2026-08-15 correction:** the PR #38 merge's `deploy` job (CI run [31845241373](https://github.com/nourishthenerve/ndn-monolithic/actions/runs/31845241373)) **failed**, not succeeded as this doc previously claimed. `NdnWebStack` is confirmed `UPDATE_ROLLBACK_COMPLETE` — live and serving `next.` exactly as before, no lasting effect — but the apex/`www` aliases were never actually added. See "CloudFront alternate domain names (step 3)" below for what broke and why it changes the plan for step 4.
 
 ## Pre-flight (step 1) — confirmed 2026-08-14
 
@@ -38,13 +40,23 @@ The `next.` row is byte-for-byte identical to the CNAME TASK 0.4.1 already added
 
 The TASK 0.4.1 certificate (`arn:.../b1f9e01e-ab10-43b8-944a-6c0ccfffacb5`) is left in place, unused — free, harmless, matching that task's own rollback note.
 
-## CloudFront alternate domain names (step 3) — merged, deploying via CI
+## CloudFront alternate domain names (step 3) — code merged, deploy FAILED, rolled back cleanly
 
-`infra/src/config.ts` gained `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME`; `CERTIFICATE_ARN` now points at the new three-SAN cert. `infra/src/web-stack.ts`'s `domainNames` is now `[DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME]` on the **existing** `NdnWebStack` distribution (`dbn8dfhgi712k.cloudfront.net`) — no second distribution, reuses the already-proven canary/rollback/security-headers/OAC shape per the task's own instruction. This is additive and **DNS-invisible on its own**: CloudFront will accept `Host: nourishthenerve.com`/`Host: www.nourishthenerve.com` once deployed, but nothing resolves either hostname here until step 4 runs. Deployed via the ordinary CI `deploy` job (OIDC, `ndn-deploy`), same as every other stack change in this repo.
+`infra/src/config.ts` gained `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME`; `CERTIFICATE_ARN` now points at the new three-SAN cert. `infra/src/web-stack.ts`'s `domainNames` is now `[DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME]` on the **existing** `NdnWebStack` distribution (`dbn8dfhgi712k.cloudfront.net`) — no second distribution, reuses the already-proven canary/rollback/security-headers/OAC shape per the task's own instruction. `infra/src/web-stack.test.ts` was updated to assert all three aliases in both the production-mode test and the "production mode is unaffected" ephemeral-comparison test. This part is fine and stays merged.
 
-`infra/src/web-stack.test.ts` updated to assert all three aliases (`Aliases: [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME]`) in both the production-mode test and the "production mode is unaffected" ephemeral-comparison test.
+**What was wrong: this step was assumed to be additive and DNS-invisible on its own. It is not.** CI run [31845241373](https://github.com/nourishthenerve/ndn-monolithic/actions/runs/31845241373) (the PR #38 merge's `deploy` job) failed:
 
-**Verification after CI deploys this PR:** confirm the distribution's aliases via `aws cloudformation describe-stacks --stack-name NdnWebStack` / a fresh `cdk diff`, and that `curl -sI --resolve nourishthenerve.com:443:<distribution-ip> https://nourishthenerve.com/` (or equivalent SNI test) reaches `NdnWebStack`, all without touching real DNS. [Owner action / next session: confirm this once the PR merges and CI's `deploy` job runs.]
+```
+NdnWebStack/Distribution: UPDATE_FAILED — Invalid request provided: One or more aliases
+specified for the distribution includes an incorrectly configured DNS record that points
+to another CloudFront distribution. (Service: CloudFront, Status Code: 409, HandlerErrorCode: InvalidRequest)
+```
+
+CloudFront performs a live DNS lookup on every alias you try to add and **refuses the change if that hostname's DNS currently resolves to a *different* CloudFront distribution** (an anti-hijack/domain-ownership check — see AWS's CloudFront alternate-domain-name restrictions doc). `nourishthenerve.com`/`www.nourishthenerve.com` still point at the legacy distribution `d2z3fclxq13w3z.cloudfront.net`, which — being CloudFront too — trips this check. CloudFormation rolled the stack back cleanly: confirmed `NdnWebStack` is `UPDATE_ROLLBACK_COMPLETE` and `next.nourishthenerve.com` is the distribution's only live alias, exactly as before this PR. No production impact occurred.
+
+**Consequence for the plan:** steps 3 and 4 cannot run in the order the task text describes (alias added first, invisibly, DNS moved second). The alias can only be added successfully *after* DNS already points at `NdnWebStack`, which means there is necessarily a window — bounded by how long the `cdk deploy` of the alias addition takes, roughly 1–2 minutes going by this run's timings from changeset start to distribution `UPDATE_COMPLETE` — during which apex/`www` DNS points at `NdnWebStack` but `NdnWebStack` does not yet recognize that `Host`, and CloudFront serves those requests an error page instead of the site. This is a **real, if short, downtime window that the original task text did not account for**, and it is in tension with this project's zero-downtime constraint. It needs an explicit decision before step 4 runs — see the site owner's go-ahead note under step 4 below, which now covers this too, not only the DNS record change itself.
+
+**Revised step 3, to run immediately before/alongside step 4 rather than in advance of it:** re-run `cdk deploy` (or merge a no-op PR that re-triggers it) for the alias addition *right after* the DNS records are repointed in step 4, not before. Until then this step is **not done** — the live distribution has only the `next.` alias.
 
 ## TTL lowered ahead of cutover (part of step 4's prep) — done 2026-08-14
 
@@ -52,16 +64,20 @@ The TASK 0.4.1 certificate (`arn:.../b1f9e01e-ab10-43b8-944a-6c0ccfffacb5`) is l
 
 ## Remaining steps — NOT executed, awaiting the site owner's go-ahead
 
-### Step 4: DNS cutover (real production traffic impact)
+### Step 4: DNS cutover + re-deploy the CloudFront alias, back to back (real production traffic impact, includes a short error-page window)
 
-In the `803129122420` zone (manual, `default` profile — `ndn-deploy` has no access there):
+**Revised from the original task text** (see step 3 above): because CloudFront refuses to add an alias while DNS still points at a different CloudFront distribution, the alias cannot be pre-staged invisibly. The two changes now have to happen in immediate succession:
 
-```bash
-# Apex: change the ALIAS target from d2z3fclxq13w3z.cloudfront.net to dbn8dfhgi712k.cloudfront.net
-# www: change the CNAME target the same way (TTL already lowered to 60 above)
-```
+1. In the `803129122420` zone (manual, `default` profile — `ndn-deploy` has no access there):
+   ```bash
+   # Apex: change the ALIAS target from d2z3fclxq13w3z.cloudfront.net to dbn8dfhgi712k.cloudfront.net
+   # www: change the CNAME target the same way (TTL already lowered to 60 above)
+   ```
+2. Immediately trigger the `NdnWebStack` deploy that adds `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` to `domainNames` (the code from step 3 is already merged — this is a re-run, e.g. re-dispatch the `deploy` job or push a no-op commit).
 
-This is the moment real visitors to `nourishthenerve.com`/`www.nourishthenerve.com` start seeing the new site instead of the legacy brochure. **Do not run this without explicit confirmation from the site owner in the same session it runs** — see `docs/plan/05-execution-plan.md`'s own framing of this as the plan's highest-risk task.
+Between (1) and (2) completing, requests to `nourishthenerve.com`/`www.nourishthenerve.com` will resolve to `NdnWebStack` but get a CloudFront error page (Host not yet a recognized alias) instead of either site — an error window of roughly 1–2 minutes based on the failed run's changeset-to-`UPDATE_COMPLETE` timing, not the zero-downtime, fully-invisible cutover the task text originally described. **This is a materially different risk profile than what was documented and needs its own explicit sign-off, separate from the general "confirm before running step 4" instruction below** — see `docs/plan/05-execution-plan.md`'s own framing of this as the plan's highest-risk task.
+
+**Do not run this without explicit confirmation from the site owner in the same session it runs.**
 
 ### Step 5: Verify immediately after cutover
 
@@ -114,7 +130,8 @@ Leaves the S3 bucket `nourishthenerve` exactly as TASK 0.0.2 configured it — v
 
 - **Before step 7 (Lambda deletion):** DNS-only. Revert the apex ALIAS and `www` CNAME in `803129122420` back to `d2z3fclxq13w3z.cloudfront.net` — restores the legacy experience with zero AWS resource changes. `www`'s 60s TTL means this propagates within roughly a minute for most resolvers.
 - **After step 7:** the Lambda cannot be undeleted. A post-step-7 issue is fixed forward on the new stack, or rolled back via the same DNS revert above (the legacy CloudFront distribution itself is never touched by this task, so it keeps serving whatever it was serving — static assets only, since the Lambda behind its API calls would now be gone). This is exactly why the observation window and step ordering exist.
-- **Certificate/CloudFront alternate domain names (steps 2–3):** harmless to leave in place even if the DNS cutover is never run — CloudFront accepting a `Host` header nobody sends traffic to, and an unused-but-valid ACM cert, cost nothing and expose nothing new.
+- **Certificate (step 2):** harmless to leave in place even if the DNS cutover is never run — an unused-but-valid ACM cert costs nothing and exposes nothing new.
+- **CloudFront alternate domain names (step 3):** not currently deployed (see above) — the merged code is a no-op until re-run alongside step 4, so there is nothing here to roll back.
 
 ## Do NOT
 
