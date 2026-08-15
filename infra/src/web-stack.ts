@@ -42,13 +42,11 @@ import type { Construct } from 'constructs';
 
 import {
   ADMIN_API_TOKEN_PARAMETER_NAME,
-  APEX_DOMAIN_NAME,
   CERTIFICATE_ARN,
   CONTACT_FORM_FROM_EMAIL,
   CONTACT_FORM_TO_EMAIL,
   DOMAIN_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
-  WWW_DOMAIN_NAME,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
@@ -493,12 +491,21 @@ function handler(event) {
       // *.cloudfront.net domain (always unique per distribution, already
       // TLS-covered) rather than next.nourishthenerve.com — see the
       // `certificate` comment above.
-      // TASK 1.6.1: apex/www added as alternate domain names ahead of the
-      // actual DNS cutover — additive and DNS-invisible on its own, since
-      // nothing resolves either hostname to this distribution yet. Real
-      // traffic only moves once the G1 cutover runbook's manual DNS step
-      // repoints the 803129122420 zone. See docs/runbooks/g1-cutover.md.
-      domainNames: props.ephemeral ? undefined : [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
+      // TASK 1.6.1: apex/www are deliberately NOT listed here yet, even though
+      // CERTIFICATE_ARN already covers them. CloudFront refuses an alternate
+      // domain name that another distribution anywhere (any account) already
+      // claims, and the legacy distribution d2z3fclxq13w3z.cloudfront.net —
+      // in an AWS account this project has never held credentials for — still
+      // claims both. Listing them here is what failed the 2026-08-15 deploy.
+      //
+      // Attaching the three-SAN certificate is a *separate*, unblocked change,
+      // and is an AWS-documented prerequisite for the cross-account
+      // alternate-domain-name move that releases the claim. Bundling the two
+      // meant the cert never landed either, because CloudFormation rolls back
+      // the whole update. They stay decoupled until AWS Support completes the
+      // move; only then do APEX_DOMAIN_NAME/WWW_DOMAIN_NAME join this array.
+      // See docs/runbooks/g1-cutover.md.
+      domainNames: props.ephemeral ? undefined : [DOMAIN_NAME],
       certificate,
       defaultRootObject: 'index.html',
       defaultBehavior: {
