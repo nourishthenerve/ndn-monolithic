@@ -15,11 +15,13 @@ With explicit owner go-ahead in-session, the revised step 4 (DNS first, alias re
 1. **10:17:35 UTC** — apex `A`/ALIAS and `www` CNAME repointed from `d2z3fclxq13w3z.cloudfront.net` to `dbn8dfhgi712k.cloudfront.net` (`NdnWebStack`) in the `803129122420` zone.
 2. **10:17:35 UTC** — `cdk deploy NdnWebStack` triggered immediately after, to add the apex/`www` aliases to `NdnWebStack` and pick up the three-SAN certificate.
 3. **10:18:06 UTC** — deploy failed, a **different** error than the earlier CI failure:
-   ```
+
+   ```text
    NdnWebStack/Distribution: UPDATE_FAILED — Invalid request provided: One or more of the
    CNAMEs you provided are already associated with a different resource.
    (Service: CloudFront, Status Code: 409, HandlerErrorCode: InvalidRequest)
    ```
+
    CloudFormation rolled `NdnWebStack` back automatically (`UPDATE_ROLLBACK_COMPLETE` by 10:18:20 UTC).
 4. **10:18:47 UTC** — apex/`www` DNS reverted back to `d2z3fclxq13w3z.cloudfront.net`, restoring the legacy site. Confirmed via `dig`/`curl`: apex `302` → `www`, `www` `200`, both served by the legacy distribution again.
 
@@ -28,6 +30,7 @@ With explicit owner go-ahead in-session, the revised step 4 (DNS first, alias re
 **Why this is a different, harder problem than the step-3 failure:** the step-3 failure was a *DNS-based* pre-check ("does this alias's DNS currently point elsewhere") that a DNS-first ordering was expected to satisfy. This one is CloudFront's actual **alias-uniqueness constraint**: an alternate domain name can only be attached to *one* CloudFront distribution at a time, globally, across every AWS account — and it is enforced against the distribution's own configuration, not DNS. The legacy distribution `d2z3fclxq13w3z.cloudfront.net` still has `nourishthenerve.com`/`www.nourishthenerve.com` configured as *its* aliases. Repointing DNS doesn't release that claim — only removing the alias from the legacy distribution's own configuration does, and that distribution lives in the unidentified third AWS account this project has never held credentials for (see 00-index.md's "Verified position"). There is no DNS trick, deploy-ordering trick, or retry that gets around this from our side alone.
 
 **Path forward — needs one of, before step 4 can be retried:**
+
 1. **Identify and get cooperation from whoever controls the account serving `d2z3fclxq13w3z.cloudfront.net`**, so they (or we, with temporary access) remove `nourishthenerve.com`/`www.nourishthenerve.com` from that distribution's aliases — after which `NdnWebStack` can claim them immediately (`cdk deploy` would then succeed the same way it does for any fresh alias).
 2. **An AWS Support case**, if (1) isn't possible — AWS has a documented process for moving an alternate domain name to a distribution in a different account when you can demonstrate you own the domain (you control its Route 53 zone, which we do). This is the standard remediation AWS points to for exactly this cross-account CNAME conflict; see AWS's "resolve the CNAMEAlreadyExists error" and "move an alternate domain name" guidance.
 3. Either way, this is a **prerequisite investigation/coordination task, not a retry of step 4** — repeating the same DNS-then-deploy sequence will fail identically every time until the alias is actually released on the legacy side.
@@ -72,7 +75,7 @@ The TASK 0.4.1 certificate (`arn:.../b1f9e01e-ab10-43b8-944a-6c0ccfffacb5`) is l
 
 **What was wrong: this step was assumed to be additive and DNS-invisible on its own. It is not.** CI run [31845241373](https://github.com/nourishthenerve/ndn-monolithic/actions/runs/31845241373) (the PR #38 merge's `deploy` job) failed:
 
-```
+```text
 NdnWebStack/Distribution: UPDATE_FAILED — Invalid request provided: One or more aliases
 specified for the distribution includes an incorrectly configured DNS record that points
 to another CloudFront distribution. (Service: CloudFront, Status Code: 409, HandlerErrorCode: InvalidRequest)
@@ -95,10 +98,12 @@ CloudFront performs a live DNS lookup on every alias you try to add and **refuse
 See "2026-08-15 cutover attempt" above for what was tried, the exact failure, and the revert. The procedure below is kept as the accurate record of what was executed (and what will need to run again once the alias conflict is resolved), not as a next action to take as-is.
 
 1. In the `803129122420` zone (manual, `default` profile — `ndn-deploy` has no access there):
+
    ```bash
    # Apex: change the ALIAS target from d2z3fclxq13w3z.cloudfront.net to dbn8dfhgi712k.cloudfront.net
    # www: change the CNAME target the same way (TTL already lowered to 60 above)
    ```
+
 2. Immediately trigger the `NdnWebStack` deploy that adds `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` to `domainNames` (the code from step 3 is already merged — this is a re-run, e.g. re-dispatch the `deploy` job or push a no-op commit).
 
 This got past the step-3 DNS pre-check but hit CloudFront's alias-uniqueness constraint instead (see above) — the deploy failed and rolled back, and DNS was reverted immediately after. **Do not re-run this until the "Path forward" items above are resolved** — as executed, it reliably reproduces the same ~70s error-page window and failed deploy, not a working cutover.
