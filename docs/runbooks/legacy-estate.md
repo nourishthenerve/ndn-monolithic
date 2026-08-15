@@ -101,3 +101,45 @@ Was `AllowOrigins: ["*"]`. Changed to:
 - The Lambda was **not** deleted (prohibited until TASK 1.6.1).
 - No S3 objects were deleted, moved, or modified.
 - The unauthenticated `/client/{id}/report` exposure and the broken `/form` route were **not** fixed — flagged above for a future task.
+
+## Decommission — executed 2026-08-15 (supersedes the "not done" list above)
+
+**Owner instruction, in session:** all legacy `nourishthenerve` infrastructure in `803129122420` is to be removed except Route 53 and DNS. This ran **ahead of** the TASK 1.6.1 step 6/7 ordering (cutover → 24–48h observation → delete), which is a deliberate, recorded deviation — see "Why running early was safe" below.
+
+### Deleted
+
+| Resource | Detail |
+|---|---|
+| Lambda Function URL | `https://sb4mceirihlywqslzljk35tucu0patni.lambda-url.eu-west-2.on.aws/` — the R-06 public unauthenticated surface |
+| Lambda `nourishthenerve-api` | python3.11, last modified 2026-02-24 |
+| Log group `/aws/lambda/nourishthenerve-api` | 46 KB, had **infinite** retention |
+| IAM roles (5) | `nourishthenerve-api-role-{56voptv0,fzndil2c,h17jvt8x}`, `nourishthenerve-sms`, `nourishthenerver-api-role-tr6wn6xp` (note the typo'd name — an abandoned duplicate, never used) |
+| IAM policies (6) | `LambdaS3AccessPolicy` (both versions), four `AWSLambdaBasicExecutionRole-*` service-role policies, `Cognito-1769082610319` — each verified at `AttachmentCount: 0` before deletion |
+
+**Not touched, deliberately:** the Route 53 zone and every DNS record (owner instruction, and the G1 cutover still needs them); the S3 bucket `nourishthenerve` (D-03 — see "Still outstanding"); everything `islamicmaps*`; the `mariamzia.com` bucket; the shared `aws-sam-cli-managed-*` bucket.
+
+### Why running early was safe
+
+The TASK 1.6.1 gate exists so the legacy site is never broken before the new one serves the apex. Its purpose was met by evidence rather than by sequence:
+
+- **Traffic:** `cloudwatch get-metric-statistics` over the preceding 30 days returned a single datapoint — **2 invocations, both on 2026-08-07**, the date of this project's own Stage A discovery probes. No real user traffic at all, which is a stronger signal than the planned 24–48h post-cutover window would have produced.
+- **Blast radius:** the legacy static site is **not** served from this account. `list-buckets` confirms the `nourishthenerve` bucket holds only `clients/` and `posts/` — no HTML, no site assets — so the brochure site's origin is in the third account serving `d2z3fclxq13w3z.cloudfront.net`. Verified after deletion: apex `302` → `www`, `www` `200`, still serving.
+- **What did break, intentionally:** the legacy site's two API calls. `POST /form` was already dead (`legacy-estate.md` found no such route — it 404'd). `GET /client/{id}/report` now fails; it had no authentication and served any client's media to any numeric ID, so removing it *is* the fix.
+
+### What this resolves
+
+- **R-06 closed.** The public delete-capable Lambda is gone, not merely contained as in TASK 0.0.2.
+- **The unauthenticated `/client/{id}/report` enumeration exposure is gone.** TASK 1.6.1 step 9 required this to be fixed or formally accepted before decommissioning, and warned it must not be "silently carried forward again" if the cutover slipped. The cutover has slipped indefinitely onto an AWS support queue with no SLA, so it was closed by removal instead of left live.
+- The broken `/form` route is gone with it.
+
+### Still outstanding — the S3 bucket
+
+The bucket `nourishthenerve` (17 objects, 361 MB) is **not** deleted. It is now fully inert — the only role that could read it no longer exists — so it is unreachable by anything, costing roughly £0.01/month.
+
+Its contents are, on inspection, entirely test data: a single `clients/99999999/` prefix (a placeholder ID) holding generic sample files (`file_example_MP3_5MG.mp3`, `file_example_MP4_1920_18MG.mp4`), an unrelated programming textbook PDF, four `download*.{jpeg,png,webp}` images, a downloaded YouTube video about rainfall, and a 1.3 KB `response.md`; plus a 29-byte `posts/first-post.md`. **No real client or clinical data is present.**
+
+Even so, **D-03 forbids deleting this bucket or its prefixes "under any circumstance,"** and that prohibition is the spine of the whole data-protection design (§6.7, R-06, the destructive-primitive lint rule, the IAM deny guardrails). Deleting it therefore needs an explicit, recorded owner decision overriding D-03 — not an inference from "remove the legacy estate." Left in place pending that decision.
+
+### Backup taken before deletion
+
+The Lambda's deployment package was downloaded and its source (`main.py`, 673 lines) preserved at `~/Desktop/nourishthenerve/legacy-lambda-main.py`, outside this repo. Scanned before deletion: no credentials or secrets embedded; routes confirmed as `/`, `/health`, `/client/{client_id}/report`, with the blog routes commented out — matching what this runbook documented in February.

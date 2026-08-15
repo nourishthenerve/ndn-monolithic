@@ -157,7 +157,21 @@ Watch the TASK 0.6.2 canary/auto-rollback machinery on this deploy specifically 
 - `apps/web/src/site-config.ts`'s `siteUrl` → `https://nourishthenerve.com` (canonical/hreflang URLs).
 - `services/api/src/stripe-checkout-handler.ts`'s `SITE_ORIGIN` fallback → same. (Currently unwired as a CDK env var — either wire `SITE_ORIGIN` in `data-stack.ts`'s `WorkshopCheckoutFunction` or edit the fallback directly; `payments.stripeCheckout.enabled` is off by default regardless, gated on LL-03.)
 
-### Step 6: Observe 24–48h before touching the legacy Lambda
+### Steps 6 and 7 — DONE 2026-08-15, ahead of the cutover
+
+**Both steps are complete.** On owner instruction ("all legacy infra except Route 53/DNS"), the Lambda, its Function URL, its log group, and five legacy IAM roles plus six policies were deleted on 2026-08-15 — *before* the DNS cutover rather than after it. Full record, including the traffic evidence and blast-radius check that made running early safe, is in [legacy-estate.md](legacy-estate.md#decommission--executed-2026-08-15-supersedes-the-not-done-list-above).
+
+Consequences for the rest of this runbook:
+
+- **Step 9's exposure warning is discharged** — the unauthenticated `/client/{id}/report` endpoint no longer exists. It is no longer "carried forward" while the cutover waits on AWS.
+- **R-06 is closed**, not merely contained.
+- **The DoD's Lambda clauses are met** — `aws lambda get-function --function-name nourishthenerve-api` returns `ResourceNotFoundException` today.
+- **The S3 bucket `nourishthenerve` remains**, untouched and now unreachable (its only reader is gone). D-03 still forbids deleting it absent an explicit owner override; see legacy-estate.md's "Still outstanding".
+- **Nothing about the CloudFront alias conflict changes.** The blocker lives in the third account's distribution config; deleting our Lambda neither helps nor hinders it. The support case stands as filed.
+
+The original step 6/7 text is kept below for the record.
+
+### Step 6 (original): Observe 24–48h before touching the legacy Lambda
 
 Monitor `nourishthenerve-api`'s CloudWatch invocation metrics in `803129122420` to confirm invocations drop to zero (excluding this task's own verification probes):
 
@@ -168,9 +182,9 @@ aws --profile default --region eu-west-2 cloudwatch get-metric-statistics \
   --start-time <cutover-time> --end-time <now> --period 3600 --statistics Sum
 ```
 
-### Step 7: Decommission the legacy Lambda — irreversible, `803129122420` only
+### Step 7 (original): Decommission the legacy Lambda — irreversible, `803129122420` only
 
-**Requires explicit go-ahead after the observation window — this cannot be undone.**
+**Executed 2026-08-15 — see "Steps 6 and 7" above. The commands below are the ones that were run.**
 
 ```bash
 aws --profile default --region eu-west-2 lambda delete-function-url-config --function-name nourishthenerve-api
@@ -188,13 +202,13 @@ Leaves the S3 bucket `nourishthenerve` exactly as TASK 0.0.2 configured it — v
 - `dig nourishthenerve.com` / `dig www.nourishthenerve.com` resolve to `NdnWebStack`'s distribution.
 - `curl -sI` both return `200` with the full security-header set (HSTS, CSP, `X-Content-Type-Options`, `X-Frame-Options`, Referrer-Policy — same assertions `iac-baseline.md` ran against `next.`).
 - A Core Web Vitals run against the live apex passes Gate G1's bar.
-- `aws lambda get-function --function-name nourishthenerve-api` → `ResourceNotFoundException`.
-- The S3 bucket `nourishthenerve`'s objects remain read-only accessible exactly as TASK 0.0.2 left them.
+- `aws lambda get-function --function-name nourishthenerve-api` → `ResourceNotFoundException`. **Already satisfied 2026-08-15.**
+- The S3 bucket `nourishthenerve`'s objects remain as TASK 0.0.2 left them. **Still satisfied** — the decommission deleted no objects. Note the bucket is now unreadable by any principal, since the role holding `GetObject` was deleted with the Lambda; "read-only accessible" now means only via the account root/an explicitly granted principal.
 
 ## Rollback
 
-- **Before step 7 (Lambda deletion):** DNS-only. Revert the apex ALIAS and `www` CNAME in `803129122420` back to `d2z3fclxq13w3z.cloudfront.net` — restores the legacy experience with zero AWS resource changes. `www`'s 60s TTL means this propagates within roughly a minute for most resolvers. **Exercised for real on 2026-08-15** (see "2026-08-15 cutover attempt" above) — confirmed working exactly as documented, reverted and verified within ~90 seconds of the failed deploy.
-- **After step 7:** the Lambda cannot be undeleted. A post-step-7 issue is fixed forward on the new stack, or rolled back via the same DNS revert above (the legacy CloudFront distribution itself is never touched by this task, so it keeps serving whatever it was serving — static assets only, since the Lambda behind its API calls would now be gone). This is exactly why the observation window and step ordering exist.
+- **DNS revert (the only rollback that matters now):** revert the apex ALIAS and `www` CNAME in `803129122420` back to `d2z3fclxq13w3z.cloudfront.net`. `www`'s 60s TTL means this propagates within roughly a minute for most resolvers. **Exercised for real on 2026-08-15** (see "2026-08-15 cutover attempt" above) — confirmed working exactly as documented, reverted and verified within ~90 seconds of the failed deploy. Note that since step 7 ran, this restores the legacy site's *static* content only — its API-backed pages are permanently gone, by design.
+- **Step 7 is done and cannot be undone.** The Lambda, its Function URL, its log group and its IAM roles/policies no longer exist. Any future issue is fixed forward on the new stack, never by resurrecting them. The Lambda's source is archived at `~/Desktop/nourishthenerve/legacy-lambda-main.py` if it is ever needed for reference (not redeployment — the role, policy and Function URL are all gone too).
 - **Certificate (step 2):** harmless to leave in place even if the DNS cutover is never run — an unused-but-valid ACM cert costs nothing and exposes nothing new.
 - **CloudFront alternate domain names (step 3):** the apex/`www` aliases are not deployed and cannot be until AWS completes the domain move, so there is nothing there to roll back. The certificate half *is* deployed (three-SAN cert on `NdnWebStack`'s distribution): to revert, point `CERTIFICATE_ARN` back at `b1f9e01e-ab10-43b8-944a-6c0ccfffacb5` and redeploy — though there is no reason to, since the three-SAN cert covers `next.` identically and is a Support-case prerequisite.
 - **Domain-control validation TXT records:** harmless to leave in place indefinitely — they name hostnames (`_.`/`_www.`) nothing resolves for real, and affect no live record. Delete with a `DELETE` change batch on the same two records if ever needed.
@@ -202,7 +216,6 @@ Leaves the S3 bucket `nourishthenerve` exactly as TASK 0.0.2 configured it — v
 ## Do NOT
 
 - Touch anything in the unidentified third account currently serving the legacy CloudFront distribution (`d2z3fclxq13w3z.cloudfront.net`) — this task can only ever repoint DNS away from it, never modify it.
-- Delete, empty, or version-purge the S3 bucket `nourishthenerve` or its prefixes, under any circumstance (D-03).
-- Run step 7 before the full observation window and explicit owner go-ahead.
+- Delete, empty, or version-purge the S3 bucket `nourishthenerve` or its prefixes (D-03) — this survives the 2026-08-15 decommission unchanged. The bucket is now inert and unreachable; removing it needs an explicit owner decision recorded against D-03, not an inference from "remove the legacy estate."
 - Run step 4 without explicit, same-session confirmation from the site owner.
 - Retry step 4 as-is expecting a different outcome — it is blocked on the alias-uniqueness conflict, not on timing or ordering, and will fail the same way every time until "Path forward" above is actually resolved.
