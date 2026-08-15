@@ -2,7 +2,7 @@
 
 **Date started:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Decisions:** D-02, D-08, D-25 · **Risks:** R-06 · **Depends on:** 0.0.2, 1.1.1–1.5.2
 
-**Status: BLOCKED. Certificate issued; the CloudFront alias cannot be added while the legacy distribution — in an AWS account we have no access to — still holds the alias. A same-session, owner-approved cutover attempt on 2026-08-15 confirmed this the hard way (see "2026-08-15 cutover attempt" below) and was reverted within ~90 seconds. Do not retry step 4 until the blocker itself is resolved — see "Path forward" at the end of this section.**
+**Status: BLOCKED, awaiting an AWS Support case. The CloudFront alias cannot be added while the legacy distribution — in an AWS account we have no access to — still holds it. A same-session, owner-approved cutover attempt on 2026-08-15 confirmed this the hard way (see "2026-08-15 cutover attempt" below) and was reverted within ~90 seconds. The owning account has since been searched for and definitively ruled out of our reach ("Ownership search"), and both prerequisites for AWS's documented cross-account domain-move process are now in place ("Support-case prerequisites"). Next action: file the case in [g1-cutover-support-case.md](g1-cutover-support-case.md). Do not retry step 4 until AWS confirms the move.**
 
 This is the highest-risk task in the plan — it repoints the live `nourishthenerve.com` apex/`www` off the legacy site and, after an observation window, irreversibly deletes the legacy Lambda. Per the task's own step ordering, the DNS cutover (step 4 below) and the Lambda decommission (step 7) were always meant to be **explicitly held for the site owner's go-ahead**, not executed as part of any prep pass — that gate did its job: the owner approved a same-session attempt on 2026-08-15, it hit a real blocker, and was rolled back immediately per the pre-agreed rollback procedure.
 
@@ -31,9 +31,45 @@ With explicit owner go-ahead in-session, the revised step 4 (DNS first, alias re
 
 **Path forward — needs one of, before step 4 can be retried:**
 
-1. **Identify and get cooperation from whoever controls the account serving `d2z3fclxq13w3z.cloudfront.net`**, so they (or we, with temporary access) remove `nourishthenerve.com`/`www.nourishthenerve.com` from that distribution's aliases — after which `NdnWebStack` can claim them immediately (`cdk deploy` would then succeed the same way it does for any fresh alias).
-2. **An AWS Support case**, if (1) isn't possible — AWS has a documented process for moving an alternate domain name to a distribution in a different account when you can demonstrate you own the domain (you control its Route 53 zone, which we do). This is the standard remediation AWS points to for exactly this cross-account CNAME conflict; see AWS's "resolve the CNAMEAlreadyExists error" and "move an alternate domain name" guidance.
+1. **Identify and get cooperation from whoever controls the account serving `d2z3fclxq13w3z.cloudfront.net`**, so they (or we, with temporary access) remove `nourishthenerve.com`/`www.nourishthenerve.com` from that distribution's aliases — after which `NdnWebStack` can claim them immediately (`cdk deploy` would then succeed the same way it does for any fresh alias). **Ruled out 2026-08-15 — see "Ownership search" below.**
+2. **An AWS Support case**, if (1) isn't possible — AWS has a documented process for moving an alternate domain name to a distribution in a different account when you can demonstrate you own the domain (you control its Route 53 zone, which we do). This is the standard remediation AWS points to for exactly this cross-account CNAME conflict; see AWS's "resolve the CNAMEAlreadyExists error" and "move an alternate domain name" guidance. **This is now the active path — prerequisites completed 2026-08-15, see below.**
 3. Either way, this is a **prerequisite investigation/coordination task, not a retry of step 4** — repeating the same DNS-then-deploy sequence will fail identically every time until the alias is actually released on the legacy side.
+
+## Ownership search — exhausted 2026-08-15
+
+The site owner recalled building the original `nourishthenerve.com` themselves under `803129122420`, which would have made this a same-account move (`update-domain-association`, no Support needed). Checked directly, as root on that account — it does **not** hold the legacy distribution:
+
+- `aws cloudfront list-distributions` (as `arn:aws:iam::803129122420:root`) returns exactly **4** distributions, all `islamicmaps.org` (`app`/`landing`/`api`/`cdn`). No `d2z3fclxq13w3z`, no `nourishthenerve.com` alias on any of them. CloudFront is a global service — `--region` does not scope this listing, so this is the account's complete inventory.
+- `aws organizations list-accounts` — `803129122420` is the management account of org `o-tsnehqxpmj`, whose only members are itself and `357601815388` (`ndn-prod`, created for this project). There is no forgotten sibling account to check.
+
+So the legacy distribution is confirmed to sit in an AWS account nobody on this project can currently sign into, and option 1 is closed unless that account is later identified. **Do not spend more time searching for it** — option 2 does not require knowing whose it is.
+
+## Support-case prerequisites — completed 2026-08-15
+
+AWS's cross-account alternate-domain-name move has two prerequisites that must be in place *before* the case is filed, or it bounces back. Both are now done. Neither moves traffic.
+
+### 1. Domain-control validation TXT records — added
+
+AWS validates domain ownership via a TXT record per hostname, named with a leading `_` (`_.` for an apex), valued with the **target** distribution's domain name:
+
+| Record | Value |
+|---|---|
+| `_.nourishthenerve.com` | `dbn8dfhgi712k.cloudfront.net` |
+| `_www.nourishthenerve.com` | `dbn8dfhgi712k.cloudfront.net` |
+
+Added by `route53 change-resource-record-sets` (`UPSERT`, TTL 300) in the `803129122420` zone, `default` profile — same cross-account manual step 0.4.1 and step 2 used. Purely additive: both are new record *names*, so the apex `A`/ALIAS, `www` `CNAME`, and the Zoho MX/SPF/DKIM/DMARC records were all untouched. Verified resolving via `dig +short TXT _.nourishthenerve.com @8.8.8.8`.
+
+### 2. Certificate attached to the target distribution — decoupled from the alias addition
+
+**The 2026-08-15 deploy failure hid a second problem:** that deploy changed *two* things at once — swapped `CERTIFICATE_ARN` to the three-SAN cert **and** added the apex/`www` aliases. Only the alias addition is blocked by the CNAME conflict, but CloudFormation rolls back the whole update, so **the certificate never landed either**. The repo said three-SAN cert + 3 aliases; the live distribution had the old `next.`-only cert + 1 alias. That drift went unrecorded until now.
+
+It matters because "target distribution carries a certificate covering the domain" is itself an AWS prerequisite for the move — the case cannot proceed without it, and `aws cloudfront list-conflicting-aliases` (which reports the masked owning account ID) refuses to run without it too.
+
+Fixed by decoupling: `web-stack.ts`'s `domainNames` is back to `[DOMAIN_NAME]` while `CERTIFICATE_ARN` stays on the three-SAN cert `c7f37883-1f9e-4abc-94b3-18fb028cf9e2`. Synth confirms `Aliases: ['next.nourishthenerve.com']` with that cert attached. A regression test (`attaches the apex/www-covering certificate without yet claiming those aliases`) asserts the two stay decoupled, so a future edit can't re-bundle them and reproduce the failure. `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` rejoin `domainNames` only *after* Support completes the move.
+
+**Support plan caveat:** both accounts are on Basic support (`describe-severity-levels` → `SubscriptionRequiredException` on each). Technical cases normally require Business tier or above; cases like this are usually accepted under **Account and Billing** (free on Basic), but routing may need adjusting if it is rejected as technical.
+
+The case text to file is in [g1-cutover-support-case.md](g1-cutover-support-case.md).
 
 ## Pre-flight (step 1) — confirmed 2026-08-14
 
@@ -85,7 +121,7 @@ CloudFront performs a live DNS lookup on every alias you try to add and **refuse
 
 **Consequence for the plan:** steps 3 and 4 cannot run in the order the task text describes (alias added first, invisibly, DNS moved second). The alias can only be added successfully *after* DNS already points at `NdnWebStack`, which means there is necessarily a window — bounded by how long the `cdk deploy` of the alias addition takes, roughly 1–2 minutes going by this run's timings from changeset start to distribution `UPDATE_COMPLETE` — during which apex/`www` DNS points at `NdnWebStack` but `NdnWebStack` does not yet recognize that `Host`, and CloudFront serves those requests an error page instead of the site. This is a **real, if short, downtime window that the original task text did not account for**, and it is in tension with this project's zero-downtime constraint. It needs an explicit decision before step 4 runs — see the site owner's go-ahead note under step 4 below, which now covers this too, not only the DNS record change itself.
 
-**Revised step 3, to run immediately before/alongside step 4 rather than in advance of it:** re-run `cdk deploy` (or merge a no-op PR that re-triggers it) for the alias addition *right after* the DNS records are repointed in step 4, not before. Until then this step is **not done** — the live distribution has only the `next.` alias.
+**Revised step 3, superseded 2026-08-15 by the Support-case path:** the earlier revision here said to re-run the alias-addition deploy immediately *after* the step-4 DNS repoint. That was tried and failed on the alias-uniqueness constraint (see "2026-08-15 cutover attempt"). The alias cannot be added by any ordering until AWS releases it from the legacy distribution. What *has* now landed from this step is the certificate half only — see "Support-case prerequisites" above. The live distribution still has just the `next.` alias, and correctly so.
 
 ## TTL lowered ahead of cutover (part of step 4's prep) — done 2026-08-14
 
@@ -160,7 +196,8 @@ Leaves the S3 bucket `nourishthenerve` exactly as TASK 0.0.2 configured it — v
 - **Before step 7 (Lambda deletion):** DNS-only. Revert the apex ALIAS and `www` CNAME in `803129122420` back to `d2z3fclxq13w3z.cloudfront.net` — restores the legacy experience with zero AWS resource changes. `www`'s 60s TTL means this propagates within roughly a minute for most resolvers. **Exercised for real on 2026-08-15** (see "2026-08-15 cutover attempt" above) — confirmed working exactly as documented, reverted and verified within ~90 seconds of the failed deploy.
 - **After step 7:** the Lambda cannot be undeleted. A post-step-7 issue is fixed forward on the new stack, or rolled back via the same DNS revert above (the legacy CloudFront distribution itself is never touched by this task, so it keeps serving whatever it was serving — static assets only, since the Lambda behind its API calls would now be gone). This is exactly why the observation window and step ordering exist.
 - **Certificate (step 2):** harmless to leave in place even if the DNS cutover is never run — an unused-but-valid ACM cert costs nothing and exposes nothing new.
-- **CloudFront alternate domain names (step 3):** not currently deployed (see above) — the merged code is a no-op until re-run alongside step 4, so there is nothing here to roll back.
+- **CloudFront alternate domain names (step 3):** the apex/`www` aliases are not deployed and cannot be until AWS completes the domain move, so there is nothing there to roll back. The certificate half *is* deployed (three-SAN cert on `NdnWebStack`'s distribution): to revert, point `CERTIFICATE_ARN` back at `b1f9e01e-ab10-43b8-944a-6c0ccfffacb5` and redeploy — though there is no reason to, since the three-SAN cert covers `next.` identically and is a Support-case prerequisite.
+- **Domain-control validation TXT records:** harmless to leave in place indefinitely — they name hostnames (`_.`/`_www.`) nothing resolves for real, and affect no live record. Delete with a `DELETE` change batch on the same two records if ever needed.
 
 ## Do NOT
 

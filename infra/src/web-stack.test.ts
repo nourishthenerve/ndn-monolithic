@@ -9,7 +9,7 @@ import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
-import { APEX_DOMAIN_NAME, DOMAIN_NAME, WWW_DOMAIN_NAME } from './config.js';
+import { APEX_DOMAIN_NAME, CERTIFICATE_ARN, DOMAIN_NAME, WWW_DOMAIN_NAME } from './config.js';
 import { DataStack } from './data-stack.js';
 import { WebStack } from './web-stack.js';
 
@@ -163,14 +163,36 @@ describe('WebStack — CloudFront distribution', () => {
     });
   });
 
-  it('serves the staging hostname plus the apex/www alternate domain names (TASK 1.6.1 prep), over TLS, at PriceClass_100', () => {
+  it('serves the staging hostname only, over TLS, at PriceClass_100', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
-        Aliases: [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
+        Aliases: [DOMAIN_NAME],
         PriceClass: 'PriceClass_100',
         DefaultRootObject: 'index.html',
         DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: 'redirect-to-https' }),
+      }),
+    });
+  });
+
+  // TASK 1.6.1: the apex/www aliases cannot be claimed while the legacy
+  // distribution (a third AWS account, no credentials) still holds them —
+  // adding them is what failed the 2026-08-15 deploy. The three-SAN
+  // certificate is attached anyway: it is unblocked, and it is an
+  // AWS-documented prerequisite for the cross-account move that releases the
+  // claim. This asserts the decoupling holds, so a well-meaning edit doesn't
+  // re-bundle them and reproduce that failure.
+  it('attaches the apex/www-covering certificate without yet claiming those aliases', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Aliases: Match.not(Match.arrayWith([APEX_DOMAIN_NAME])),
+        ViewerCertificate: Match.objectLike({ AcmCertificateArn: CERTIFICATE_ARN }),
+      }),
+    });
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Aliases: Match.not(Match.arrayWith([WWW_DOMAIN_NAME])),
       }),
     });
   });
@@ -853,7 +875,7 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
-        Aliases: [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
+        Aliases: [DOMAIN_NAME],
       }),
     });
     template.hasResourceProperties('AWS::Logs::LogGroup', {
