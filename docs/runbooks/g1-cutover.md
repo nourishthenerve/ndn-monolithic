@@ -2,7 +2,7 @@
 
 **Date started:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Decisions:** D-02, D-08, D-25 · **Risks:** R-06 · **Depends on:** 0.0.2, 1.1.1–1.5.2
 
-**Status: BLOCKED, awaiting an AWS Support case. The CloudFront alias cannot be added while the legacy distribution — in an AWS account we have no access to — still holds it. A same-session, owner-approved cutover attempt on 2026-08-15 confirmed this the hard way (see "2026-08-15 cutover attempt" below) and was reverted within ~90 seconds. The owning account has since been searched for and definitively ruled out of our reach ("Ownership search"), and both prerequisites for AWS's documented cross-account domain-move process are now in place ("Support-case prerequisites"). Next action: file the case in [g1-cutover-support-case.md](g1-cutover-support-case.md) — but ask the site owner one question first, see "Conflicting-alias check" below: the conflicting distribution's owning account is now known to end `155257`, and if that is recognised the case is unnecessary. Re-verified unchanged 2026-08-21. Do not retry step 4 until the aliases are actually released.**
+**Status: BLOCKED, awaiting an AWS Support case. The CloudFront alias cannot be added while the legacy distribution — in an AWS account we have no access to — still holds it. A same-session, owner-approved cutover attempt on 2026-08-15 confirmed this the hard way (see "2026-08-15 cutover attempt" below) and was reverted within ~90 seconds. The owning account has since been searched for and definitively ruled out of our reach ("Ownership search"), and both prerequisites for AWS's documented cross-account domain-move process are now in place ("Support-case prerequisites"). The case is **filed** (owner, confirmed 2026-08-21) and awaiting an AWS reply; the task is parked on the owner's decision until that lands, and Phase 2 proceeds around it. Next action: poll `list-conflicting-aliases` for `Quantity: 0` — see "Conflicting-alias check" below, which also records that the conflicting distribution's owning account ends `155257`, a lead worth putting to the owner in parallel. Re-verified unchanged 2026-08-21. Do not retry step 4 until the aliases are actually released.**
 
 This is the highest-risk task in the plan — it repoints the live `nourishthenerve.com` apex/`www` off the legacy site and, after an observation window, irreversibly deletes the legacy Lambda. Per the task's own step ordering, the DNS cutover (step 4 below) and the Lambda decommission (step 7) were always meant to be **explicitly held for the site owner's go-ahead**, not executed as part of any prep pass — that gate did its job: the owner approved a same-session attempt on 2026-08-15, it hit a real blocker, and was rolled back immediately per the pre-agreed rollback procedure.
 
@@ -99,7 +99,9 @@ Strictly, the masked ID cannot be compared against a domain name, so this does n
 
 ## Status re-verified 2026-08-21
 
-Nothing has changed and nothing has drifted. Support case **still not filed** — it is a console action for the site owner (both accounts are Basic, so `support create-case` is unavailable to this project: `SubscriptionRequiredException`).
+Nothing has changed and nothing has drifted. Support case **filed by the site owner, no reply yet** — filing was necessarily a console action for them, since both accounts are Basic and `support create-case` is unavailable to this project (`SubscriptionRequiredException`), which also means this repo cannot read the case's status or AWS's response. Progress is visible here only as `list-conflicting-aliases` dropping to `Quantity: 0`.
+
+**Owner decision, 2026-08-21:** park the cutover until AWS acts rather than hold Phase 2 behind it. Gate G1 is recorded as not-met on the apex criterion for exactly this reason — see [gate-g1-report.md](../plan/gate-g1-report.md).
 
 | Check | Result |
 |---|---|

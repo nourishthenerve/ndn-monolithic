@@ -1,6 +1,6 @@
 # AWS Support case — move `nourishthenerve.com` / `www.nourishthenerve.com` to our CloudFront distribution
 
-**Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Blocks:** the G1 DNS cutover ([g1-cutover.md](g1-cutover.md)) · **Drafted:** 2026-08-15 · **Status: not yet filed**
+**Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Blocks:** the G1 DNS cutover ([g1-cutover.md](g1-cutover.md)) · **Drafted:** 2026-08-15 · **Status: FILED by the site owner, awaiting AWS reply (confirmed 2026-08-21)**
 
 This is the text to file at <https://console.aws.amazon.com/support/home>. Prerequisites are already complete — see "Support-case prerequisites" in [g1-cutover.md](g1-cutover.md).
 
@@ -31,7 +31,9 @@ aws --profile ndn-prod cloudfront list-conflicting-aliases \
 
 All four re-verified 2026-08-21: TXT records resolve, and both aliases are still held by one distribution `*******0TMKEWA` in account `******155257` (AWS masks all but the trailing characters).
 
-**Ask the owner first — this may make the case unnecessary.** `155257` is neither `803129122420` nor `357601815388`. If the site owner recognises an AWS account ending `155257` and can still sign into it, deleting the two aliases from that distribution's own configuration releases them in minutes, and `NdnWebStack` claims them on the next ordinary deploy — no case, no queue, no SLA. File this only once that has been ruled out.
+**The case is already filed** (owner, confirmed 2026-08-21; no reply yet). The text below is kept as the record of what was requested and as the basis for any follow-up reply.
+
+**Still worth asking the owner:** `155257` is neither `803129122420` nor `357601815388`. If they recognise an AWS account ending `155257` and can still sign into it, deleting the two aliases from that distribution's own configuration releases them in minutes and `NdnWebStack` claims them on the next ordinary deploy — which would resolve this without waiting on a queue that has no SLA. Worth a moment's thought even with the case open, not a reason to withdraw it.
 
 ## Case body — copy from here
 
