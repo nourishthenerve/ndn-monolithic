@@ -4,11 +4,22 @@
 // by findById. No method here removes an item from the store (00-conventions.md's
 // prohibition; docs/plan/05-execution-plan.md TASK 0.3.3's DoD: "no
 // repository method exists that removes a row").
+//
+// TASK 2.1.2 (R-09): every method that hands a record back marks it
+// `Unprojected<T>` (projection.ts). docs/plan/04-data-model-rbac.md puts
+// the clinician-private boundary "at the repository layer — not in the
+// handler, not in the view", and this is the repository's half of it: what
+// leaves here is visibly a record with its `private{}` half intact, and
+// `serialiseResponse` will not take one until `projectFor` has ruled on it.
+// Writes are branded as well as reads — a freshly created record echoed
+// straight back to its author is exactly the "forgot to project" bug the
+// brand exists to catch.
 import type { BaseRecord } from '@ndn/shared-types';
 
 import type { AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
+import { unprojected, type Unprojected } from './projection.js';
 import type { KeyValueStore } from './store.js';
 
 export class Repository<T extends BaseRecord> {
@@ -19,7 +30,11 @@ export class Repository<T extends BaseRecord> {
     private readonly entityType: string,
   ) {}
 
-  async create(id: string, actor: string, data: Omit<T, keyof BaseRecord>): Promise<T> {
+  async create(
+    id: string,
+    actor: string,
+    data: Omit<T, keyof BaseRecord>,
+  ): Promise<Unprojected<T>> {
     const existing = await this.store.get(id);
     if (existing) {
       throw new AppError('RECORD_ALREADY_EXISTS', `${this.entityType} ${id} already exists`);
@@ -39,10 +54,14 @@ export class Repository<T extends BaseRecord> {
       entityType: this.entityType,
       entityId: id,
     });
-    return record;
+    return unprojected(record);
   }
 
-  async update(id: string, actor: string, patch: Partial<Omit<T, keyof BaseRecord>>): Promise<T> {
+  async update(
+    id: string,
+    actor: string,
+    patch: Partial<Omit<T, keyof BaseRecord>>,
+  ): Promise<Unprojected<T>> {
     const existing = await this.requireActive(id);
     const now = this.clock.now().toISOString();
     const record: T = {
@@ -60,10 +79,10 @@ export class Repository<T extends BaseRecord> {
       entityType: this.entityType,
       entityId: id,
     });
-    return record;
+    return unprojected(record);
   }
 
-  async softDelete(id: string, actor: string): Promise<T> {
+  async softDelete(id: string, actor: string): Promise<Unprojected<T>> {
     const existing = await this.requireActive(id);
     const now = this.clock.now().toISOString();
     const record: T = { ...existing, status: 'deleted', updated_at: now };
@@ -75,11 +94,12 @@ export class Repository<T extends BaseRecord> {
       entityType: this.entityType,
       entityId: id,
     });
-    return record;
+    return unprojected(record);
   }
 
-  async findById(id: string): Promise<T | undefined> {
-    return this.store.get(id);
+  async findById(id: string): Promise<Unprojected<T> | undefined> {
+    const found = await this.store.get(id);
+    return found === undefined ? undefined : unprojected(found);
   }
 
   private async requireActive(id: string): Promise<T> {
