@@ -21,19 +21,31 @@ import {
 import { DataStack } from './data-stack.js';
 import { WebStack } from './web-stack.js';
 
-function synth() {
+// Synthesis, not assertion, is what this suite spends its time on: every
+// call builds the whole app and re-bundles all six Lambdas through
+// esbuild, and there are ~70 calls across this file. Each distinct shape
+// is therefore synthesized once and shared — the assertions library only
+// ever reads a Template, so there is nothing for one test to hand the next
+// in a mutated state. Before this, `quality` ran the infra suite for six
+// minutes and then hit its 15-minute job ceiling.
+function memoize(build: () => Template): () => Template {
+  let template: Template | undefined;
+  return () => (template ??= build());
+}
+
+const synth = memoize(() => {
   const app = new App();
   const stack = new WebStack(app, 'TestWebStack', {
     env: { account: '357601815388', region: 'eu-west-2' },
     deployVersion: 'test-sha',
   });
   return Template.fromStack(stack);
-}
+});
 
 // TASK 1.5.2: the Stripe webhook function only exists when a `table` prop
 // is given (mirrors production's DataStack -> WebStack wiring in
 // infra/bin/app.ts) — same App so CDK resolves the cross-stack reference.
-function synthWithTable() {
+const synthWithTable = memoize(() => {
   const app = new App();
   const dataStack = new DataStack(app, 'TestDataStackForWebStack', {
     env: { account: '357601815388', region: 'eu-west-2' },
@@ -44,9 +56,23 @@ function synthWithTable() {
     table: dataStack.table,
   });
   return Template.fromStack(stack);
+});
+
+// Resolve a log group by the name it carries rather than by position:
+// there are now several in this stack, and "the first one findResources
+// happens to return" would quietly start asserting about a different
+// function the next time one is added.
+function logGroupLogicalIdFor(template: Template, logGroupName: string): string {
+  const [logicalId] = Object.entries(template.findResources('AWS::Logs::LogGroup')).find(
+    ([, resource]) =>
+      (resource as { Properties?: { LogGroupName?: string } }).Properties?.LogGroupName ===
+      logGroupName,
+  ) ?? [undefined];
+  expect(logicalId, `no log group named ${logGroupName}`).toBeDefined();
+  return logicalId as string;
 }
 
-function synthEphemeral() {
+const synthEphemeral = memoize(() => {
   const app = new App();
   const stack = new WebStack(app, 'TestWebStackPr123', {
     env: { account: '357601815388', region: 'eu-west-2' },
@@ -55,7 +81,7 @@ function synthEphemeral() {
     prLabel: 'pr-123',
   });
   return Template.fromStack(stack);
-}
+});
 
 describe('WebStack — site bucket', () => {
   it('is private, versioned, and SSL-enforced', () => {
@@ -696,10 +722,9 @@ describe('WebStack — health Lambda', () => {
       LogGroupName: '/ndn/health-function',
       RetentionInDays: 14,
     });
-    const [logGroupLogicalId] = Object.keys(template.findResources('AWS::Logs::LogGroup'));
     template.hasResourceProperties('AWS::Lambda::Function', {
       LoggingConfig: Match.objectLike({
-        LogGroup: { Ref: logGroupLogicalId },
+        LogGroup: { Ref: logGroupLogicalIdFor(template, '/ndn/health-function') },
       }),
     });
   });
@@ -849,6 +874,49 @@ describe('WebStack — canary deployment (TASK 0.6.2)', () => {
   });
 });
 
+// Gate G1 §4. BucketDeployment brings a Lambda of its own, and it was the
+// only function in the app writing to a log group CloudFormation didn't
+// own: infinite retention, left behind by `cdk destroy`, one new orphan
+// per ephemeral PR stack.
+describe('WebStack — site deployment log group', () => {
+  it('gives CDK’s bucket-deployment Lambda an explicit 14-day, DESTROY log group', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/site-deployment',
+      RetentionInDays: 14,
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      LoggingConfig: Match.objectLike({
+        LogGroup: { Ref: logGroupLogicalIdFor(template, '/ndn/site-deployment') },
+      }),
+    });
+  });
+
+  it('destroys that log group with the stack, so an ephemeral PR stack leaves nothing behind', () => {
+    const template = synthEphemeral();
+    const logGroups = Object.values(template.findResources('AWS::Logs::LogGroup')).filter(
+      (resource) =>
+        (resource as { Properties?: { LogGroupName?: string } }).Properties?.LogGroupName ===
+        '/ndn/pr-123/site-deployment',
+    );
+    expect(logGroups).toHaveLength(1);
+    expect((logGroups[0] as { DeletionPolicy?: string }).DeletionPolicy).toBe('Delete');
+  });
+
+  it('leaves no Lambda in the stack relying on CloudWatch’s implicit group', () => {
+    for (const template of [synth(), synthEphemeral()]) {
+      const functions = Object.entries(template.findResources('AWS::Lambda::Function'));
+      expect(functions.length).toBeGreaterThan(0);
+      for (const [logicalId, resource] of functions) {
+        const loggingConfig = (
+          resource as { Properties?: { LoggingConfig?: { LogGroup?: unknown } } }
+        ).Properties?.LoggingConfig;
+        expect(loggingConfig?.LogGroup, logicalId).toBeDefined();
+      }
+    }
+  });
+});
+
 describe('WebStack — outputs', () => {
   it('exposes the values the manual DNS step needs', () => {
     const template = synth();
@@ -887,16 +955,14 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
     );
   });
 
-  it('scopes both explicit log group names to the given PR label, not the fixed production names', () => {
+  it('scopes every explicit log group name to the given PR label, not the fixed production names', () => {
     const template = synthEphemeral();
-    template.hasResourceProperties('AWS::Logs::LogGroup', {
-      LogGroupName: '/ndn/pr-123/health-function',
-      RetentionInDays: 14,
-    });
-    template.hasResourceProperties('AWS::Logs::LogGroup', {
-      LogGroupName: '/ndn/pr-123/smoke-test-function',
-      RetentionInDays: 14,
-    });
+    for (const baseName of ['health-function', 'smoke-test-function', 'site-deployment']) {
+      template.hasResourceProperties('AWS::Logs::LogGroup', {
+        LogGroupName: `/ndn/pr-123/${baseName}`,
+        RetentionInDays: 14,
+      });
+    }
   });
 
   // Regression guard. The email-event pipeline landed unconditionally

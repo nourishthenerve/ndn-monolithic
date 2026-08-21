@@ -59,15 +59,23 @@ export const COST_ALLOCATION_TAG_VALUE = 'nourishthenerve';
 // the $24.21 budget (TASK 0.5.1) without tripping on ordinary variance.
 export const LOG_INGESTION_ALARM_THRESHOLD_BYTES = 350_000_000;
 
-// TASK 0.5.2 fix (see docs/runbooks/rollback.md): every log group name ever
-// passed to createLogGroup(), in one place. budget-stack.ts sums each
-// group's IncomingBytes into a single alarm. This list needs a new entry
-// whenever a new createLogGroup() call lands — AWS's PutMetricAlarm API
-// rejects any alarm math expression containing a SEARCH() (confirmed
-// against the real API, not just CDK synth), so a dynamically-discovered,
-// zero-maintenance version of this alarm isn't achievable without a
-// separate metric-publishing Lambda, which is more infrastructure than
-// this £0.00-cost guard has earned so far.
+// TASK 0.5.2 fix (see docs/runbooks/rollback.md): the log groups whose
+// IncomingBytes budget-stack.ts sums into the single log-volume alarm.
+// AWS's PutMetricAlarm API rejects any alarm math expression containing a
+// SEARCH() (confirmed against the real API, not just CDK synth), so the
+// groups have to be named one by one; a dynamically-discovered,
+// zero-maintenance version isn't achievable without a separate
+// metric-publishing Lambda, which is more infrastructure than this
+// £0.00-cost guard has earned so far.
+//
+// **Ten is a hard ceiling, not a style preference.** PutMetricAlarm answers
+// an eleventh metric with `ValidationError: Too many metrics in alarm,
+// maximum is 10` — probed against the real API in eu-west-2 on 2026-08-21
+// (10 metrics + the sum expression: accepted; 13 + the expression:
+// rejected), the same way the SEARCH() rejection was found, and for the
+// same reason: CDK synth is happy with either. An eleventh entry here
+// breaks every deploy, so adding a log group means choosing which one it
+// displaces and recording the swap in UNMONITORED_LOG_GROUP_NAMES below.
 export const MONITORED_LOG_GROUP_NAMES = [
   '/ndn/health-function',
   '/ndn/smoke-test-function',
@@ -76,6 +84,34 @@ export const MONITORED_LOG_GROUP_NAMES = [
   '/ndn/testimonial-moderation-function',
   '/ndn/workshop-checkout-function',
   '/ndn/stripe-webhook-function',
+  // Gate G1 §4: the two public GET endpoints were missing from this list
+  // and are the two highest-volume groups the moment their flags come on —
+  // every blog and workshops page view hits one of them. Added ahead of
+  // that, with media-upload (the largest per-request payloads) taking the
+  // last free slot.
+  '/ndn/content-read-function',
+  '/ndn/workshop-read-function',
+  '/ndn/media-upload-function',
+];
+
+// The other side of that ceiling, kept explicit so the gap is a recorded
+// decision rather than an oversight — log-retention.test.ts asserts that
+// these two lists together account for every /ndn/* log group the app
+// synthesizes, so a new createLogGroup() call fails the build until someone
+// puts it in one list or the other.
+//
+// These three are the lowest-volume groups in the estate — site-deployment
+// writes ~4 KB per deploy, and the two authoring handlers only when a
+// clinician publishes — so they are what a 10-slot budget leaves out.
+// (Admin-gated is not itself the criterion: testimonial-moderation keeps
+// the slot it has held since this alarm was built.) Their bytes still
+// expire on the same 14-day retention; they are simply not summed into the
+// alarm, which therefore under-reports total ingestion slightly rather
+// than missing a plausible runaway.
+export const UNMONITORED_LOG_GROUP_NAMES = [
+  '/ndn/content-authoring-function',
+  '/ndn/workshop-authoring-function',
+  '/ndn/site-deployment',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret

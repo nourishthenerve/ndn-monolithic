@@ -10,12 +10,19 @@ import { describe, expect, it } from 'vitest';
 import { FLAG_PARAMETER_NAME_PREFIX } from './config.js';
 import { DataStack } from './data-stack.js';
 
-function synth() {
-  const app = new App();
-  const stack = new DataStack(app, 'TestDataStack', {
-    env: { account: '357601815388', region: 'eu-west-2' },
-  });
-  return Template.fromStack(stack);
+// Synthesized once and shared across this file's ~24 assertions, for the
+// same reason web-stack.test.ts memoizes its own: each call re-bundles all
+// seven Lambdas through esbuild, and a Template is only ever read.
+let template: Template | undefined;
+
+function synth(): Template {
+  return (template ??= (() => {
+    const app = new App();
+    const stack = new DataStack(app, 'TestDataStack', {
+      env: { account: '357601815388', region: 'eu-west-2' },
+    });
+    return Template.fromStack(stack);
+  })());
 }
 
 describe('DataStack — table', () => {

@@ -722,6 +722,16 @@ function handler(event) {
       destinationBucket: siteBucket,
       distribution,
       distributionPaths: ['/*'],
+      // Gate G1 §4: this construct owns a Lambda of its own (CDK's
+      // Custom::CDKBucketDeployment singleton), and until now it was the
+      // one function in the app without an explicit log group — so every
+      // deploy wrote to a group CloudFormation never knew about, with
+      // infinite retention, which `cdk destroy` then left behind. Ephemeral
+      // PR stacks turned that into a leak that grew per PR: 2 orphans at
+      // Gate G0, 13 by the time this landed. Naming the group here puts it
+      // back inside the stack — 14-day retention, RemovalPolicy.DESTROY,
+      // and gone with the stack that made it.
+      logGroup: createLogGroup(this, 'SiteDeploymentLogGroup', logGroupName('site-deployment')),
     });
 
     new CfnOutput(this, 'DistributionDomainName', { value: distribution.distributionDomainName });
