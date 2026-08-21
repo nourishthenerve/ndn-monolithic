@@ -899,6 +899,38 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
     });
   });
 
+  // Regression guard. The email-event pipeline landed unconditionally
+  // while the pr-environment job was paused, so nothing deployed an
+  // ephemeral copy of this stack until the job was re-enabled — at which
+  // point CloudFormation refused three of its four resources with
+  // "already exists" (the fourth, the SNS topic, would have been adopted
+  // silently and then deleted on destroy — see web-stack.ts's comment).
+  // Every resource named here is account-global and fixed, so the correct
+  // ephemeral count for each is zero, not "one with a different name".
+  it('creates none of the account-global email resources — they belong to production alone', () => {
+    const template = synthEphemeral();
+    template.resourceCountIs('AWS::SES::ConfigurationSet', 0);
+    template.resourceCountIs('AWS::SES::ConfigurationSetEventDestination', 0);
+    template.resourceCountIs('AWS::SNS::Topic', 0);
+    template.resourceCountIs('AWS::SNS::Subscription', 0);
+
+    const alarmNames = Object.values(template.findResources('AWS::CloudWatch::Alarm')).map(
+      (alarm) => (alarm as { Properties?: { AlarmName?: string } }).Properties?.AlarmName,
+    );
+    expect(alarmNames.filter((name) => name?.startsWith('ndn-email'))).toEqual([]);
+  });
+
+  it('still sends through production’s configuration set, so the sender wiring stays identical', () => {
+    const template = synthEphemeral();
+    const senders = Object.values(template.findResources('AWS::Lambda::Function')).filter(
+      (fn) =>
+        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables?.SES_CONFIGURATION_SET_NAME ===
+        SES_CONFIGURATION_SET_NAME,
+    );
+    expect(senders.length).toBeGreaterThan(0);
+  });
+
   it('production mode is unaffected — still the fixed domain, certificate, and log group names', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
@@ -909,6 +941,13 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/ndn/health-function',
     });
+    // The pipeline the ephemeral tests above assert is absent must still
+    // exist here — otherwise "zero in ephemeral" would pass by deleting it
+    // everywhere.
+    template.hasResourceProperties('AWS::SES::ConfigurationSet', {
+      Name: SES_CONFIGURATION_SET_NAME,
+    });
+    template.hasResourceProperties('AWS::SNS::Topic', { TopicName: 'ndn-email-events' });
   });
 });
 

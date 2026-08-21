@@ -18,7 +18,7 @@ Second, **the accessibility gate that G1 exists to enforce has not run on a sing
 
 Nothing found here endangers data or costs money. But Phase 2 builds authentication and RBAC on top of this foundation, and two of these — the flag source and the a11y gate — are foundation, not polish. They should be fixed before Phase 2 work lands, not after.
 
-**Actioned since the findings above were written**, on the owner's go-ahead and each on its own branch: the flag source is fixed (§3a), and Core Web Vitals is measured and passing (§7). The gate verdict is unchanged — G1 cannot be declared met while the apex criterion is blocked — and the a11y gate still needs re-enabling before Phase 2 work lands.
+**Actioned since the findings above were written**, on the owner's go-ahead and each on its own branch: the flag source is fixed (§3a), Core Web Vitals is measured and passing (§7), and — as of 2026-08-21 — the a11y gate is fixed, re-enabled and now blocking (§7, action items 2 and 3). The gate verdict is unchanged: G1 cannot be declared met while the apex criterion is blocked. Of the four engineering action items this review raised, three are closed; the log-retention leak (§4) is the one still open.
 
 ## 1. Full test suite
 
@@ -31,7 +31,7 @@ Nothing found here endangers data or costs money. But Phase 2 builds authenticat
 - **`pnpm audit --audit-level=high`:** no known vulnerabilities.
 - **CI on `main`:** the last three runs are green (`31885381778`, `31883355180`, `31879865251`). The one red run in the window, `31845241373`, is the PR #38 merge whose `deploy` job hit the CloudFront alias conflict — fully analysed in [g1-cutover.md](../runbooks/g1-cutover.md), rolled back cleanly, no production impact.
 
-**Skips to explain — one, and it matters:** the `pr-environment` job (and with it the entire real-browser a11y + keyboard suite from TASK 1.1.3) has been disabled since 2026-08-13. It is not a skip inside a test run; it is a whole CI job short-circuited by `&& false`. See §7.
+**Skips to explain — one, and it matters:** the `pr-environment` job (and with it the entire real-browser a11y + keyboard suite from TASK 1.1.3) had been disabled since 2026-08-13. It is not a skip inside a test run; it is a whole CI job short-circuited by `&& false`. See §7. **Re-enabled 2026-08-21** and now in the required gate — this was the state at the time of the review, not the state today.
 
 ## 1a. Regression diff against the previous gate
 
@@ -54,7 +54,7 @@ No test regressed. No previously-passing check now fails. The one metric moving 
 |---|---|---|---|
 | 1.1.1 Design system + tokens, WCAG primitives | Tokens + primitives, reduced-motion | **COMPLETE** | 74 unit + 5 Playwright reduced-motion tests. Primitives are native semantic HTML as the DoD required — confirmed in the live DOM. |
 | 1.1.2 i18n framework | No string bypasses `t()`, `/en/` routing | **COMPLETE** | `/en/...` routing live. English-only catalogue is correct, not a gap — `Locale` is `'en'`, `rtlLocales` deliberately empty per D-04/LL-08. `/ar` returning 404 is by design. Lint rule `ndn/no-hardcoded-strings` runs in the required gate. |
-| 1.1.3 CI accessibility checks | Every route axe-checked **on every PR** | **GAP (material)** | The suite exists and is good. It has not run on any PR since 2026-08-13 — see §7. Run manually for this gate: axe clean on all 15 routes, keyboard suite **fails on 4**. |
+| 1.1.3 CI accessibility checks | Every route axe-checked **on every PR** | **GAP (material)** → **CLOSED 2026-08-21** | The suite exists and is good. It had not run on any PR since 2026-08-13 — see §7. Run manually for this gate: axe clean on all 15 routes, keyboard suite **failed on 4**. Since fixed (§7's corrections), and `pr-environment` is re-enabled *and* in `ci-summary`'s required-gate loop, so the DoD's "on every PR" is now literally true and blocking. |
 | 1.2.1 Public pages, nav, footer | Pages + nav + configurable social links | **COMPLETE** | All 15 routes `200`. Nav/footer present and keyboard-reachable. |
 | 1.2.2 Legal pages | Five legal pages as i18n placeholders | **COMPLETE** | privacy, cookies, terms, accessibility-statement, clinical-disclaimer all `200`, all axe-clean. |
 | 1.2.3 Cookie consent, self-hosted fonts | Consent gate; no `http://` font dependency | **COMPLETE** | Verified live: no font request leaves the origin; banner is keyboard-operable; a recorded decision survives reload. |
@@ -133,19 +133,27 @@ aws ssm get-parameters-by-path --path / --recursive  -> only /cdk-bootstrap/hnb6
 
 **The gate did not run.** `ci.yml`'s `pr-environment` job carries `&& false` in its `if:` condition, added 2026-08-13 as a deliberate owner decision to save 15–30 minutes of CI wall-clock per PR while the plan worked through many small milestone PRs. That job is the only place `tests/pr-env/a11y-full.test.ts` and `keyboard.test.ts` run. Every Phase 1 UI task from TASK 1.2.1 onward — nav, footer, legal pages, cookie consent, blog, contact, testimonials, workshops — merged without an axe or keyboard check. The job was already informational-only, so even before the pause it could not have blocked a merge.
 
-[ephemeral-pr-environments.md](../runbooks/ephemeral-pr-environments.md) says to re-enable it "before the go-live gate (the cutover in TASK 1.6.1, or whichever milestone review precedes the service going live)" and to promote it into `ci-summary`'s required loop at the same time. **This review is that point.**
+[ephemeral-pr-environments.md](../runbooks/ephemeral-pr-environments.md) says to re-enable it "before the go-live gate (the cutover in TASK 1.6.1, or whichever milestone review precedes the service going live)" and to promote it into `ci-summary`'s required loop at the same time. **This review is that point.** — **Done 2026-08-21:** both halves landed together on the branch that fixed the suite; the job runs and gates again.
 
 Run by hand for this gate against `https://next.nourishthenerve.com` (`PR_ENV_BASE_URL`, Playwright/Chromium, all 15 routes):
 
 - **axe: clean.** Zero `serious`/`critical` violations on all 15 routes.
 - **Cookie consent: clean.** 5/5 — keyboard-operable, decision persists across reload, no cross-origin font request.
-- **Keyboard: 25 passed, 4 failed** — `/en/blog`, `/en/workshops`, `/en/testimonials`, `/en/contact`.
+- **Keyboard: 25 passed, 4 failed** — `/en/blog`, `/en/workshops`, `/en/testimonials`, `/en/contact`. (**Now 29/29**, after the fixes recorded below; full `pnpm run test:pr-env` against `next.` is 18 vitest + 29 Playwright green.)
 
 Two distinct root causes, diagnosed rather than assumed:
 
 **(a) A real keyboard defect on both form pages.** On `/en/contact` and `/en/testimonials`, walking the actual browser tab order shows **three unnamed, empty elements between the last form field and the submit button** — the inner `<div>`s of the `.cf-turnstile` container. They take focus, have no accessible name, and are invisible. A keyboard user tabs three times into nothing before reaching "Send" / "Submit for review". axe does not catch this (it is a focus-order and name-role-value issue, not a static DOM violation), which is exactly why TASK 1.1.3 specified a keyboard suite alongside axe — the suite worked; it just wasn't running. Worth confirming whether the real Turnstile widget (once the production site key replaces the test key) still produces these stops, since the fix may differ.
 
+**Correction to (a), 2026-08-21 — the diagnosis above was wrong, and the record should say so.** Fixing it required looking at what actually receives the focus, and the answer is not what the gate run reported. `.cf-turnstile`'s contents are replaced by Cloudflare with a **closed shadow root** holding a single cross-origin `<iframe>`. `document.activeElement` retargets every focus stop inside a shadow root to its host element, so from the light DOM all three stops appear to land on one unnamed, empty wrapper `<div>` — which is exactly how they were read. Patching `attachShadow` to open and re-walking the tab order shows the truth: the stop is a **visible 300×65 iframe carrying `title="Widget containing a Cloudflare security challenge"` and `tabindex="0"`**, followed by two focusables inside the widget itself. It is a named, visible, third-party widget behaving normally, not three empty elements. There is no product defect to fix, and no user tabs "three times into nothing". The same closed shadow root is why axe saw nothing — not, as (a) supposed, because this was a focus-order issue axe structurally can't catch.
+
+**What was actually fixed (a):** the test. `keyboard.test.ts` enumerated light-DOM focusables and demanded an exact Tab-for-Tab match through them, which no third-party widget that mounts its own focusables can satisfy. It now treats `.cf-turnstile` as an opaque third-party region — tabbing past its stops, but **bounded** (8), so a genuine trap inside one still fails — and adds a dedicated step asserting the property that (a) was really reaching for: the region is visible, a challenge frame actually attached, and the element taking the keyboard focus carries a non-empty accessible name. Reaching that element needs Playwright's `frameElement()`, which crosses the closed shadow root that `page.locator('iframe')` cannot. Proved by deliberately breaking the name assertion: exactly `/en/contact` and `/en/testimonials` fail, the other ten pass.
+
+**One real thing (a) got right by accident:** its closing note to re-check once a production Turnstile key replaces the test key still stands. The new step is what will answer it — a widget that fails to render, or renders unnamed, now fails the gate instead of passing quietly.
+
 **(b) A symptom of §3a, plus a soft spot in the test.** On `/en/blog` and `/en/workshops` the only `.ndn-button` elements on the page are the **hidden cookie-banner buttons** — because both lists render empty, because the content API is flag-off. The test's "Enter and Space activate a focused button" step calls `.ndn-button.first()`, focuses a `display:none` element (a no-op), and the subsequent `Enter` lands on whatever still held focus: the footer's last link, navigating to `/en/legal/clinical-disclaimer`. So the assertion failure is real but the diagnosis is two-part — the pages are empty because of the flag gap, and the test should assert on a *visible* button rather than the first matching one. Both halves want fixing; neither is the "buttons don't respond to Enter" defect the failure message suggests.
+
+**Fixed (b), 2026-08-21.** The step now selects the first *visible* `.ndn-button`. Where a route has none — `/en/blog` and `/en/workshops`, both empty because of §3a — it does not skip quietly: it asserts that every `.ndn-button` on the page is one of the cookie banner's hidden two, so a route that loses a visible button for any other reason still fails, and it records an annotation naming the flag gap as the reason. Running the two form routes' button step for the first time (they had failed earlier and never reached it) surfaced a third, smaller test defect: `Enter` on a real `type="submit"` button fires the click and then native constraint validation moves focus to the first invalid required field, so the chained `Space` press landed in a text input. Correct browser behaviour; the test now re-focuses the button before the second key press, since the claim under test is "a focused button is activated by Space", not "focus survives the previous activation".
 
 **Core Web Vitals — measured and passing** (actioned during this review, on the owner's go-ahead: no Lighthouse existed in this environment, and substituting a weaker proxy would not have been a pass). `@lhci/cli` now lives in the repo with the bar encoded in `lighthouserc.json` — the plan says "Gate G1's bar" and gives numbers nowhere, so it is defined as Google's "good" thresholds (LCP ≤ 2500 ms, CLS ≤ 0.1, FCP ≤ 1800 ms) plus TBT ≤ 200 ms, performance ≥ 0.90 and accessibility **= 1.00**.
 
@@ -175,6 +183,7 @@ Actioned separately, during the review, on the owner's go-ahead — each on its 
 
 - **`SsmFlagSource`** (§3a's fix) — the flag layer can be operated again. Every flag remains off.
 - **`@lhci/cli` + `lighthouserc.json` + `core-web-vitals.md`** (§7) — G1's third criterion, measured and passing.
+- **`tests/pr-env/keyboard.test.ts` + `ci.yml` + `ephemeral-pr-environments.md`** (§7's corrections, action items 2 and 3) — the keyboard suite fixed and the a11y gate re-enabled and made blocking. This report's §7 amended in the same change to correct (a)'s diagnosis.
 
 Phase 2's stubs are **not** elaborated in this pass. D-27 elaborates the next phase at each gate, and this gate is a no-go; elaborating Phase 2 against a foundation with an inoperable flag layer would bake that assumption into fourteen task specs. Elaborate it once §3a is fixed — the fix is small and does not depend on the cutover.
 
@@ -183,9 +192,9 @@ Phase 2's stubs are **not** elaborated in this pass. D-27 elaborates the next ph
 **Before Phase 2 work lands (engineering, no owner action needed):**
 
 1. ~~Build `SsmFlagSource` and wire it into the nine handlers~~ — **done during this review** (§3a), on its own branch. Flags all remain off; the ability to turn them on is what was restored.
-2. **Re-enable `pr-environment` and promote it into `ci-summary`'s required gate** (§7). Its own runbook already names this moment. A check worth gating on at launch is a check worth running.
-3. **Fix the three unnamed focus stops on the Turnstile container** (§7a), and tighten `keyboard.test.ts` to select a *visible* button (§7b).
-4. **Fix the log-group retention leak** (§4) — repeat finding, five times larger than at G0, and it grows per PR.
+2. ~~Re-enable `pr-environment` and promote it into `ci-summary`'s required gate~~ — **done 2026-08-21** (§7). It earned its keep on the first run: the job failed at `cdk deploy` because the SES event pipeline added earlier the same day created account-global fixed-name resources in `WebStack`, which is also the per-PR stack — so the ephemeral environment had been non-deployable for a day with nothing to say so. Fixed on the same branch ([email-events.md](../runbooks/email-events.md)). Both halves landed together, as [ephemeral-pr-environments.md](../runbooks/ephemeral-pr-environments.md) always said they should. Every code-touching PR now pays the ~15–30 minute distribution cycle again, and an a11y or keyboard regression blocks the merge; docs-only PRs still skip it on the path filter.
+3. ~~Fix the "three unnamed focus stops" on the Turnstile container (§7a), and tighten `keyboard.test.ts` to select a *visible* button (§7b)~~ — **done 2026-08-21**, with a correction: (a) was misdiagnosed. There is no product defect — the stops belong to a visible, accessibly-named cross-origin widget hidden behind a closed shadow root. The fix is in the test, plus a new assertion that the widget really is visible and named. See §7's correction; keyboard is now 29/29.
+4. **Fix the log-group retention leak** (§4) — repeat finding, five times larger than at G0, and it grows per PR. **Still open — the last of the four.**
 
 **Owner actions:**
 
