@@ -13,14 +13,10 @@ import { z } from 'zod';
 import { InMemoryAuditLog } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
 import { DynamoTestimonialStore } from './dynamo-store.js';
-import {
-  CachedFlagReader,
-  FLAG_CACHE_TTL_MS,
-  InMemoryFlagSource,
-  type FlagReader,
-} from './flags.js';
+import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
 import { InMemoryRateLimiter, type RateLimiter } from './rate-limiter.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
 import { TestimonialRepository } from './testimonial-repository.js';
 import {
   TESTIMONIAL_SUBMISSION_RATE_LIMIT_PER_PRINCIPAL,
@@ -198,16 +194,9 @@ function getTurnstileSecret(): Promise<string> {
   return cachedSecretPromise;
 }
 
-// No SSM-backed FlagSource exists yet anywhere in this codebase — same
-// documented gap every other *-handler.ts in this repo carries. An
-// InMemoryFlagSource that nothing ever sets keeps
-// testimonials.submission.enabled permanently off in production until one
-// is built.
-const flags = new CachedFlagReader({
-  source: new InMemoryFlagSource(),
-  clock: systemClock,
-  ttlMs: FLAG_CACHE_TTL_MS,
-});
+// TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
+// ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
+const flags = createSsmFlagReader();
 
 // One rate limiter per warm Lambda container — resets on cold start, same
 // accepted limitation contact-form-handler.ts's own rateLimiter carries.

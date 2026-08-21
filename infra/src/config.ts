@@ -142,3 +142,18 @@ export const ADMIN_API_TOKEN_PARAMETER_NAME = '/ndn/admin-api-token';
 // webhook function.
 export const STRIPE_SECRET_KEY_PARAMETER_NAME = '/ndn/stripe-secret-key';
 export const STRIPE_WEBHOOK_SECRET_PARAMETER_NAME = '/ndn/stripe-webhook-secret';
+
+// TASK 1.6.2: the SSM prefix every feature flag lives under — one plain
+// `String` parameter per flag, named `<prefix><FlagName>` (so
+// `/ndn/flags/contact.form.enabled`), holding exactly `true` or `false`.
+// Not SecureString: a flag's state is not a secret, and WithDecryption
+// would need a KMS grant for nothing. Shared by web-stack.ts/data-stack.ts
+// (grant ssm:GetParameter on the whole prefix and set the Lambda's
+// FLAG_PARAMETER_NAME_PREFIX env var) and services/api/src/ssm-flag-source.ts's
+// own fallback default, so the two can't drift apart silently.
+//
+// Unlike the secrets above, these are created by an operator *when they
+// want to turn something on* — nothing exists at deploy time and nothing
+// needs to, because an absent parameter is the documented "off". See
+// docs/runbooks/feature-flags.md.
+export const FLAG_PARAMETER_NAME_PREFIX = '/ndn/flags/';

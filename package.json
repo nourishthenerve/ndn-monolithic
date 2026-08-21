@@ -18,11 +18,13 @@
     "test:pr-env": "pnpm --filter @ndn/tests run test:pr-env",
     "test:coverage": "pnpm run build:web && vitest run --coverage",
     "audit": "pnpm audit --audit-level=high",
+    "cwv": "lhci autorun",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@lhci/cli": "^0.15.1",
     "@ndn/eslint-plugin-i18n": "workspace:*",
     "@ndn/eslint-plugin-no-destructive": "workspace:*",
     "@vitest/coverage-v8": "4.1.10",

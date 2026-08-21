@@ -7,9 +7,8 @@ import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
-import { systemClock } from './clock.js';
-import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags.js';
 import { createMediaUploadHandler } from './media-upload.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
 
 const ADMIN_TOKEN_PARAMETER_NAME = process.env.ADMIN_TOKEN_PARAMETER_NAME ?? '/ndn/admin-api-token';
 const MEDIA_BUCKET_NAME = process.env.MEDIA_BUCKET_NAME ?? '';
@@ -41,11 +40,9 @@ function getAdminToken(): Promise<string> {
   return cachedTokenPromise;
 }
 
-const flags = new CachedFlagReader({
-  source: new InMemoryFlagSource(),
-  clock: systemClock,
-  ttlMs: FLAG_CACHE_TTL_MS,
-});
+// TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
+// ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
+const flags = createSsmFlagReader();
 
 function createPresignedPutUrl(key: string, contentType: string): Promise<string> {
   const command = new PutObjectCommand({

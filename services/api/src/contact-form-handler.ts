@@ -16,15 +16,11 @@ import {
   CONTACT_FORM_RATE_LIMIT_WINDOW_MS,
   createContactFormHandler,
 } from './contact-form.js';
-import {
-  CachedFlagReader,
-  FLAG_CACHE_TTL_MS,
-  InMemoryFlagSource,
-  type FlagReader,
-} from './flags.js';
+import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
 import { InMemoryRateLimiter, type RateLimiter } from './rate-limiter.js';
 import { createSesContactEmailSender, type EmailSender } from './ses.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
 import { createTurnstileVerifier, type TurnstileVerifier } from './turnstile.js';
 
 const contactBodySchema = z.object({
@@ -168,15 +164,9 @@ function getTurnstileSecret(): Promise<string> {
   return cachedSecretPromise;
 }
 
-// No SSM-backed FlagSource exists yet anywhere in this codebase — same
-// documented gap content-read-handler.ts/content-authoring-handler.ts carry.
-// An InMemoryFlagSource that nothing ever sets keeps contact.form.enabled
-// permanently off in production until one is built.
-const flags = new CachedFlagReader({
-  source: new InMemoryFlagSource(),
-  clock: systemClock,
-  ttlMs: FLAG_CACHE_TTL_MS,
-});
+// TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
+// ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
+const flags = createSsmFlagReader();
 
 // One rate limiter per warm Lambda container — resets on cold start, the
 // same accepted limitation sms-rate-limiter.ts's InMemoryRateLimiter

@@ -16,7 +16,7 @@ import { systemClock } from './clock.js';
 import { createContentAuthoringHandler } from './content-authoring.js';
 import { ContentRepository } from './content-repository.js';
 import { DynamoContentStore } from './dynamo-store.js';
-import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
 
 // Mirrors infra/src/config.ts's ADMIN_API_TOKEN_PARAMETER_NAME — that
 // constant is what data-stack.ts actually sets this env var to at deploy
@@ -53,15 +53,9 @@ function getAdminToken(): Promise<string> {
   return cachedTokenPromise;
 }
 
-// No SSM-backed FlagSource exists yet — same documented gap
-// content-read-handler.ts carries for `content.readApi.enabled`. An
-// InMemoryFlagSource that nothing ever sets keeps `content.authoring.enabled`
-// permanently off in production until one is built.
-const flags = new CachedFlagReader({
-  source: new InMemoryFlagSource(),
-  clock: systemClock,
-  ttlMs: FLAG_CACHE_TTL_MS,
-});
+// TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
+// ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
+const flags = createSsmFlagReader();
 
 const contentStore = new DynamoContentStore({ tableName: process.env.CONTENT_TABLE_NAME ?? '' });
 

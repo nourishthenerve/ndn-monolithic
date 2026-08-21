@@ -1,6 +1,6 @@
 # AWS Support case — move `nourishthenerve.com` / `www.nourishthenerve.com` to our CloudFront distribution
 
-**Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Blocks:** the G1 DNS cutover ([g1-cutover.md](g1-cutover.md)) · **Drafted:** 2026-08-15 · **Status: not yet filed**
+**Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Blocks:** the G1 DNS cutover ([g1-cutover.md](g1-cutover.md)) · **Drafted:** 2026-08-15 · **Status: FILED by the site owner, awaiting AWS reply (confirmed 2026-08-21)**
 
 This is the text to file at <https://console.aws.amazon.com/support/home>. Prerequisites are already complete — see "Support-case prerequisites" in [g1-cutover.md](g1-cutover.md).
 
@@ -17,12 +17,23 @@ This is the text to file at <https://console.aws.amazon.com/support/home>. Prere
 
 **On case type:** both accounts are on Basic support, which excludes *technical* cases (`describe-severity-levels` → `SubscriptionRequiredException`). Domain-move requests like this are normally accepted under **Account and Billing**, which Basic does cover. If it is bounced as technical, reply asking for it to be routed to the CloudFront team as a domain-ownership dispute rather than a technical support request — this is a fixed AWS-side operation, not troubleshooting. Escalating to a paid plan for one case is a last resort, not the first response.
 
-**Before sending:** confirm the two TXT records still resolve, since AWS will check them:
+**Before sending:** confirm the two TXT records still resolve, since AWS will check them, and confirm the conflict is still there at all — if `Quantity` has dropped to `0`, the names are already free and there is nothing to file:
 
 ```bash
 dig +short TXT _.nourishthenerve.com @8.8.8.8      # -> "dbn8dfhgi712k.cloudfront.net"
 dig +short TXT _www.nourishthenerve.com @8.8.8.8   # -> "dbn8dfhgi712k.cloudfront.net"
+
+aws --profile ndn-prod cloudfront list-conflicting-aliases \
+  --alias nourishthenerve.com --distribution-id E1K6OYW4X46BJZ
+aws --profile ndn-prod cloudfront list-conflicting-aliases \
+  --alias www.nourishthenerve.com --distribution-id E1K6OYW4X46BJZ
 ```
+
+All four re-verified 2026-08-21: TXT records resolve, and both aliases are still held by one distribution `*******0TMKEWA` in account `******155257` (AWS masks all but the trailing characters).
+
+**The case is already filed** (owner, confirmed 2026-08-21; no reply yet). The text below is kept as the record of what was requested and as the basis for any follow-up reply.
+
+**Still worth asking the owner:** `155257` is neither `803129122420` nor `357601815388`. If they recognise an AWS account ending `155257` and can still sign into it, deleting the two aliases from that distribution's own configuration releases them in minutes and `NdnWebStack` claims them on the next ordinary deploy — which would resolve this without waiting on a queue that has no SLA. Worth a moment's thought even with the case open, not a reason to withdraw it.
 
 ## Case body — copy from here
 
@@ -46,6 +57,7 @@ dig +short TXT _www.nourishthenerve.com @8.8.8.8   # -> "dbn8dfhgi712k.cloudfron
 > **Source distribution (currently holds the names; not my account)**
 >
 > - Domain name: `d2z3fclxq13w3z.cloudfront.net`
+> - Per `cloudfront list-conflicting-aliases` run from my account against my target distribution, both names are held by one distribution, reported masked as `*******0TMKEWA` in account `******155257`. That account is neither of the two I control.
 >
 > **Proof of domain ownership**
 >
@@ -90,6 +102,8 @@ dig +short TXT _www.nourishthenerve.com @8.8.8.8   # -> "dbn8dfhgi712k.cloudfron
    aws --profile ndn-prod cloudfront list-conflicting-aliases \
      --alias nourishthenerve.com --distribution-id E1K6OYW4X46BJZ
    ```
+
+   Expect `Quantity: 0`. While the conflict stands it returns `Quantity: 1` naming `*******0TMKEWA` / `******155257` (as of 2026-08-21), so this is an unambiguous released/not-released signal — poll it rather than retrying a deploy to find out.
 
    AWS may attach the names to `E1K6OYW4X46BJZ` themselves. If they do, `get-distribution` shows all three aliases and the CDK code below just catches up with reality; if they only release them, the deploy claims them.
 

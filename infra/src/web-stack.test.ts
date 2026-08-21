@@ -14,6 +14,7 @@ import {
   APEX_DOMAIN_NAME,
   CERTIFICATE_ARN,
   DOMAIN_NAME,
+  FLAG_PARAMETER_NAME_PREFIX,
   SES_CONFIGURATION_SET_NAME,
   WWW_DOMAIN_NAME,
 } from './config.js';
@@ -452,9 +453,9 @@ describe('WebStack — contact form Lambda (TASK 1.4.1)', () => {
           Match.objectLike({
             Effect: 'Allow',
             Action: 'ses:SendEmail',
-            // Two resources since TASK 1.4.1's bounce/complaint follow-up:
-            // the identity *and* the configuration set the send names.
-            // Naming a set the role cannot use is an AccessDenied.
+            // Two resources since the bounce/complaint follow-up: the
+            // identity *and* the configuration set the send names. Naming a
+            // set the role cannot use is an AccessDenied on every send.
             Resource: Match.arrayWith([
               Match.objectLike({
                 'Fn::Join': Match.arrayWith([
@@ -764,10 +765,9 @@ describe('WebStack — canary deployment (TASK 0.6.2)', () => {
 
   it('wires both alarms into the deployment group and rolls back automatically on failure or an alarm', () => {
     const template = synth();
-    // Select the two health alarms by what they measure, not by being
-    // first in the template. The stack gained SES reputation alarms
-    // (TASK 1.4.1's bounce/complaint follow-up) and "the first two alarms"
-    // silently stopped meaning "the health alarms".
+    // Select the two health alarms by what they measure, not by being first
+    // in the template. The stack gained SES reputation alarms and "the first
+    // two alarms" silently stopped meaning "the health alarms".
     const [errorsAlarmId, latencyAlarmId] = Object.entries(
       template.findResources('AWS::CloudWatch::Alarm'),
     )
@@ -912,6 +912,58 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
   });
 });
 
+// TASK 1.6.2: this stack's two flag-reading functions (contact-form-handler,
+// media-upload-handler). data-stack.test.ts carries the fuller assertions
+// for the other seven and for the prefix's scoping; these prove the wiring
+// reached this stack too, rather than only the one it was written against.
+describe('WebStack — feature-flag reads', () => {
+  it('gives the contact-form and media-upload functions the flag prefix and a scoped read grant', () => {
+    const template = synth();
+
+    const withPrefix = Object.values(template.findResources('AWS::Lambda::Function')).filter(
+      (fn) =>
+        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables?.FLAG_PARAMETER_NAME_PREFIX ===
+        FLAG_PARAMETER_NAME_PREFIX,
+    );
+    expect(withPrefix).toHaveLength(2);
+
+    const grants = Object.values(template.findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (
+            policy as {
+              Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } };
+            }
+          ).Properties.PolicyDocument.Statement,
+      )
+      .filter((s) => s.Sid === 'ReadFeatureFlags');
+
+    expect(grants).toHaveLength(2);
+    for (const grant of grants) {
+      expect(grant.Action).toBe('ssm:GetParameter');
+      expect(JSON.stringify(grant.Resource)).toContain('parameter/ndn/flags/*');
+    }
+  });
+
+  it('leaves the health and smoke-test functions without any flag access', () => {
+    const template = synth();
+    // Neither reads a flag, so neither should be able to. A future edit that
+    // hands the grant out stack-wide instead of per-function fails here.
+    const functions = Object.entries(template.findResources('AWS::Lambda::Function'));
+    const flagless = functions.filter(
+      ([logicalId]) => logicalId.startsWith('HealthFunction') || logicalId.startsWith('SmokeTest'),
+    );
+    expect(flagless.length).toBeGreaterThan(0);
+    for (const [, fn] of flagless) {
+      const variables =
+        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables ?? {};
+      expect(variables).not.toHaveProperty('FLAG_PARAMETER_NAME_PREFIX');
+    }
+  });
+});
+
 // Bounce/complaint handling — the half that did not exist until now.
 // TASK 1.4.1 and 1.5.2 each deferred it, and AWS asked about it directly
 // when reviewing the SES production-access request
@@ -930,9 +982,7 @@ describe('WebStack — SES bounce/complaint events', () => {
     const template = synth();
     const destinations = Object.values(
       template.findResources('AWS::SES::ConfigurationSetEventDestination'),
-    ) as Array<{
-      Properties: { EventDestination: { MatchingEventTypes: string[]; Enabled?: boolean } };
-    }>;
+    ) as Array<{ Properties: { EventDestination: { MatchingEventTypes: string[] } } }>;
     expect(destinations).toHaveLength(1);
 
     // CDK emits these lowercase in the template, whatever case the

@@ -18,7 +18,7 @@ Flagged as an unraised gap in the Gate G0 review (`gate-g0-report.md`): the plan
 
 ## What this does not do yet
 
-- **Still sandboxed** (`ProductionAccessEnabled: false`) until AWS completes its review — typically hours to a few business days for a small transactional request, within the plan's "days–2wk" estimate. No code in this repo depends on production access yet (TASK 1.4.1/1.5.2 do, and aren't built).
+- **Still sandboxed** (`ProductionAccessEnabled: false`) — **this was true pending review on 2026-08-13; the review has since been DENIED, see "Production access denied" below.** The original text is kept as written: until AWS completes its review — typically hours to a few business days for a small transactional request, within the plan's "days–2wk" estimate. No code in this repo depends on production access yet (TASK 1.4.1/1.5.2 do, and aren't built).
 - No `MAIL FROM` domain configured (SES's default subdomain is used) — not required for DKIM/DMARC alignment or production access; can be added later if bounce-handling needs it.
 - No SNS topic wired to `FeedbackForwardingStatus`/bounce-complaint notifications beyond SES's default email forwarding — a Phase 1 task (1.4.1/1.5.2) concern, not this one's.
 
@@ -30,3 +30,34 @@ Flagged as an unraised gap in the Gate G0 review (`gate-g0-report.md`): the plan
 ## Cost delta
 
 £0.00 — domain identity, DKIM, and the production-access request are all free; SES send volume remains £0 until Phase 1 code actually sends anything.
+
+## Production access denied — found 2026-08-21 (Gate G1)
+
+The request above was **refused**. Found during the Gate G1 review ([gate-g1-report.md](../plan/gate-g1-report.md) §6), not by a notification reaching this repo:
+
+```bash
+aws --profile ndn-prod sesv2 get-account
+# ProductionAccessEnabled: false
+# Details.ReviewDetails: { "Status": "DENIED", "CaseId": "178661888300813" }
+```
+
+AWS's reason is not exposed through the API — it is emailed to the account address, and Basic support blocks the Support API (`SubscriptionRequiredException`), so it can only be read from that inbox or the console.
+
+**The identity itself is fine.** `get-email-identity` still returns `VerifiedForSendingStatus: true`, `DkimAttributes.Status: SUCCESS`, signing enabled. DKIM, SPF and DMARC are all as this runbook left them. Nothing needs re-verifying; only the sandbox restriction stands.
+
+### What the sandbox actually blocks
+
+Sandbox mode permits sending **to verified identities only**. `nourishthenerve.com` is a verified *domain* identity, which covers every address at that domain. So:
+
+| Sender | Recipient | Works in sandbox? |
+|---|---|---|
+| Contact-form relay (TASK 1.4.1) | `contact@nourishthenerve.com` | **Yes** — inside the verified domain |
+| Workshop registration confirmation (TASK 1.5.2) | arbitrary registrant address | **No** — `MessageRejected` |
+
+Neither is failing in production today, because both features are flag-gated off and the flag layer cannot currently be switched on at all (gate-g1-report.md §3a). But this blocks TASK 1.5.2's DoD from the moment workshop registration goes live.
+
+### Next action — appeal, don't re-request
+
+Re-submitting the same `put-account-details` payload will be refused the same way. Read AWS's stated reason from the account email first, then reply on case `178661888300813` addressing it directly. Denials for small transactional senders usually turn on the use-case description being too thin about **volume, recipient provenance, and bounce/complaint handling** — so an appeal should state: expected volume (single-digit emails/day at launch), that every recipient has just submitted a form or completed a paid registration (never a purchased or scraped list), that mail is transactional-only with no marketing, and how bounces and complaints are handled. Note that the current setup has no SNS bounce/complaint topic beyond SES's default forwarding — standing one up before appealing is a cheap, concrete improvement to point at.
+
+**Owner action.** This is an AWS-console/email step, not something this repo can drive.
