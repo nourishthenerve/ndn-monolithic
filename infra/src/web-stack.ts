@@ -36,6 +36,7 @@ import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Alias, Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
@@ -46,6 +47,7 @@ import {
   CONTACT_FORM_FROM_EMAIL,
   CONTACT_FORM_TO_EMAIL,
   DOMAIN_NAME,
+  PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME,
   SES_CONFIGURATION_SET_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
@@ -728,10 +730,25 @@ function handler(event) {
       // deploy wrote to a group CloudFormation never knew about, with
       // infinite retention, which `cdk destroy` then left behind. Ephemeral
       // PR stacks turned that into a leak that grew per PR: 2 orphans at
-      // Gate G0, 13 by the time this landed. Naming the group here puts it
-      // back inside the stack — 14-day retention, RemovalPolicy.DESTROY,
-      // and gone with the stack that made it.
-      logGroup: createLogGroup(this, 'SiteDeploymentLogGroup', logGroupName('site-deployment')),
+      // Gate G0, 13 by the time this landed.
+      //
+      // Production names its own group, stack-owned and capped. An
+      // ephemeral stack instead *imports* the shared, out-of-band group
+      // (config.ts) rather than creating one it would have to delete: this
+      // is the one Lambda that `cdk destroy` itself invokes, so a
+      // stack-owned group loses a race with its own teardown — the group
+      // is deleted, the Delete-event logs flush a moment later, and
+      // CloudWatch recreates it bare. Measured on PR #48: the recreated
+      // group's creation timestamp was 9 seconds *later* than the events
+      // inside it. Importing removes the race rather than narrowing it —
+      // nothing per-PR is created, so nothing per-PR is left behind.
+      logGroup: props.ephemeral
+        ? LogGroup.fromLogGroupName(
+            this,
+            'SiteDeploymentLogGroup',
+            PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME,
+          )
+        : createLogGroup(this, 'SiteDeploymentLogGroup', logGroupName('site-deployment')),
     });
 
     new CfnOutput(this, 'DistributionDomainName', { value: distribution.distributionDomainName });

@@ -15,6 +15,7 @@ import {
   CERTIFICATE_ARN,
   DOMAIN_NAME,
   FLAG_PARAMETER_NAME_PREFIX,
+  PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME,
   SES_CONFIGURATION_SET_NAME,
   WWW_DOMAIN_NAME,
 } from './config.js';
@@ -892,12 +893,33 @@ describe('WebStack — site deployment log group', () => {
     });
   });
 
-  it('destroys that log group with the stack, so an ephemeral PR stack leaves nothing behind', () => {
+  // The ephemeral half is the opposite shape, and deliberately so: this is
+  // the one Lambda `cdk destroy` invokes as part of its own teardown, so a
+  // stack-owned group races its own deletion and CloudWatch recreates it
+  // bare (measured on PR #48 — the recreated group's creation timestamp was
+  // 9 seconds later than the events inside it). An ephemeral stack
+  // therefore creates no group at all and writes to the shared, out-of-band
+  // one, which nothing in any stack can delete.
+  it('creates no site-deployment log group in an ephemeral stack — it writes to the shared one', () => {
     const template = synthEphemeral();
+    const names = Object.values(template.findResources('AWS::Logs::LogGroup')).map(
+      (resource) =>
+        (resource as { Properties?: { LogGroupName?: string } }).Properties?.LogGroupName,
+    );
+    expect(names).not.toContain('/ndn/pr-123/site-deployment');
+    expect(names).not.toContain(PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME);
+
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      LoggingConfig: Match.objectLike({ LogGroup: PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME }),
+    });
+  });
+
+  it('destroys production’s own group with its stack — nothing is retained by accident', () => {
+    const template = synth();
     const logGroups = Object.values(template.findResources('AWS::Logs::LogGroup')).filter(
       (resource) =>
         (resource as { Properties?: { LogGroupName?: string } }).Properties?.LogGroupName ===
-        '/ndn/pr-123/site-deployment',
+        '/ndn/site-deployment',
     );
     expect(logGroups).toHaveLength(1);
     expect((logGroups[0] as { DeletionPolicy?: string }).DeletionPolicy).toBe('Delete');
@@ -957,7 +979,7 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
 
   it('scopes every explicit log group name to the given PR label, not the fixed production names', () => {
     const template = synthEphemeral();
-    for (const baseName of ['health-function', 'smoke-test-function', 'site-deployment']) {
+    for (const baseName of ['health-function', 'smoke-test-function']) {
       template.hasResourceProperties('AWS::Logs::LogGroup', {
         LogGroupName: `/ndn/pr-123/${baseName}`,
         RetentionInDays: 14,

@@ -157,6 +157,26 @@ export const SES_CONFIGURATION_SET_NAME = 'ndn-email';
 // so the two never drift apart silently.
 export const PR_STACK_ID_PREFIX = 'NdnWebStackPr';
 
+// The one log group an ephemeral PR stack writes to but does not own.
+//
+// Gate G1 §4's fix gave `BucketDeployment`'s Lambda an explicit log group,
+// which works for production but not for a stack that gets destroyed: the
+// same `cdk destroy` that deletes the group also invokes that Lambda with
+// a Delete event, and its logs flush *after* the group is gone, so
+// CloudWatch recreates the group — bare, uncapped, outside CloudFormation.
+// Observed on PR #48's own run, not theorised: the recreated
+// `/ndn/pr-48/site-deployment` carried a creation timestamp **9 seconds
+// later than the log events inside it**.
+//
+// So ephemeral stacks import this shared, long-lived group by name instead
+// of creating one each. Nothing per-PR is created, nothing is deleted
+// mid-flight, and there is no race to lose. It is created out of band with
+// 14-day retention (docs/runbooks/log-retention-volume-control.md) —
+// deliberately owned by neither stack, since a CloudFormation resource
+// that any PR can race is the exact problem being solved. Production keeps
+// its own stack-owned `/ndn/site-deployment`.
+export const PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME = '/ndn/pr-env/site-deployment';
+
 // TASK 1.3.2: the SSM SecureString holding ADMIN_API_TOKEN (D-14). Created
 // out-of-band (`aws ssm put-parameter --type SecureString`), same reasoning
 // CERTIFICATE_ARN documents above — never committed as a value, only this
