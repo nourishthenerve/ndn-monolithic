@@ -192,7 +192,6 @@ Actioned separately, during the review, on the owner's go-ahead — each on its 
 
 Phase 2's stubs are **not** elaborated in this pass. D-27 elaborates the next phase at each gate, and this gate is a no-go; elaborating Phase 2 against a foundation with an inoperable flag layer would bake that assumption into fourteen task specs. Elaborate it once §3a is fixed — the fix is small and does not depend on the cutover.
 
-
 ## 10. Addendum — the apex criterion, closed 2026-08-21 18:15 UTC
 
 This section is written after the review above, and changes its verdict.
