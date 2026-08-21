@@ -19,12 +19,12 @@ Three constraints shape every decision in this plan: **£20/month all-in ex-VAT*
 | [02-risk-register.md](02-risk-register.md) | Risk register R-01…R-14 |
 | [03-cost-model.md](03-cost-model.md) | Costed bill of materials (M1/M6/M12) |
 | [04-data-model-rbac.md](04-data-model-rbac.md) | Single-table DynamoDB data model, GSIs, RBAC matrix |
-| [05-execution-plan.md](05-execution-plan.md) | Full task breakdown — Phase 0 and Phase 1 in detail, Phases 2–7 as milestone stubs |
+| [05-execution-plan.md](05-execution-plan.md) | Full task breakdown — Phases 0, 1 and 2 in detail, Phases 3–7 as milestone stubs |
 | [06-gate-checklists.md](06-gate-checklists.md) | What is run and reported at every gate |
 | [07-traceability.md](07-traceability.md) | FR/NFR coverage summary |
 | [08-long-lead.md](08-long-lead.md) | Long-lead register (LL-01…LL-10) |
 | [09-self-audit.md](09-self-audit.md) | Plan self-audit, red-team, and the one place the plan pushes back on the brief |
-| [`docs/adr/0001..0017-*.md`](../adr/) | Architecture Decision Records, one per line of §3 plus ADR-0017 (frontend framework, added at Gate G0 ahead of Phase 1) |
+| [`docs/adr/0001..0017-*.md`](../adr/) | Architecture Decision Records, one per line of §3 plus ADR-0017 (frontend framework, added at Gate G0 ahead of Phase 1). ADR-0004 carries a Gate G1 amendment (two Cognito user pools) added ahead of Phase 2 on the same precedent |
 | [`docs/compliance/dpia-skeleton.md`](../compliance/dpia-skeleton.md) | DPIA skeleton (schema separation for future lawful erasure, R-04) |
 
 Appendix A (Stage A discovery findings, verified 2026-08-07) remains in the source planning-brief file at the repo root; it is not duplicated here.
