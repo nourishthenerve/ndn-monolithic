@@ -33,6 +33,16 @@ AWS reviews sending accounts at roughly 5% bounce and 0.1% complaint. Bounce ala
 
 Naming a configuration set in `SendEmail` makes it a resource of the call. A role authorised on the identity but not on the set gets `AccessDenied` on **every** send — so this change had to touch the grants, not just the code. Both statements now list both ARNs, and a test asserts it.
 
+## Production only — never in an ephemeral PR stack (added 2026-08-21)
+
+Every resource here is named account-globally and fixed: configuration set `ndn-email`, topic `ndn-email-events`, alarms `ndn-email-bounce-rate` and `ndn-email-complaint-rate`. `createEmailEventPipeline` originally ran unconditionally in `WebStack`, which is also the stack TASK 0.6.3 deploys per pull request — so the first ephemeral deploy after this landed failed with `already exists` on the configuration set and both alarms.
+
+Fixed by guarding the call with `if (!props.ephemeral)` in `web-stack.ts`, not by giving the resources per-PR names. Per-PR names would mean a real SES configuration set and an SNS topic per pull request, and the topic carries an **email subscription** — so every PR would send the alert address a confirmation request for a topic destroyed minutes later. `bin/app.ts` already applies the same reasoning to `BudgetStack`: an account-wide alarm makes no sense for a stack that is gone within the same CI run.
+
+**The part worth remembering:** the three "already exists" errors were the loud half. `sns:CreateTopic` is idempotent by name, so the topic would *not* have errored — CloudFormation would have adopted the production topic into the ephemeral stack and deleted it on `cdk destroy`, leaving both alarms with an action pointing at nothing and no bounce notification reaching anyone. The loud failures aborted the deploy first, so this never happened; production's topic, both alarms and the configuration set were verified intact afterwards.
+
+The two sender functions still carry `SES_CONFIGURATION_SET_NAME` and its IAM grant in ephemeral stacks. The name resolves to production's set, which lives in the same account, and nothing in a PR environment sends mail — both senders are flag-gated off and the account is still in the SES sandbox. `infra/src/web-stack.test.ts` asserts both halves: zero email resources in an ephemeral synth, and the pipeline still present in production's.
+
 ## Owner action — confirm the SNS subscription
 
 AWS sends a **"Subscription Confirmation"** email to `mohammed.zia33+ndnprod@gmail.com` when the topic is first created. **Until the link in it is clicked, the topic delivers nothing** — no bounce notification, no alarm. It fails silently and looks identical to "no bounces have happened".

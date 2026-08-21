@@ -176,7 +176,35 @@ export class WebStack extends Stack {
     // Both SES senders below attach every message to this configuration
     // set, so bounces and complaints become events and metrics rather than
     // only a silent suppression-list side effect. See email-events.ts.
-    createEmailEventPipeline(this);
+    //
+    // Production only. Every resource this creates is named account-
+    // globally and fixed (`ndn-email`, `ndn-email-events`, two
+    // `ndn-email-*` alarms), so an ephemeral per-PR copy of this stack
+    // cannot create its own: CloudFormation refused with "already exists"
+    // on the configuration set and both alarms the first time the
+    // pr-environment job ran after this pipeline landed. Per-PR *names*
+    // would be the wrong fix — the topic carries an email subscription, so
+    // every PR would mail the alert address a subscription confirmation
+    // for a topic destroyed minutes later. Same reasoning bin/app.ts
+    // already applies to BudgetStack: an account-wide alarm makes no sense
+    // for a stack that is gone within the same CI run.
+    //
+    // The SNS topic is the quiet half of that collision and the reason
+    // this guard matters beyond a red build: `CreateTopic` is idempotent
+    // by name, so it would not have errored — CloudFormation would have
+    // adopted production's topic into the ephemeral stack and deleted it
+    // on `cdk destroy`, leaving both production alarms pointing at
+    // nothing. The three loud failures aborted the deploy before that
+    // could happen.
+    //
+    // The two sender functions keep SES_CONFIGURATION_SET_NAME and its
+    // IAM grant in ephemeral stacks: the name resolves to production's
+    // set, which exists in the same account, and nothing in a PR
+    // environment sends mail (both senders are flag-gated off, and the
+    // account is still in the SES sandbox).
+    if (!props.ephemeral) {
+      createEmailEventPipeline(this);
+    }
 
     // TASK 1.4.1: the contact form's Lambda + route. A separate function
     // and role from HealthFunction — this one needs ssm:GetParameter (the

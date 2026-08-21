@@ -190,6 +190,10 @@ Both halves of the "Owner actions" item below landed together, as it always said
 
 **Cost of the resume, stated plainly:** every PR that touches code now pays the ~15–30 minute distribution create/destroy cycle again. Docs-only PRs are unaffected — the `changes.outputs.code` path filter still short-circuits the job. If that wall-clock cost has to be cut again, cut it by narrowing *what* the job deploys, not by turning the a11y gate off; the eight-day pause is the argument against the second option.
 
+**What the first re-enabled run found, within 15 minutes.** PR #47's own `pr-environment` job failed at `cdk deploy`: `AWS::SES::ConfigurationSet 'ndn-email' already exists`, plus both `ndn-email-*` alarms. TASK 1.4.1/1.5.2's email-event pipeline (2026-08-21, [email-events.md](email-events.md)) had landed while this job was paused and created account-global fixed-name resources unconditionally in `WebStack` — the same stack this job deploys per PR. Nothing was broken in production and the `always()` destroy step left no orphan, but **the ephemeral environment had been non-deployable for a day and nothing said so.** That is the concrete cost of a paused gate, and it is the answer to "was re-enabling worth the CI minutes". Fixed on the same branch; see email-events.md for why the fix is a guard rather than per-PR names.
+
+**Standing rule this implies:** anything added to `WebStack` with a fixed physical name is a per-PR collision. Ephemeral mode already scopes log groups and SSM paths by `prLabel`; for account-global resources that make no sense per PR (budgets, reputation alarms, an SNS topic with a human subscriber), guard on `props.ephemeral` instead and assert the absence in `web-stack.test.ts`.
+
 **To pause again (not recommended — read the paragraph above first):** append `&& false` to `pr-environment`'s `if:` condition in `.github/workflows/ci.yml` **and** remove it from `ci-summary`'s `for r in ...` loop in the same change, or the summary job will fail every PR on a job that never ran.
 
 ## Owner actions
