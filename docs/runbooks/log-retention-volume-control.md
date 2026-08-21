@@ -87,7 +87,8 @@ The last one is different and already inert: the health Lambda's pre-0.5.2 group
 
 ### What was fixed
 
-- **`web-stack.ts`** — `BucketDeployment` now takes `logGroup: createLogGroup(this, 'SiteDeploymentLogGroup', logGroupName('site-deployment'))`. Same treatment every other Lambda in the repo already had, through the same helper: 14-day retention, `RemovalPolicy.DESTROY`, and `prLabel`-scoped in ephemeral mode (`/ndn/pr-47/site-deployment`) so concurrent PR stacks cannot collide on the name. Because the group is now a stack resource, `cdk destroy` takes it with the stack — no orphan, per PR or otherwise.
+- **`web-stack.ts`, production** — `BucketDeployment` now takes `logGroup: createLogGroup(this, 'SiteDeploymentLogGroup', '/ndn/site-deployment')`. Same treatment every other Lambda in the repo already had, through the same helper: 14-day retention, `RemovalPolicy.DESTROY`, a resource CloudFormation owns.
+- **`web-stack.ts`, ephemeral** — the opposite, and the reason is in the next section: an ephemeral stack creates no group of its own and **imports** the shared `/ndn/pr-env/site-deployment` (`PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME`, `config.ts`) instead. Nothing per-PR is created, so nothing per-PR is left behind.
 - **`log-retention.ts`** — a second Aspect, `ExplicitLambdaLogGroupAspect`, applied by the same `enforceLogRetention(app)` call in `bin/app.ts`. It visits every `CfnFunction` and raises a synth-time **error** on any that has no `LoggingConfig.LogGroup`. This is the part that stops the finding recurring: a future Lambda — ours, or one a construct creates on our behalf — cannot reach production relying on CloudWatch's implicit group, because `cdk synth` refuses to produce a template at all. Verified against the CLI, not just asserted in a test: a deliberately log-group-less function makes `cdk synth` print `Synthesis finished with errors` and exit 1, which fails CI's `deploy` job.
 
   The check reads the L1 property rather than the synthesized JSON, so a `LoggingConfig` injected via `addPropertyOverride` would read as absent. That is deliberate: the guard's job is to insist on the supported prop, and a silent pass is the failure mode it exists to prevent.
@@ -150,6 +151,38 @@ $ aws logs describe-log-groups --query 'logGroups[?retentionInDays==null].logGro
 
 Retention expires log *events*, not the group, so the 12 orphaned shells (11 from destroyed PR stacks, 1 from the pre-0.5.2 health function) will empty themselves within a day and then sit at 0 bytes, costing nothing. They are left in place rather than deleted: `put-retention-policy` is the sanctioned mechanism D-18 already decided on, and it makes deletion unnecessary rather than merely deferred. Removing the empty shells is a two-minute console tidy-up whenever anyone wants it, with nothing depending on it.
 
+### The first live run found a second race — and it is why ephemeral stacks import
+
+The fix above was verified the only way that counts: PR #48's own `pr-environment` job deployed a real ephemeral stack and destroyed it. Two things came back.
+
+**The good half.** No `/aws/lambda/NdnWebStackPr48-CustomCDKBucketDeployment...` group was created. That is the first PR in this project's history not to add one, and the leak this task set out to close is closed.
+
+**The half that was not anticipated.** The stack-owned `/ndn/pr-48/site-deployment` group **survived `cdk destroy`, with no retention** — a differently-named orphan of exactly the same shape. The evidence is unambiguous:
+
+```text
+log stream events (first/last):  1787326633415 / 1787326633481
+log group creationTime:          1787326642465   <- 9 seconds LATER
+```
+
+A group cannot be created after the events it holds unless it was created twice. What happens is a race that only a *destroyed* stack can lose: `cdk destroy` deletes the log group, and the same teardown invokes `Custom::CDKBucketDeployment` with a `Delete` event. That Lambda logs, its output flushes asynchronously a moment later, and CloudWatch — finding no group of that name — recreates it. The recreated group is not a CloudFormation resource, so it has no retention, no removal policy, and nothing to delete it. This is why `RemovalPolicy.DESTROY` on the log group of a Lambda that its own teardown invokes cannot be made to work by tightening it.
+
+Three alternatives were considered and rejected before the one that shipped:
+
+- **`RemovalPolicy.RETAIN` on the per-PR group.** Removes the race, but `AWS::Logs::LogGroup` fails to create when the name already exists, so re-running the same PR's job would fail the deploy — the identical "already exists" trap PR #47 hit with the SES pipeline ([ephemeral-pr-environments.md](ephemeral-pr-environments.md)).
+- **A post-`destroy` sweep in CI** (`put-retention-policy`, or deleting the group). Needs IAM `ndn-deploy-pr` does not have, and the delete variant would hand a PR-triggered role a destructive permission this repo deliberately withholds.
+- **Reverting to no explicit group for that one Lambda.** That is the original bug.
+
+**What shipped instead: ephemeral stacks import a group nothing owns.** `/ndn/pr-env/site-deployment` is created out of band with 14-day retention, shared by every PR stack, and referenced by name (`LogGroup.fromLogGroupName`). No stack creates it, so there is no "already exists"; no stack deletes it, so there is no race; and the count of log groups in the account no longer grows with PR volume at all — a better outcome than the per-PR group this task originally aimed for. Log streams stay distinguishable because CloudWatch names each one after the writing function instance (`NdnWebStackPr48-CustomCDKBucketDeployment...`).
+
+Created once, and recorded here because it is the one log group in the estate CloudFormation does not manage:
+
+```text
+aws logs create-log-group     --log-group-name /ndn/pr-env/site-deployment
+aws logs put-retention-policy --log-group-name /ndn/pr-env/site-deployment --retention-in-days 14
+```
+
+**Its honest weakness:** being owned by no stack, its retention is not enforced by `enforceLogRetention` or by any test — the aspect only reaches template resources. It is one hand-made group, in the same category as the ACM certificate and the SSM parameters this repo already creates out of band, and the same standing check covers it: `describe-log-groups --query 'logGroups[?retentionInDays==null]'` returning empty. Making CI assert that on every run needs the same IAM decision as the standing-cost check ([ephemeral-pr-environments.md](ephemeral-pr-environments.md)).
+
 ### What this does not cover
 
-`cdk destroy` on an ephemeral stack now removes the site-deployment group with it, but only for stacks deployed **after** this change. Any PR stack still deploying from a branch cut before it will leave one more `/aws/lambda/NdnWebStackPrNN-CustomCDKBucketDeployment...` orphan behind, with no retention, until that branch merges or rebases. The count should stop at 13 and go no higher once `main` carries this; if a 14th appears, that is what it means.
+Any PR stack still deploying from a branch cut before this change will leave one more `/aws/lambda/NdnWebStackPrNN-CustomCDKBucketDeployment...` orphan behind, with no retention, until that branch merges or rebases. The count should stop at 13 and go no higher once `main` carries this; if a 14th appears, that is what it means. (`/ndn/pr-48/site-deployment`, the one the race created, was capped at 14 days by hand along with the other 13.)
