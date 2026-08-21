@@ -216,7 +216,15 @@ CloudFront performs a live DNS lookup on every alias you try to add and **refuse
 
 **The 2026-08-15 ordering is dead.** It put DNS first and the deploy second, which was correct when the only obstacle was believed to be a DNS-based pre-check. It is wrong now: the alias must be *released* before CloudFront will accept it, so the release comes first and DNS comes last. Running the old order reproduces the ~72-second error window and a failed deploy, nothing more.
 
-**Prerequisite:** the code change adding `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` to `domainNames` must be **merged to `main` and ready to deploy before step 4.1 runs**. Landing it first is what keeps the outage to minutes; discovering a failing test after the site is already down does not.
+**Prerequisite: the code change adding `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` to `domainNames` is reviewed and green, but NOT yet merged.** `ci.yml`'s `deploy` job triggers on any push to `main` that touches code (`if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true'`), so **merging is what fires the deploy** — there is no "merge now, deploy later". Merging before the release therefore produces a guaranteed failed deploy.
+
+Two ways to sequence this. The default below is (a):
+
+**(a) Merge inside the window, after the release — recommended.** The merge *is* step 4.3. Costs a few extra minutes inside the outage (`quality` must pass before `deploy` starts, they are not parallel), but `main` never carries a deliberately-broken deploy.
+
+**(b) Merge early, accept one failed deploy, re-dispatch at the window.** The failed deploy is genuinely harmless and this is proven, not assumed — the 2026-08-15 attempt rolled `NdnWebStack` back cleanly in ~14 seconds and `next.` never stopped serving. Shortens the outage, because re-dispatching `deploy` skips the `quality` wait. The cost is a red `main` and a failed production deploy that a future reader has to be told was intentional. Choose this only if the outage minutes genuinely matter more.
+
+Either way the ordering rule is the same and is not negotiable: **nothing deploys until `list-conflicting-aliases` reports `Quantity: 0`.**
 
 **Expected outage: ~10–20 minutes**, apex and `www` both, from 4.1 until 4.4 propagates. Dominated by the CloudFront distribution update in 4.3. Unavoidable — CloudFront will not accept an alias that is still claimed, so the release and the claim cannot overlap. Choose a low-traffic window. `next.nourishthenerve.com` is unaffected throughout and keeps serving the new site.
 
@@ -240,7 +248,7 @@ CloudFront performs a live DNS lookup on every alias you try to add and **refuse
 
    Both must report `Quantity: 0`. Poll until they do. A deploy launched early fails and rolls back, adding a full distribution-update cycle to the outage for nothing.
 
-3. **Deploy `NdnWebStack`** to claim the aliases — re-dispatch the `deploy` job on `main`. This is the long pole (a CloudFront distribution update, typically 5–15 minutes). Wait for `UPDATE_COMPLETE` and for the distribution to report `Deployed`; a distribution still `InProgress` will not serve the new aliases reliably.
+3. **Deploy `NdnWebStack`** to claim the aliases — under (a), merge the PR and let `deploy` fire; under (b), re-dispatch the `deploy` job on `main`. This is the long pole (a CloudFront distribution update, typically 5–15 minutes, plus ~5 for `quality` under (a)). Wait for `UPDATE_COMPLETE` **and** for the distribution to report `Deployed`; one still `InProgress` will not serve the new aliases reliably.
 
 4. **Repoint DNS** in the `803129122420` zone (manual, `default` profile — `ndn-deploy` has no access there). Amplify most likely deleted these records in 4.1, so this is usually a `CREATE`, not an `UPSERT` — check before assuming:
 
