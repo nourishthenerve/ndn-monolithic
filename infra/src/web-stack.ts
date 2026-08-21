@@ -43,6 +43,7 @@ import type { Construct } from 'constructs';
 
 import {
   ADMIN_API_TOKEN_PARAMETER_NAME,
+  APEX_DOMAIN_NAME,
   CERTIFICATE_ARN,
   CONTACT_FORM_FROM_EMAIL,
   CONTACT_FORM_TO_EMAIL,
@@ -53,6 +54,7 @@ import {
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
+  WWW_DOMAIN_NAME,
 } from './config.js';
 import { createEmailEventPipeline } from './email-events.js';
 import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
@@ -553,21 +555,23 @@ function handler(event) {
       // *.cloudfront.net domain (always unique per distribution, already
       // TLS-covered) rather than next.nourishthenerve.com — see the
       // `certificate` comment above.
-      // TASK 1.6.1: apex/www are deliberately NOT listed here yet, even though
-      // CERTIFICATE_ARN already covers them. CloudFront refuses an alternate
-      // domain name that another distribution anywhere (any account) already
-      // claims, and the legacy distribution d2z3fclxq13w3z.cloudfront.net —
-      // in an AWS account this project has never held credentials for — still
-      // claims both. Listing them here is what failed the 2026-08-15 deploy.
+      // TASK 1.6.1: apex/www join next. here as part of the G1 cutover. This
+      // deploy CANNOT succeed until the legacy claim on both names is
+      // released first — CloudFront refuses an alternate domain name that any
+      // distribution, in any account, already holds, which is what failed the
+      // 2026-08-15 deploy. The holder was found on 2026-08-21 (AWS Support
+      // case): not a third account, but the `ndn-frontend` Amplify app
+      // (dty9c1kqh8zkh, eu-west-2) in 803129122420, whose Amplify-managed
+      // distribution is d2z3fclxq13w3z.cloudfront.net.
       //
-      // Attaching the three-SAN certificate is a *separate*, unblocked change,
-      // and is an AWS-documented prerequisite for the cross-account
-      // alternate-domain-name move that releases the claim. Bundling the two
-      // meant the cert never landed either, because CloudFormation rolls back
-      // the whole update. They stay decoupled until AWS Support completes the
-      // move; only then do APEX_DOMAIN_NAME/WWW_DOMAIN_NAME join this array.
+      // Deploy order is therefore not optional — see the runbook's cutover
+      // steps: delete the Amplify domain association, confirm
+      // `list-conflicting-aliases` returns Quantity: 0, and only then deploy
+      // this. Deploying ahead of that release rolls the whole stack update
+      // back, taking the certificate with it (the 2026-08-15 lesson that put
+      // the cert on its own deploy in the first place).
       // See docs/runbooks/g1-cutover.md.
-      domainNames: props.ephemeral ? undefined : [DOMAIN_NAME],
+      domainNames: props.ephemeral ? undefined : [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
       certificate,
       defaultRootObject: 'index.html',
       defaultBehavior: {

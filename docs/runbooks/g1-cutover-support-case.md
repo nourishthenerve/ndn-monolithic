@@ -1,8 +1,12 @@
 # AWS Support case — move `nourishthenerve.com` / `www.nourishthenerve.com` to our CloudFront distribution
 
-**Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Blocks:** the G1 DNS cutover ([g1-cutover.md](g1-cutover.md)) · **Drafted:** 2026-08-15 · **Status: FILED by the site owner, awaiting AWS reply (confirmed 2026-08-21)**
+**Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Drafted:** 2026-08-15 · **Status: CLOSED — filed, answered, no move required (2026-08-21)**
 
-This is the text to file at <https://console.aws.amazon.com/support/home>. Prerequisites are already complete — see "Support-case prerequisites" in [g1-cutover.md](g1-cutover.md).
+> **Superseded. Do not file this again.** The case was filed and AWS answered: the alternate domain names are not held cross-account at all, but by the **`ndn-frontend` Amplify app (`dty9c1kqh8zkh`, `eu-west-2`) in `803129122420`** — an account we have root on. No cross-account move is needed; the aliases are released with one `amplify delete-domain-association`. See "Holder identified" in [g1-cutover.md](g1-cutover.md), which is now the live document for the cutover.
+>
+> Kept for the record, and because the case text below is a good template if a genuinely cross-account conflict ever comes up. Note AWS's reply gave the App ID as `d33x5xdydlevqa`, which does not exist in the account — the real one is `dty9c1kqh8zkh`.
+
+The text below is what was filed at <https://console.aws.amazon.com/support/home>.
 
 ## How to file it
 
@@ -33,7 +37,7 @@ All four re-verified 2026-08-21: TXT records resolve, and both aliases are still
 
 **The case is already filed** (owner, confirmed 2026-08-21; no reply yet). The text below is kept as the record of what was requested and as the basis for any follow-up reply.
 
-**Still worth asking the owner:** `155257` is neither `803129122420` nor `357601815388`. If they recognise an AWS account ending `155257` and can still sign into it, deleting the two aliases from that distribution's own configuration releases them in minutes and `NdnWebStack` claims them on the next ordinary deploy — which would resolve this without waiting on a queue that has no SLA. Worth a moment's thought even with the case open, not a reason to withdraw it.
+~~**Still worth asking the owner:** `155257` is neither `803129122420` nor `357601815388`; if they recognise it and can sign in, the aliases can be released directly.~~ **Answered 2026-08-21, and the premise was wrong:** `155257` is AWS's own Amplify service account, not anyone's to recognise. The right instinct — "release it directly rather than wait on the queue" — was correct; it just needed `amplify list-apps` in `803129122420` rather than a memory test. See [g1-cutover.md](g1-cutover.md).
 
 ## Case body — copy from here
 
