@@ -4,7 +4,9 @@
 
 ## Go/no-go
 
-**NO-GO on declaring Gate G1 met. CONDITIONAL GO on starting Phase 2**, on the owner's standing decision to park the apex cutover while AWS works the support case.
+**Superseded 2026-08-21, later the same day: GO. Gate G1 is met.** The one criterion this report found blocked — the apex — was cut over at 18:15 UTC on the owner's in-session go-ahead, with a ~2m50s outage. `nourishthenerve.com` and `www.` now serve `NdnWebStack`; the legacy Amplify domain association is released and its app kept as the rollback path. See [g1-cutover.md](../runbooks/g1-cutover.md#cutover-executed--2026-08-21) and §10 below. Everything from here to §9 is the review as written before that, unamended except where marked.
+
+**As written: NO-GO on declaring Gate G1 met. CONDITIONAL GO on starting Phase 2**, on the owner's standing decision to park the apex cutover while AWS works the support case.
 
 G1's three gate-specific criteria are "apex serving new site, legacy retired, Core Web Vitals pass". Two are met — legacy retired comprehensively (§2), and Core Web Vitals now measured and passing on every route with a great deal of headroom (§7, actioned during this review). One is blocked outside this project's control: the apex, on an AWS support case with no reply.
 
@@ -190,6 +192,38 @@ Actioned separately, during the review, on the owner's go-ahead — each on its 
 
 Phase 2's stubs are **not** elaborated in this pass. D-27 elaborates the next phase at each gate, and this gate is a no-go; elaborating Phase 2 against a foundation with an inoperable flag layer would bake that assumption into fourteen task specs. Elaborate it once §3a is fixed — the fix is small and does not depend on the cutover.
 
+## 10. Addendum — the apex criterion, closed 2026-08-21 18:15 UTC
+
+This section is written after the review above, and changes its verdict.
+
+**What happened.** PR #50 (the code change putting `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` back into `domainNames`) was merged at 18:09, which fires the production `deploy` job — and the Amplify claim on the apex had not been released, so that deploy was heading for the same 409 the 2026-08-15 attempt hit. With the owner's go-ahead the release was run instead of waiting: `amplify delete-domain-association` at 18:12:54, both aliases clear 30 seconds later, DNS repointed at 18:13:47, and `deploy` reached CloudFront at 18:15:25 with nothing left to conflict with. Apex and `www` were serving by ~18:15:45.
+
+**Outage: ~2m50s**, against the ~10–20 minutes budgeted. Two reasons, both worth keeping: the Amplify release propagated in 30 seconds rather than minutes, and DNS was repointed *during* the outage rather than after the deploy — once the legacy claim is gone both hostnames are down wherever DNS points, so moving it early overlaps propagation with the distribution update instead of appending it. Full timeline and the ordering rule in [g1-cutover.md](../runbooks/g1-cutover.md#cutover-executed--2026-08-21).
+
+**Verified after:** apex and `www` both `200` and byte-identical to `next.`; full security-header set on the apex (HSTS with `preload`, the same CSP, `X-Frame-Options: DENY`, nosniff, Referrer-Policy); `/health` on both; `dig` resolving into `dbn8dfhgi712k.cloudfront.net`; CI run `32511868364` green end-to-end including the TASK 0.6.2 canary and smoke test — **its first run serving the apex**, which §8 flagged as the thing to watch; `NdnWebStack` `UPDATE_COMPLETE`; distribution carrying all three aliases. The Zoho MX/SPF/DKIM records were untouched (the change batch named exactly two record sets), and the `ndn-frontend` Amplify app still exists and still builds, so the documented rollback remains available.
+
+**Core Web Vitals on the apex** — G1's verification asks for this specifically, and it could not run before today: all 6 routes, 18 runs, **every assertion passing**, performance/accessibility/SEO 100 and LCP 282–325 ms, statistically the same as the `next.` baseline. Table in [core-web-vitals.md](../runbooks/core-web-vitals.md#apex-run--2026-08-21-nourishthenervecom-desktop-preset).
+
+### Gate G1 verdict, restated
+
+| Criterion | Status |
+|---|---|
+| Apex serving the new site | **MET** — 2026-08-21 18:15 UTC |
+| Legacy estate retired | **MET** — Lambda, Function URL, log group, 5 roles, 6 policies deleted 2026-08-15; the Amplify domain association released today. The app itself is deliberately kept as the rollback path, and the S3 bucket `nourishthenerve` is deliberately kept under D-03. |
+| Core Web Vitals pass | **MET** — on the apex, not a proxy for it |
+
+**Gate G1 is met.** The four engineering action items this review raised were already closed; the fifth thing, the one that made it a no-go, is closed now.
+
+### What this does *not* change
+
+- **Every feature flag is still off.** The apex serves the same static brochure `next.` did. §3a restored the ability to turn features on; nothing has been turned on, and the two form-backed flags should still wait on a real Turnstile site key.
+- **The owner actions in the list below are all still open** — MFA on `ndn-admin`, the SES denial appeal, the Turnstile key, the favicon. The SES one is now more pressing in one narrow sense: the site is on its real domain, so a visitor who finds the contact form the moment it is enabled is a real patient enquiry.
+- **Step 8 of TASK 1.6.1 — cost-model reconciliation — remains open**, and correctly so. It needs real apex traffic to have accumulated; there has been about half an hour of it. Revisit at Gate G2, or after the first week of real traffic, whichever is sooner.
+
+### Phase 2 elaboration
+
+§9 held Phase 2's stubs back because elaborating fourteen task specs against an inoperable flag layer would bake that assumption in. That reason is gone (§3a is fixed) and so is the gate's no-go. **Phase 2 elaboration per D-27 is now the next planning task**, and nothing blocks it.
+
 ## Action items
 
 **Before Phase 2 work lands (engineering, no owner action needed):**
@@ -205,4 +239,4 @@ Phase 2's stubs are **not** elaborated in this pass. D-27 elaborates the next ph
 2. **Appeal the SES production-access denial** (§6), case `178661888300813` — AWS's reason will be in the account's email. Blocks workshop confirmation emails, and therefore 1.5.2's DoD, whenever those features go live.
 3. **Replace the Turnstile test site key** with a real widget's key before `contact.form.enabled` or `testimonials.submission.enabled` is ever turned on (§6).
 4. **Supply a square logo/mark** so a favicon can be added (§7) — the one thing docking every page's best-practices score, and a blank browser-tab icon on every page today. Two-minute follow-up once the asset exists.
-5. **The AWS support case** for the apex alias (`nourishthenerve.com` / `www` → `E1K6OYW4X46BJZ`) is filed and awaiting reply. Poll `cloudfront list-conflicting-aliases` for `Quantity: 0` rather than retrying a deploy; the runbook explains why.
+5. ~~**The AWS support case** for the apex alias (`nourishthenerve.com` / `www` → `E1K6OYW4X46BJZ`) is filed and awaiting reply.~~ **Closed 2026-08-21** — the case's useful output was identifying the holder as our own `ndn-frontend` Amplify app; the release was then self-service and the cutover ran the same day (§10). Nothing is owed to AWS on it. Worth replying to the case only to correct the App ID they quoted (`d33x5xdydlevqa`, which does not exist — the real one is `dty9c1kqh8zkh`) and close it out.

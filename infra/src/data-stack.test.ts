@@ -286,13 +286,18 @@ describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
 });
 
 describe('DataStack — workshop checkout function (TASK 1.5.2)', () => {
-  it('is wired to the table name and Stripe secret key parameter name via environment, and routed at POST /workshops/{id}/checkout', () => {
+  it('is wired to the table name, the Stripe secret key parameter name and the canonical site origin via environment, and routed at POST /workshops/{id}/checkout', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {
       Environment: {
         Variables: Match.objectLike({
           WORKSHOP_TABLE_NAME: Match.anyValue(),
           STRIPE_SECRET_KEY_PARAMETER_NAME: '/ndn/stripe-secret-key',
+          // TASK 1.6.1 step 5: the apex, not `next.` — Stripe returns the
+          // customer to this origin, so a stale staging hostname here would
+          // strand them on the wrong one. Asserted as a literal rather than
+          // Match.anyValue() precisely so a silent repoint fails here.
+          SITE_ORIGIN: 'https://nourishthenerve.com',
         }),
       },
     });

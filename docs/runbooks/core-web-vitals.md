@@ -30,7 +30,7 @@ pnpm cwv
 ```
 
 Needs Chrome on the machine (`CHROME_PATH` if it is not in the default location — on macOS,
-`CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`). Three runs per URL, median reported; `--collect.numberOfRuns=1` for a quick check. HTML and JSON reports land in `.lighthouseci/` (gitignored).
+`CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`). There is no Chrome in `/Applications` on the current machine; use Playwright's Chrome for Testing instead — exact command under "Apex run" below. Three runs per URL, median reported; `--collect.numberOfRuns=1` for a quick check. HTML and JSON reports land in `.lighthouseci/` (gitignored).
 
 **Deliberately not wired into CI.** It measures a live deployed URL, so on a PR it would measure `main`'s site, not the PR's — a green check that proves nothing about the change under review. The job that *could* measure a PR's own build is `pr-environment` — paused when this was written, re-enabled and gating since 2026-08-21 ([ephemeral-pr-environments.md](ephemeral-pr-environments.md)). Wiring Lighthouse into it is now possible but still not done here: it would add a second slow step to a job that already dominates PR wall-clock, and the thresholds have 6–9× headroom, so gate-time runs remain the right cadence. Run this at gates, before and after the apex cutover, and whenever a change lands that could plausibly affect page weight.
 
@@ -51,7 +51,32 @@ LCP is 6–9× inside the 2500 ms budget and TBT is zero everywhere. That is wha
 
 **Read this as a floor, not a forecast.** Every dynamic feature is currently flag-off (Gate G1 review §3a), so `/en/blog`, `/en/workshops` and `/en/testimonials` render empty lists, and none of these pages fetches anything. The numbers will move when real content, workshop posters and testimonial text land — images especially are the usual LCP regression. **Re-run this after the first real content is published**, not only at the next gate; that is the run that tells you something you do not already know.
 
-Two further limits on what this baseline proves: it is `next.`, not the apex (the cutover is blocked — [g1-cutover.md](g1-cutover.md)), though both are served by the same CloudFront distribution and the same S3 origin, so the apex should measure identically once it is live; and it is the desktop preset, so it says nothing about a throttled mobile connection.
+One further limit on what this baseline proves: it is the desktop preset, so it says nothing about a throttled mobile connection. The other limit recorded here — that it measured `next.` rather than the blocked apex — is now discharged; the apex run is below.
+
+## Apex run — 2026-08-21, `nourishthenerve.com`, desktop preset
+
+Gate G1's verification asks for a Core Web Vitals run against the **live apex**, which only became possible at 18:15 UTC that day ([g1-cutover.md](g1-cutover.md#cutover-executed--2026-08-21)). Run ~30 minutes after the cutover, same config, `lighthouserc.json`'s collect URLs repointed from `next.` to the apex as part of the cutover's step 5:
+
+| Route | Perf | A11y | Best practices | SEO | LCP | FCP | CLS | TBT |
+|---|---|---|---|---|---|---|---|---|
+| `/en` | 100 | 100 | 96 | 100 | 324 ms | 324 ms | 0.001 | 0 ms |
+| `/en/about` | 100 | 100 | 96 | 100 | 285 ms | 285 ms | 0.001 | 0 ms |
+| `/en/blog` | 100 | 100 | 96 | 100 | 282 ms | 282 ms | 0.001 | 0 ms |
+| `/en/workshops` | 100 | 100 | 96 | 100 | 283 ms | 283 ms | 0.001 | 0 ms |
+| `/en/testimonials` | 100 | 100 | 96 | 100 | 325 ms | 325 ms | 0.010 | 0 ms |
+| `/en/contact` | 100 | 100 | 96 | 100 | 285 ms | 285 ms | 0.001 | 0 ms |
+
+**All 6 URLs, 18 runs, every assertion passing.** As the baseline predicted, the apex measures identically to `next.` — same distribution, same origin, differences inside run-to-run noise (`/en/testimonials` and `/en/contact` came in *faster* here, 325/285 ms against 412/414 ms, which is variance, not an improvement to claim). **Gate G1's Core Web Vitals criterion is met on the hostname the gate actually names.**
+
+The floor-not-forecast caveat above applies unchanged, and now matters more: this is the public apex, so the run to repeat is the one after real content and images publish.
+
+**A note on running it here:** the machine has no Chrome in `/Applications`, so `pnpm cwv` fails its healthcheck with "Chrome installation not found". Point `CHROME_PATH` at the Chrome for Testing that Playwright already installs for the a11y suite — no separate download, and it is real Chrome, not Chromium:
+
+```bash
+CHROME_PATH="$HOME/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" pnpm cwv
+```
+
+(The `chromium-<build>` directory number changes when Playwright updates — `ls ~/Library/Caches/ms-playwright` for the current one.)
 
 ## Finding — no favicon (the only point docked anywhere)
 

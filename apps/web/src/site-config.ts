@@ -6,12 +6,15 @@
 
 export const siteName = 'Nourish the Nerve';
 
-// TASK 1.3.2: mirrors infra/src/config.ts's DOMAIN_NAME — a staging
-// hostname only until Gate G1 (TASK 1.6.1) points the apex/www here
-// instead. Used to build absolute canonical/hreflang URLs for blog posts;
-// no page needed an absolute URL before this task (relative hrefs were
-// always enough). Update alongside DOMAIN_NAME at G1 cutover.
-export const siteUrl = 'https://next.nourishthenerve.com';
+// TASK 1.3.2, repointed at the G1 cutover (TASK 1.6.1, 2026-08-21): the
+// canonical public origin. Used to build absolute canonical/hreflang URLs
+// for blog posts and workshops; no page needed an absolute URL before
+// TASK 1.3.2 (relative hrefs were always enough). This is deliberately the
+// apex, not infra/src/config.ts's DOMAIN_NAME — `next.` remains an alias on
+// the same distribution and stays useful as a staging URL, but a page served
+// from either hostname must name one canonical origin, and after the cutover
+// that is the apex. See docs/runbooks/g1-cutover.md step 5.
+export const siteUrl = 'https://nourishthenerve.com';
 
 // TASK 1.3.2: NdnDataStack's ContentHttpApiUrl output (infra/src/data-stack.ts,
 // TASK 1.3.1) — a fixed `execute-api.amazonaws.com` URL, stable for the

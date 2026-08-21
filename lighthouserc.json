@@ -2,12 +2,12 @@
   "ci": {
     "collect": {
       "url": [
-        "https://next.nourishthenerve.com/en",
-        "https://next.nourishthenerve.com/en/about",
-        "https://next.nourishthenerve.com/en/blog",
-        "https://next.nourishthenerve.com/en/workshops",
-        "https://next.nourishthenerve.com/en/testimonials",
-        "https://next.nourishthenerve.com/en/contact"
+        "https://nourishthenerve.com/en",
+        "https://nourishthenerve.com/en/about",
+        "https://nourishthenerve.com/en/blog",
+        "https://nourishthenerve.com/en/workshops",
+        "https://nourishthenerve.com/en/testimonials",
+        "https://nourishthenerve.com/en/contact"
       ],
       "numberOfRuns": 3,
       "settings": {
