@@ -101,7 +101,7 @@ Strictly, the masked ID cannot be compared against a domain name, so this does n
 
 Nothing has changed and nothing has drifted. Support case **filed by the site owner, no reply yet** — filing was necessarily a console action for them, since both accounts are Basic and `support create-case` is unavailable to this project (`SubscriptionRequiredException`), which also means this repo cannot read the case's status or AWS's response. Progress is visible here only as `list-conflicting-aliases` dropping to `Quantity: 0`.
 
-**Owner decision, 2026-08-21:** park the cutover until AWS acts rather than hold Phase 2 behind it. Gate G1 is recorded as not-met on the apex criterion for exactly this reason — see [gate-g1-report.md](../plan/gate-g1-report.md).
+**Owner decision, 2026-08-21:** park the cutover until AWS acts rather than hold Phase 2 behind it. Gate G1 is recorded as not-met on the apex criterion for exactly this reason — see `docs/plan/gate-g1-report.md`, added on its own branch.
 
 | Check | Result |
 |---|---|
