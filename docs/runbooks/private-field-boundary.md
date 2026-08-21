@@ -86,13 +86,13 @@ The cases to cover, per endpoint, are the matrix's `—` columns for the private
 
 R-09's mitigation names the number — "100% coverage on the boundary" — so `vitest.config.ts` holds `projection.ts` to 100% lines/branches/functions/statements on its own, separately from the repo-wide 80%:
 
-```
+```ts
 '**/services/api/src/projection.ts': { lines: 100, functions: 100, branches: 100, statements: 100 }
 ```
 
 `pnpm test:coverage` runs in the `quality` job of `.github/workflows/ci.yml`, so a new untested branch in `projection.ts` fails the build with a named error:
 
-```
+```text
 ERROR: Coverage for branches (87.5%) does not meet "**/services/api/src/projection.ts" threshold (100%)
 ```
 
