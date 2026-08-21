@@ -3,11 +3,17 @@
 // forms): each version is its own immutable key, so version N+1 can never
 // mutate version N, and writing an already-existing version throws instead
 // of silently overwriting it.
+//
+// TASK 2.1.2 (R-09): reads and writes hand back `Unprojected<T>` for the
+// same reason repository.ts does — an assessment form, the one entity
+// docs/plan/04-data-model-rbac.md gives a `private{}` half, is a versioned
+// record, so this class is the read path 3.2.x wires through `projectFor`.
 import type { BaseRecord } from '@ndn/shared-types';
 
 import type { AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
+import { unprojected, type Unprojected } from './projection.js';
 import type { KeyValueStore } from './store.js';
 
 export interface VersionedRecord extends BaseRecord {
@@ -27,7 +33,7 @@ export class VersionedRepository<T extends VersionedRecord> {
     version: number,
     actor: string,
     data: Omit<T, keyof BaseRecord | 'version'>,
-  ): Promise<T> {
+  ): Promise<Unprojected<T>> {
     const key = this.versionKey(id, version);
     const existing = await this.store.get(key);
     if (existing) {
@@ -52,11 +58,12 @@ export class VersionedRepository<T extends VersionedRecord> {
       entityType: this.entityType,
       entityId: key,
     });
-    return record;
+    return unprojected(record);
   }
 
-  async getVersion(id: string, version: number): Promise<T | undefined> {
-    return this.store.get(this.versionKey(id, version));
+  async getVersion(id: string, version: number): Promise<Unprojected<T> | undefined> {
+    const found = await this.store.get(this.versionKey(id, version));
+    return found === undefined ? undefined : unprojected(found);
   }
 
   private versionKey(id: string, version: number): string {
