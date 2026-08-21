@@ -137,6 +137,12 @@ const CONTACT_FORM_FROM_EMAIL =
   process.env.CONTACT_FORM_FROM_EMAIL ?? 'noreply@nourishthenerve.com';
 const CONTACT_FORM_TO_EMAIL = process.env.CONTACT_FORM_TO_EMAIL ?? 'contact@nourishthenerve.com';
 
+// Mirrors infra/src/config.ts's SES_CONFIGURATION_SET_NAME — that constant
+// is what web-stack.ts sets this env var to at deploy time; the literal
+// here is only a local-dev/test fallback, same convention this file already
+// uses for TURNSTILE_SECRET_PARAMETER_NAME.
+const SES_CONFIGURATION_SET_NAME = process.env.SES_CONFIGURATION_SET_NAME ?? 'ndn-email';
+
 const ssmClient = new SSMClient({});
 
 // Resolved once per cold start and reused for the execution environment's
@@ -186,6 +192,7 @@ const rateLimiter: RateLimiter = new InMemoryRateLimiter({
 const sendEmail = createSesContactEmailSender({
   fromAddress: CONTACT_FORM_FROM_EMAIL,
   toAddress: CONTACT_FORM_TO_EMAIL,
+  configurationSetName: SES_CONFIGURATION_SET_NAME,
 });
 
 // verifyTurnstile is built lazily, per call, so a cold start doesn't fail

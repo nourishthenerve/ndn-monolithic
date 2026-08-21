@@ -9,7 +9,14 @@ import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
-import { APEX_DOMAIN_NAME, CERTIFICATE_ARN, DOMAIN_NAME, WWW_DOMAIN_NAME } from './config.js';
+import {
+  ALERT_EMAIL,
+  APEX_DOMAIN_NAME,
+  CERTIFICATE_ARN,
+  DOMAIN_NAME,
+  SES_CONFIGURATION_SET_NAME,
+  WWW_DOMAIN_NAME,
+} from './config.js';
 import { DataStack } from './data-stack.js';
 import { WebStack } from './web-stack.js';
 
@@ -445,11 +452,21 @@ describe('WebStack — contact form Lambda (TASK 1.4.1)', () => {
           Match.objectLike({
             Effect: 'Allow',
             Action: 'ses:SendEmail',
-            Resource: Match.objectLike({
-              'Fn::Join': Match.arrayWith([
-                Match.arrayWith([Match.stringLikeRegexp('identity/nourishthenerve.com')]),
-              ]),
-            }),
+            // Two resources since TASK 1.4.1's bounce/complaint follow-up:
+            // the identity *and* the configuration set the send names.
+            // Naming a set the role cannot use is an AccessDenied.
+            Resource: Match.arrayWith([
+              Match.objectLike({
+                'Fn::Join': Match.arrayWith([
+                  Match.arrayWith([Match.stringLikeRegexp('identity/nourishthenerve.com')]),
+                ]),
+              }),
+              Match.objectLike({
+                'Fn::Join': Match.arrayWith([
+                  Match.arrayWith([Match.stringLikeRegexp('configuration-set/ndn-email')]),
+                ]),
+              }),
+            ]),
           }),
         ]),
       }),
@@ -747,9 +764,20 @@ describe('WebStack — canary deployment (TASK 0.6.2)', () => {
 
   it('wires both alarms into the deployment group and rolls back automatically on failure or an alarm', () => {
     const template = synth();
-    const [errorsAlarmId, latencyAlarmId] = Object.keys(
+    // Select the two health alarms by what they measure, not by being
+    // first in the template. The stack gained SES reputation alarms
+    // (TASK 1.4.1's bounce/complaint follow-up) and "the first two alarms"
+    // silently stopped meaning "the health alarms".
+    const [errorsAlarmId, latencyAlarmId] = Object.entries(
       template.findResources('AWS::CloudWatch::Alarm'),
-    );
+    )
+      .filter(
+        ([, alarm]) =>
+          (alarm as { Properties: { Namespace?: string } }).Properties.Namespace === 'AWS/Lambda',
+      )
+      .map(([logicalId]) => logicalId);
+    expect(errorsAlarmId).toBeDefined();
+    expect(latencyAlarmId).toBeDefined();
     template.hasResourceProperties('AWS::CodeDeploy::DeploymentGroup', {
       AlarmConfiguration: {
         Enabled: true,
@@ -881,5 +909,100 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/ndn/health-function',
     });
+  });
+});
+
+// Bounce/complaint handling — the half that did not exist until now.
+// TASK 1.4.1 and 1.5.2 each deferred it, and AWS asked about it directly
+// when reviewing the SES production-access request
+// (docs/runbooks/ses-production-access.md).
+describe('WebStack — SES bounce/complaint events', () => {
+  it('creates the configuration set with suppression and reputation metrics on', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::SES::ConfigurationSet', {
+      Name: SES_CONFIGURATION_SET_NAME,
+      SuppressionOptions: { SuppressedReasons: ['BOUNCE', 'COMPLAINT'] },
+      ReputationOptions: { ReputationMetricsEnabled: true },
+    });
+  });
+
+  it('publishes exactly the failure events to SNS — never DELIVERY or SEND', () => {
+    const template = synth();
+    const destinations = Object.values(
+      template.findResources('AWS::SES::ConfigurationSetEventDestination'),
+    ) as Array<{
+      Properties: { EventDestination: { MatchingEventTypes: string[]; Enabled?: boolean } };
+    }>;
+    expect(destinations).toHaveLength(1);
+
+    // CDK emits these lowercase in the template, whatever case the
+    // EmailSendingEvent enum uses.
+    const events = (destinations[0]?.Properties.EventDestination.MatchingEventTypes ?? []).map(
+      (event) => event.toLowerCase(),
+    );
+    expect([...events].sort()).toEqual(['bounce', 'complaint', 'reject', 'renderingfailure']);
+    // A human inbox is subscribed to this topic. One notification per
+    // successful send would make it noise, and noise gets filtered away.
+    expect(events).not.toContain('delivery');
+    expect(events).not.toContain('send');
+    expect(events).not.toContain('open');
+  });
+
+  it('routes those events to a topic a human actually receives', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::SNS::Topic', { TopicName: 'ndn-email-events' });
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: ALERT_EMAIL,
+    });
+  });
+
+  it('alarms on bounce and complaint rate before AWS would', () => {
+    const template = synth();
+    for (const [alarmName, metricName] of [
+      ['ndn-email-bounce-rate', 'Reputation.BounceRate'],
+      ['ndn-email-complaint-rate', 'Reputation.ComplaintRate'],
+    ]) {
+      template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        AlarmName: alarmName,
+        Namespace: 'AWS/SES',
+        MetricName: metricName,
+        ComparisonOperator: 'GreaterThanThreshold',
+        // An hour with nothing sent has no datapoint — today's normal state.
+        TreatMissingData: 'notBreaching',
+      });
+    }
+  });
+
+  it('lets both senders name the configuration set, and authorises them to', () => {
+    const template = synthWithTable();
+
+    const withConfigSet = Object.values(template.findResources('AWS::Lambda::Function')).filter(
+      (fn) =>
+        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables?.SES_CONFIGURATION_SET_NAME ===
+        SES_CONFIGURATION_SET_NAME,
+    );
+    expect(withConfigSet).toHaveLength(2);
+
+    // Naming a configuration set the role has no permission on turns every
+    // send into an AccessDenied, so the grant must cover both resources.
+    const sendStatements = Object.values(template.findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (
+            policy as {
+              Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } };
+            }
+          ).Properties.PolicyDocument.Statement,
+      )
+      .filter((s) => s.Action === 'ses:SendEmail');
+
+    expect(sendStatements).toHaveLength(2);
+    for (const statement of sendStatements) {
+      const resources = JSON.stringify(statement.Resource);
+      expect(resources).toContain('identity/nourishthenerve.com');
+      expect(resources).toContain(`configuration-set/${SES_CONFIGURATION_SET_NAME}`);
+    }
   });
 });

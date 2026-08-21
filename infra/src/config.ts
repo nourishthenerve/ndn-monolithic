@@ -103,6 +103,17 @@ export const CONTACT_FORM_TO_EMAIL = 'contact@nourishthenerve.com';
 // ContactFormFunction's ses:SendEmail grant to exactly this identity's ARN.
 export const SES_EMAIL_IDENTITY_DOMAIN = 'nourishthenerve.com';
 
+// The SES configuration set both senders attach every message to, so
+// bounces, complaints, rejects and rendering failures are published as
+// events rather than only landing in a mailbox via SES's default feedback
+// forwarding. TASK 1.4.1 and 1.5.2 each deferred this ("no SNS topic wired
+// to bounce-complaint notifications beyond SES's default email
+// forwarding" — docs/runbooks/ses-production-access.md); it is built now
+// because AWS asked precisely this question when reviewing our
+// production-access request, and because a suppression list you cannot
+// observe is not a bounce-handling story.
+export const SES_CONFIGURATION_SET_NAME = 'ndn-email';
+
 // TASK 0.6.3: every ephemeral per-PR stack's CDK app id is this prefix plus
 // the PR number (bin/app.ts). Also the literal ARN-pattern prefix the
 // ndn-deploy-pr IAM role's policy is scoped to on the real account

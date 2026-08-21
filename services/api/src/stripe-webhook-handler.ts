@@ -142,6 +142,11 @@ async function verifySignature(rawBody: string, signatureHeader: string): Promis
   ) as unknown as StripeEvent;
 }
 
+// Mirrors infra/src/config.ts's SES_CONFIGURATION_SET_NAME — web-stack.ts
+// sets this env var at deploy time; the literal is a local-dev/test
+// fallback, same convention this repo uses for every other mirrored name.
+const SES_CONFIGURATION_SET_NAME = process.env.SES_CONFIGURATION_SET_NAME ?? 'ndn-email';
+
 const tableName = process.env.WORKSHOP_TABLE_NAME ?? '';
 const workshopStore = new DynamoWorkshopStore({ tableName });
 const registrationStore = new DynamoRegistrationStore({ tableName });
@@ -160,6 +165,7 @@ const registrations = new RegistrationRepository(
 
 const sendConfirmationEmail = createSesRegistrationEmailSender({
   fromAddress: process.env.CONTACT_FORM_FROM_EMAIL ?? 'noreply@nourishthenerve.com',
+  configurationSetName: SES_CONFIGURATION_SET_NAME,
 });
 
 export const handler = createStripeWebhookHttpHandler({
