@@ -2,7 +2,7 @@
 
 **Date started:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Decisions:** D-02, D-08, D-25 · **Risks:** R-06 · **Depends on:** 0.0.2, 1.1.1–1.5.2
 
-**Status: BLOCKED, awaiting an AWS Support case. The CloudFront alias cannot be added while the legacy distribution — in an AWS account we have no access to — still holds it. A same-session, owner-approved cutover attempt on 2026-08-15 confirmed this the hard way (see "2026-08-15 cutover attempt" below) and was reverted within ~90 seconds. The owning account has since been searched for and definitively ruled out of our reach ("Ownership search"), and both prerequisites for AWS's documented cross-account domain-move process are now in place ("Support-case prerequisites"). Next action: file the case in [g1-cutover-support-case.md](g1-cutover-support-case.md). Do not retry step 4 until AWS confirms the move.**
+**Status: BLOCKED, awaiting an AWS Support case. The CloudFront alias cannot be added while the legacy distribution — in an AWS account we have no access to — still holds it. A same-session, owner-approved cutover attempt on 2026-08-15 confirmed this the hard way (see "2026-08-15 cutover attempt" below) and was reverted within ~90 seconds. The owning account has since been searched for and definitively ruled out of our reach ("Ownership search"), and both prerequisites for AWS's documented cross-account domain-move process are now in place ("Support-case prerequisites"). Next action: file the case in [g1-cutover-support-case.md](g1-cutover-support-case.md) — but ask the site owner one question first, see "Conflicting-alias check" below: the conflicting distribution's owning account is now known to end `155257`, and if that is recognised the case is unnecessary. Re-verified unchanged 2026-08-21. Do not retry step 4 until the aliases are actually released.**
 
 This is the highest-risk task in the plan — it repoints the live `nourishthenerve.com` apex/`www` off the legacy site and, after an observation window, irreversibly deletes the legacy Lambda. Per the task's own step ordering, the DNS cutover (step 4 below) and the Lambda decommission (step 7) were always meant to be **explicitly held for the site owner's go-ahead**, not executed as part of any prep pass — that gate did its job: the owner approved a same-session attempt on 2026-08-15, it hit a real blocker, and was rolled back immediately per the pre-agreed rollback procedure.
 
@@ -70,6 +70,46 @@ Fixed by decoupling: `web-stack.ts`'s `domainNames` is back to `[DOMAIN_NAME]` w
 **Support plan caveat:** both accounts are on Basic support (`describe-severity-levels` → `SubscriptionRequiredException` on each). Technical cases normally require Business tier or above; cases like this are usually accepted under **Account and Billing** (free on Basic), but routing may need adjusting if it is rejected as technical.
 
 The case text to file is in [g1-cutover-support-case.md](g1-cutover-support-case.md).
+
+## Conflicting-alias check — run 2026-08-21, source account narrowed
+
+With the three-SAN certificate attached, `list-conflicting-aliases` finally runs (it refused while the distribution carried only the `next.`-only cert). Run from `ndn-prod` for both hostnames:
+
+```bash
+aws --profile ndn-prod cloudfront list-conflicting-aliases \
+  --alias nourishthenerve.com --distribution-id E1K6OYW4X46BJZ
+aws --profile ndn-prod cloudfront list-conflicting-aliases \
+  --alias www.nourishthenerve.com --distribution-id E1K6OYW4X46BJZ
+```
+
+Each returns exactly one conflict, and it is the **same** distribution for both:
+
+| Alias | Conflicting distribution | Owning account |
+|---|---|---|
+| `nourishthenerve.com` | `*******0TMKEWA` | `******155257` |
+| `www.nourishthenerve.com` | `*******0TMKEWA` | `******155257` |
+
+AWS masks all but the trailing characters by design. Two things follow.
+
+**The conflict is live and unchanged** — nothing has quietly released the aliases since 2026-08-15. This command is also the cheapest way to detect when AWS *has* completed the move: `Quantity: 0` means released. Re-run it rather than retrying a deploy to find out.
+
+**The owning account ends `155257`** — neither `803129122420` nor `357601815388`. That independently confirms the "Ownership search" conclusion above, and it is something the 2026-08-15 search never had: a concrete identifier the site owner may recognise (an old personal account, a former agency's, a previous developer's). **If it is recognised and still accessible, "Path forward" option 1 reopens and the Support case becomes unnecessary** — removing the two aliases from that distribution's own configuration lets `NdnWebStack` claim them on the next ordinary deploy, with no queue and no SLA to wait on. This is the one question worth putting to the owner before the case is filed; it is not a reason to resume searching AWS-side, which remains closed.
+
+Strictly, the masked ID cannot be compared against a domain name, so this does not *prove* the conflicting distribution is `d2z3fclxq13w3z.cloudfront.net` — only that a single distribution outside both of our accounts holds both names. Live DNS points apex/`www` at `d2z3fclxq13w3z.cloudfront.net` and that distribution serves them, so in practice they are the same thing.
+
+## Status re-verified 2026-08-21
+
+Nothing has changed and nothing has drifted. Support case **still not filed** — it is a console action for the site owner (both accounts are Basic, so `support create-case` is unavailable to this project: `SubscriptionRequiredException`).
+
+| Check | Result |
+|---|---|
+| `dig +short TXT _.nourishthenerve.com` / `_www.` | both `"dbn8dfhgi712k.cloudfront.net"` — prerequisites intact |
+| apex `curl -sI` | `302` → `www`, served by the legacy distribution |
+| `www` `curl -sI` | `200`, `server: AmazonS3` via the legacy distribution |
+| `www` CNAME | `d2z3fclxq13w3z.cloudfront.net` (unchanged; TTL still 60) |
+| `NdnWebStack` distribution | `Deployed`, aliases `['next.nourishthenerve.com']`, three-SAN cert `c7f37883…` attached — decoupling holds |
+| `next.nourishthenerve.com/health` | `200`, version `4c7dedf` (`main`'s last code-bearing commit; `d64a5b1` was docs + AWS-side only) |
+| Alias conflict | still held — see the table above |
 
 ## Pre-flight (step 1) — confirmed 2026-08-14
 
