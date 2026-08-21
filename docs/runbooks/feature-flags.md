@@ -38,7 +38,7 @@ All in `services/api/src/flags.ts`, following the same interface-seam pattern `s
 
 ## SSM-backed flag source — added 2026-08-21 (TASK 1.6.2)
 
-**This section supersedes "What was deliberately not built here" above.** That deferral was right in TASK 0.6.1 — nothing deployed then read a flag. It stopped being right at TASK 1.3.1, when the first flag-gated Lambda shipped, and it was not revisited: nine handlers went to production each wiring an `InMemoryFlagSource` that nothing ever wrote to, so every flag read `false` forever and no operator action could change it. The Gate G1 review found and quantified that ([gate-g1-report.md](../plan/gate-g1-report.md) §3a); this is the fix.
+**This section supersedes "What was deliberately not built here" above.** That deferral was right in TASK 0.6.1 — nothing deployed then read a flag. It stopped being right at TASK 1.3.1, when the first flag-gated Lambda shipped, and it was not revisited: nine handlers went to production each wiring an `InMemoryFlagSource` that nothing ever wrote to, so every flag read `false` forever and no operator action could change it. The Gate G1 review found and quantified that (`docs/plan/gate-g1-report.md` §3a, added on its own branch); this is the fix.
 
 ### How to turn a flag on
 
