@@ -8,19 +8,11 @@ import { InMemoryAuditLog } from './audit.js';
 import { systemClock } from './clock.js';
 import { ContentRepository, createContentReadHandler } from './content-repository.js';
 import { DynamoContentStore } from './dynamo-store.js';
-import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
 
-// No SSM-backed FlagSource exists yet anywhere in this codebase — same gap
-// sms-flags.ts documents for `sms.enabled` ("backed by whatever FlagReader
-// it's given ... once a Lambda actually [needs it] for real"). Until one is
-// built, an InMemoryFlagSource that nothing ever sets keeps
-// content.readApi.enabled permanently off in production, which is this
-// flag's documented default (05-execution-plan.md, TASK 1.3.1's Flag line).
-const flags = new CachedFlagReader({
-  source: new InMemoryFlagSource(),
-  clock: systemClock,
-  ttlMs: FLAG_CACHE_TTL_MS,
-});
+// TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
+// ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
+const flags = createSsmFlagReader();
 
 // No client option given — DynamoContentStore defaults to a real
 // DynamoDBDocumentClient (dynamo-store.ts).

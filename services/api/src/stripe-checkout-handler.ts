@@ -14,15 +14,15 @@ import { z } from 'zod';
 
 import { InMemoryAuditLog } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
-import { DynamoRegistrationStore, DynamoWorkshopCapacityStore, DynamoWorkshopStore } from './dynamo-store.js';
 import {
-  CachedFlagReader,
-  FLAG_CACHE_TTL_MS,
-  InMemoryFlagSource,
-  type FlagReader,
-} from './flags.js';
+  DynamoRegistrationStore,
+  DynamoWorkshopCapacityStore,
+  DynamoWorkshopStore,
+} from './dynamo-store.js';
+import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
 import { RegistrationRepository } from './registration-repository.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
 import {
   createWorkshopCheckoutHandler,
   type CreateCheckoutSession,
@@ -195,16 +195,9 @@ const createCheckoutSession: CreateCheckoutSession = async (input) => {
   return { id: session.id, url: session.url ?? '' };
 };
 
-// No SSM-backed FlagSource exists yet anywhere in this codebase — same
-// documented gap every other *-handler.ts in this repo carries. An
-// InMemoryFlagSource that nothing ever sets keeps
-// payments.stripeCheckout.enabled permanently off in production until one
-// is built.
-const flags = new CachedFlagReader({
-  source: new InMemoryFlagSource(),
-  clock: systemClock,
-  ttlMs: FLAG_CACHE_TTL_MS,
-});
+// TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
+// ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
+const flags = createSsmFlagReader();
 
 const workshopStore = new DynamoWorkshopStore({
   tableName: process.env.WORKSHOP_TABLE_NAME ?? '',
