@@ -113,6 +113,10 @@ Synth-only, no live AWS calls, in `log-retention.test.ts` and `web-stack.test.ts
 - `/ndn/site-deployment` synthesizes with `RetentionInDays: 14` and `DeletionPolicy: Delete`.
 - `MONITORED_LOG_GROUP_NAMES.length <= 10` (the API ceiling), and the monitored + unmonitored lists together account for **every** `/ndn/*` log group the app synthesizes — so a new `createLogGroup()` call fails the build until someone decides which list it belongs in, instead of quietly going unmonitored the way five groups did.
 
+**A CI timeout this exposed, and the fix for it.** The first CI run of this change failed: `quality` (`timeout-minutes: 15`) was killed at 15m13s, with every test passing. The infra suite alone took **369 seconds** on the runner, and `test:coverage` re-runs the whole thing a second time in the same job. The cause is not new — `web-stack.test.ts` and `data-stack.test.ts` call `synth()` once per assertion (~93 times between them), and every call rebuilds the CDK app and re-bundles all thirteen Lambdas through esbuild. The four synth-heavy tests added here were simply what pushed a suite that was already near the ceiling over it.
+
+Both files (and this one) now synthesize each distinct stack shape **once** and share the `Template`, which the assertions library only ever reads. Infra: **369s → 15s locally, 119 tests, same assertions**. No test was weakened or removed to get there; the negative check still holds — remove `ExplicitLambdaLogGroupAspect` and exactly one test fails.
+
 ### Live-account diff (read-only, no deploy)
 
 ```text

@@ -74,6 +74,29 @@ describe('enforceLogRetention', () => {
   });
 });
 
+// Both production stacks, synthesized once for the whole file — the same
+// cost web-stack.test.ts memoizes away, for the same reason: every synth
+// re-bundles thirteen Lambdas through esbuild, and a Template is only read.
+let templates: Array<{ stackName: string; template: Template }> | undefined;
+
+function productionTemplates(): Array<{ stackName: string; template: Template }> {
+  return (templates ??= (() => {
+    const app = new App();
+    enforceLogRetention(app);
+    const env = { account: '357601815388', region: 'eu-west-2' };
+    const dataStack = new DataStack(app, 'NdnDataStack', { env });
+    const webStack = new WebStack(app, 'NdnWebStack', {
+      env,
+      deployVersion: 'test-sha',
+      table: dataStack.table,
+    });
+    return [dataStack, webStack].map((stack) => ({
+      stackName: stack.stackName,
+      template: Template.fromStack(stack),
+    }));
+  })());
+}
+
 // Gate G1 §4's repeat finding. The aspect above can only reach log groups
 // that exist as template resources; a Lambda with no `logGroup` prop has
 // none, and CloudWatch creates its `/aws/lambda/<function-name>` group
@@ -127,27 +150,13 @@ describe('enforceLogRetention — implicit Lambda log groups', () => {
   });
 
   it('holds across the real app — every Lambda in both production stacks names its own group', () => {
-    const app = new App();
-    enforceLogRetention(app);
-    const env = { account: '357601815388', region: 'eu-west-2' };
-    const dataStack = new DataStack(app, 'NdnDataStack', { env });
-    const webStack = new WebStack(app, 'NdnWebStack', {
-      env,
-      deployVersion: 'test-sha',
-      table: dataStack.table,
-    });
-
-    for (const stack of [dataStack, webStack]) {
-      const template = Template.fromStack(stack);
+    for (const { stackName, template } of productionTemplates()) {
       const functions = Object.entries(template.findResources('AWS::Lambda::Function'));
       expect(functions.length).toBeGreaterThan(0);
       for (const [logicalId, resource] of functions) {
         const properties = (resource as { Properties?: { LoggingConfig?: { LogGroup?: unknown } } })
           .Properties;
-        expect(
-          properties?.LoggingConfig?.LogGroup,
-          `${stack.stackName}/${logicalId}`,
-        ).toBeDefined();
+        expect(properties?.LoggingConfig?.LogGroup, `${stackName}/${logicalId}`).toBeDefined();
       }
     }
   });
@@ -164,20 +173,8 @@ describe('log-volume alarm coverage', () => {
   });
 
   it('accounts for every /ndn/* log group the production app synthesizes', () => {
-    const app = new App();
-    enforceLogRetention(app);
-    const env = { account: '357601815388', region: 'eu-west-2' };
-    const dataStack = new DataStack(app, 'NdnDataStack', { env });
-    const webStack = new WebStack(app, 'NdnWebStack', {
-      env,
-      deployVersion: 'test-sha',
-      table: dataStack.table,
-    });
-
-    const synthesized = [dataStack, webStack]
-      .flatMap((stack) =>
-        Object.values(Template.fromStack(stack).findResources('AWS::Logs::LogGroup')),
-      )
+    const synthesized = productionTemplates()
+      .flatMap(({ template }) => Object.values(template.findResources('AWS::Logs::LogGroup')))
       .map(
         (resource) =>
           (resource as { Properties?: { LogGroupName?: string } }).Properties?.LogGroupName,

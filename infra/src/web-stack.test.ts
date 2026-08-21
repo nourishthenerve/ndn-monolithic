@@ -21,19 +21,31 @@ import {
 import { DataStack } from './data-stack.js';
 import { WebStack } from './web-stack.js';
 
-function synth() {
+// Synthesis, not assertion, is what this suite spends its time on: every
+// call builds the whole app and re-bundles all six Lambdas through
+// esbuild, and there are ~70 calls across this file. Each distinct shape
+// is therefore synthesized once and shared — the assertions library only
+// ever reads a Template, so there is nothing for one test to hand the next
+// in a mutated state. Before this, `quality` ran the infra suite for six
+// minutes and then hit its 15-minute job ceiling.
+function memoize(build: () => Template): () => Template {
+  let template: Template | undefined;
+  return () => (template ??= build());
+}
+
+const synth = memoize(() => {
   const app = new App();
   const stack = new WebStack(app, 'TestWebStack', {
     env: { account: '357601815388', region: 'eu-west-2' },
     deployVersion: 'test-sha',
   });
   return Template.fromStack(stack);
-}
+});
 
 // TASK 1.5.2: the Stripe webhook function only exists when a `table` prop
 // is given (mirrors production's DataStack -> WebStack wiring in
 // infra/bin/app.ts) — same App so CDK resolves the cross-stack reference.
-function synthWithTable() {
+const synthWithTable = memoize(() => {
   const app = new App();
   const dataStack = new DataStack(app, 'TestDataStackForWebStack', {
     env: { account: '357601815388', region: 'eu-west-2' },
@@ -44,7 +56,7 @@ function synthWithTable() {
     table: dataStack.table,
   });
   return Template.fromStack(stack);
-}
+});
 
 // Resolve a log group by the name it carries rather than by position:
 // there are now several in this stack, and "the first one findResources
@@ -60,7 +72,7 @@ function logGroupLogicalIdFor(template: Template, logGroupName: string): string 
   return logicalId as string;
 }
 
-function synthEphemeral() {
+const synthEphemeral = memoize(() => {
   const app = new App();
   const stack = new WebStack(app, 'TestWebStackPr123', {
     env: { account: '357601815388', region: 'eu-west-2' },
@@ -69,7 +81,7 @@ function synthEphemeral() {
     prLabel: 'pr-123',
   });
   return Template.fromStack(stack);
-}
+});
 
 describe('WebStack — site bucket', () => {
   it('is private, versioned, and SSL-enforced', () => {
