@@ -58,6 +58,73 @@ Neither is failing in production today, because both features are flag-gated off
 
 ### Next action — appeal, don't re-request
 
-Re-submitting the same `put-account-details` payload will be refused the same way. Read AWS's stated reason from the account email first, then reply on case `178661888300813` addressing it directly. Denials for small transactional senders usually turn on the use-case description being too thin about **volume, recipient provenance, and bounce/complaint handling** — so an appeal should state: expected volume (single-digit emails/day at launch), that every recipient has just submitted a form or completed a paid registration (never a purchased or scraped list), that mail is transactional-only with no marketing, and how bounces and complaints are handled. Note that the current setup has no SNS bounce/complaint topic beyond SES's default forwarding — standing one up before appealing is a cheap, concrete improvement to point at.
+Re-submitting the same `put-account-details` payload will be refused the same way. Read AWS's stated reason from the account email first, then reply on case `178661888300813` addressing it directly. Denials for small transactional senders usually turn on the use-case description being too thin about **volume, recipient provenance, and bounce/complaint handling** — so an appeal should state: expected volume (single-digit emails/day at launch), that every recipient has just submitted a form or completed a paid registration (never a purchased or scraped list), that mail is transactional-only with no marketing, and how bounces and complaints are handled. **Done** — see "The reply sent" and "Bounce handling, built" below.
 
-**Owner action.** This is an AWS-console/email step, not something this repo can drive.
+- **Account-level suppression list: enabled for `BOUNCE` and `COMPLAINT`** (`get-account` → `SuppressionAttributes.SuppressedReasons`). SES automatically suppresses an address account-wide once it hard-bounces or generates a complaint, without any application code.
+- **Feedback forwarding: on** (`FeedbackForwardingStatus: true`) — bounce and complaint notifications are delivered by email.
+- **Not in place when the reply was written:** a configuration set with an SNS event destination, i.e. programmatic bounce/complaint handling. `list-configuration-sets` returned nothing and the only SNS topic in the account was `ndn-log-ingestion-alarm`; no application code referenced bounces or complaints. The reply below says so plainly rather than claiming otherwise. **Built later the same day** — see "Bounce handling, built" below.
+
+### The reply sent — case `178661888300813`, 2026-08-21
+
+**Sent by the owner on 2026-08-21**, reopening the case rather than submitting a fresh request. Awaiting AWS. Kept here as the record of what was said, and because the third answer below is a commitment that has since been honoured — see "Bounce handling, built" at the end.
+
+> Thank you — apologies for the delayed reply, and here is the detail you asked for.
+>
+> **How often we send, and volume**
+>
+> Very low, and entirely event-driven — there is no scheduled or batch send anywhere in the system. At launch we expect single figures per day, and we do not expect to exceed a few dozen on any day. Three senders, in the order they go live:
+>
+> 1. *Contact-form relay* — one email per website contact-form submission, sent to our own `contact@nourishthenerve.com` mailbox. Realistically a handful per week.
+> 2. *Workshop registration confirmation* — one email to the person who has just completed a Stripe Checkout payment for a workshop place. Workshops are occasional; a busy one is a few dozen attendees, spread over the booking window.
+> 3. *Appointment reminders and account notifications* (later phase) — to registered, authenticated patients and clinicians only, one per appointment or account event.
+>
+> **How recipient lists are maintained**
+>
+> We do not maintain recipient lists. There is no mailing list, no import, no purchased or rented list, and no bulk send capability in the application at all. Every message is triggered by a specific action taken by that specific person moments earlier: they submitted our contact form, they completed and paid for a booking, or they have an appointment in an account they registered for. The only addresses we store are on patient and clinician account records, used solely to notify that person about their own account.
+>
+> **How we manage bounces, complaints and unsubscribes**
+>
+> - The account-level suppression list is enabled for both `BOUNCE` and `COMPLAINT`, so SES suppresses an address automatically once it hard-bounces or a recipient complains.
+> - Feedback forwarding is enabled, so bounce and complaint notifications reach a monitored mailbox.
+> - Before we send at any real volume we will add a configuration set with an SNS event destination for bounces, complaints and deliveries, so handling is programmatic rather than manual. We would rather tell you what is in place today than describe this as done.
+> - On unsubscribes: all of this mail is transactional and recipient-initiated, and we send no marketing or promotional email, so there is no list to unsubscribe from. Registered users will be able to manage their own notification preferences in their account. Our data model already separates personal and contact attributes (including marketing preferences) from clinical records specifically so those preferences can be honoured and changed independently.
+>
+> **Examples of the email we send**
+>
+> These are the two live templates, verbatim. Both are plain text.
+>
+> Contact-form relay — to our own mailbox, with the submitter's address as `Reply-To` so staff can reply directly to them:
+>
+> ```text
+> Subject: Contact form message from {name}
+>
+> {the message the visitor typed}
+> ```
+>
+> Workshop registration confirmation — to the person who just paid:
+>
+> ```text
+> Subject: You're registered: {workshop title}
+>
+> Your registration for "{workshop title}" is confirmed.
+>
+> Date/time (UTC): {date and time}
+>
+> See you there.
+> ```
+>
+> **Verified identity**
+>
+> Already in place, as you noted is required: `nourishthenerve.com` is a verified domain identity in eu-west-2 with Easy DKIM (`SUCCESS`, signing enabled), SPF extended to include `amazonses.com` alongside our existing Zoho mail, and a DMARC record published at `p=none` while we monitor alignment.
+>
+> We are a UK neuro-rehabilitation clinic and this is the transactional mail for our own patient and workshop platform. Happy to provide anything further.
+
+### Bounce handling, built — 2026-08-21
+
+The reply's third answer promised a configuration set with an SNS event destination "before we send at any real volume". That was built the same day rather than left as a commitment, and it supersedes the "Not in place" line in the section above.
+
+In short: SES configuration set `ndn-email` attached to every send by both senders, an SNS destination matching `BOUNCE`/`COMPLAINT`/`REJECT`/`RENDERING_FAILURE` to topic `ndn-email-events` with the alert address subscribed, and CloudWatch alarms on bounce rate (>3%) and complaint rate (>0.1%) — both below AWS's own review thresholds, so a problem surfaces to us before it surfaces to them. Full detail, verification commands and the mailbox-simulator test procedure are in `docs/runbooks/email-events.md`, added on its own branch.
+
+**One owner action comes with it:** AWS emails a subscription confirmation to the alert address when the topic is first created, and until that link is clicked the topic delivers nothing — silently, in a way indistinguishable from no bounces having occurred. Confirm it after the first deploy that includes this.
+
+If AWS follows up asking for more on bounce handling, that answer is now "here is what runs" rather than "here is what we intend".
