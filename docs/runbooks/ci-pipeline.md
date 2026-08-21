@@ -13,7 +13,9 @@
 | `docs-lint` | docs changed | markdownlint + offline internal-link check |
 | `secret-scan` | always | gitleaks over full git history |
 | `oidc-dry-run` | `pull_request` only | proves `ndn-deploy` still has exactly the access TASK 0.1.1 granted it, via a separate read-only role (see [Security fix](#security-fix-tighten-ndn-deploys-oidc-trust-2026-08-09) below); since TASK 0.3.2, also proves the IAM deny guardrail against the real policy simulator (see [Follow-up](#follow-up-oidc-dry-run-gains-a-guardrail-simulator-step-task-032-2026-08-09) below) |
-| `ci-summary` | always | single required status check; gates on all five above and prints CI minutes used to the job summary |
+| `pr-environment` | `pull_request`, code changed | deploys this PR's own ephemeral stack, runs the integration/contract suite plus TASK 1.1.3's axe + keyboard checks against it, destroys it in the same run (TASK 0.6.3, [ephemeral-pr-environments.md](ephemeral-pr-environments.md)). Paused 2026-08-13, re-enabled and promoted into the gate 2026-08-21 |
+| `deploy` | push to `main`, code changed | `cdk deploy` of the production stacks via `ndn-deploy` (OIDC) |
+| `ci-summary` | always | single required status check; gates on every job above and prints CI minutes used to the job summary |
 
 ## Scope consolidation: this task absorbs three stale plan references
 

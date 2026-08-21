@@ -257,16 +257,17 @@ jobs:
   pr-environment:
     name: Ephemeral PR environment
     needs: [changes, quality]
-    # PAUSED 2026-08-13 (owner decision, see docs/runbooks/
-    # ephemeral-pr-environments.md's "Paused" section): this job is
-    # already informational-only (excluded from ci-summary's required-gate
-    # loop below), but a full CloudFront distribution create+test+destroy
-    # still costs ~15-30 min of wall-clock CI time on every PR — not worth
-    # paying during this phase of many small milestone PRs. Re-enable
-    # before the go-live gate by deleting "&& false" below; the runbook's
-    # own "Owner actions" already calls for promoting this job into the
-    # required-gate loop at that same point, so do both together.
-    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true' && false
+    # Paused 2026-08-13, RESUMED 2026-08-21 (Gate G1 action item 2,
+    # docs/plan/gate-g1-report.md §7): the pause held for eight days and
+    # every Phase 1 UI task from 1.2.1 onward merged without an axe or
+    # keyboard check, which is what the gate review found. Re-enabled here
+    # and promoted into ci-summary's required-gate loop below at the same
+    # time — the runbook's own "Owner actions" always tied the two
+    # together, and a check worth gating on at launch is a check worth
+    # running. The ~15-30 min of wall-clock CloudFront create+destroy per
+    # PR is the price; the path filter (`changes.outputs.code`) still
+    # keeps docs-only PRs out of it.
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     # CloudFront distribution create/delete each take up to ~15 minutes
     # (docs/runbooks/iac-baseline.md) — deploy, wait, test, and destroy
@@ -426,17 +427,17 @@ jobs:
           echo "docs-lint:      ${{ needs.docs-lint.result }}"
           echo "secret-scan:    ${{ needs.secret-scan.result }}"
           echo "oidc-dry-run:   ${{ needs.oidc-dry-run.result }}"
-          # TASK 0.6.3: informational only, not yet gated — see the
-          # pr-environment job's own header comment for why (same
-          # first-landing pattern as oidc-dry-run originally used).
-          echo "pr-environment: ${{ needs.pr-environment.result }} (informational — not yet gating)"
+          echo "pr-environment: ${{ needs.pr-environment.result }}"
           echo "deploy:         ${{ needs.deploy.result }}"
           fail=0
           [ "${{ needs.changes.result }}" = "success" ] || fail=1
           # oidc-dry-run and pr-environment run on pull_request only; deploy
           # runs on push to main only (and only when code changed) — each
           # is `skipped` on the other's trigger by design, not a gap.
-          for r in "${{ needs.quality.result }}" "${{ needs.docs-lint.result }}" "${{ needs.secret-scan.result }}" "${{ needs.oidc-dry-run.result }}" "${{ needs.deploy.result }}"; do
+          # pr-environment joined this loop on 2026-08-21 (Gate G1 action
+          # item 2): it carries TASK 1.1.3's axe + keyboard suite, the only
+          # place either runs, so an a11y regression must block a merge.
+          for r in "${{ needs.quality.result }}" "${{ needs.docs-lint.result }}" "${{ needs.secret-scan.result }}" "${{ needs.oidc-dry-run.result }}" "${{ needs.pr-environment.result }}" "${{ needs.deploy.result }}"; do
             [ "$r" = "success" ] || [ "$r" = "skipped" ] || fail=1
           done
           if [ "$fail" = "1" ]; then

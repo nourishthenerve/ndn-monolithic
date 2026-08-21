@@ -32,7 +32,7 @@ pnpm cwv
 Needs Chrome on the machine (`CHROME_PATH` if it is not in the default location — on macOS,
 `CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`). Three runs per URL, median reported; `--collect.numberOfRuns=1` for a quick check. HTML and JSON reports land in `.lighthouseci/` (gitignored).
 
-**Deliberately not wired into CI.** It measures a live deployed URL, so on a PR it would measure `main`'s site, not the PR's — a green check that proves nothing about the change under review. The job that *could* measure a PR's own build is `pr-environment`, which is currently paused ([ephemeral-pr-environments.md](ephemeral-pr-environments.md)). Run this at gates, before and after the apex cutover, and whenever a change lands that could plausibly affect page weight.
+**Deliberately not wired into CI.** It measures a live deployed URL, so on a PR it would measure `main`'s site, not the PR's — a green check that proves nothing about the change under review. The job that *could* measure a PR's own build is `pr-environment` — paused when this was written, re-enabled and gating since 2026-08-21 ([ephemeral-pr-environments.md](ephemeral-pr-environments.md)). Wiring Lighthouse into it is now possible but still not done here: it would add a second slow step to a job that already dominates PR wall-clock, and the thresholds have 6–9× headroom, so gate-time runs remain the right cadence. Run this at gates, before and after the apex cutover, and whenever a change lands that could plausibly affect page weight.
 
 ## Baseline — 2026-08-21, `next.nourishthenerve.com`, desktop preset
 

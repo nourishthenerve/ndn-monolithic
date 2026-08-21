@@ -178,24 +178,28 @@ Zero standing cost, proven for real — the exact mechanism the CI job's own fin
 
 - **The bespoke least-privilege execution role** (design option 1 above) — explicitly deferred, flagged for revisit before a second collaborator gets repo access.
 - **A scheduled/periodic sweep for orphaned stacks** — `always()` steps reliably run on ordinary failures and on this workflow's own `cancel-in-progress` cancellations, but not if a runner is hard-killed mid-job. Not built here; the DoD's literal bar (assert the stack is gone within the same run) is met either way.
-- **Promoting `pr-environment` into `ci-summary`'s required gate** — owner action below, once its first live run is confirmed green.
+- **Promoting `pr-environment` into `ci-summary`'s required gate** — was an owner action here; **done 2026-08-21**, see "Paused, then resumed" below.
 
-## Paused (owner decision, 2026-08-13)
+## Paused (2026-08-13), then resumed and made gating (2026-08-21)
 
-The `pr-environment` job is currently disabled (`ci.yml`'s `if:` condition has `&& false` appended). Rationale: the job was already informational-only (see above — never in `ci-summary`'s required-gate loop), but a full CloudFront distribution create → test → destroy cycle still costs ~15–30 minutes of wall-clock CI time on every PR. During this phase of the plan (many small, sequential milestone-task PRs — see `docs/plan/05-execution-plan.md`'s Phase 1 task list), that wait isn't worth paying on every PR for a check that was already advisory.
+**Paused 2026-08-13 (owner decision).** The job was disabled by appending `&& false` to its `if:` condition. Rationale: it was already informational-only (see above — never in `ci-summary`'s required-gate loop), but a full CloudFront distribution create → test → destroy cycle still costs ~15–30 minutes of wall-clock CI time on every PR. During that phase of the plan (many small, sequential milestone-task PRs — see `docs/plan/05-execution-plan.md`'s Phase 1 task list), the wait wasn't worth paying on every PR for a check that was already advisory.
 
-**Re-enable before the go-live gate** (the cutover in TASK 1.6.1, or whichever milestone review precedes the service going live to real clients) — at that point also action the "Owner actions" item below to promote it into the required loop, since a check worth gating on at launch is a check worth actually running.
+**Resumed 2026-08-21, and promoted into the required gate in the same change** (Gate G1 action item 2, `docs/plan/gate-g1-report.md` §7). The pause lasted eight days and cost more than the CI minutes it saved: this job is the only place `tests/pr-env/a11y-full.test.ts` and `keyboard.test.ts` run, so every Phase 1 UI task from TASK 1.2.1 onward — nav, footer, legal pages, cookie consent, blog, contact, testimonials, workshops — merged with no axe or keyboard check at all. Run by hand for the gate, the keyboard suite failed on 4 of 15 routes.
 
-**To re-enable:** delete the `&& false` from `pr-environment`'s `if:` condition in `.github/workflows/ci.yml` (the line has a comment pointing back here).
+Both halves of the "Owner actions" item below landed together, as it always said they should: the `&& false` is gone from `ci.yml`, and `pr-environment` is now inside `ci-summary`'s `for r in ...` loop, so an a11y or keyboard regression blocks a merge instead of being reported after the fact. What made that safe to do in one step rather than the usual watch-then-promote sequence is that the suite was first proved green against the live site (`PR_ENV_BASE_URL=https://next.nourishthenerve.com pnpm run test:pr-env` → 18 vitest + 29 Playwright, all passing) on the same branch that fixed it.
+
+**Cost of the resume, stated plainly:** every PR that touches code now pays the ~15–30 minute distribution create/destroy cycle again. Docs-only PRs are unaffected — the `changes.outputs.code` path filter still short-circuits the job. If that wall-clock cost has to be cut again, cut it by narrowing *what* the job deploys, not by turning the a11y gate off; the eight-day pause is the argument against the second option.
+
+**To pause again (not recommended — read the paragraph above first):** append `&& false` to `pr-environment`'s `if:` condition in `.github/workflows/ci.yml` **and** remove it from `ci-summary`'s `for r in ...` loop in the same change, or the summary job will fail every PR on a job that never ran.
 
 ## Owner actions
 
-1. **Watch the first real `pr-environment` run** on an actual PR, then promote it into `ci-summary`'s required gate (move it into the `for r in ...` loop) — same follow-up `ci-pipeline.md` already did for `oidc-dry-run`. Do this at the same time as re-enabling the job (above), not before.
+1. ~~**Watch the first real `pr-environment` run** on an actual PR, then promote it into `ci-summary`'s required gate~~ — **done 2026-08-21** (see above). The job is re-enabled and gating; the first PR to run it is the one that made this change.
 2. **Revisit the IAM design trade-off above** before granting a second collaborator write access to this repository.
 
 ## Rollback
 
 - **`ndn-deploy-pr` role:** `aws --profile ndn-prod iam delete-role-policy --role-name ndn-deploy-pr --policy-name AssumeCdkBootstrapRolesOnly` then `iam delete-role --role-name ndn-deploy-pr`. Deleting it only removes the ability to run the `pr-environment` job — no other role or production path depends on it.
 - **`WebStack`'s ephemeral mode / `bin/app.ts`'s `PR_NUMBER` branch:** revert the commit. Production's own deploy path (`PR_NUMBER` unset) is unchanged either way, so no redeploy of `NdnWebStack`/`NdnBudgetStack` is required to roll this back.
-- **`ci.yml`'s `pr-environment` job:** revert the commit — it is additive-only (a new job plus two `needs`/gate-echo lines), no existing job's behaviour changes.
+- **`ci.yml`'s `pr-environment` job:** revert the commit that added it — it was additive-only (a new job plus two `needs`/gate-echo lines), no existing job's behaviour changed. Since 2026-08-21 the job is also in `ci-summary`'s required-gate loop, so a rollback must remove it from that loop too (see "To pause again" above).
 - **Any stray `NdnWebStackPr*` stack** (e.g. from a hard-killed CI run): `AWS_PROFILE=ndn-prod npx cdk destroy NdnWebStackPr<N> --exclusively --force` from `infra/`, or delete via the CloudFormation console. No data is at risk — every ephemeral stack holds only the placeholder page and a health-check Lambda.
