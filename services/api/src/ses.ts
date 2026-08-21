@@ -18,6 +18,13 @@ export type EmailSender = (input: ContactEmailInput) => Promise<void>;
 export interface SesContactEmailSenderOptions {
   readonly fromAddress: string;
   readonly toAddress: string;
+  /**
+   * SES configuration set to attribute the send to (infra/src/email-events.ts).
+   * Without it SES publishes no bounce/complaint event for the message and
+   * the reputation metrics stay empty — the send still works, which is why
+   * this is easy to leave off and worth naming explicitly.
+   */
+  readonly configurationSetName?: string;
   /** Defaults to a real client — tests inject a mocked one (aws-sdk-client-mock) instead. */
   readonly client?: SESv2Client;
 }
@@ -30,6 +37,7 @@ export function createSesContactEmailSender(options: SesContactEmailSenderOption
       new SendEmailCommand({
         FromEmailAddress: options.fromAddress,
         Destination: { ToAddresses: [options.toAddress] },
+        ConfigurationSetName: options.configurationSetName,
         ReplyToAddresses: [input.email],
         Content: {
           Simple: {
@@ -53,12 +61,12 @@ export interface RegistrationConfirmationEmailInput {
   readonly dateTimeUtc: string;
 }
 
-export type RegistrationEmailSender = (
-  input: RegistrationConfirmationEmailInput,
-) => Promise<void>;
+export type RegistrationEmailSender = (input: RegistrationConfirmationEmailInput) => Promise<void>;
 
 export interface SesRegistrationEmailSenderOptions {
   readonly fromAddress: string;
+  /** Same configuration set as the contact relay — see above. */
+  readonly configurationSetName?: string;
   /** Defaults to a real client — tests inject a mocked one (aws-sdk-client-mock) instead. */
   readonly client?: SESv2Client;
 }
@@ -73,6 +81,7 @@ export function createSesRegistrationEmailSender(
       new SendEmailCommand({
         FromEmailAddress: options.fromAddress,
         Destination: { ToAddresses: [input.to] },
+        ConfigurationSetName: options.configurationSetName,
         Content: {
           Simple: {
             Subject: { Data: `You're registered: ${input.workshopTitle}` },

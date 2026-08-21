@@ -46,11 +46,13 @@ import {
   CONTACT_FORM_FROM_EMAIL,
   CONTACT_FORM_TO_EMAIL,
   DOMAIN_NAME,
+  SES_CONFIGURATION_SET_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
 } from './config.js';
+import { createEmailEventPipeline } from './email-events.js';
 import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
 import { attachDestructiveActionGuardrail } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
@@ -171,6 +173,11 @@ export class WebStack extends Stack {
       integration: new HttpLambdaIntegration('HealthIntegration', healthAlias),
     });
 
+    // Both SES senders below attach every message to this configuration
+    // set, so bounces and complaints become events and metrics rather than
+    // only a silent suppression-list side effect. See email-events.ts.
+    createEmailEventPipeline(this);
+
     // TASK 1.4.1: the contact form's Lambda + route. A separate function
     // and role from HealthFunction — this one needs ssm:GetParameter (the
     // Turnstile secret, D-14) and ses:SendEmail, neither of which the
@@ -193,6 +200,7 @@ export class WebStack extends Stack {
         TURNSTILE_SECRET_PARAMETER_NAME,
         CONTACT_FORM_FROM_EMAIL,
         CONTACT_FORM_TO_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(
@@ -227,11 +235,20 @@ export class WebStack extends Stack {
         sid: 'SendContactFormEmail',
         effect: Effect.ALLOW,
         actions: ['ses:SendEmail'],
+        // Both the identity and the configuration set: SESv2 authorises
+        // SendEmail against each resource the call names, so omitting the
+        // configuration set turns every send into an AccessDenied the
+        // moment ConfigurationSetName is set.
         resources: [
           Stack.of(this).formatArn({
             service: 'ses',
             resource: 'identity',
             resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
           }),
         ],
       }),
@@ -353,6 +370,7 @@ export class WebStack extends Stack {
           STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
           STRIPE_SECRET_KEY_PARAMETER_NAME,
           CONTACT_FORM_FROM_EMAIL,
+          SES_CONFIGURATION_SET_NAME,
         },
         logGroup: createLogGroup(
           this,
@@ -395,9 +413,9 @@ export class WebStack extends Stack {
           ],
         }),
       );
-      // Scoped to exactly the one verified sending identity, same shape
-      // SendContactFormEmail above — the registration-confirmation email
-      // reuses this identity, not a second one.
+      // Scoped to exactly the one verified sending identity and the one
+      // configuration set, same shape SendContactFormEmail above — the
+      // registration-confirmation email reuses both, not a second of either.
       stripeWebhookRole.addToPrincipalPolicy(
         new PolicyStatement({
           sid: 'SendRegistrationConfirmationEmail',
@@ -408,6 +426,11 @@ export class WebStack extends Stack {
               service: 'ses',
               resource: 'identity',
               resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+            }),
+            Stack.of(this).formatArn({
+              service: 'ses',
+              resource: 'configuration-set',
+              resourceName: SES_CONFIGURATION_SET_NAME,
             }),
           ],
         }),
