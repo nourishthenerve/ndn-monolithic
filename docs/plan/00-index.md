@@ -8,7 +8,7 @@ Nourish the Nerve is a UK neuro-rehabilitation clinic that today has only a stat
 
 Three constraints shape every decision in this plan: **£20/month all-in ex-VAT** (designed to £12–14), **zero downtime with no staging environment**, and an absolute prohibition on code that deletes patient, clinical, content or media data.
 
-**Verified position (2026-08-07):** greenfield repo (zero commits at plan time), domain and DNS under our control in AWS account 803129122420, live brochure site served from a *different* unidentified AWS account, and a legacy click-ops Lambda with a public unauthenticated URL holding delete rights over an unversioned bucket. Planning FX £1 = $1.2105 ($1.345 ECB less the 10% adverse buffer required by C-01).
+**Verified position (2026-08-07):** greenfield repo (zero commits at plan time), domain and DNS under our control in AWS account 803129122420, live brochure site served from what looked like a *different* unidentified AWS account (corrected 2026-08-21: it is an Amplify app inside 803129122420 — `docs/runbooks/g1-cutover.md`), and a legacy click-ops Lambda with a public unauthenticated URL holding delete rights over an unversioned bucket. Planning FX £1 = $1.2105 ($1.345 ECB less the 10% adverse buffer required by C-01).
 
 ## Document map
 

@@ -2,7 +2,9 @@
 
 **Date started:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Decisions:** D-02, D-08, D-25 · **Risks:** R-06 · **Depends on:** 0.0.2, 1.1.1–1.5.2
 
-**Status: BLOCKED, awaiting an AWS Support case. The CloudFront alias cannot be added while the legacy distribution — in an AWS account we have no access to — still holds it. A same-session, owner-approved cutover attempt on 2026-08-15 confirmed this the hard way (see "2026-08-15 cutover attempt" below) and was reverted within ~90 seconds. The owning account has since been searched for and definitively ruled out of our reach ("Ownership search"), and both prerequisites for AWS's documented cross-account domain-move process are now in place ("Support-case prerequisites"). The case is **filed** (owner, confirmed 2026-08-21) and awaiting an AWS reply; the task is parked on the owner's decision until that lands, and Phase 2 proceeds around it. Next action: poll `list-conflicting-aliases` for `Quantity: 0` — see "Conflicting-alias check" below, which also records that the conflicting distribution's owning account ends `155257`, a lead worth putting to the owner in parallel. Re-verified unchanged 2026-08-21. Do not retry step 4 until the aliases are actually released.**
+**Status: UNBLOCKED 2026-08-21 — no Support case needed, the fix is self-service.** AWS Support's reply identified the holder of the apex/`www` aliases: not an unreachable third account, but the **`ndn-frontend` Amplify app in `803129122420`**, an account we have root on. Verified independently (see "Holder identified" below). Releasing the aliases is one `amplify delete-domain-association` call. The blocker was never cross-account cooperation; it was that the ownership search looked in the wrong place — see "Why the ownership search missed it".
+
+**What this now needs is an owner go-ahead on timing, not a queue.** Removing the domain association takes the legacy site down, and apex/`www` stay down until the `NdnWebStack` deploy claims the aliases and DNS is repointed — a **~10–20 minute outage**, structurally unavoidable (CloudFront will not accept an alias until it is released). That is much longer than the ~72-second window of the 2026-08-15 attempt, and is why this is scheduled rather than run on sight. Revised step 4 is below. **Do not run it without the owner's go-ahead on a window.**
 
 This is the highest-risk task in the plan — it repoints the live `nourishthenerve.com` apex/`www` off the legacy site and, after an observation window, irreversibly deletes the legacy Lambda. Per the task's own step ordering, the DNS cutover (step 4 below) and the Lambda decommission (step 7) were always meant to be **explicitly held for the site owner's go-ahead**, not executed as part of any prep pass — that gate did its job: the owner approved a same-session attempt on 2026-08-15, it hit a real blocker, and was rolled back immediately per the pre-agreed rollback procedure.
 
@@ -27,26 +29,59 @@ With explicit owner go-ahead in-session, the revised step 4 (DNS first, alias re
 
 **Total window where apex/`www` served a CloudFront error page instead of either site: ~72 seconds (10:17:35–10:18:47 UTC).**
 
-**Why this is a different, harder problem than the step-3 failure:** the step-3 failure was a *DNS-based* pre-check ("does this alias's DNS currently point elsewhere") that a DNS-first ordering was expected to satisfy. This one is CloudFront's actual **alias-uniqueness constraint**: an alternate domain name can only be attached to *one* CloudFront distribution at a time, globally, across every AWS account — and it is enforced against the distribution's own configuration, not DNS. The legacy distribution `d2z3fclxq13w3z.cloudfront.net` still has `nourishthenerve.com`/`www.nourishthenerve.com` configured as *its* aliases. Repointing DNS doesn't release that claim — only removing the alias from the legacy distribution's own configuration does, and that distribution lives in the unidentified third AWS account this project has never held credentials for (see 00-index.md's "Verified position"). There is no DNS trick, deploy-ordering trick, or retry that gets around this from our side alone.
+**Why this is a different, harder problem than the step-3 failure:** the step-3 failure was a *DNS-based* pre-check ("does this alias's DNS currently point elsewhere") that a DNS-first ordering was expected to satisfy. This one is CloudFront's actual **alias-uniqueness constraint**: an alternate domain name can only be attached to *one* CloudFront distribution at a time, globally, across every AWS account — and it is enforced against the distribution's own configuration, not DNS. The legacy distribution `d2z3fclxq13w3z.cloudfront.net` still has `nourishthenerve.com`/`www.nourishthenerve.com` configured as *its* aliases. Repointing DNS doesn't release that claim — only removing the alias from the legacy distribution's own configuration does. There is no DNS trick, deploy-ordering trick, or retry that gets around it. (This paragraph originally went on to say that distribution "lives in the unidentified third AWS account this project has never held credentials for". That was wrong — it is Amplify-managed from `803129122420`, see "Holder identified" below. The analysis of the constraint itself stands unchanged; only the attribution was mistaken.)
 
-**Path forward — needs one of, before step 4 can be retried:**
+**Path forward — RESOLVED 2026-08-21 as option 1.** The two options below were written on 2026-08-15, when the holder was believed external. Option 1 is what actually applies, and it was never closed:
 
-1. **Identify and get cooperation from whoever controls the account serving `d2z3fclxq13w3z.cloudfront.net`**, so they (or we, with temporary access) remove `nourishthenerve.com`/`www.nourishthenerve.com` from that distribution's aliases — after which `NdnWebStack` can claim them immediately (`cdk deploy` would then succeed the same way it does for any fresh alias). **Ruled out 2026-08-15 — see "Ownership search" below.**
-2. **An AWS Support case**, if (1) isn't possible — AWS has a documented process for moving an alternate domain name to a distribution in a different account when you can demonstrate you own the domain (you control its Route 53 zone, which we do). This is the standard remediation AWS points to for exactly this cross-account CNAME conflict; see AWS's "resolve the CNAMEAlreadyExists error" and "move an alternate domain name" guidance. **This is now the active path — prerequisites completed 2026-08-15, see below.**
-3. Either way, this is a **prerequisite investigation/coordination task, not a retry of step 4** — repeating the same DNS-then-deploy sequence will fail identically every time until the alias is actually released on the legacy side.
+1. **Get the alias removed from the holding distribution's own configuration**, after which `NdnWebStack` can claim it immediately, exactly as it would any fresh alias. **This is the live path.** The holder turned out to be an Amplify app in our own `803129122420` — see "Holder identified" below — so "cooperation" means one CLI call, not a conversation.
+2. ~~An AWS Support case to move the alternate domain name cross-account.~~ **Moot** — the case was filed and its useful output was the identification in (1), not a move. AWS explicitly handed the action back: the domains are in an account we control, so we remove them ourselves.
+3. Still true, and still the thing to respect: this is **a prerequisite release, not a retry of step 4**. The same DNS-then-deploy sequence fails identically every time until the alias is actually released. What changed is only *who* can release it.
 
-## Ownership search — exhausted 2026-08-15
+## Holder identified — 2026-08-21
 
-The site owner recalled building the original `nourishthenerve.com` themselves under `803129122420`, which would have made this a same-account move (`update-domain-association`, no Support needed). Checked directly, as root on that account — it does **not** hold the legacy distribution:
+AWS Support replied to the case and named the holder. Verified independently against `803129122420` before acting on it:
 
-- `aws cloudfront list-distributions` (as `arn:aws:iam::803129122420:root`) returns exactly **4** distributions, all `islamicmaps.org` (`app`/`landing`/`api`/`cdn`). No `d2z3fclxq13w3z`, no `nourishthenerve.com` alias on any of them. CloudFront is a global service — `--region` does not scope this listing, so this is the account's complete inventory.
-- `aws organizations list-accounts` — `803129122420` is the management account of org `o-tsnehqxpmj`, whose only members are itself and `357601815388` (`ndn-prod`, created for this project). There is no forgotten sibling account to check.
+```console
+$ aws --profile default --region eu-west-2 amplify list-domain-associations --app-id dty9c1kqh8zkh
+domainAssociationArn: arn:aws:amplify:eu-west-2:803129122420:apps/dty9c1kqh8zkh/domains/nourishthenerve.com
+domainStatus:         AVAILABLE
+subDomains:
+  (apex)  CNAME d2z3fclxq13w3z.cloudfront.net
+  www     CNAME d2z3fclxq13w3z.cloudfront.net
+```
 
-So the legacy distribution is confirmed to sit in an AWS account nobody on this project can currently sign into, and option 1 is closed unless that account is later identified. **Do not spend more time searching for it** — option 2 does not require knowing whose it is.
+That is the distribution this runbook has been chasing since 2026-08-14. Corroborated: `https://main.dty9c1kqh8zkh.amplifyapp.com` serves byte-identical content to `www.nourishthenerve.com` (both `content-length: 26876`).
 
-## Support-case prerequisites — completed 2026-08-15
+| | |
+|---|---|
+| Amplify app | `ndn-frontend`, appId **`dty9c1kqh8zkh`**, `eu-west-2` |
+| Account | **`803129122420`** — root access held |
+| Source | `github.com/nourishthenerve/ndn-frontend` |
+| Created / last deployed | 2026-01-21 / 2026-02-24 |
 
-AWS's cross-account alternate-domain-name move has two prerequisites that must be in place *before* the case is filed, or it bounces back. Both are now done. Neither moves traffic.
+**One correction to AWS's reply:** it gives the App ID as `d33x5xdydlevqa`. No such app exists — `amplify list-apps` across all regions returns exactly one app in this account, `dty9c1kqh8zkh`. Everything else in their message checks out, so treat it as a transcription error on their side and use the real ID when replying to them.
+
+## Why the ownership search missed it
+
+The section this replaces concluded, on 2026-08-15, that the distribution sat in an account "nobody on this project can currently sign into", and instructed **"do not spend more time searching for it"**. That conclusion was wrong, and the instruction pointed the search away from the answer for six days. Recorded here rather than quietly deleted, because the failure mode generalises.
+
+The evidence at the time was:
+
+- `aws cloudfront list-distributions` (as `arn:aws:iam::803129122420:root`) returned exactly **4** distributions, all `islamicmaps.org` (`app`/`landing`/`api`/`cdn`). No `d2z3fclxq13w3z`, no `nourishthenerve.com` alias on any of them.
+- `aws organizations list-accounts` — `803129122420` is the management account of org `o-tsnehqxpmj`, whose only members are itself and `357601815388`. No forgotten sibling account.
+
+Both commands were run correctly and both outputs were accurate. The error was the inference drawn from them: **Amplify-managed CloudFront distributions do not appear in the owning account's `list-distributions`.** Amplify provisions them in an AWS-owned service account, so an Amplify-fronted domain is invisible to every CloudFront-side query you can run against your own account. The listing was complete for distributions the account *owns*; it was never complete for domains the account *controls*, and only the second question mattered.
+
+That also disposes of the `155257` lead recorded below: it is AWS's own Amplify service account, not a former agency's or an old personal one. It was never worth chasing.
+
+**The command that would have found this on day one is `aws amplify list-apps`.** Generalised: when a CloudFront alias conflict points at an account you appear not to control, check the services that front CloudFront on your behalf — Amplify first, then App Runner, then edge-optimised API Gateway — in the accounts you *do* control, before concluding the holder is external.
+
+## Support-case prerequisites — completed 2026-08-15, now largely moot
+
+Kept because one of the two is still load-bearing. These were AWS's prerequisites for the cross-account move, which is no longer the path (see "Path forward"). Neither moves traffic.
+
+- **The TXT records (1) are now pointless but harmless** — leave or delete them; they validate a move that will not happen. Deleting is tidier, and is listed under "Post-cutover cleanup".
+- **The certificate (2) is still essential**, for an unrelated reason: it must cover apex/`www` *before* those aliases are added, or the deploy fails on a certificate/alias mismatch. It is already attached. Nothing to redo.
 
 ### 1. Domain-control validation TXT records — added
 
@@ -65,7 +100,9 @@ Added by `route53 change-resource-record-sets` (`UPSERT`, TTL 300) in the `80312
 
 It matters because "target distribution carries a certificate covering the domain" is itself an AWS prerequisite for the move — the case cannot proceed without it, and `aws cloudfront list-conflicting-aliases` (which reports the masked owning account ID) refuses to run without it too.
 
-Fixed by decoupling: `web-stack.ts`'s `domainNames` is back to `[DOMAIN_NAME]` while `CERTIFICATE_ARN` stays on the three-SAN cert `c7f37883-1f9e-4abc-94b3-18fb028cf9e2`. Synth confirms `Aliases: ['next.nourishthenerve.com']` with that cert attached. A regression test (`attaches the apex/www-covering certificate without yet claiming those aliases`) asserts the two stay decoupled, so a future edit can't re-bundle them and reproduce the failure. `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` rejoin `domainNames` only *after* Support completes the move.
+Fixed at the time by decoupling: `domainNames` went back to `[DOMAIN_NAME]` while `CERTIFICATE_ARN` stayed on the three-SAN cert `c7f37883-1f9e-4abc-94b3-18fb028cf9e2`, guarded by a test asserting the aliases were absent.
+
+**Superseded 2026-08-21.** With the release now self-service, `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` have rejoined `domainNames` and the guard test is inverted: `claims apex/www alongside next., all covered by the three-SAN certificate` now asserts the aliases are present *and* that the attached cert is the one covering them — the same mismatch protected against, from the other side. **The decoupling's whole point survives as deploy ordering:** the release must happen before this deploys, or CloudFormation rolls the update back and takes the certificate with it again.
 
 **Support plan caveat:** both accounts are on Basic support (`describe-severity-levels` → `SubscriptionRequiredException` on each). Technical cases normally require Business tier or above; cases like this are usually accepted under **Account and Billing** (free on Basic), but routing may need adjusting if it is rejected as technical.
 
@@ -93,15 +130,19 @@ AWS masks all but the trailing characters by design. Two things follow.
 
 **The conflict is live and unchanged** — nothing has quietly released the aliases since 2026-08-15. This command is also the cheapest way to detect when AWS *has* completed the move: `Quantity: 0` means released. Re-run it rather than retrying a deploy to find out.
 
-**The owning account ends `155257`** — neither `803129122420` nor `357601815388`. That independently confirms the "Ownership search" conclusion above, and it is something the 2026-08-15 search never had: a concrete identifier the site owner may recognise (an old personal account, a former agency's, a previous developer's). **If it is recognised and still accessible, "Path forward" option 1 reopens and the Support case becomes unnecessary** — removing the two aliases from that distribution's own configuration lets `NdnWebStack` claim them on the next ordinary deploy, with no queue and no SLA to wait on. This is the one question worth putting to the owner before the case is filed; it is not a reason to resume searching AWS-side, which remains closed.
+**The owning account ends `155257` — and this was read wrongly on 2026-08-21.** It is neither `803129122420` nor `357601815388`, and that was taken as independent confirmation that the holder was a third party, plus "a concrete identifier the site owner may recognise". It is neither. **`155257` is AWS's own Amplify service account** — where Amplify provisions the CloudFront distributions it manages on a customer's behalf. An Amplify-fronted domain always reports a conflicting account you have never heard of, because you do not own the distribution; you own the Amplify app in front of it.
 
-Strictly, the masked ID cannot be compared against a domain name, so this does not *prove* the conflicting distribution is `d2z3fclxq13w3z.cloudfront.net` — only that a single distribution outside both of our accounts holds both names. Live DNS points apex/`www` at `d2z3fclxq13w3z.cloudfront.net` and that distribution serves them, so in practice they are the same thing.
+So the correct reading of this table is: *"the conflict is real, and the holding distribution is service-managed rather than customer-owned"* — which is a pointer **toward** Amplify/App Runner in your own accounts, not away from them. See "Why the ownership search missed it".
+
+Strictly, the masked ID cannot be compared against a domain name, so this does not *prove* the conflicting distribution is `d2z3fclxq13w3z.cloudfront.net`. The Amplify domain association names that exact CloudFront domain, so in practice they are the same thing.
 
 ## Status re-verified 2026-08-21
 
-Nothing has changed and nothing has drifted. Support case **filed by the site owner, no reply yet** — filing was necessarily a console action for them, since both accounts are Basic and `support create-case` is unavailable to this project (`SubscriptionRequiredException`), which also means this repo cannot read the case's status or AWS's response. Progress is visible here only as `list-conflicting-aliases` dropping to `Quantity: 0`.
+Nothing has drifted; the table below is the pre-cutover baseline to compare against after step 4.
 
-**Owner decision, 2026-08-21:** park the cutover until AWS acts rather than hold Phase 2 behind it. Gate G1 is recorded as not-met on the apex criterion for exactly this reason — see `docs/plan/gate-g1-report.md`, added on its own branch.
+**Support case: answered, and closed out the blocker.** Filing was necessarily a console action for the owner, since both accounts are Basic and `support create-case` is unavailable to this project (`SubscriptionRequiredException`) — which also means this repo could not read the reply, and it reached us by the owner pasting it in. Its useful content was the identification, not a move: see "Holder identified".
+
+**The earlier owner decision to park the cutover is superseded.** It was made when the next action was "wait on an AWS queue with no SLA". The next action is now a command we can run, so what remains is choosing a window for the ~10–20 minute outage — see step 4. Gate G1 stays not-met on the apex criterion until that runs (`docs/plan/gate-g1-report.md`).
 
 | Check | Result |
 |---|---|
@@ -169,22 +210,56 @@ CloudFront performs a live DNS lookup on every alias you try to add and **refuse
 
 `www.nourishthenerve.com`'s CNAME TTL was `500`; lowered to `60` (target unchanged — still `d2z3fclxq13w3z.cloudfront.net`, zero traffic impact) so that if the real cutover needs a fast rollback, resolvers pick up the reverted record quickly. The apex record is a Route 53 **ALIAS**, which has no TTL of its own and resolves through Route 53 directly — already fast. **Wait at least the old TTL (500s, call it 15+ minutes for safety against caching resolvers that ignore TTL) after this change before running the actual cutover**, so caches have already rolled onto the new 60s TTL by the time it matters.
 
-## Remaining steps — BLOCKED on the third-account alias conflict, not merely "awaiting go-ahead"
+## Remaining steps — unblocked, awaiting an owner-chosen window
 
-### Step 4: DNS cutover + re-deploy the CloudFront alias, back to back — attempted 2026-08-15, blocked, reverted
+### Step 4 (revised 2026-08-21): release the Amplify claim, deploy, then repoint DNS
 
-See "2026-08-15 cutover attempt" above for what was tried, the exact failure, and the revert. The procedure below is kept as the accurate record of what was executed (and what will need to run again once the alias conflict is resolved), not as a next action to take as-is.
+**The 2026-08-15 ordering is dead.** It put DNS first and the deploy second, which was correct when the only obstacle was believed to be a DNS-based pre-check. It is wrong now: the alias must be *released* before CloudFront will accept it, so the release comes first and DNS comes last. Running the old order reproduces the ~72-second error window and a failed deploy, nothing more.
 
-1. In the `803129122420` zone (manual, `default` profile — `ndn-deploy` has no access there):
+**Prerequisite: the code change adding `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` to `domainNames` is reviewed and green, but NOT yet merged.** `ci.yml`'s `deploy` job triggers on any push to `main` that touches code (`if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true'`), so **merging is what fires the deploy** — there is no "merge now, deploy later". Merging before the release therefore produces a guaranteed failed deploy.
+
+Two ways to sequence this. The default below is (a):
+
+**(a) Merge inside the window, after the release — recommended.** The merge *is* step 4.3. Costs a few extra minutes inside the outage (`quality` must pass before `deploy` starts, they are not parallel), but `main` never carries a deliberately-broken deploy.
+
+**(b) Merge early, accept one failed deploy, re-dispatch at the window.** The failed deploy is genuinely harmless and this is proven, not assumed — the 2026-08-15 attempt rolled `NdnWebStack` back cleanly in ~14 seconds and `next.` never stopped serving. Shortens the outage, because re-dispatching `deploy` skips the `quality` wait. The cost is a red `main` and a failed production deploy that a future reader has to be told was intentional. Choose this only if the outage minutes genuinely matter more.
+
+Either way the ordering rule is the same and is not negotiable: **nothing deploys until `list-conflicting-aliases` reports `Quantity: 0`.**
+
+**Expected outage: ~10–20 minutes**, apex and `www` both, from 4.1 until 4.4 propagates. Dominated by the CloudFront distribution update in 4.3. Unavoidable — CloudFront will not accept an alias that is still claimed, so the release and the claim cannot overlap. Choose a low-traffic window. `next.nourishthenerve.com` is unaffected throughout and keeps serving the new site.
+
+1. **Release the aliases** (manual, `default` profile — `803129122420`):
 
    ```bash
-   # Apex: change the ALIAS target from d2z3fclxq13w3z.cloudfront.net to dbn8dfhgi712k.cloudfront.net
-   # www: change the CNAME target the same way (TTL already lowered to 60 above)
+   aws --profile default --region eu-west-2 amplify delete-domain-association \
+     --app-id dty9c1kqh8zkh --domain-name nourishthenerve.com
    ```
 
-2. Immediately trigger the `NdnWebStack` deploy that adds `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` to `domainNames` (the code from step 3 is already merged — this is a re-run, e.g. re-dispatch the `deploy` job or push a no-op commit).
+   This is the destructive step and the start of the outage: it takes the legacy site off apex/`www`. It does **not** delete the Amplify app or its build — that stays reachable at `https://main.dty9c1kqh8zkh.amplifyapp.com`, which is what makes step 4's rollback possible at all. Expect Amplify to also remove the apex `A`/ALIAS and `www` `CNAME` it manages in Route 53, so the hostnames will likely go NXDOMAIN rather than serve an error page.
 
-This got past the step-3 DNS pre-check but hit CloudFront's alias-uniqueness constraint instead (see above) — the deploy failed and rolled back, and DNS was reverted immediately after. **Do not re-run this until the "Path forward" items above are resolved** — as executed, it reliably reproduces the same ~70s error-page window and failed deploy, not a working cutover.
+2. **Confirm the release before deploying anything.** Do not skip this and do not substitute a deploy attempt for it:
+
+   ```bash
+   aws --profile ndn-prod cloudfront list-conflicting-aliases \
+     --alias nourishthenerve.com --distribution-id E1K6OYW4X46BJZ
+   aws --profile ndn-prod cloudfront list-conflicting-aliases \
+     --alias www.nourishthenerve.com --distribution-id E1K6OYW4X46BJZ
+   ```
+
+   Both must report `Quantity: 0`. Poll until they do. A deploy launched early fails and rolls back, adding a full distribution-update cycle to the outage for nothing.
+
+3. **Deploy `NdnWebStack`** to claim the aliases — under (a), merge the PR and let `deploy` fire; under (b), re-dispatch the `deploy` job on `main`. This is the long pole (a CloudFront distribution update, typically 5–15 minutes, plus ~5 for `quality` under (a)). Wait for `UPDATE_COMPLETE` **and** for the distribution to report `Deployed`; one still `InProgress` will not serve the new aliases reliably.
+
+4. **Repoint DNS** in the `803129122420` zone (manual, `default` profile — `ndn-deploy` has no access there). Amplify most likely deleted these records in 4.1, so this is usually a `CREATE`, not an `UPSERT` — check before assuming:
+
+   ```bash
+   # Apex: A/ALIAS -> dbn8dfhgi712k.cloudfront.net (Route 53 ALIAS, no TTL)
+   # www:  CNAME   -> dbn8dfhgi712k.cloudfront.net, TTL 60
+   ```
+
+5. Proceed to step 5's verification below.
+
+**Rollback, if 4.3 fails and cannot be fixed quickly:** re-add the domain association in Amplify (`amplify create-domain-association`, same app ID, `main` branch, apex + `www` subdomains). Be aware this is *slow* — Amplify re-runs certificate validation, so budget tens of minutes before the legacy site is serving again. Practically, once 4.1 has run, forward is faster than back for anything short of a deploy that cannot be made to work at all.
 
 ### Step 5: Verify immediately after cutover
 
@@ -209,7 +284,7 @@ Consequences for the rest of this runbook:
 - **R-06 is closed**, not merely contained.
 - **The DoD's Lambda clauses are met** — `aws lambda get-function --function-name nourishthenerve-api` returns `ResourceNotFoundException` today.
 - **The S3 bucket `nourishthenerve` remains**, untouched and now unreachable (its only reader is gone). D-03 still forbids deleting it absent an explicit owner override; see legacy-estate.md's "Still outstanding".
-- **Nothing about the CloudFront alias conflict changes.** The blocker lives in the third account's distribution config; deleting our Lambda neither helps nor hinders it. The support case stands as filed.
+- **Nothing about the CloudFront alias conflict changes.** The claim lives in the holding distribution's config; deleting our Lambda neither helps nor hinders it. (Written while the holder was believed to be a third account — it is the `ndn-frontend` Amplify app in `803129122420`, and the point stands unchanged either way.)
 
 The original step 6/7 text is kept below for the record.
 
@@ -252,12 +327,13 @@ Leaves the S3 bucket `nourishthenerve` exactly as TASK 0.0.2 configured it — v
 - **DNS revert (the only rollback that matters now):** revert the apex ALIAS and `www` CNAME in `803129122420` back to `d2z3fclxq13w3z.cloudfront.net`. `www`'s 60s TTL means this propagates within roughly a minute for most resolvers. **Exercised for real on 2026-08-15** (see "2026-08-15 cutover attempt" above) — confirmed working exactly as documented, reverted and verified within ~90 seconds of the failed deploy. Note that since step 7 ran, this restores the legacy site's *static* content only — its API-backed pages are permanently gone, by design.
 - **Step 7 is done and cannot be undone.** The Lambda, its Function URL, its log group and its IAM roles/policies no longer exist. Any future issue is fixed forward on the new stack, never by resurrecting them. The Lambda's source is archived at `~/Desktop/nourishthenerve/legacy-lambda-main.py` if it is ever needed for reference (not redeployment — the role, policy and Function URL are all gone too).
 - **Certificate (step 2):** harmless to leave in place even if the DNS cutover is never run — an unused-but-valid ACM cert costs nothing and exposes nothing new.
-- **CloudFront alternate domain names (step 3):** the apex/`www` aliases are not deployed and cannot be until AWS completes the domain move, so there is nothing there to roll back. The certificate half *is* deployed (three-SAN cert on `NdnWebStack`'s distribution): to revert, point `CERTIFICATE_ARN` back at `b1f9e01e-ab10-43b8-944a-6c0ccfffacb5` and redeploy — though there is no reason to, since the three-SAN cert covers `next.` identically and is a Support-case prerequisite.
-- **Domain-control validation TXT records:** harmless to leave in place indefinitely — they name hostnames (`_.`/`_www.`) nothing resolves for real, and affect no live record. Delete with a `DELETE` change batch on the same two records if ever needed.
+- **Amplify domain association (step 4.1):** re-add it with `amplify create-domain-association` (app `dty9c1kqh8zkh`, branch `main`, apex + `www`). Slow — Amplify re-runs certificate validation, so budget tens of minutes. The Amplify app itself is never deleted by this runbook, so this rollback stays available indefinitely.
+- **CloudFront alternate domain names (step 3/4.3):** to drop the aliases again, remove `APEX_DOMAIN_NAME`/`WWW_DOMAIN_NAME` from `domainNames` and redeploy. The certificate half is independent: to revert it, point `CERTIFICATE_ARN` back at `b1f9e01e-ab10-43b8-944a-6c0ccfffacb5` — though there is no reason to, since the three-SAN cert covers `next.` identically and is what lets the aliases be claimed at all.
+- **Domain-control validation TXT records:** harmless to leave in place indefinitely — they name hostnames (`_.`/`_www.`) nothing resolves for real, and affect no live record. Now also pointless, since the Support move they were for is not happening. Delete with a `DELETE` change batch on the same two records whenever convenient (this is the "Post-cutover cleanup" referenced above).
 
 ## Do NOT
 
-- Touch anything in the unidentified third account currently serving the legacy CloudFront distribution (`d2z3fclxq13w3z.cloudfront.net`) — this task can only ever repoint DNS away from it, never modify it.
+- **Delete the `ndn-frontend` Amplify app, or any other resource in `803129122420`.** Step 4.1 removes *one domain association* and nothing else. The app is the rollback path, and the account is shared with the unrelated `islamicmaps` estate — see [legacy-estate.md](legacy-estate.md).
 - Delete, empty, or version-purge the S3 bucket `nourishthenerve` or its prefixes (D-03) — this survives the 2026-08-15 decommission unchanged. The bucket is now inert and unreachable; removing it needs an explicit owner decision recorded against D-03, not an inference from "remove the legacy estate."
-- Run step 4 without explicit, same-session confirmation from the site owner.
-- Retry step 4 as-is expecting a different outcome — it is blocked on the alias-uniqueness conflict, not on timing or ordering, and will fail the same way every time until "Path forward" above is actually resolved.
+- Run step 4 without explicit, same-session confirmation from the site owner, on a window they have chosen. It is a deliberate outage now, not just a risky change.
+- Run step 4's sub-steps out of order, or skip 4.2. Releasing then deploying blind, or deploying before the release lands, turns a ~10–20 minute outage into a longer one with a rolled-back stack at the end of it.

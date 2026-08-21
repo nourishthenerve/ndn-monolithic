@@ -7,15 +7,19 @@
 export const ACCOUNT_ID = '357601815388';
 export const REGION = 'eu-west-2';
 
-// A staging hostname only — the apex and www stay on the legacy site until
-// Gate G1 (TASK 1.6.1). See docs/plan/05-execution-plan.md TASK 0.4.1.
+// The hostname this stack has served since TASK 0.4.1, and still its only
+// one until the G1 cutover's DNS step runs (TASK 1.6.1). Kept as an alias
+// after cutover too, so next. stays a usable staging URL.
+// See docs/plan/05-execution-plan.md TASK 0.4.1.
 export const DOMAIN_NAME = 'next.nourishthenerve.com';
 
-// TASK 1.6.1: the two hostnames DNS still points at the legacy account's
-// CloudFront distribution as of this task's prep step. Added as alternate
-// domain names on NdnWebStack's existing distribution ahead of the actual
-// DNS cutover (additive, DNS-invisible — no traffic moves until the G1
-// cutover runbook's manual DNS step runs). See docs/runbooks/g1-cutover.md.
+// TASK 1.6.1: the two hostnames the G1 cutover moves onto this stack's
+// distribution. Listing them as alternate domain names is itself
+// DNS-invisible — no traffic moves until the cutover runbook's manual DNS
+// step repoints apex/www — but the deploy that adds them only succeeds once
+// the legacy claim is released, which is a manual AWS-side step in a
+// different account (803129122420's `ndn-frontend` Amplify app). Order and
+// consequences: docs/runbooks/g1-cutover.md.
 export const APEX_DOMAIN_NAME = 'nourishthenerve.com';
 export const WWW_DOMAIN_NAME = 'www.nourishthenerve.com';
 

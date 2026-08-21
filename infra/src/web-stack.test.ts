@@ -198,11 +198,11 @@ describe('WebStack — CloudFront distribution', () => {
     });
   });
 
-  it('serves the staging hostname only, over TLS, at PriceClass_100', () => {
+  it('serves all three production hostnames, over TLS, at PriceClass_100', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
-        Aliases: [DOMAIN_NAME],
+        Aliases: [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
         PriceClass: 'PriceClass_100',
         DefaultRootObject: 'index.html',
         DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: 'redirect-to-https' }),
@@ -210,24 +210,20 @@ describe('WebStack — CloudFront distribution', () => {
     });
   });
 
-  // TASK 1.6.1: the apex/www aliases cannot be claimed while the legacy
-  // distribution (a third AWS account, no credentials) still holds them —
-  // adding them is what failed the 2026-08-15 deploy. The three-SAN
-  // certificate is attached anyway: it is unblocked, and it is an
-  // AWS-documented prerequisite for the cross-account move that releases the
-  // claim. This asserts the decoupling holds, so a well-meaning edit doesn't
-  // re-bundle them and reproduce that failure.
-  it('attaches the apex/www-covering certificate without yet claiming those aliases', () => {
+  // TASK 1.6.1: apex/www were held out of this array until 2026-08-21,
+  // because a CloudFront alternate domain name can only be claimed by one
+  // distribution globally and the legacy `ndn-frontend` Amplify app still
+  // held both. Now that they are listed, the pairing that the earlier
+  // decoupling protected has to hold in the other direction: every alias
+  // must be covered by the attached certificate, or the deploy fails at
+  // CloudFront with a certificate/alias mismatch rather than at rollback.
+  // CERTIFICATE_ARN is the three-SAN cert covering exactly these names.
+  it('claims apex/www alongside next., all covered by the three-SAN certificate', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
-        Aliases: Match.not(Match.arrayWith([APEX_DOMAIN_NAME])),
+        Aliases: Match.arrayWith([APEX_DOMAIN_NAME, WWW_DOMAIN_NAME]),
         ViewerCertificate: Match.objectLike({ AcmCertificateArn: CERTIFICATE_ARN }),
-      }),
-    });
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({
-        Aliases: Match.not(Match.arrayWith([WWW_DOMAIN_NAME])),
       }),
     });
   });
@@ -1019,11 +1015,11 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
     expect(senders.length).toBeGreaterThan(0);
   });
 
-  it('production mode is unaffected — still the fixed domain, certificate, and log group names', () => {
+  it('production mode is unaffected — still the fixed domains, certificate, and log group names', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
-        Aliases: [DOMAIN_NAME],
+        Aliases: [DOMAIN_NAME, APEX_DOMAIN_NAME, WWW_DOMAIN_NAME],
       }),
     });
     template.hasResourceProperties('AWS::Logs::LogGroup', {
