@@ -36,9 +36,12 @@ import { WorkshopRepository } from './workshop-repository.js';
 const STRIPE_SECRET_KEY_PARAMETER_NAME =
   process.env.STRIPE_SECRET_KEY_PARAMETER_NAME ?? '/ndn/stripe-secret-key';
 
-// TASK 1.6.1 will point this at the apex domain at G1 cutover — same
-// documented gap apps/web/src/site-config.ts's siteUrl carries today.
-const SITE_ORIGIN = process.env.SITE_ORIGIN ?? 'https://next.nourishthenerve.com';
+// Set by infra/src/data-stack.ts from infra/src/config.ts's SITE_ORIGIN;
+// the literal is a local-dev/test fallback only, kept in step with it. Both
+// were repointed from `next.` to the apex at the G1 cutover (TASK 1.6.1,
+// 2026-08-21) — Stripe sends the customer here after checkout, so it must be
+// the origin a visitor actually arrived on.
+const SITE_ORIGIN = process.env.SITE_ORIGIN ?? 'https://nourishthenerve.com';
 
 const checkoutBodySchema = z.object({
   attendeeEmail: z.email().max(320),

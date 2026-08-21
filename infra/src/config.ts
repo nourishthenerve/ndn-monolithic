@@ -23,6 +23,14 @@ export const DOMAIN_NAME = 'next.nourishthenerve.com';
 export const APEX_DOMAIN_NAME = 'nourishthenerve.com';
 export const WWW_DOMAIN_NAME = 'www.nourishthenerve.com';
 
+// TASK 1.6.1 step 5: the canonical public origin, for the one place a Lambda
+// has to build an absolute URL back to the site — Stripe Checkout's
+// success/cancel redirects. The apex rather than DOMAIN_NAME, matching
+// apps/web/src/site-config.ts's siteUrl: `next.` is an alias on the same
+// distribution and still serves, but a customer returning from Stripe should
+// land on the hostname the site calls canonical.
+export const SITE_ORIGIN = `https://${APEX_DOMAIN_NAME}`;
+
 // TASK 1.6.1: re-requested (not reused/extended — ACM certs are immutable,
 // SANs can't be added to an existing one) to cover next./apex/www in one
 // cert, same CloudFront-requires-a-single-certificate constraint that

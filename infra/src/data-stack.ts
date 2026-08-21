@@ -36,6 +36,7 @@ import type { Construct } from 'constructs';
 import {
   ADMIN_API_TOKEN_PARAMETER_NAME,
   DOMAIN_NAME,
+  SITE_ORIGIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
 } from './config.js';
@@ -546,6 +547,7 @@ export class DataStack extends Stack {
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
         STRIPE_SECRET_KEY_PARAMETER_NAME,
+        SITE_ORIGIN,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(

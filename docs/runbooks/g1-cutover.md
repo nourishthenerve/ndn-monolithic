@@ -2,7 +2,9 @@
 
 **Date started:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.6.1](../plan/05-execution-plan.md) · **Decisions:** D-02, D-08, D-25 · **Risks:** R-06 · **Depends on:** 0.0.2, 1.1.1–1.5.2
 
-**Status: UNBLOCKED 2026-08-21 — no Support case needed, the fix is self-service.** AWS Support's reply identified the holder of the apex/`www` aliases: not an unreachable third account, but the **`ndn-frontend` Amplify app in `803129122420`**, an account we have root on. Verified independently (see "Holder identified" below). Releasing the aliases is one `amplify delete-domain-association` call. The blocker was never cross-account cooperation; it was that the ownership search looked in the wrong place — see "Why the ownership search missed it".
+**Status: CUT OVER 2026-08-21 18:15 UTC. `nourishthenerve.com` and `www.` now serve the new site.** Step 4 ran end-to-end with the owner's in-session go-ahead; the apex outage was **~2m50s**, not the 10–20 minutes budgeted. Full timeline in "Cutover executed" below. What remains of this task is step 8 (cost-model reconciliation, which needs real traffic to accumulate first) and the optional TXT-record cleanup.
+
+**Status before that, kept because the reasoning is what unblocked it — UNBLOCKED 2026-08-21, no Support case needed, the fix is self-service.** AWS Support's reply identified the holder of the apex/`www` aliases: not an unreachable third account, but the **`ndn-frontend` Amplify app in `803129122420`**, an account we have root on. Verified independently (see "Holder identified" below). Releasing the aliases is one `amplify delete-domain-association` call. The blocker was never cross-account cooperation; it was that the ownership search looked in the wrong place — see "Why the ownership search missed it".
 
 **What this now needs is an owner go-ahead on timing, not a queue.** Removing the domain association takes the legacy site down, and apex/`www` stay down until the `NdnWebStack` deploy claims the aliases and DNS is repointed — a **~10–20 minute outage**, structurally unavoidable (CloudFront will not accept an alias until it is released). That is much longer than the ~72-second window of the 2026-08-15 attempt, and is why this is scheduled rather than run on sight. Revised step 4 is below. **Do not run it without the owner's go-ahead on a window.**
 
@@ -136,13 +138,54 @@ So the correct reading of this table is: *"the conflict is real, and the holding
 
 Strictly, the masked ID cannot be compared against a domain name, so this does not *prove* the conflicting distribution is `d2z3fclxq13w3z.cloudfront.net`. The Amplify domain association names that exact CloudFront domain, so in practice they are the same thing.
 
+## Cutover executed — 2026-08-21
+
+Owner go-ahead given in-session while PR #50's `deploy` job was already in flight. That merge had happened **before** the release, which step 4 warns produces a guaranteed failed deploy — so the choice was between letting it fail and racing the release ahead of it. The release won by about 90 seconds and the deploy succeeded on its first attempt.
+
+| Time (UTC) | Event |
+|---|---|
+| 18:09:16 | PR #50 merged; CI run [32511868364](https://github.com/nourishthenerve/ndn-monolithic/actions/runs/32511868364) starts. `quality` must pass before `deploy` begins — that gap is what made the race winnable. |
+| 18:12:54 | **Step 4.1** — `amplify delete-domain-association` on app `dty9c1kqh8zkh`. Outage starts. |
+| 18:13:24 | **Step 4.2** — `list-conflicting-aliases` reports `Quantity: 0` for both hostnames. 30 seconds, not the minutes assumed. |
+| 18:13:47 | **Step 4.4, moved early** — apex `A`/ALIAS and `www` CNAME repointed to `dbn8dfhgi712k.cloudfront.net`. See "Why DNS moved before the deploy" below. |
+| 18:14:18 | **Step 4.3** — `quality` green, `deploy` job starts. |
+| 18:15:25 | `NdnWebStack` `UPDATE_IN_PROGRESS` — CloudFront accepted the alias addition, no 409. |
+| ~18:15:45 | Apex and `www` serving `200` from `NdnWebStack`. **Outage ends: ~2m50s total.** |
+| 18:15:55 | Distribution carries all three aliases: `next.`, `www.`, apex. |
+
+**Amplify did not remove the Route 53 records** the way step 4.1 predicted it might — the apex `A`/ALIAS and `www` CNAME were still present and still pointing at `d2z3fclxq13w3z.cloudfront.net` immediately after the association was deleted. So 4.4 was an `UPSERT`, not the `CREATE` the runbook expected. Check before assuming, as that step already said.
+
+### Why DNS moved before the deploy
+
+Step 4 orders DNS last. Doing it early here was deliberate and is worth recording, because it is the difference between a ~3 minute outage and a ~10 minute one:
+
+Once 4.1 has run, the legacy distribution no longer answers for apex/`www`, so **both hostnames are already down regardless of where DNS points**. Pointing them at `NdnWebStack` before it holds the aliases costs nothing — it serves the same error either way — and it means the recovery moment is the instant CloudFront accepts the alias, with DNS propagation (`www`'s 60s TTL, and the apex ALIAS which has none) already spent. Ordering DNS last would have added that propagation to the tail of the outage instead of overlapping it.
+
+This only holds **after** 4.1. Repointing DNS while the legacy claim is still live is the 2026-08-15 failure, and it is still wrong.
+
+### Verified immediately after (step 5)
+
+| Check | Result |
+|---|---|
+| `curl -sI https://nourishthenerve.com/` | `200`, 379-byte locale-redirect page — byte-identical to `next.`'s |
+| `curl -sI https://www.nourishthenerve.com/` | `200`, same |
+| `https://nourishthenerve.com/en` | `200`, 9572 bytes — identical to `next.nourishthenerve.com/en` |
+| Security headers on the apex | full set: HSTS `max-age=31536000; includeSubDomains; preload`, the same CSP as `next.`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` |
+| `/health` on both hostnames | `{"status":"ok",...}` |
+| `dig` apex / `www` | both resolve into `dbn8dfhgi712k.cloudfront.net` |
+| Zoho mail records | **untouched** — MX, SPF/TXT and the zoho-verification TXT all still present. The change batch named only the apex `A` and `www` CNAME. |
+| Amplify app `ndn-frontend` | still exists, still building, still reachable at `https://main.dty9c1kqh8zkh.amplifyapp.com` — the rollback path is intact |
+| `next.nourishthenerve.com` | unaffected throughout, still serving |
+
 ## Status re-verified 2026-08-21
 
-Nothing has drifted; the table below is the pre-cutover baseline to compare against after step 4.
+Nothing had drifted at this point; the table below is the pre-cutover baseline, kept as the before-picture.
 
 **Support case: answered, and closed out the blocker.** Filing was necessarily a console action for the owner, since both accounts are Basic and `support create-case` is unavailable to this project (`SubscriptionRequiredException`) — which also means this repo could not read the reply, and it reached us by the owner pasting it in. Its useful content was the identification, not a move: see "Holder identified".
 
-**The earlier owner decision to park the cutover is superseded.** It was made when the next action was "wait on an AWS queue with no SLA". The next action is now a command we can run, so what remains is choosing a window for the ~10–20 minute outage — see step 4. Gate G1 stays not-met on the apex criterion until that runs (`docs/plan/gate-g1-report.md`).
+**The earlier owner decision to park the cutover is superseded.** It was made when the next action was "wait on an AWS queue with no SLA". The next action became a command we could run, and it was run — see "Cutover executed" above. Gate G1's apex criterion is now met (`docs/plan/gate-g1-report.md`).
+
+The table below is the **pre-cutover** baseline. Every row describing the legacy distribution is now historical; compare it against "Verified immediately after (step 5)".
 
 | Check | Result |
 |---|---|
@@ -210,9 +253,13 @@ CloudFront performs a live DNS lookup on every alias you try to add and **refuse
 
 `www.nourishthenerve.com`'s CNAME TTL was `500`; lowered to `60` (target unchanged — still `d2z3fclxq13w3z.cloudfront.net`, zero traffic impact) so that if the real cutover needs a fast rollback, resolvers pick up the reverted record quickly. The apex record is a Route 53 **ALIAS**, which has no TTL of its own and resolves through Route 53 directly — already fast. **Wait at least the old TTL (500s, call it 15+ minutes for safety against caching resolvers that ignore TTL) after this change before running the actual cutover**, so caches have already rolled onto the new 60s TTL by the time it matters.
 
-## Remaining steps — unblocked, awaiting an owner-chosen window
+## Remaining steps
 
-### Step 4 (revised 2026-08-21): release the Amplify claim, deploy, then repoint DNS
+**Step 4 and step 5 are DONE** (2026-08-21 — see "Cutover executed"). Steps 6 and 7 were done ahead of the cutover on 2026-08-15. **Step 8 (cost reconciliation) is the only substantive step still open**, and it is waiting on traffic, not on a decision.
+
+The step 4 procedure below is kept as written, both as the record of what was executed and because its ordering rules are the reusable part.
+
+### Step 4 (revised 2026-08-21): release the Amplify claim, deploy, then repoint DNS — **EXECUTED 2026-08-21 18:12–18:16 UTC**
 
 **The 2026-08-15 ordering is dead.** It put DNS first and the deploy second, which was correct when the only obstacle was believed to be a DNS-based pre-check. It is wrong now: the alias must be *released* before CloudFront will accept it, so the release comes first and DNS comes last. Running the old order reproduces the ~72-second error window and a failed deploy, nothing more.
 
@@ -261,7 +308,7 @@ Either way the ordering rule is the same and is not negotiable: **nothing deploy
 
 **Rollback, if 4.3 fails and cannot be fixed quickly:** re-add the domain association in Amplify (`amplify create-domain-association`, same app ID, `main` branch, apex + `www` subdomains). Be aware this is *slow* — Amplify re-runs certificate validation, so budget tens of minutes before the legacy site is serving again. Practically, once 4.1 has run, forward is faster than back for anything short of a deploy that cannot be made to work at all.
 
-### Step 5: Verify immediately after cutover
+### Step 5: Verify immediately after cutover — **EXECUTED 2026-08-21**
 
 ```bash
 curl -sI https://nourishthenerve.com/    # expect 200 (or 302 -> /en), full security-header set
@@ -271,8 +318,11 @@ curl -s  https://nourishthenerve.com/health
 
 Watch the TASK 0.6.2 canary/auto-rollback machinery on this deploy specifically — its first time serving the apex. Also the moment to update two hardcoded staging-URL fallbacks that were deliberately **not** touched during prep (changing them earlier would have made `next.` emit apex URLs before the apex served anything):
 
-- `apps/web/src/site-config.ts`'s `siteUrl` → `https://nourishthenerve.com` (canonical/hreflang URLs).
-- `services/api/src/stripe-checkout-handler.ts`'s `SITE_ORIGIN` fallback → same. (Currently unwired as a CDK env var — either wire `SITE_ORIGIN` in `data-stack.ts`'s `WorkshopCheckoutFunction` or edit the fallback directly; `payments.stripeCheckout.enabled` is off by default regardless, gated on LL-03.)
+- `apps/web/src/site-config.ts`'s `siteUrl` → `https://nourishthenerve.com` (canonical/hreflang URLs). **Done 2026-08-21.**
+- `services/api/src/stripe-checkout-handler.ts`'s `SITE_ORIGIN` fallback → same. **Done 2026-08-21**, and the "currently unwired" half is closed too: `SITE_ORIGIN` is now a constant in `infra/src/config.ts`, wired into `WorkshopCheckoutFunction`'s environment in `data-stack.ts`, with the literal in the handler demoted to a local-dev fallback. A `data-stack.test.ts` assertion pins the deployed value to the apex as a literal, so a future silent repoint fails a test rather than stranding a paying customer on a staging hostname. `payments.stripeCheckout.enabled` is off regardless, gated on LL-03.
+- `lighthouserc.json`'s six collect URLs → the apex. **Done 2026-08-21** — Gate G1's Core Web Vitals criterion asks for a run against the live apex, and the config now points there by default rather than needing a per-run override.
+
+All three land in the same follow-up PR, which itself triggers the next `deploy`. None of them moves traffic; they change which origin the site *names* in canonical/hreflang tags and Stripe redirects.
 
 ### Steps 6 and 7 — DONE 2026-08-15, ahead of the cutover
 
