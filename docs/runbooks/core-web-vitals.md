@@ -59,6 +59,19 @@ Best practices scores 96, not 100, on **every** page, for one reason: `GET /favi
 
 Cosmetically this means a blank default icon in every browser tab and bookmark. It is a two-minute fix once an icon exists, and the icon is a brand decision for the site owner rather than something to invent here. **Owner action:** supply a square logo/mark; then add `apps/web/public/favicon.ico` (plus an SVG and an apple-touch-icon) and the corresponding `<link>` tags, and this score goes to 100.
 
+## Dependency advisories this pulled in, and how they were closed
+
+`@lhci/cli` adds 258 transitive packages, two of them carrying **high** advisories that `pnpm audit --audit-level=high` — CI's blocking gate, which does not distinguish dev from prod — refused, correctly. Both are closed by override in `pnpm-workspace.yaml`, the same way TASK 1.1.1 already handled `nanoid`:
+
+| Advisory | Path | How it is closed |
+|---|---|---|
+| `tmp` <0.2.6, path traversal ([GHSA-ph9p-34f9-6g65](https://github.com/advisories/GHSA-ph9p-34f9-6g65)) | `@lhci/cli>tmp`, and `@lhci/cli>inquirer>external-editor>tmp` | pinned to `^0.2.7` — an ordinary bump past the patched version |
+| `extract-zip` ≤2.0.1, symlink traversal ([GHSA-jmr9-qjv8-65gv](https://github.com/advisories/GHSA-jmr9-qjv8-65gv)) | `lighthouse>puppeteer-core>@puppeteer/browsers>extract-zip` | **not fixable by bumping it** — the advisory names ≥2.0.2 and npm's latest is 2.0.1, so no patched release exists. Closed by removing the package instead: `@puppeteer/browsers` dropped `extract-zip` in v3 (it uses `modern-tar`), so the override pins the *parent* to `^3.2.1` and the vulnerable package leaves the tree entirely. |
+
+Overriding a transitive dependency across a major version is worth being careful about, so it was checked rather than assumed: the v2→v3 change in `@puppeteer/browsers` is in browser *downloading*, which this setup never does — it launches the system Chrome via `CHROME_PATH`. A full collection across all six routes runs clean afterwards, with identical scores. `pnpm audit --audit-level=high` now passes; one moderate advisory remains, below the gate.
+
+Neither package ships to production: `@lhci/cli` is a dev dependency invoked by hand, and nothing it touches is attacker-controlled. The advisories were still worth closing rather than exempting, because a gate that gets an exception once tends to get another.
+
 ## Cost
 
 £0.00 — `@lhci/cli` is a dev dependency that runs locally against an already-deployed site. No AWS resource, no CI minutes (not wired into CI, above).
