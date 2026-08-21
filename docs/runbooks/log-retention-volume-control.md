@@ -63,3 +63,89 @@ Cost Anomaly Detection has no equivalent forced-test path for this alarm either 
 ## Cost
 
 ~£1.00/mo, matching the execution plan's estimate: the log group's own storage/ingestion (already priced into `03-cost-model.md`'s ~$1.23/mo CloudWatch Logs line) plus the new alarm (CloudWatch Alarms: first 10 free) and SNS topic (email delivery: 1,000 free/month, this account sends at most a handful).
+
+## Follow-up, 2026-08-21 — the implicit-log-group leak (Gate G1 §4)
+
+**The finding, in one line:** this task's DoD is "no log group has infinite retention", and from the day it landed it was false — not for the groups it created, but for the ones nobody created.
+
+Raised at Gate G0 (§4, 2 orphaned groups), left unactioned, re-raised at Gate G1 (§4, 10 orphans plus the live stack's own 2) as the only engineering action item of that review still open. It was 13 by the time this fix was written — one more had appeared from PR #47 in the four days between the review and the fix, which is the point: the count grows with every PR that deploys.
+
+### Root cause
+
+`enforceLogRetention`'s Aspect can only reach a `CfnLogGroup` — a log group that is a *resource in the template*. A Lambda with no `logGroup` prop has none: the CloudWatch Logs service creates `/aws/lambda/<function-name>` on the function's first write, outside CloudFormation, with retention "never expire" and no removal policy for `cdk destroy` to act on. The aspect never sees it, because from CloudFormation's point of view it does not exist.
+
+Exactly one function in the app was in that position — and not one of ours. `BucketDeployment` (`web-stack.ts`, the construct that uploads `apps/web/dist`) brings its own singleton Lambda, `Custom::CDKBucketDeployment`. Every one of the 13 orphans is that function's group, one per stack that ever deployed:
+
+```text
+/aws/lambda/NdnWebStack-CustomCDKBucketDeployment...      42,576 bytes, Retention: None
+/aws/lambda/NdnWebStackPr23-CustomCDKBucketDeployment...   4,401 bytes, Retention: None
+...Pr25, Pr26 (x2), Pr27 (x2), Pr28, Pr29, Pr30, Pr47, Pr999
+/aws/lambda/NdnWebStack-HealthFunction19D7724A-...           740 bytes, Retention: None
+```
+
+The last one is different and already inert: the health Lambda's pre-0.5.2 group, abandoned (not deleted) when this task gave it an explicit one — the "simply no longer written to" case the Live-account diff section above describes.
+
+### What was fixed
+
+- **`web-stack.ts`** — `BucketDeployment` now takes `logGroup: createLogGroup(this, 'SiteDeploymentLogGroup', logGroupName('site-deployment'))`. Same treatment every other Lambda in the repo already had, through the same helper: 14-day retention, `RemovalPolicy.DESTROY`, and `prLabel`-scoped in ephemeral mode (`/ndn/pr-47/site-deployment`) so concurrent PR stacks cannot collide on the name. Because the group is now a stack resource, `cdk destroy` takes it with the stack — no orphan, per PR or otherwise.
+- **`log-retention.ts`** — a second Aspect, `ExplicitLambdaLogGroupAspect`, applied by the same `enforceLogRetention(app)` call in `bin/app.ts`. It visits every `CfnFunction` and raises a synth-time **error** on any that has no `LoggingConfig.LogGroup`. This is the part that stops the finding recurring: a future Lambda — ours, or one a construct creates on our behalf — cannot reach production relying on CloudWatch's implicit group, because `cdk synth` refuses to produce a template at all. Verified against the CLI, not just asserted in a test: a deliberately log-group-less function makes `cdk synth` print `Synthesis finished with errors` and exit 1, which fails CI's `deploy` job.
+
+  The check reads the L1 property rather than the synthesized JSON, so a `LoggingConfig` injected via `addPropertyOverride` would read as absent. That is deliberate: the guard's job is to insist on the supported prop, and a silent pass is the failure mode it exists to prevent.
+
+  **If a future construct gives you no way to name its function's log group** — some CDK-owned helper Lambdas don't expose the prop — the fallback is not to weaken the aspect. Give that function an explicit `functionName` and construct its log group yourself under the name CloudWatch would have used:
+
+  ```ts
+  createLogGroup(this, 'SomeFunctionLogGroup', `/aws/lambda/${functionName}`);
+  ```
+
+  CloudWatch writes to the group of that exact name, and because CloudFormation now owns it, retention and `DESTROY` apply as normal. That keeps the invariant ("every log group in this account is a stack resource with 14-day retention") rather than carving an exception into it.
+
+- **`config.ts` — alarm coverage, while here.** The log-volume alarm summed 7 named groups; 12 existed. The two public GET endpoints (`content-read`, `workshop-read`) were among the missing five, and they are the highest-volume groups in the estate the moment their flags come on — every blog and workshops page view hits one. They are now in the list, with `media-upload` (largest per-request payloads) taking the last free slot.
+
+  **The list stops at 10 because AWS stops it at 10.** `PutMetricAlarm` answers an eleventh metric with `ValidationError: Too many metrics in alarm, maximum is 10` — probed against the real API in `eu-west-2` on 2026-08-21 (10 metrics + the sum expression: accepted; 13 + the expression: rejected; probe alarm deleted afterwards), the same way the `SEARCH()` rejection was found and for the same reason: CDK synth accepts either happily. The three groups that do not fit — `content-authoring`, `workshop-authoring`, `site-deployment` — are now named in `UNMONITORED_LOG_GROUP_NAMES` rather than merely absent, and they are the three lowest-volume groups in the estate (a few KB per deploy or per publish). Their bytes still expire on the same 14-day retention; they are simply not summed into the alarm, which under-reports total ingestion by a rounding error rather than missing a plausible runaway.
+
+### Verification
+
+Synth-only, no live AWS calls, in `log-retention.test.ts` and `web-stack.test.ts` (infra: 119 tests, 0 failures):
+
+- The aspect raises its error on a Lambda with no explicit log group, and stays silent on one that has it. Proved capable of failing: with the aspect removed, that test fails and the other nine still pass.
+- Every Lambda in both production stacks — 13 functions, `Custom::CDKBucketDeployment` included — has `LoggingConfig.LogGroup` set. Asserted for the ephemeral shape too, where all three of its log group names carry the PR label.
+- `/ndn/site-deployment` synthesizes with `RetentionInDays: 14` and `DeletionPolicy: Delete`.
+- `MONITORED_LOG_GROUP_NAMES.length <= 10` (the API ceiling), and the monitored + unmonitored lists together account for **every** `/ndn/*` log group the app synthesizes — so a new `createLogGroup()` call fails the build until someone decides which list it belongs in, instead of quietly going unmonitored the way five groups did.
+
+### Live-account diff (read-only, no deploy)
+
+```text
+$ AWS_PROFILE=ndn-prod npx cdk diff NdnWebStack NdnBudgetStack
+Stack NdnWebStack
+[+] AWS::Logs::LogGroup SiteDeploymentLogGroup SiteDeploymentLogGroup07FC5F1F
+[~] AWS::Lambda::Function Custom::CDKBucketDeployment...
+ └─ [+] LoggingConfig                       (new — the explicit log group)
+[~] AWS::Lambda::Function HealthFunction    (ordinary — DEPLOY_VERSION, local synth has no GITHUB_SHA)
+
+Stack NdnBudgetStack
+[~] AWS::CloudWatch::Alarm LogIngestionVolumeAlarm
+ └─ [~] Metrics                             (m7, m8, m9 — the three added groups)
+```
+
+`NdnDataStack`: no differences. No `[-]` and no replacement anywhere except the Lambda version churn that every deploy produces.
+
+### Account-side remediation, applied 2026-08-21
+
+The 13 existing groups predate the fix and are not CloudFormation-managed, so no deploy can reach them. All 13 were given the same 14-day policy by hand:
+
+```text
+$ for g in $(aws logs describe-log-groups --query 'logGroups[?retentionInDays==null].logGroupName' --output text); do
+    aws logs put-retention-policy --log-group-name "$g" --retention-in-days 14
+  done
+$ aws logs describe-log-groups --query 'logGroups[?retentionInDays==null].logGroupName' --output text
+(empty)
+```
+
+**Zero log groups in the account now have infinite retention** — this task's DoD, true on the live account for the first time.
+
+Retention expires log *events*, not the group, so the 12 orphaned shells (11 from destroyed PR stacks, 1 from the pre-0.5.2 health function) will empty themselves within a day and then sit at 0 bytes, costing nothing. They are left in place rather than deleted: `put-retention-policy` is the sanctioned mechanism D-18 already decided on, and it makes deletion unnecessary rather than merely deferred. Removing the empty shells is a two-minute console tidy-up whenever anyone wants it, with nothing depending on it.
+
+### What this does not cover
+
+`cdk destroy` on an ephemeral stack now removes the site-deployment group with it, but only for stacks deployed **after** this change. Any PR stack still deploying from a branch cut before it will leave one more `/aws/lambda/NdnWebStackPrNN-CustomCDKBucketDeployment...` orphan behind, with no retention, until that branch merges or rebases. The count should stop at 13 and go no higher once `main` carries this; if a 14th appears, that is what it means.
