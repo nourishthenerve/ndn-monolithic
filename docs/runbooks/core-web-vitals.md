@@ -4,7 +4,7 @@
 
 ## Why this exists
 
-Gate G1 names a Core Web Vitals pass as one of its three criteria, and TASK 1.6.1's Verification line requires "a Core Web Vitals run against the live apex [that] passes Gate G1's bar". The [Gate G1 review](../plan/gate-g1-report.md) §7 found that criterion **unmeasurable** — no Lighthouse tooling existed in the repo — and recorded it as formally unmet rather than substituting a weaker proxy. This closes that.
+Gate G1 names a Core Web Vitals pass as one of its three criteria, and TASK 1.6.1's Verification line requires "a Core Web Vitals run against the live apex [that] passes Gate G1's bar". The Gate G1 review (`docs/plan/gate-g1-report.md`, added on its own branch) §7 found that criterion **unmeasurable** — no Lighthouse tooling existed in the repo — and recorded it as formally unmet rather than substituting a weaker proxy. This closes that.
 
 ## The bar — defined here, because the plan never did
 
@@ -49,7 +49,7 @@ All six pages pass every assertion, with a great deal of headroom:
 
 LCP is 6–9× inside the 2500 ms budget and TBT is zero everywhere. That is what a static Astro build on CloudFront with self-hosted fonts (TASK 1.2.3) and no client-side framework should look like, and it is the shape ADR-0017 chose the stack for.
 
-**Read this as a floor, not a forecast.** Every dynamic feature is currently flag-off ([gate-g1-report.md](../plan/gate-g1-report.md) §3a), so `/en/blog`, `/en/workshops` and `/en/testimonials` render empty lists, and none of these pages fetches anything. The numbers will move when real content, workshop posters and testimonial text land — images especially are the usual LCP regression. **Re-run this after the first real content is published**, not only at the next gate; that is the run that tells you something you do not already know.
+**Read this as a floor, not a forecast.** Every dynamic feature is currently flag-off (Gate G1 review §3a), so `/en/blog`, `/en/workshops` and `/en/testimonials` render empty lists, and none of these pages fetches anything. The numbers will move when real content, workshop posters and testimonial text land — images especially are the usual LCP regression. **Re-run this after the first real content is published**, not only at the next gate; that is the run that tells you something you do not already know.
 
 Two further limits on what this baseline proves: it is `next.`, not the apex (the cutover is blocked — [g1-cutover.md](g1-cutover.md)), though both are served by the same CloudFront distribution and the same S3 origin, so the apex should measure identically once it is live; and it is the desktop preset, so it says nothing about a throttled mobile connection.
 
