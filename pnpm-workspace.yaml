@@ -10,8 +10,25 @@ packages:
 # `pnpm audit --audit-level=high` (00-conventions.md's required gate,
 # TASK 0.2.1) doesn't distinguish dev from prod. Pinned past the patched
 # version rather than left to fail CI on every future PR.
+# Core Web Vitals tooling: `@lhci/cli` reaches two more high advisories
+# the same way — dev-only, never invoked on attacker-controlled input, and
+# invisible to `pnpm audit --audit-level=high`'s dev/prod blindness.
+#   tmp <0.2.6 (GHSA-ph9p-34f9-6g65) via @lhci/cli and inquirer >
+#     external-editor. A patched 0.2.7 exists; pinned past it.
+#   extract-zip <=2.0.1 (GHSA-jmr9-qjv8-65gv) via
+#     lighthouse > puppeteer-core > @puppeteer/browsers. There is no fixed
+#     release — the advisory names >=2.0.2 and npm's latest is 2.0.1, so
+#     the package cannot be bumped out of the vulnerability. It can be
+#     removed instead: @puppeteer/browsers dropped extract-zip in v3
+#     (it uses modern-tar now), so the override is on the parent, not the
+#     vulnerable package. Verified after pinning that `pnpm cwv` still
+#     runs a full Lighthouse collection — the v2->v3 API change is in
+#     browser *downloading*, which this never does (it launches the
+#     system Chrome via CHROME_PATH).
 overrides:
   nanoid: '^3.3.18'
+  tmp: '^0.2.7'
+  '@puppeteer/browsers': '^3.2.1'
 allowBuilds:
   esbuild: true
   unrs-resolver: true
