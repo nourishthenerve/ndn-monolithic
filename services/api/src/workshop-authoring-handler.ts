@@ -10,7 +10,7 @@ import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { InMemoryAuditLog } from './audit.js';
 import { systemClock } from './clock.js';
 import { DynamoWorkshopStore } from './dynamo-store.js';
-import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
 import { createWorkshopAuthoringHandler } from './workshop-authoring.js';
 import { WorkshopRepository } from './workshop-repository.js';
 
@@ -42,15 +42,9 @@ function getAdminToken(): Promise<string> {
   return cachedTokenPromise;
 }
 
-// No SSM-backed FlagSource exists yet — same documented gap every other
-// *-authoring-handler.ts in this repo carries. An InMemoryFlagSource that
-// nothing ever sets keeps `workshops.enabled` permanently off in
-// production until one is built.
-const flags = new CachedFlagReader({
-  source: new InMemoryFlagSource(),
-  clock: systemClock,
-  ttlMs: FLAG_CACHE_TTL_MS,
-});
+// TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
+// ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
+const flags = createSsmFlagReader();
 
 const workshopStore = new DynamoWorkshopStore({
   tableName: process.env.WORKSHOP_TABLE_NAME ?? '',

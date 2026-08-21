@@ -39,6 +39,7 @@ import {
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
 } from './config.js';
+import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
 import { attachDestructiveActionGuardrail } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 
@@ -98,9 +99,11 @@ export class DataStack extends Stack {
       role: contentReadRole,
       environment: {
         CONTENT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'ContentReadFunctionLogGroup', logGroupName),
     });
+    grantFlagReads(this, contentReadRole);
 
     // TASK 1.3.1 step 5: "minimal read API only" — no PutItem/DeleteItem
     // grant here. Authoring (1.3.2) gets its own function and its own grant
@@ -134,9 +137,11 @@ export class DataStack extends Stack {
       environment: {
         CONTENT_TABLE_NAME: this.table.tableName,
         ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+        ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'ContentAuthoringFunctionLogGroup', authoringLogGroupName),
     });
+    grantFlagReads(this, contentAuthoringRole);
 
     this.table.grantReadData(contentAuthoringRole);
     // Precise write actions only — deliberately not table.grantWriteData(),
@@ -254,6 +259,7 @@ export class DataStack extends Stack {
         environment: {
           TESTIMONIAL_TABLE_NAME: this.table.tableName,
           TURNSTILE_SECRET_PARAMETER_NAME,
+          ...FLAG_ENVIRONMENT,
         },
         logGroup: createLogGroup(
           this,
@@ -262,6 +268,8 @@ export class DataStack extends Stack {
         ),
       },
     );
+
+    grantFlagReads(this, testimonialSubmissionRole);
 
     // Precise write actions only — same reasoning ContentAuthoringWrite
     // documents above: DynamoContentStore/DynamoTestimonialStore's real
@@ -325,6 +333,7 @@ export class DataStack extends Stack {
         environment: {
           TESTIMONIAL_TABLE_NAME: this.table.tableName,
           ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+          ...FLAG_ENVIRONMENT,
         },
         logGroup: createLogGroup(
           this,
@@ -333,6 +342,8 @@ export class DataStack extends Stack {
         ),
       },
     );
+
+    grantFlagReads(this, testimonialModerationRole);
 
     this.table.grantReadData(testimonialModerationRole);
     testimonialModerationRole.addToPrincipalPolicy(
@@ -406,9 +417,11 @@ export class DataStack extends Stack {
       role: workshopReadRole,
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'WorkshopReadFunctionLogGroup', workshopReadLogGroupName),
     });
+    grantFlagReads(this, workshopReadRole);
 
     this.table.grantReadData(workshopReadRole);
     attachDestructiveActionGuardrail(workshopReadRole, { buckets: [], tables: [this.table] });
@@ -438,6 +451,7 @@ export class DataStack extends Stack {
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
         ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+        ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(
         this,
@@ -445,6 +459,7 @@ export class DataStack extends Stack {
         workshopAuthoringLogGroupName,
       ),
     });
+    grantFlagReads(this, workshopAuthoringRole);
 
     this.table.grantReadData(workshopAuthoringRole);
     // Precise write actions only — same reasoning ContentAuthoringWrite/
@@ -531,6 +546,7 @@ export class DataStack extends Stack {
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
         STRIPE_SECRET_KEY_PARAMETER_NAME,
+        ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(
         this,
@@ -538,6 +554,7 @@ export class DataStack extends Stack {
         workshopCheckoutLogGroupName,
       ),
     });
+    grantFlagReads(this, workshopCheckoutRole);
 
     this.table.grantReadData(workshopCheckoutRole);
     // Precise write actions only — same reasoning ContentAuthoringWrite/
@@ -570,7 +587,10 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/workshops/{id}/checkout',
       methods: [HttpMethod.POST],
-      integration: new HttpLambdaIntegration('WorkshopCheckoutIntegration', workshopCheckoutFunction),
+      integration: new HttpLambdaIntegration(
+        'WorkshopCheckoutIntegration',
+        workshopCheckoutFunction,
+      ),
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

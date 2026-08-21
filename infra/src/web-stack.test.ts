@@ -9,7 +9,13 @@ import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
-import { APEX_DOMAIN_NAME, CERTIFICATE_ARN, DOMAIN_NAME, WWW_DOMAIN_NAME } from './config.js';
+import {
+  APEX_DOMAIN_NAME,
+  CERTIFICATE_ARN,
+  DOMAIN_NAME,
+  FLAG_PARAMETER_NAME_PREFIX,
+  WWW_DOMAIN_NAME,
+} from './config.js';
 import { DataStack } from './data-stack.js';
 import { WebStack } from './web-stack.js';
 
@@ -881,5 +887,57 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/ndn/health-function',
     });
+  });
+});
+
+// TASK 1.6.2: this stack's two flag-reading functions (contact-form-handler,
+// media-upload-handler). data-stack.test.ts carries the fuller assertions
+// for the other seven and for the prefix's scoping; these prove the wiring
+// reached this stack too, rather than only the one it was written against.
+describe('WebStack — feature-flag reads', () => {
+  it('gives the contact-form and media-upload functions the flag prefix and a scoped read grant', () => {
+    const template = synth();
+
+    const withPrefix = Object.values(template.findResources('AWS::Lambda::Function')).filter(
+      (fn) =>
+        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables?.FLAG_PARAMETER_NAME_PREFIX ===
+        FLAG_PARAMETER_NAME_PREFIX,
+    );
+    expect(withPrefix).toHaveLength(2);
+
+    const grants = Object.values(template.findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (
+            policy as {
+              Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } };
+            }
+          ).Properties.PolicyDocument.Statement,
+      )
+      .filter((s) => s.Sid === 'ReadFeatureFlags');
+
+    expect(grants).toHaveLength(2);
+    for (const grant of grants) {
+      expect(grant.Action).toBe('ssm:GetParameter');
+      expect(JSON.stringify(grant.Resource)).toContain('parameter/ndn/flags/*');
+    }
+  });
+
+  it('leaves the health and smoke-test functions without any flag access', () => {
+    const template = synth();
+    // Neither reads a flag, so neither should be able to. A future edit that
+    // hands the grant out stack-wide instead of per-function fails here.
+    const functions = Object.entries(template.findResources('AWS::Lambda::Function'));
+    const flagless = functions.filter(
+      ([logicalId]) => logicalId.startsWith('HealthFunction') || logicalId.startsWith('SmokeTest'),
+    );
+    expect(flagless.length).toBeGreaterThan(0);
+    for (const [, fn] of flagless) {
+      const variables =
+        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables ?? {};
+      expect(variables).not.toHaveProperty('FLAG_PARAMETER_NAME_PREFIX');
+    }
   });
 });

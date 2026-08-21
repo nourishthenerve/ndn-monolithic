@@ -7,6 +7,7 @@ import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
+import { FLAG_PARAMETER_NAME_PREFIX } from './config.js';
 import { DataStack } from './data-stack.js';
 
 function synth() {
@@ -73,8 +74,15 @@ describe('DataStack — guardrail', () => {
     const readGrant = policies.find((policy) =>
       JSON.stringify(policy).includes('dynamodb:Query'),
     ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    // The dynamo statement specifically — this role also carries an Allow
+    // for ssm:GetParameter over the feature-flag prefix (TASK 1.6.2), and
+    // "the first Allow" stopped meaning "the table grant" once it did.
     const allowStatement = readGrant.Properties.PolicyDocument.Statement.find(
-      (s) => s.Effect === 'Allow',
+      (s) =>
+        s.Effect === 'Allow' &&
+        ([] as string[])
+          .concat(s.Action as string | string[])
+          .some((a) => a.startsWith('dynamodb:')),
     );
     const actions = ([] as string[]).concat(allowStatement?.Action as string | string[]);
     expect(actions).toContain('dynamodb:Query');
@@ -347,3 +355,84 @@ describe('DataStack — workshop checkout function (TASK 1.5.2)', () => {
 // Its tests live in web-stack.test.ts. TASK 1.5.2's stripe-webhook function
 // is likewise defined in web-stack.ts (a stable custom-domain URL for the
 // Stripe dashboard) — its tests live there too.
+
+// TASK 1.6.2: the IAM/env half of the SSM-backed feature-flag store. Until
+// this landed, every flag read `false` forever with no operator action able
+// to change it (docs/plan/gate-g1-report.md §3a) — these assertions are
+// what stop a future function being added to this stack flag-gated but
+// unable to read a flag, which would look identical from the outside.
+describe('DataStack — feature-flag reads', () => {
+  const FLAG_READING_FUNCTIONS = [
+    'content-read-handler',
+    'content-authoring-handler',
+    'testimonial-submission-handler',
+    'testimonial-moderation-handler',
+    'workshop-read-handler',
+    'workshop-authoring-handler',
+    'stripe-checkout-handler',
+  ];
+
+  it('gives every flag-reading function the prefix its handler resolves against', () => {
+    const template = synth();
+    const functions = Object.values(template.findResources('AWS::Lambda::Function')).filter(
+      (fn) =>
+        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables?.FLAG_PARAMETER_NAME_PREFIX !== undefined,
+    );
+    expect(functions).toHaveLength(FLAG_READING_FUNCTIONS.length);
+    for (const fn of functions) {
+      const variables = (
+        fn as { Properties: { Environment: { Variables: Record<string, unknown> } } }
+      ).Properties.Environment.Variables;
+      expect(variables.FLAG_PARAMETER_NAME_PREFIX).toBe(FLAG_PARAMETER_NAME_PREFIX);
+    }
+  });
+
+  it('grants ssm:GetParameter over the flag prefix and nothing wider', () => {
+    const template = synth();
+    const statements = Object.values(template.findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (
+            policy as {
+              Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } };
+            }
+          ).Properties.PolicyDocument.Statement,
+      )
+      .filter((s) => s.Sid === 'ReadFeatureFlags');
+
+    expect(statements).toHaveLength(FLAG_READING_FUNCTIONS.length);
+    for (const statement of statements) {
+      expect(statement.Effect).toBe('Allow');
+      // Exactly one action. GetParameters/GetParametersByPath would let a
+      // role enumerate the prefix; nothing needs that.
+      expect(statement.Action).toBe('ssm:GetParameter');
+      expect(JSON.stringify(statement.Resource)).toContain('parameter/ndn/flags/*');
+    }
+  });
+
+  it('cannot reach any secret parameter — the wildcard stops at the flags/ segment', () => {
+    const template = synth();
+    const flagResources = JSON.stringify(
+      Object.values(template.findResources('AWS::IAM::Policy'))
+        .flatMap(
+          (policy) =>
+            (
+              policy as {
+                Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } };
+              }
+            ).Properties.PolicyDocument.Statement,
+        )
+        .filter((s) => s.Sid === 'ReadFeatureFlags')
+        .map((s) => s.Resource),
+    );
+
+    // The secrets that live under /ndn/ but outside /ndn/flags/. A grant of
+    // `parameter/ndn/*` would still pass the assertion above; it would not
+    // pass this one.
+    expect(flagResources).not.toContain('parameter/ndn/*');
+    expect(flagResources).not.toContain('admin-api-token');
+    expect(flagResources).not.toContain('stripe-secret-key');
+    expect(flagResources).not.toContain('turnstile-secret-key');
+  });
+});

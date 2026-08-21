@@ -51,6 +51,7 @@ import {
   STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
 } from './config.js';
+import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
 import { attachDestructiveActionGuardrail } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 
@@ -192,6 +193,7 @@ export class WebStack extends Stack {
         TURNSTILE_SECRET_PARAMETER_NAME,
         CONTACT_FORM_FROM_EMAIL,
         CONTACT_FORM_TO_EMAIL,
+        ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(
         this,
@@ -199,6 +201,7 @@ export class WebStack extends Stack {
         logGroupName('contact-form-function'),
       ),
     });
+    grantFlagReads(this, contactFormRole);
 
     contactFormRole.addToPrincipalPolicy(
       new PolicyStatement({
@@ -267,9 +270,15 @@ export class WebStack extends Stack {
       environment: {
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
         ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+        ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'MediaUploadFunctionLogGroup', logGroupName('media-upload-function')),
+      logGroup: createLogGroup(
+        this,
+        'MediaUploadFunctionLogGroup',
+        logGroupName('media-upload-function'),
+      ),
     });
+    grantFlagReads(this, mediaUploadRole);
 
     // Scoped to the workshops/ prefix only (media-upload.ts's
     // WORKSHOP_MEDIA_PREFIX) — TASK 1.5.1's own DoD: "the runtime role gets
