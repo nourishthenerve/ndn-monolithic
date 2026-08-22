@@ -63,7 +63,13 @@ export type FlagName =
   | 'appointments.reminders.enabled'
   // TASK 3.5.1: a clinician assigning existing (published) content to a
   // patient, and the patient's own hydrated read of it. Default off.
-  | 'contentAssignment.enabled';
+  | 'contentAssignment.enabled'
+  // TASK 3.6.1: patient<->clinician messaging, both routes gated by one
+  // flag — a send half with no read half to read it back is not a useful
+  // flag state, the identical "one flag for both halves" reasoning
+  // clinicalRecords.enabled/assessments.enabled already establish.
+  // Default off.
+  | 'messaging.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

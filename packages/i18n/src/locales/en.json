@@ -166,5 +166,7 @@
   "notifications.clinicianCaseloadPatientAdded.subject": "A patient has been added to your caseload",
   "notifications.clinicianCaseloadPatientAdded.emailBody": "A patient has been added to your caseload. Sign in to view your caseload for details.",
   "notifications.clinicianCaseloadPatientRemoved.subject": "A patient has been removed from your caseload",
-  "notifications.clinicianCaseloadPatientRemoved.emailBody": "A patient has been removed from your caseload."
+  "notifications.clinicianCaseloadPatientRemoved.emailBody": "A patient has been removed from your caseload.",
+  "notifications.newMessage.subject": "You have a new message",
+  "notifications.newMessage.emailBody": "You have a new message. Sign in to read and reply."
 }

@@ -5,6 +5,7 @@ export * from './clinical-record.js';
 export * from './clinician.js';
 export * from './content-assignment.js';
 export * from './content.js';
+export * from './message.js';
 export * from './patient.js';
 export * from './principal.js';
 export * from './registration.js';
