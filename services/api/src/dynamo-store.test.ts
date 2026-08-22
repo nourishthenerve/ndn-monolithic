@@ -27,6 +27,7 @@ import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
   DynamoAssignmentStore,
+  DynamoCaseloadStore,
   DynamoClinicianStore,
   DynamoContentStore,
   DynamoRegistrationStore,
@@ -766,7 +767,7 @@ describe('DynamoAssignmentStore', () => {
     });
   });
 
-  it('writeDecision() for an approval atomically writes the ASSIGNREQ# row and the patient row, with GSI1 attributes set', async () => {
+  it('writeDecision() for an approval atomically writes the ASSIGNREQ# row and the patient row, with GSI1 and GSI3 attributes set', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     const request = buildAssignmentRequest({ status: 'approved', assignedClinicianId: 'cli-1' });
     const patient = buildPatient({ account_status: 'approved', assigned_clinician_id: 'cli-1' });
@@ -791,11 +792,13 @@ describe('DynamoAssignmentStore', () => {
         sk: 'PROFILE',
         gsi1pk: 'CLI#cli-1',
         gsi1sk: 'PAT#pat-1',
+        gsi3pk: 'CASELOAD#all',
+        gsi3sk: 'CLI#cli-1#PAT#pat-1',
       },
     });
   });
 
-  it('writeDecision() for a decline writes no gsi1pk/gsi1sk at all', async () => {
+  it('writeDecision() for a decline writes no gsi1pk/gsi1sk/gsi3pk/gsi3sk at all', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     const request = buildAssignmentRequest({ status: 'declined' });
     const patient = buildPatient({ account_status: 'declined' });
@@ -806,6 +809,8 @@ describe('DynamoAssignmentStore', () => {
       ?.Put?.Item as Record<string, unknown>;
     expect(patientItem.gsi1pk).toBeUndefined();
     expect(patientItem.gsi1sk).toBeUndefined();
+    expect(patientItem.gsi3pk).toBeUndefined();
+    expect(patientItem.gsi3sk).toBeUndefined();
   });
 
   it('writeDecision() propagates a cancelled transaction as AppError — the atomicity property: neither leg lands', async () => {
@@ -853,5 +858,73 @@ describe('DynamoAssignmentStore', () => {
   it('listPatientIdsForClinician() returns an empty array for a clinician with no assigned patients', async () => {
     ddbMock.on(QueryCommand).resolves({});
     expect(await store.listPatientIdsForClinician('cli-1')).toEqual([]);
+  });
+});
+
+describe('DynamoCaseloadStore', () => {
+  const store = new DynamoCaseloadStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('queryPage() queries GSI3 for the fixed caseload key — a Query, never a Scan', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { gsi3pk: 'CASELOAD#all', gsi3sk: 'CLI#cli-1#PAT#pat-1' },
+        { gsi3pk: 'CASELOAD#all', gsi3sk: 'CLI#cli-1#PAT#pat-2' },
+      ],
+    });
+
+    const page = await store.queryPage(undefined, 20);
+
+    expect(page.patientIds).toEqual(['pat-1', 'pat-2']);
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI3',
+      KeyConditionExpression: 'gsi3pk = :caseloadKey',
+      ExpressionAttributeValues: { ':caseloadKey': 'CASELOAD#all' },
+      Limit: 20,
+    });
+    // No ScanCommand was ever imported or sent by this store — asserted
+    // structurally by there being no ScanCommand call to find at all.
+  });
+
+  it('queryPage() round-trips a cursor: the next page picks up exactly where LastEvaluatedKey said to', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ gsi3pk: 'CASELOAD#all', gsi3sk: 'CLI#cli-1#PAT#pat-1' }],
+      LastEvaluatedKey: { pk: 'PAT#pat-1', sk: 'PROFILE', gsi3pk: 'CASELOAD#all', gsi3sk: 'CLI#cli-1#PAT#pat-1' },
+    });
+
+    const firstPage = await store.queryPage(undefined, 1);
+    expect(firstPage.nextCursor).toBeDefined();
+
+    ddbMock.resetHistory();
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    await store.queryPage(firstPage.nextCursor, 1);
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ExclusiveStartKey).toEqual({
+      pk: 'PAT#pat-1',
+      sk: 'PROFILE',
+      gsi3pk: 'CASELOAD#all',
+      gsi3sk: 'CLI#cli-1#PAT#pat-1',
+    });
+  });
+
+  it('queryPage() has no nextCursor once the query returns no LastEvaluatedKey — the last page', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const page = await store.queryPage(undefined, 20);
+    expect(page.nextCursor).toBeUndefined();
+  });
+
+  it('getPatient() reads the PROFILE row and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: { pk: 'PAT#pat-1', sk: 'PROFILE', ...buildPatient() },
+    });
+
+    const result = await store.getPatient('pat-1');
+    expect(result).toMatchObject({ id: 'pat-1' });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'PAT#pat-1', sk: 'PROFILE' },
+    });
   });
 });

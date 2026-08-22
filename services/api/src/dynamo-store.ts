@@ -40,6 +40,7 @@ import type {
 } from '@ndn/shared-types';
 
 import type { AssignmentStore } from './assignment-repository.js';
+import type { CaseloadStore } from './caseload-repository.js';
 import type { ClinicianStore } from './clinician-repository.js';
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
@@ -735,12 +736,27 @@ export class DynamoClinicianStore implements ClinicianStore {
 // a `PROFILE` row only while `assigned_clinician_id` is set, derived from
 // that field alone — never a second input a caller could pass out of
 // step with it.
+//
+// TASK 2.5.3 adds GSI3 (its own proof, same file): `gsi3pk =
+// 'CASELOAD#all'` / `gsi3sk = CLI#<clinicianId>#PAT#<patientId>`, set in
+// the same conditional block below, on the same condition — one write,
+// two indexes, no second decision about when a patient belongs in either.
 const PATIENT_PK = (id: string) => `PAT#${id}`;
 const PATIENT_PROFILE_SK = 'PROFILE';
 const ASSIGNMENT_REQUEST_SK = (at: string, suffix: string) => `ASSIGNREQ#${at}#${suffix}`;
 const GSI1_INDEX_NAME = 'GSI1';
 const GSI1_CLINICIAN_PK = (clinicianId: string) => `CLI#${clinicianId}`;
 const GSI1_PATIENT_SK = (patientId: string) => `PAT#${patientId}`;
+
+// TASK 2.5.3: GSI3's shape, proved in docs/adr/0002-database.md — one
+// fixed partition value (the same "_all" shape TESTIMONIAL_INDEX_GSI2PK/
+// WORKSHOP_INDEX_GSI2PK already use, on their own index rather than
+// sharing GSI2), sorted by clinician so one Query returns the whole
+// cross-caseload list already grouped.
+const GSI3_INDEX_NAME = 'GSI3';
+const GSI3_CASELOAD_PK = 'CASELOAD#all';
+const GSI3_CASELOAD_SK = (clinicianId: string, patientId: string) =>
+  `CLI#${clinicianId}#PAT#${patientId}`;
 
 export interface DynamoAssignmentStoreOptions {
   readonly tableName: string;
@@ -796,10 +812,17 @@ export class DynamoAssignmentStore implements AssignmentStore {
     // Sparse, derived from `assigned_clinician_id` alone — see this
     // section's header. Simply omitted (not set to `undefined`) when
     // there is no assignment, so a decline's `PutCommand` never tries to
-    // marshall an explicit `undefined` value.
+    // marshall an explicit `undefined` value. GSI3 (TASK 2.5.3) piggybacks
+    // on the same condition: `assigned_clinician_id` is only ever set by
+    // this store alongside `account_status: 'approved'` (approve/reassign
+    // both do both in the same write), so "carries a clinician" and
+    // "belongs in the caseload view" are the same fact here, not two
+    // conditions that could drift apart.
     if (patient.assigned_clinician_id) {
       patientItem.gsi1pk = GSI1_CLINICIAN_PK(patient.assigned_clinician_id);
       patientItem.gsi1sk = GSI1_PATIENT_SK(patient.id);
+      patientItem.gsi3pk = GSI3_CASELOAD_PK;
+      patientItem.gsi3sk = GSI3_CASELOAD_SK(patient.assigned_clinician_id, patient.id);
     }
 
     try {
@@ -848,5 +871,91 @@ export class DynamoAssignmentStore implements AssignmentStore {
       }
     }
     return ids;
+  }
+}
+
+// TASK 2.5.3: the cross-caseload view's cursor — DynamoDB's own
+// `LastEvaluatedKey`, opaque to the caller, base64url-encoded so it
+// travels safely as a query-string value. Never anything else: no offset,
+// no page number, nothing that would let a caller skip into the middle of
+// a GSI3 partition without the key DynamoDB itself issued.
+function encodeCaseloadCursor(key: Record<string, unknown> | undefined): string | undefined {
+  if (!key) {
+    return undefined;
+  }
+  return Buffer.from(JSON.stringify(key), 'utf-8').toString('base64url');
+}
+
+function decodeCaseloadCursor(cursor: string | undefined): Record<string, unknown> | undefined {
+  if (!cursor) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8')) as Record<string, unknown>;
+  } catch {
+    throw new AppError('INVALID_CURSOR', 'cursor could not be decoded');
+  }
+}
+
+export interface DynamoCaseloadStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoCaseloadStore implements CaseloadStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoCaseloadStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  /**
+   * One bounded `Query` against GSI3 (docs/adr/0002-database.md's proof),
+   * sorted by clinician — never a `Scan`, never more than `limit` items
+   * read, never a second page fetched to build this one (step 5).
+   */
+  async queryPage(
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<{ patientIds: string[]; nextCursor?: string }> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI3_INDEX_NAME,
+        KeyConditionExpression: 'gsi3pk = :caseloadKey',
+        ExpressionAttributeValues: { ':caseloadKey': GSI3_CASELOAD_PK },
+        Limit: limit,
+        ExclusiveStartKey: decodeCaseloadCursor(cursor),
+      }),
+    );
+    const patientIds: string[] = [];
+    for (const row of result.Items ?? []) {
+      const gsi3sk = row.gsi3sk;
+      if (typeof gsi3sk === 'string') {
+        // `CLI#<clinicianId>#PAT#<patientId>` — the patient id is
+        // everything after the last `#PAT#` marker; clinician ids are
+        // Cognito subs (UUIDs, no `#`), so this is unambiguous.
+        const patientId = gsi3sk.split('#PAT#').pop();
+        if (patientId) {
+          patientIds.push(patientId);
+        }
+      }
+    }
+    return { patientIds, nextCursor: encodeCaseloadCursor(result.LastEvaluatedKey) };
+  }
+
+  async getPatient(patientId: string): Promise<Patient | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: PATIENT_PK(patientId), sk: PATIENT_PROFILE_SK },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Patient>(result.Item);
   }
 }

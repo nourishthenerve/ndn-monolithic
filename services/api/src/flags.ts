@@ -39,7 +39,9 @@ export type FlagName =
   // TASK 2.5.1: turned on together with auth.patientRegistration.enabled
   // — registering into a system with no route out of `pending` strands
   // people there, which is this flag's own DoD line.
-  | 'assignment.enabled';
+  | 'assignment.enabled'
+  // TASK 2.5.3: the cross-caseload admin view. Default off.
+  | 'caseload.view.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

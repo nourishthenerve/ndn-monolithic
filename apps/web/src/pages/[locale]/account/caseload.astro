@@ -1,0 +1,66 @@
+---
+// TASK 2.5.3: the principal clinician's cross-caseload view. Statically
+// generated and **empty**, same discipline account/index.astro states —
+// what makes this page private is not server rendering but that its
+// content is not in the HTML at all. The island below decides whether to
+// fetch anything, and renders nothing until the session resolves.
+//
+// Deliberately absent from routes.ts, same as account/index.astro and
+// account/callback.astro — TASK 1.1.3's a11y gate (tests/pr-env/
+// a11y-full.test.ts) scans every registered route unauthenticated, and an
+// authenticated-only page has no accessible content to find that way. See
+// docs/runbooks/caseload-view.md for what accessibility verification this
+// page actually has instead, and the real gap it names honestly: this
+// codebase has no live-session pr-env testing mechanism yet, for this
+// page or for TASK 2.2.4's sign-in flow before it.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { CaseloadView } from '../../../account/CaseloadView.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('caseload.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('caseload.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    signedOut={
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signIn', undefined, locale)} />
+      </p>
+    }
+  >
+    <CaseloadView
+      client:only="react"
+      strings={{
+        loadingLabel: t('caseload.loading', undefined, locale),
+        forbiddenLabel: t('caseload.forbidden', undefined, locale),
+        errorLabel: t('caseload.error', undefined, locale),
+        emptyLabel: t('caseload.empty', undefined, locale),
+        patientColumnLabel: t('caseload.patientColumn', undefined, locale),
+        clinicianColumnLabel: t('caseload.clinicianColumn', undefined, locale),
+        nextPageLabel: t('caseload.nextPage', undefined, locale),
+        previousPageLabel: t('caseload.previousPage', undefined, locale),
+        caption: heading,
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>

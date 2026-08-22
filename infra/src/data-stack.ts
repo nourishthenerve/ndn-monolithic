@@ -46,6 +46,7 @@ import {
   SITE_ORIGIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
+  WWW_DOMAIN_NAME,
 } from './config.js';
 import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
 import {
@@ -64,6 +65,7 @@ const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
 const GSI1_INDEX_NAME = 'GSI1';
 const GSI2_INDEX_NAME = 'GSI2';
+const GSI3_INDEX_NAME = 'GSI3';
 
 
 export interface DataStackProps extends StackProps {
@@ -127,6 +129,20 @@ export class DataStack extends Stack {
       projectionType: ProjectionType.KEYS_ONLY,
     });
 
+    // TASK 2.5.3: FR-DP-02's cross-caseload admin view, proved against
+    // this shape in docs/adr/0002-database.md before this index was
+    // added. Sparse: only a patient's PROFILE row carries gsi3pk, and only
+    // while approved and assigned (dynamo-store.ts's DynamoAssignmentStore
+    // — the same write that already derives GSI1's projection derives
+    // this one). KEYS_ONLY: caseload-repository.ts's own read follows up
+    // with a GetItem per id, the same shape GSI1/GSI2's own reads take.
+    this.table.addGlobalSecondaryIndex({
+      indexName: GSI3_INDEX_NAME,
+      partitionKey: { name: 'gsi3pk', type: AttributeType.STRING },
+      sortKey: { name: 'gsi3sk', type: AttributeType.STRING },
+      projectionType: ProjectionType.KEYS_ONLY,
+    });
+
     const logGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-read-function`
       : '/ndn/content-read-function';
@@ -145,6 +161,9 @@ export class DataStack extends Stack {
     const assignmentLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/assignment-function`
       : '/ndn/assignment-function';
+    const caseloadLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/caseload-function`
+      : '/ndn/caseload-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -326,14 +345,27 @@ export class DataStack extends Stack {
       // content, which apps/web only ever calls at `astro build` time —
       // see apps/web/src/blog/content-client.ts) — this API's own
       // execute-api.amazonaws.com origin differs from the site's own
-      // origin, so a browser POST needs CORS. Scoped to the site's own
-      // origin only; update DOMAIN_NAME here alongside TASK 1.6.1's G1
-      // cutover, same convention apps/web/src/site-config.ts's siteUrl
-      // documents.
+      // origin, so a browser POST needs CORS.
+      //
+      // TASK 2.5.3 fix: this comment used to say "update DOMAIN_NAME here
+      // alongside TASK 1.6.1's G1 cutover" — and TASK 1.6.1 never came
+      // back to do it. `apps/web/src/site-config.ts`'s own `siteUrl` moved
+      // to the apex at that cutover ("apex, not infra/src/config.ts's
+      // DOMAIN_NAME"); this API's CORS policy did not, and has allowed
+      // only `next.` ever since — silently breaking testimonial submission
+      // and workshop checkout's live browser fetches from the apex, the
+      // site's own canonical origin, for however long the DNS cutover has
+      // been live. Fixed here, found only because this task's own caseload
+      // fetch (the first authenticated browser call to this API) needed a
+      // correct CORS policy to work at all. All three real origins are
+      // listed — apex (canonical), www, and `next.` (kept as a staging
+      // alias, config.ts's own DOMAIN_NAME comment) — and `authorization`
+      // joins `content-type` in `allowHeaders`, the first header this API
+      // needs for a bearer-token request rather than a public POST.
       corsPreflight: {
-        allowOrigins: [`https://${DOMAIN_NAME}`],
+        allowOrigins: [SITE_ORIGIN, `https://${WWW_DOMAIN_NAME}`, `https://${DOMAIN_NAME}`],
         allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
-        allowHeaders: ['content-type'],
+        allowHeaders: ['content-type', 'authorization'],
       },
       // TASK 2.2.2: **protected unless it says otherwise.** Every route on
       // this API takes the Lambda authorizer unless it explicitly passes
@@ -1239,6 +1271,77 @@ export class DataStack extends Stack {
       path: '/patients/{id}/reassign',
       methods: [HttpMethod.POST],
       integration: assignmentIntegration,
+    });
+
+    // TASK 2.5.3: FR-DP-02's cross-caseload admin view. No `authorizer:`
+    // override, same reasoning as the clinician-admin and assignment
+    // routes — only the principal ever passes `can()` on `'Patient
+    // profile'`'s Principal column for an unscoped resource (caseload.ts's
+    // own comment on why that row, not a new one).
+    const caseloadRole = new Role(this, 'CaseloadFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const caseloadFunction = new NodejsFunction(this, 'CaseloadFunction', {
+      entry: `${moduleDir}../../services/api/src/caseload-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: caseloadRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        CLINICIAN_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'CaseloadFunctionLogGroup', caseloadLogGroupName),
+    });
+    grantFlagReads(this, caseloadRole);
+
+    // `dynamodb:Query` alone, on the table *and* GSI3's own index ARN —
+    // not `table.grantReadData()`, whose action list also includes `Scan`
+    // (the audit reader's own precedent, same reasoning: this task's DoD
+    // is "no Scan reaches the table", not "no Scan happens to be called").
+    caseloadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryCaseloadIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [this.table.tableArn, `${this.table.tableArn}/index/${GSI3_INDEX_NAME}`],
+      }),
+    );
+    // The follow-up `GetItem` per page item (caseload-repository.ts's
+    // `listPage`) — patient profiles only; this function never writes one.
+    caseloadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPatientProfiles',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // The clinician-name lookup per distinct clinician on a page
+    // (`ClinicianRepository.findById`) — read-only, same as
+    // `AssignmentFunction`'s own `ReadClinicianAccounts` grant.
+    caseloadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianAccounts',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(caseloadRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(caseloadRole, this.table);
+
+    httpApi.addRoutes({
+      path: '/caseload',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration('CaseloadIntegration', caseloadFunction),
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

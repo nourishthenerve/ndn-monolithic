@@ -51,12 +51,12 @@ describe('DataStack — table', () => {
     });
   });
 
-  it('creates only GSI1 (clinician -> patients/calendar) and GSI2 (keyword -> content), both KEYS_ONLY, nothing else', () => {
+  it('creates only GSI1 (clinician -> patients/calendar), GSI2 (keyword -> content) and GSI3 (cross-caseload), all KEYS_ONLY, nothing else', () => {
     const template = synth();
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       // arrayWith matches patterns as an ordered subsequence, not a set —
       // listed in synthesis order (GSI2's addGlobalSecondaryIndex call
-      // precedes GSI1's own in the stack's constructor).
+      // precedes GSI1's, which precedes GSI3's, in the stack's constructor).
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({
           IndexName: 'GSI2',
@@ -74,13 +74,52 @@ describe('DataStack — table', () => {
           ],
           Projection: { ProjectionType: 'KEYS_ONLY' },
         }),
+        Match.objectLike({
+          IndexName: 'GSI3',
+          KeySchema: [
+            { AttributeName: 'gsi3pk', KeyType: 'HASH' },
+            { AttributeName: 'gsi3sk', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'KEYS_ONLY' },
+        }),
       ]),
     });
     const table = Object.values(template.findResources('AWS::DynamoDB::Table'))[0] as {
       Properties: { GlobalSecondaryIndexes: unknown[] };
     };
-    // arrayWith (above) proves both exist; this proves there is no third.
-    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(2);
+    // arrayWith (above) proves all three exist; this proves there is no fourth.
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(3);
+  });
+});
+
+// TASK 2.5.3 fix: ContentHttpApi's CORS policy allowed only `next.` — the
+// pre-G1-cutover origin — because the comment reminding a future task to
+// update it alongside TASK 1.6.1 was never acted on. This silently broke
+// testimonial submission and workshop checkout's live browser fetches from
+// the apex, the site's own canonical origin (apps/web/src/site-config.ts's
+// `siteUrl`), for however long the DNS cutover has been live. No test
+// caught it because none existed; these do now.
+describe('DataStack — ContentHttpApi CORS (TASK 2.5.3 fix)', () => {
+  it('allows the apex (canonical), www and next. — every real origin the site is served from', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: {
+        AllowOrigins: [
+          'https://nourishthenerve.com',
+          'https://www.nourishthenerve.com',
+          'https://next.nourishthenerve.com',
+        ],
+      },
+    });
+  });
+
+  it('allows the authorization header — needed for the caseload feature bearer-token fetch', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: {
+        AllowHeaders: ['content-type', 'authorization'],
+      },
+    });
   });
 });
 
@@ -417,6 +456,8 @@ describe('DataStack — feature-flag reads', () => {
     'clinician-admin-handler',
     // TASK 2.5.1: assignment.enabled, default off.
     'assignment-handler',
+    // TASK 2.5.3: caseload.view.enabled, default off.
+    'caseload-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -521,9 +562,13 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // Every Lambda in this stack that goes through a repository: the seven
     // that existed before TASK 2.1.3, the audit reader itself, TASK 2.2.3's
     // two registration functions, TASK 2.4.1's clinician-admin function,
-    // and TASK 2.5.1's assignment function. The authorizer is
-    // deliberately absent — it reads a status and writes nothing.
-    expect(withAuditTable).toHaveLength(12);
+    // TASK 2.5.1's assignment function, and TASK 2.5.3's caseload
+    // function (it never writes an audit row — `ClinicianRepository`'s
+    // read-only `findById` never reaches one — but its constructor still
+    // takes an `AuditWriter`, so the env var is present regardless). The
+    // authorizer is deliberately absent — it reads a status and writes
+    // nothing.
+    expect(withAuditTable).toHaveLength(13);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -571,10 +616,10 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
 
     // The seven pre-existing functions, TASK 2.2.2's authorizer, TASK
     // 2.2.3's two registration roles, TASK 2.4.1's clinician-admin role,
-    // and TASK 2.5.1's assignment role; the audit reader is deliberately
-    // not among them, being the one role that is supposed to read that
-    // partition.
-    expect(denials).toHaveLength(12);
+    // TASK 2.5.1's assignment role, and TASK 2.5.3's caseload role; the
+    // audit reader is deliberately not among them, being the one role
+    // that is supposed to read that partition.
+    expect(denials).toHaveLength(13);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -591,7 +636,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(12);
+    expect(denials).toHaveLength(13);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -648,13 +693,14 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts exactly the clinician-admin (2.4.1) and assignment (2.5.1/2.5.2) routes behind the real authorizer', () => {
+  it('puts exactly the clinician-admin (2.4.1), assignment (2.5.1/2.5.2) and caseload (2.5.3) routes behind the real authorizer', () => {
     // The first routes on this API to take no `authorizer:` override —
     // every route before them opted out with `PUBLIC_ROUTE` or
-    // `ADMIN_TOKEN_ROUTE` (route-protection.ts). When a seventh route
+    // `ADMIN_TOKEN_ROUTE` (route-protection.ts). When an eighth route
     // joins this list, that is a task landing, not a regression.
     expect(routeKeys('CUSTOM')).toEqual(
       [
+        'GET /caseload',
         'POST /clinicians',
         'POST /clinicians/{id}/deactivate',
         'POST /clinicians/{id}/reactivate',
