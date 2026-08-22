@@ -17,13 +17,13 @@ import type { RequestLogFields, RequestLogger } from './logger.js';
 // than a bare actor string — who, with what role, on which request, from
 // where. One fixture stands in for all four here.
 const ACTOR = actorContext(
-  { subjectId: 'editor-1', role: 'admin-token' },
+  { subjectId: 'editor-1', role: 'principal-clinician' },
   { requestId: 'req-content-1', sourceIp: '198.51.100.7' },
 );
 
 /** A second operator, for the tests that assert one actor's write is attributed to them and not the other. */
 const EDITOR_2 = actorContext(
-  { subjectId: 'editor-2', role: 'admin-token' },
+  { subjectId: 'editor-2', role: 'principal-clinician' },
   { requestId: 'req-content-2', sourceIp: '198.51.100.9' },
 );
 

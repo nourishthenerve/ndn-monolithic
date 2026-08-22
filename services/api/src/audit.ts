@@ -62,27 +62,34 @@ export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
 /**
  * docs/plan/05-execution-plan.md TASK 2.1.3 types this field as `Role`.
- * Widened by exactly three members, because Phase 1 shipped before there
- * was an identity system and its actors are still writing audit rows:
+ * Widened by two members, because Phase 1 shipped before there was an
+ * identity system and its actors are still writing audit rows:
  *
- *   * `'admin-token'` — the bearer gate admin-auth.ts calls "one narrow,
- *     explicitly-temporary … not a real auth system: no user identity, no
- *     session, no scopes." Content authoring, workshop authoring and
- *     testimonial moderation all act as it. TASK 2.5.4 retires the gate;
- *     this member goes with it.
  *   * `'public'` — an unauthenticated visitor (testimonial submission,
  *     workshop checkout). Their subject id is a hash of their source
  *     address, which is the only identifier they have.
  *   * `'system'` — a machine actor with no human behind it, i.e. the
  *     Stripe webhook confirming or cancelling a registration.
  *
+ * A third member, `'admin-token'`, stood here until TASK 2.5.4: the bearer
+ * gate admin-auth.ts called "one narrow, explicitly-temporary … not a real
+ * auth system: no user identity, no session, no scopes," which content
+ * authoring, workshop authoring and testimonial moderation all acted as.
+ * Retired along with the gate — no code path can construct one any more —
+ * but historical audit rows written under it are real, permanent data
+ * (append-only, never amended, never expired) that this type no longer
+ * describes. Nothing here validates a row read back from storage against
+ * this union (dynamo-audit-log.ts trusts the read), so an old row with
+ * `actorRole: 'admin-token'` still reads back exactly as written; only new
+ * code is narrower now.
+ *
  * Recording these honestly is the point. Mapping them onto a real `Role`
  * would put a clinician's role on a row a clinician had nothing to do
- * with, which is worse than a union with three named exceptions in it —
- * and an audit log that misattributes is worse than one that admits it
- * does not know.
+ * with, which is worse than a union with named exceptions in it — and an
+ * audit log that misattributes is worse than one that admits it does not
+ * know.
  */
-export type AuditActorRole = Role | 'admin-token' | 'public' | 'system';
+export type AuditActorRole = Role | 'public' | 'system';
 
 /**
  * Who is acting, and where from — everything an audit row needs beyond the

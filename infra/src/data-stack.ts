@@ -34,7 +34,6 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 
 import {
-  ADMIN_API_TOKEN_PARAMETER_NAME,
   CLINICIAN_USER_POOL_CLIENT_ID,
   CONTACT_FORM_FROM_EMAIL,
   CLINICIAN_USER_POOL_ID,
@@ -55,11 +54,7 @@ import {
   AUDIT_PARTITION_KEY_PREFIX,
 } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
-import {
-  ADMIN_TOKEN_ROUTE,
-  createRequestAuthorizer,
-  PUBLIC_ROUTE,
-} from './route-protection.js';
+import { createRequestAuthorizer, PUBLIC_ROUTE } from './route-protection.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -206,7 +201,7 @@ export class DataStack extends Stack {
     // TASK 1.3.2: the write side. A separate function/role from
     // ContentReadFunction — the read path stays exactly "read the table,
     // write its own logs" (comment above); this one additionally needs to
-    // write content and read the admin token.
+    // write content.
     const authoringLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-authoring-function`
       : '/ndn/content-authoring-function';
@@ -226,7 +221,6 @@ export class DataStack extends Stack {
       environment: {
         CONTENT_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
-        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'ContentAuthoringFunctionLogGroup', authoringLogGroupName),
@@ -264,21 +258,6 @@ export class DataStack extends Stack {
     // first place (see the comment on the write grant just above).
     attachDestructiveActionGuardrail(contentAuthoringRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(contentAuthoringRole, this.table);
-
-    contentAuthoringRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
 
     // TASK 2.2.2: the Lambda authorizer, and the single most
     // security-sensitive function in this repository — everything
@@ -383,6 +362,9 @@ export class DataStack extends Stack {
       integration: new HttpLambdaIntegration('ContentReadIntegration', contentReadFunction),
     });
 
+    // TASK 2.5.4: no `authorizer:` override on any of these four — the
+    // real Lambda authorizer (`httpApi`'s `defaultAuthorizer`) applies,
+    // same as the clinician-admin/assignment/caseload routes below.
     const contentAuthoringIntegration = new HttpLambdaIntegration(
       'ContentAuthoringIntegration',
       contentAuthoringFunction,
@@ -390,25 +372,21 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/content',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}',
       methods: [HttpMethod.PATCH],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}/publish',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}/unpublish',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
 
@@ -417,9 +395,10 @@ export class DataStack extends Stack {
     // functions/roles. TestimonialSubmissionFunction is the public write
     // path (Turnstile + rate-limited, see services/api/src/testimonial-submission.ts)
     // reachable by a live browser fetch, hence the CORS config on httpApi
-    // above; TestimonialModerationFunction is the admin-token-gated read/
-    // publish/reject path, reusing the same ADMIN_API_TOKEN as content
-    // authoring.
+    // above; TestimonialModerationFunction serves the public published-only
+    // read plus the clinician-gated moderation queue and publish/reject
+    // actions (TASK 2.5.4) — see testimonial-moderation.ts's own header for
+    // why the queue moved off `GET /testimonials` onto its own path.
     const testimonialSubmissionLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/testimonial-submission-function`
       : '/ndn/testimonial-submission-function';
@@ -519,7 +498,6 @@ export class DataStack extends Stack {
         environment: {
           TESTIMONIAL_TABLE_NAME: this.table.tableName,
           AUDIT_TABLE_NAME: this.table.tableName,
-          ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
           ...FLAG_ENVIRONMENT,
         },
         logGroup: createLogGroup(
@@ -546,21 +524,14 @@ export class DataStack extends Stack {
       tables: [this.table],
     });
     attachAuditPartitionReadGuardrail(testimonialModerationRole, this.table);
-    testimonialModerationRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
 
+    // TASK 2.5.4: `GET /testimonials` is genuinely public (PUBLIC_ROUTE —
+    // published-only, unconditionally) — the real Lambda authorizer denies
+    // outright on a missing bearer token, so it cannot also gate a route
+    // an anonymous visitor must reach. The moderation queue moved to its
+    // own path, `GET /testimonials/pending`, which takes no override and
+    // so falls to `defaultAuthorizer` (the real one), same as publish/reject
+    // below. See testimonial-moderation.ts's own header.
     const testimonialModerationIntegration = new HttpLambdaIntegration(
       'TestimonialModerationIntegration',
       testimonialModerationFunction,
@@ -568,19 +539,22 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/testimonials',
       methods: [HttpMethod.GET],
-      authorizer: ADMIN_TOKEN_ROUTE,
+      authorizer: PUBLIC_ROUTE,
+      integration: testimonialModerationIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/testimonials/pending',
+      methods: [HttpMethod.GET],
       integration: testimonialModerationIntegration,
     });
     httpApi.addRoutes({
       path: '/testimonials/{id}/publish',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: testimonialModerationIntegration,
     });
     httpApi.addRoutes({
       path: '/testimonials/{id}/reject',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: testimonialModerationIntegration,
     });
 
@@ -645,7 +619,6 @@ export class DataStack extends Stack {
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
-        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(
@@ -672,21 +645,9 @@ export class DataStack extends Stack {
     );
     attachDestructiveActionGuardrail(workshopAuthoringRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(workshopAuthoringRole, this.table);
-    workshopAuthoringRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
 
+    // TASK 2.5.4: no `authorizer:` override on any of these four —
+    // `defaultAuthorizer` (the real one) applies.
     const workshopAuthoringIntegration = new HttpLambdaIntegration(
       'WorkshopAuthoringIntegration',
       workshopAuthoringFunction,
@@ -694,25 +655,21 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/workshops',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}',
       methods: [HttpMethod.PATCH],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}/publish',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}/cancel',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
 
@@ -824,7 +781,6 @@ export class DataStack extends Stack {
       role: auditReadRole,
       environment: {
         AUDIT_TABLE_NAME: this.table.tableName,
-        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'AuditReadFunctionLogGroup', auditReadLogGroupName),
@@ -848,20 +804,6 @@ export class DataStack extends Stack {
     // Deliberately *not* attachAuditPartitionReadGuardrail — this is the
     // one role that is supposed to read that partition.
     attachDestructiveActionGuardrail(auditReadRole, { buckets: [], tables: [this.table] });
-    auditReadRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
 
     // TASK 2.2.3: the front door. Two functions, deliberately — the plan
     // named one log group and this needs two, for a reason worth stating.
@@ -1010,19 +952,19 @@ export class DataStack extends Stack {
       integration: new HttpLambdaIntegration('RegistrationIntegration', registrationFunction),
     });
 
+    // TASK 2.5.4: no `authorizer:` override — `defaultAuthorizer` applies,
+    // same as the content/testimonial/workshop authoring routes above.
     httpApi.addRoutes({
       path: '/audit',
       methods: [HttpMethod.GET],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: new HttpLambdaIntegration('AuditReadIntegration', auditReadFunction),
     });
 
-    // TASK 2.4.1: clinician accounts. The first function on this API with
-    // no `authorizer:` override — `httpApi`'s `defaultAuthorizer` (the
-    // real Lambda authorizer, TASK 2.2.2) applies as-is, so these three
-    // routes are not in `route-protection.ts`'s `PUBLIC_ROUTE_KEYS` or
-    // `ADMIN_TOKEN_ROUTE_KEYS`, and data-stack.test.ts's opt-out-set
-    // assertion covers them by their absence.
+    // TASK 2.4.1: clinician accounts. `httpApi`'s `defaultAuthorizer` (the
+    // real Lambda authorizer, TASK 2.2.2) applies as-is — these three
+    // routes, like every other override-free route above, are not in
+    // `route-protection.ts`'s `PUBLIC_ROUTE_KEYS`, and data-stack.test.ts's
+    // opt-out-set assertion covers them by their absence.
     const clinicianAdminRole = new Role(this, 'ClinicianAdminFunctionRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
     });

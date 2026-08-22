@@ -88,11 +88,11 @@ describe('actorContext', () => {
     expect(JSON.stringify(ACTOR)).not.toContain('198.51.100.7');
   });
 
-  it('records the three non-Role actors Phase 1 still writes rows as', () => {
-    const roles = (['admin-token', 'public', 'system'] as const).map(
+  it('records the two non-Role actors Phase 1 still writes rows as', () => {
+    const roles = (['public', 'system'] as const).map(
       (role) => actorContext({ subjectId: 'x', role }, ORIGIN).role,
     );
-    expect(roles).toEqual(['admin-token', 'public', 'system']);
+    expect(roles).toEqual(['public', 'system']);
   });
 });
 

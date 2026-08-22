@@ -51,12 +51,13 @@ const BEARER_PREFIX = 'Bearer ';
 /**
  * `undefined` for anything that is not exactly one `Bearer <non-empty>`.
  *
- * Deliberately a second copy of admin-auth.ts's function rather than an
- * import: that file is a shared-secret gate this phase retires (TASK
- * 2.5.4 deletes it), and the one piece of code every authenticated request
- * passes through must not acquire a dependency on something scheduled for
- * deletion. The two are five lines each and will not drift, because one of
- * them is going away.
+ * Deliberately its own copy rather than a shared import: until TASK 2.5.4,
+ * this same five-line function also lived in admin-auth.ts, the
+ * shared-secret bearer gate — the one piece of code every authenticated
+ * request passes through was kept free of a dependency on something
+ * scheduled for deletion, rather than sharing an implementation that would
+ * have needed splitting apart again once that file was deleted. 2.5.4 did
+ * delete it; this copy needed no change.
  */
 export function extractBearerToken(header: string | undefined): string | undefined {
   if (!header || !header.startsWith(BEARER_PREFIX)) {

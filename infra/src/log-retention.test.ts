@@ -89,6 +89,12 @@ function productionTemplates(): Array<{ stackName: string; template: Template }>
       env,
       deployVersion: 'test-sha',
       table: dataStack.table,
+      // TASK 2.5.4: matches bin/app.ts's real wiring — without this,
+      // MediaUploadFunction's new `if (props.authorizerFunction)` gate
+      // (web-stack.ts) means this helper would silently stop
+      // synthesizing it at all, same gap web-stack.test.ts's own
+      // synthWithTable() had until this task.
+      authorizerFunction: dataStack.authorizerFunction,
     });
     return [dataStack, webStack].map((stack) => ({
       stackName: stack.stackName,

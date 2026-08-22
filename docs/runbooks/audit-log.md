@@ -2,6 +2,8 @@
 
 **Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.1.3](../plan/05-execution-plan.md) · **Milestone:** M2.1 · **Requirements:** §6.2–6.4, NFR-06 · **Decisions:** D-07, D-21 · **Depends on:** 2.1.1, 1.3.1
 
+**Superseded in part by [TASK 2.5.4](admin-token-retirement.md), 2026-08-22.** "The principal source is a bridge" section below described `GET /audit`'s original admin-token stand-in for a real principal; that bridge is retired, and this route sits behind the real Lambda authorizer like every other admin-shaped route now does. See the linked runbook.
+
 ## The invariant
 
 > Every repository write lands a durable row saying who did what, when, and from where. Nothing can amend or remove one. The principal clinician can read a day of them, and nobody else can.
@@ -17,7 +19,6 @@ That was correctly deferred at TASK 0.3.3 (no table existed) and then never revi
 - **`services/api/src/audit-read.ts` + `audit-read-handler.ts`** (new) — `GET /audit?date=`, behind `can(principal, 'read', { entityType: 'audit' })`.
 - **`infra/src/data-stack.ts`** — `AuditReadFunction`, its role (`dynamodb:Query`, nothing else), the route, and `AUDIT_TABLE_NAME` on every function that writes through a repository.
 - **`infra/src/guardrails.ts`** — `denyAuditPartitionReadStatements`, attached to every *other* runtime role.
-- **`services/api/src/admin-token.ts`** (new) — the SSM admin-token resolver, which was three copies of one routine and is now one.
 
 ## Append-only, three ways
 
@@ -72,8 +73,8 @@ Eight fields, and there is no ninth:
 | Field | Example | Why |
 |---|---|---|
 | `at` | `2026-08-21T10:00:00.000Z` | when; also derives the partition |
-| `actor` | `sub-9f3c…` / `admin-token` / a source-address hash | who, as an identifier — never a name |
-| `actorRole` | `sub-clinician` / `admin-token` / `public` / `system` | what they were acting as |
+| `actor` | `sub-9f3c…` / a source-address hash | who, as an identifier — never a name |
+| `actorRole` | `sub-clinician` / `public` / `system` | what they were acting as |
 | `action` | `update` | what |
 | `entityType`, `entityId` | `CarePlan`, `plan-1` | which row |
 | `requestId` | API Gateway's own | the join key to the CloudWatch log line |
@@ -94,14 +95,16 @@ It is also the convention this repo already had. `contact-form-handler.ts`, `tes
 
 ### `actorRole` is wider than `Role`, on purpose
 
-The plan types it `Role`. It is `Role | 'admin-token' | 'public' | 'system'`, because three actors that write audit rows today predate the identity system: the bearer-token bridge (`admin-auth.ts`, retired at TASK 2.5.4), an unauthenticated visitor submitting a testimonial or buying a workshop place, and the Stripe webhook. Mapping any of them onto a clinical role would put a clinician's role on a row a clinician had nothing to do with. **An audit log that misattributes is worse than one that admits what it does not know.**
+The plan types it `Role`. It is `Role | 'public' | 'system'`, because two actors that write audit rows today predate the identity system: an unauthenticated visitor submitting a testimonial or buying a workshop place, and the Stripe webhook. Mapping either onto a clinical role would put a clinician's role on a row a clinician had nothing to do with. **An audit log that misattributes is worse than one that admits what it does not know.**
+
+A third member, `'admin-token'`, stood here until TASK 2.5.4 — the bearer-token bridge (`admin-auth.ts`) that content authoring, workshop authoring and testimonial moderation all acted as. Retired along with the bridge: no code path can construct one any more, but historical rows written under it are real, permanent data this type no longer describes — nothing validates a row read back from storage against `AuditActorRole` (`dynamo-audit-log.ts` trusts the read), so an old row with `actorRole: 'admin-token'` still reads back exactly as written.
 
 ## The actor is a parameter, not a decoration
 
 Every repository method now takes an `ActorContext` where it used to take `actor: string`:
 
 ```ts
-await repository.update(actor, id, patch);   // actor: ActorContext, not 'admin-token'
+await repository.update(actor, id, patch);   // actor: ActorContext, not a bare string
 ```
 
 The alternative — a request-scoped writer that decorates events with the `where` on their way out — was rejected: it makes "the handler forgot to set the context" a blank field in a row nobody looks at until they need it. As a parameter, a caller that cannot say where a write came from does not compile. Handlers build one with `actorContext(who, requestOriginOf(event))`; from TASK 2.2.x on, `actorFromPrincipal(principal, origin)` does it straight from the authenticated caller.
@@ -123,10 +126,10 @@ aws ssm put-parameter --name /ndn/flags/audit.readApi.enabled \
 
 Off is the default, and the writer is not flagged — audit rows are written whether or not anyone can read them through the API.
 
-**Read a day:**
+**Read a day**, with a real principal clinician's Cognito access token (TASK 2.5.4 — see [admin-token-retirement.md](admin-token-retirement.md) for how to obtain one):
 
 ```bash
-curl -s -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+curl -s -H "Authorization: Bearer $CLINICIAN_ACCESS_TOKEN" \
   "$API_URL/audit?date=2026-08-21" | jq '.items[] | {at, actor, actorRole, action, entityType, entityId}'
 ```
 
@@ -143,11 +146,11 @@ aws iam simulate-principal-policy \
 
 Expect `explicitDeny` with the `AUDIT#` context entry, and `allowed` with a `CONTENT#` one — the second half matters as much as the first, since a Deny that also broke ordinary entity reads would be a regression, not a guard.
 
-## The principal source is a bridge
+## The principal source, then and now
 
-`audit-read-handler.ts` resolves a verified `ADMIN_API_TOKEN` into a principal-clinician `Principal`. There is no identity system yet — TASK 2.2.2's Lambda authorizer is what replaces it, and when it does, only `resolvePrincipal` changes: `audit-read.ts` asks `can()` about a `Principal` and cannot tell where it came from.
+`audit-read-handler.ts` originally resolved a verified `ADMIN_API_TOKEN` into a stand-in principal-clinician `Principal` — there was no identity system yet, and TASK 2.2.2's Lambda authorizer was always the intended replacement. `audit-read.ts` itself never knew which bridge it was: it asks `can()` about a `Principal` and cannot tell where the `Principal` came from, so TASK 2.5.4's fix is confined entirely to `audit-read-handler.ts` — `resolvePrincipal` now reads `request-principal.ts`'s `optionalPrincipal(event)` off the real authorizer's context, and nothing in `audit-read.ts` changed.
 
-Two things bound the risk: the route is behind a default-off flag, and the token already authorises content authoring, workshop authoring and testimonial moderation — reading a log of one's own actions is a strictly smaller power than performing them.
+Two things bounded the risk of the old bridge while it stood: the route was behind a default-off flag, and the token already authorised content authoring, workshop authoring and testimonial moderation — reading a log of one's own actions was a strictly smaller power than performing them. Both are moot now that the bridge is gone.
 
 ## What this does *not* record
 

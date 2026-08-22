@@ -45,7 +45,7 @@ import { Repository } from './repository.js';
 // than a bare actor string — who, with what role, on which request, from
 // where. One fixture stands in for all four here.
 const ACTOR = actorContext(
-  { subjectId: 'editor-1', role: 'admin-token' },
+  { subjectId: 'editor-1', role: 'principal-clinician' },
   { requestId: 'req-store-1', sourceIp: '198.51.100.7' },
 );
 

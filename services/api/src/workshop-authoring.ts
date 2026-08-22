@@ -1,22 +1,30 @@
 // TASK 1.5.1: the write side of workshop-repository.ts, same split
 // content-authoring.ts established for content — this file stays SDK-free
-// and unit-testable; workshop-authoring-handler.ts is the only place that
-// resolves the real ADMIN_API_TOKEN secret and wires the real
+// and unit-testable; workshop-authoring-handler.ts wires the real
 // DynamoDB-backed store together. Every mutation goes through
 // WorkshopRepository.create/update/publish/cancel — no endpoint here calls
 // anything delete-shaped, and `cancel` only ever transitions `status` (see
 // WorkshopRepository.cancel's own comment).
+//
+// TASK 2.5.4: the admin-token bridge this file stood behind since 1.5.1 is
+// retired — `requirePrincipal`/`can()` against `authz-matrix.ts`'s
+// 'Workshop' row now gate every route, and the audit trail names *which*
+// clinician acted instead of one shared `admin-token` actor.
 import { supportedLocales } from '@ndn/i18n';
-import type { Workshop } from '@ndn/shared-types';
-import type { APIGatewayProxyEventV2, APIGatewayProxyHandlerV2 } from 'aws-lambda';
+import type { Principal, Workshop } from '@ndn/shared-types';
+import type {
+  APIGatewayProxyEventV2,
+  APIGatewayProxyHandlerV2WithLambdaAuthorizer,
+} from 'aws-lambda';
 import { z } from 'zod';
 
-import { verifyAdminToken } from './admin-auth.js';
-import { actorContext, requestOriginOf } from './audit.js';
+import { actorFromPrincipal, requestOriginOf } from './audit.js';
+import { can } from './authz.js';
 import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
+import { requirePrincipal } from './request-principal.js';
 import type {
   CreateWorkshopInput,
   UpdateWorkshopInput,
@@ -45,9 +53,9 @@ const detailsSchema = z
 
 // dateTimeUtc is validated as "parses to a real instant", not with a strict
 // ISO-8601 format validator — the store always writes/reads
-// `Date#toISOString()` output, but this is the one boundary that accepts an
-// admin-authored string, so it's kept permissive about format while still
-// rejecting nonsense.
+// `Date#toISOString()` output, but this is the one boundary that accepts a
+// clinician-authored string, so it's kept permissive about format while
+// still rejecting nonsense.
 const dateTimeUtcSchema = z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
   message: 'dateTimeUtc must be a valid date-time string',
 });
@@ -92,18 +100,19 @@ function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
 
 const WORKSHOP_AUTHORING_LOG_SAMPLE_RATE = 1;
 
+/** TASK 2.5.4: the matrix row this file's every mutation is governed by — `authz-matrix.ts`'s 'Workshop'. */
+const WORKSHOP_RESOURCE = { entityType: 'workshop' } as const;
+
 export interface WorkshopAuthoringDeps {
   readonly repository: WorkshopRepository;
   readonly flags: FlagReader;
-  /** Resolves the current `ADMIN_API_TOKEN` (SSM SecureString, D-14) — same shared secret content-authoring-handler.ts resolves. */
-  readonly getAdminToken: () => Promise<string>;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
 }
 
 export function createWorkshopAuthoringHandler(
   deps: WorkshopAuthoringDeps,
-): APIGatewayProxyHandlerV2 {
+): APIGatewayProxyHandlerV2WithLambdaAuthorizer<Record<string, unknown> | undefined> {
   const clock = deps.clock ?? systemClock;
   const logger =
     deps.logger ?? createSampledLogger({ clock, sampleRate: WORKSHOP_AUTHORING_LOG_SAMPLE_RATE });
@@ -132,27 +141,26 @@ export function createWorkshopAuthoringHandler(
       return respond(404, { error: 'NOT_FOUND' });
     }
 
-    // Checked before any repository call — a rejected token must mutate
-    // nothing, not even a read.
-    const authHeader = event.headers?.authorization ?? event.headers?.Authorization;
-    const adminToken = await deps.getAdminToken();
-    if (!verifyAdminToken(authHeader, adminToken)) {
+    // TASK 2.5.4: the real Lambda authorizer (2.2.2) replaces the admin
+    // bearer token — a rejected/absent principal must mutate nothing, not
+    // even a read, same ordering the token check had.
+    let principal: Principal;
+    try {
+      principal = requirePrincipal(event);
+    } catch {
       return respond(401, { error: 'UNAUTHORIZED' });
     }
 
-    // TASK 1.5.1: the bearer token proves "an authorised editor," not
-    // *which* one — same shared actor content-authoring.ts uses until
-    // Phase 2's Cognito RBAC. Every mutation is still audited (audit.ts),
-    // and since TASK 2.1.3 that audit row carries the role and the request
-    // origin too — see content-authoring.ts's own note.
-    const actor = actorContext(
-      { subjectId: 'admin-token', role: 'admin-token' },
-      requestOriginOf(event),
-    );
+    // The audit trail (audit.ts) now records *which* clinician acted,
+    // replacing TASK 1.5.1's one shared `admin-token` actor.
+    const actor = actorFromPrincipal(principal, requestOriginOf(event));
 
     try {
       switch (routeKey) {
         case 'POST /workshops': {
+          if (!can(principal, 'create', WORKSHOP_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
           const parsed = createWorkshopBodySchema.safeParse(parseJsonBody(event));
           if (!parsed.success) {
             return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
@@ -164,6 +172,9 @@ export function createWorkshopAuthoringHandler(
           return respond(201, { item });
         }
         case 'PATCH /workshops/{id}': {
+          if (!can(principal, 'update', WORKSHOP_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
           const id = event.pathParameters?.id;
           if (!id) {
             return respond(400, { error: 'ID_REQUIRED' });
@@ -180,6 +191,9 @@ export function createWorkshopAuthoringHandler(
           return respond(200, { item });
         }
         case 'POST /workshops/{id}/publish': {
+          if (!can(principal, 'update', WORKSHOP_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
           const id = event.pathParameters?.id;
           if (!id) {
             return respond(400, { error: 'ID_REQUIRED' });
@@ -188,6 +202,9 @@ export function createWorkshopAuthoringHandler(
           return respond(200, { item });
         }
         case 'POST /workshops/{id}/cancel': {
+          if (!can(principal, 'update', WORKSHOP_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
           const id = event.pathParameters?.id;
           if (!id) {
             return respond(400, { error: 'ID_REQUIRED' });

@@ -38,19 +38,7 @@ export const AUTHORIZER_RESULT_CACHE_TTL = Duration.minutes(5);
 export const PUBLIC_ROUTE = new HttpNoneAuthorizer();
 
 /**
- * **Temporary, and this is the register of it.** Each of these stands
- * behind `services/api/src/admin-auth.ts`'s single shared bearer secret —
- * no user identity, no session, no scopes. TASK 2.5.4 retires that by
- * moving them onto this authorizer and `can()`.
- *
- * Every route marked with this is one whose audit rows say `admin-token`
- * where they should say a person (TASK 2.1.3's `actorRole`), so the size
- * of `ADMIN_TOKEN_ROUTE_KEYS` below is the size of that debt, countable.
- */
-export const ADMIN_TOKEN_ROUTE = new HttpNoneAuthorizer();
-
-/**
- * The four routes with no caller identity at all, by design.
+ * The routes with no caller identity at all, by design.
  *
  * `POST /stripe/webhook` is here because its authentication is a
  * signature over the request body (`stripe-webhook.ts`), not a token —
@@ -67,11 +55,21 @@ export const ADMIN_TOKEN_ROUTE = new HttpNoneAuthorizer();
  * Putting them behind the authorizer would make signing in require being
  * signed in. Their own gate is the PKCE state cookie, `SameSite=Lax` and
  * the `auth.webSignIn.enabled` flag.
+ *
+ * `GET /testimonials` joined this list in TASK 2.5.4: it always was public
+ * in practice (testimonial-moderation.ts never gated the published-only
+ * read), but stood on `ADMIN_TOKEN_ROUTE` at the infra level because the
+ * moderation queue used to overload the same path. The queue has its own
+ * path now (`GET /testimonials/pending`, behind the real authorizer below)
+ * — see docs/runbooks/testimonials.md for why the two couldn't stay one
+ * route once a real authorizer, which denies outright on a missing bearer
+ * token, replaced the admin-token bridge that tolerated an absent one.
  */
 export const PUBLIC_ROUTE_KEYS: readonly string[] = [
   'GET /auth/signin',
   'GET /content',
   'GET /health',
+  'GET /testimonials',
   'GET /workshops',
   'POST /contact',
   'POST /stripe/webhook',
@@ -83,36 +81,8 @@ export const PUBLIC_ROUTE_KEYS: readonly string[] = [
   'POST /workshops/{id}/checkout',
 ];
 
-/**
- * TASK 2.5.4's work list, as data. Its own step 4 names four *functions*
- * — content authoring, workshop authoring, testimonial moderation and
- * media upload — which is thirteen routes, **and misses `GET /audit`**:
- * TASK 2.1.3 added that endpoint after Phase 2 was elaborated, and put it
- * behind the same shared secret with an explicit "TASK 2.2.2 replaces
- * `resolvePrincipal`" note in audit-read-handler.ts. It is listed here so
- * 2.5.4 finds it by reading this file rather than by remembering.
- */
-export const ADMIN_TOKEN_ROUTE_KEYS: readonly string[] = [
-  'GET /audit',
-  'GET /testimonials',
-  'PATCH /content/{id}',
-  'PATCH /workshops/{id}',
-  'POST /content',
-  'POST /content/{id}/publish',
-  'POST /content/{id}/unpublish',
-  'POST /testimonials/{id}/publish',
-  'POST /testimonials/{id}/reject',
-  'POST /workshops',
-  'POST /workshops/{id}/cancel',
-  'POST /workshops/{id}/publish',
-  'POST /workshops/media-upload-url',
-];
-
 /** Every route that is *not* behind the authorizer today, for the two synth tests. */
-export const UNAUTHENTICATED_ROUTE_KEYS: readonly string[] = [
-  ...PUBLIC_ROUTE_KEYS,
-  ...ADMIN_TOKEN_ROUTE_KEYS,
-].sort();
+export const UNAUTHENTICATED_ROUTE_KEYS: readonly string[] = [...PUBLIC_ROUTE_KEYS].sort();
 
 /**
  * One authorizer construct per API — an API Gateway authorizer belongs to

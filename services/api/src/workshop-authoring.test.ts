@@ -1,4 +1,5 @@
 import type { Workshop } from '@ndn/shared-types';
+import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import { describe, expect, it } from 'vitest';
 
 import { InMemoryAuditLog, actorContext } from './audit.js';
@@ -12,32 +13,52 @@ import { InMemoryWorkshopStore, WorkshopRepository } from './workshop-repository
 
 // TASK 2.1.3: the seeding actor for fixtures these tests set up directly
 // through the repository. The handler under test builds its own
-// `ActorContext` from the request (audit.ts's actorContext).
+// `ActorContext` from the request's principal (audit.ts's actorFromPrincipal).
 const SEED_ACTOR = actorContext(
-  { subjectId: 'seed', role: 'admin-token' },
+  { subjectId: 'seed', role: 'principal-clinician' },
   { requestId: 'req-seed', sourceIp: '198.51.100.1' },
 );
 
 const fixedClock: Clock = { now: () => new Date('2026-06-01T00:00:00.000Z') };
-const ADMIN_TOKEN = 'test-admin-token';
+
+type LambdaAuthorizerEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<
+  Record<string, unknown> | undefined
+>;
+
+const PRINCIPAL_CONTEXT = {
+  subjectId: 'principal-sub',
+  role: 'principal-clinician',
+  accountStatus: 'active',
+  clinicianId: 'principal-sub',
+};
+
+const PATIENT_CONTEXT = {
+  subjectId: 'pat-1',
+  role: 'patient',
+  accountStatus: 'approved',
+  patientId: 'pat-1',
+};
 
 function fakeEvent(overrides: {
   routeKey: string;
   pathParameters?: Record<string, string>;
-  headers?: Record<string, string>;
   body?: unknown;
-}) {
+  principal?: Record<string, unknown>;
+}): LambdaAuthorizerEvent {
   return {
     routeKey: overrides.routeKey,
     pathParameters: overrides.pathParameters,
-    headers: overrides.headers ?? { authorization: `Bearer ${ADMIN_TOKEN}` },
     body: overrides.body === undefined ? undefined : JSON.stringify(overrides.body),
     // TASK 2.1.3: `http.sourceIp` is part of every real API Gateway v2
     // event and is what the audit row's `where` is derived from
     // (audit.ts's requestOriginOf) — the fixture carries it because
     // the real event always does.
-    requestContext: { requestId: 'req-1', http: { sourceIp: '198.51.100.7' } },
-  } as never;
+    requestContext: {
+      requestId: 'req-1',
+      http: { sourceIp: '198.51.100.7' },
+      authorizer: { lambda: 'principal' in overrides ? overrides.principal : PRINCIPAL_CONTEXT },
+    },
+  } as unknown as LambdaAuthorizerEvent;
 }
 
 function buildDeps(overrides: Partial<WorkshopAuthoringDeps> = {}) {
@@ -50,7 +71,6 @@ function buildDeps(overrides: Partial<WorkshopAuthoringDeps> = {}) {
   const deps: WorkshopAuthoringDeps = {
     repository,
     flags,
-    getAdminToken: async () => ADMIN_TOKEN,
     clock: fixedClock,
     ...overrides,
   };
@@ -67,7 +87,7 @@ const validBody = {
 };
 
 describe('createWorkshopAuthoringHandler — flag gating', () => {
-  it('returns 404 when workshops.enabled is off, without checking the token', async () => {
+  it('returns 404 when workshops.enabled is off, without checking the principal', async () => {
     const { deps } = buildDeps();
     const source = new InMemoryFlagSource();
     source.set('workshops.enabled', false);
@@ -75,7 +95,7 @@ describe('createWorkshopAuthoringHandler — flag gating', () => {
     const handler = createWorkshopAuthoringHandler({ ...deps, flags });
 
     const result = await handler(
-      fakeEvent({ routeKey: 'POST /workshops', headers: {}, body: validBody }),
+      fakeEvent({ routeKey: 'POST /workshops', principal: undefined, body: validBody }),
       {} as never,
       undefined as never,
     );
@@ -83,13 +103,13 @@ describe('createWorkshopAuthoringHandler — flag gating', () => {
   });
 });
 
-describe('createWorkshopAuthoringHandler — admin token gate', () => {
-  it('rejects a missing Authorization header with 401 and creates nothing', async () => {
+describe('createWorkshopAuthoringHandler — authentication and authorisation', () => {
+  it('rejects a request with no verified principal, 401, and creates nothing', async () => {
     const { deps, repository } = buildDeps();
     const handler = createWorkshopAuthoringHandler(deps);
 
     const result = await handler(
-      fakeEvent({ routeKey: 'POST /workshops', headers: {}, body: validBody }),
+      fakeEvent({ routeKey: 'POST /workshops', principal: undefined, body: validBody }),
       {} as never,
       undefined as never,
     );
@@ -97,24 +117,20 @@ describe('createWorkshopAuthoringHandler — admin token gate', () => {
     expect(await repository.findById('workshop-1')).toBeUndefined();
   });
 
-  it('rejects a wrong token with 401 and creates nothing', async () => {
+  it('rejects a patient with 403 and creates nothing', async () => {
     const { deps, repository } = buildDeps();
     const handler = createWorkshopAuthoringHandler(deps);
 
     const result = await handler(
-      fakeEvent({
-        routeKey: 'POST /workshops',
-        headers: { authorization: 'Bearer wrong-token' },
-        body: validBody,
-      }),
+      fakeEvent({ routeKey: 'POST /workshops', principal: PATIENT_CONTEXT, body: validBody }),
       {} as never,
       undefined as never,
     );
-    expect(result).toMatchObject({ statusCode: 401 });
+    expect(result).toMatchObject({ statusCode: 403 });
     expect(await repository.findById('workshop-1')).toBeUndefined();
   });
 
-  it('accepts the correct token', async () => {
+  it('accepts the principal clinician', async () => {
     const { deps } = buildDeps();
     const handler = createWorkshopAuthoringHandler(deps);
 

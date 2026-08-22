@@ -38,8 +38,9 @@ export interface TestimonialSubmissionRequest {
    * the only identifier they have — and its role is `'public'` rather than
    * a clinical one, so a reviewer reading a day's rows can tell a
    * visitor's submission from a moderator's decision at a glance. There is
-   * still no user identity here; the same gap admin-auth.ts documents for
-   * authoring, closed by TASK 2.2.x.
+   * still no user identity here — an anonymous visitor has no account to
+   * identify them by, unlike the authoring gap TASK 2.2.x closed for
+   * clinicians.
    */
   readonly actor: ActorContext;
 }

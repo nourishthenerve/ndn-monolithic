@@ -1,22 +1,21 @@
 // TASK 1.4.2: the deployed Lambda entry for GET /testimonials,
-// POST /testimonials/{id}/publish, POST /testimonials/{id}/reject
-// (infra/src/data-stack.ts) — same split as content-authoring-handler.ts:
-// testimonial-moderation.ts is SDK-free and unit-testable, this file is the
-// only place that resolves the real `ADMIN_API_TOKEN` secret (SSM
-// SecureString, D-14, the same one content-authoring-handler.ts resolves)
-// and wires the real DynamoDB-backed store together.
-import { createAdminTokenResolver } from './admin-token.js';
+// GET /testimonials/pending, POST /testimonials/{id}/publish,
+// POST /testimonials/{id}/reject (infra/src/data-stack.ts) — same split
+// as content-authoring-handler.ts: testimonial-moderation.ts is SDK-free
+// and unit-testable, this file wires the real DynamoDB-backed store
+// together.
+//
+// TASK 2.5.4: no admin secret to resolve here any more — the three
+// moderation routes sit behind infra's real Lambda authorizer by default,
+// and testimonial-moderation.ts reads the principal straight off the
+// event. `GET /testimonials` itself takes no principal at all — see that
+// file's own header.
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
 import { DynamoTestimonialStore } from './dynamo-store.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
 import { createTestimonialModerationHandler } from './testimonial-moderation.js';
 import { TestimonialRepository } from './testimonial-repository.js';
-
-// TASK 2.1.3: the cold-start-cached SSM read that used to sit here, in
-// three copies across this repo, now lives in admin-token.ts. Same
-// behaviour, one implementation.
-const getAdminToken = createAdminTokenResolver();
 
 // TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
 // ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
@@ -35,4 +34,4 @@ const auditLog = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ??
 
 const repository = new TestimonialRepository(testimonialStore, auditLog, systemClock);
 
-export const handler = createTestimonialModerationHandler({ repository, flags, getAdminToken });
+export const handler = createTestimonialModerationHandler({ repository, flags });
