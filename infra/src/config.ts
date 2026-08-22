@@ -139,11 +139,20 @@ export const MONITORED_LOG_GROUP_NAMES = [
 // TASK 2.2.2 moves `/ndn/media-upload-function` here — see the note on the
 // last entry of the monitored list. It keeps its 14-day retention and its
 // bytes still expire; they are simply no longer summed into the alarm.
+//
+// TASK 2.2.3 adds both of its functions here, displacing nothing. The
+// answer to this file's "which list, and what does it displace" question
+// is: registration is a once-per-patient act behind a default-off flag, and
+// the Post-Confirmation trigger fires exactly once per registration. At
+// 509 patients over a year that is a few hundred invocations in total —
+// the two smallest log volumes in the estate after site-deployment.
 export const UNMONITORED_LOG_GROUP_NAMES = [
   '/ndn/content-authoring-function',
   '/ndn/workshop-authoring-function',
   '/ndn/audit-read-function',
   '/ndn/media-upload-function',
+  '/ndn/registration-function',
+  '/ndn/post-confirmation-function',
   '/ndn/site-deployment',
 ];
 

@@ -81,5 +81,9 @@ if (prNumber) {
   // CloudFormation export, so the stacks can deploy in any order.
   new AuthStack(app, 'NdnAuthStack', {
     env: { account: ACCOUNT_ID, region: REGION },
+    // TASK 2.2.3: the patient pool's Post-Confirmation trigger. Same
+    // one-directional DataStack -> consumer reference `table` and
+    // `authorizerFunction` already use.
+    postConfirmationFunction: dataStack.postConfirmationFunction,
   });
 }

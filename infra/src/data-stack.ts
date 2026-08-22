@@ -36,10 +36,13 @@ import type { Construct } from 'constructs';
 import {
   ADMIN_API_TOKEN_PARAMETER_NAME,
   CLINICIAN_USER_POOL_CLIENT_ID,
+  CONTACT_FORM_FROM_EMAIL,
   CLINICIAN_USER_POOL_ID,
   DOMAIN_NAME,
   PATIENT_USER_POOL_CLIENT_ID,
   PATIENT_USER_POOL_ID,
+  SES_CONFIGURATION_SET_NAME,
+  SES_EMAIL_IDENTITY_DOMAIN,
   SITE_ORIGIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
@@ -48,6 +51,7 @@ import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
 import {
   attachAuditPartitionReadGuardrail,
   attachDestructiveActionGuardrail,
+  AUDIT_PARTITION_KEY_PREFIX,
 } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 import {
@@ -74,6 +78,14 @@ export class DataStack extends Stack {
    * constructs, one implementation.
    */
   public readonly authorizerFunction: IFunction;
+  /**
+   * TASK 2.2.3: attached to the patient pool's Post-Confirmation trigger
+   * by `AuthStack` (bin/app.ts). The function lives here because
+   * everything it writes — the patient profile, the intake row it
+   * consumes, the audit row — is on this stack's table; the pool it fires
+   * from lives there. One prop, one direction.
+   */
+  public readonly postConfirmationFunction: IFunction;
 
   constructor(scope: Construct, id: string, props: DataStackProps = {}) {
     super(scope, id, props);
@@ -103,6 +115,12 @@ export class DataStack extends Stack {
     const authorizerLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/authorizer-function`
       : '/ndn/authorizer-function';
+    const registrationLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/registration-function`
+      : '/ndn/registration-function';
+    const postConfirmationLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/post-confirmation-function`
+      : '/ndn/post-confirmation-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -788,6 +806,153 @@ export class DataStack extends Stack {
         ],
       }),
     );
+
+    // TASK 2.2.3: the front door. Two functions, deliberately — the plan
+    // named one log group and this needs two, for a reason worth stating.
+    //
+    // `RegistrationFunction` is an ordinary HTTP endpoint because step 7
+    // asks for a rate limit **per source IP**, and a Cognito Lambda
+    // trigger cannot see one: Pre-SignUp events carry no client address,
+    // and the address is only available on the paid threat-protection tier
+    // TASK 2.2.1 declined. Behind API Gateway it is free.
+    //
+    // `PostConfirmationFunction` is the Cognito trigger that writes the
+    // `PAT#` record, and it can only be a trigger — nothing else knows
+    // when a patient has proved they can read the mailbox.
+    const registrationRole = new Role(this, 'RegistrationFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const registrationFunction = new NodejsFunction(this, 'RegistrationFunction', {
+      entry: `${moduleDir}../../services/api/src/registration-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      // Turnstile's siteverify round trip plus Cognito's SignUp, both
+      // outbound HTTPS.
+      timeout: Duration.seconds(10),
+      role: registrationRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        PATIENT_USER_POOL_CLIENT_ID,
+        TURNSTILE_SECRET_PARAMETER_NAME,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'RegistrationFunctionLogGroup', registrationLogGroupName),
+    });
+    grantFlagReads(this, registrationRole);
+
+    // **No `cognito-idp` grant anywhere.** `SignUp` is an unauthenticated
+    // Cognito operation — AWS's own API reference says it "doesn't evaluate
+    // IAM policies" — so this function calls it with no credentials at
+    // all. A grant here would be permission that does nothing, which is
+    // worse than none: it reads as if the function had admin reach into
+    // the directory.
+    registrationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteRegistrationIntake',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['REG#*'] } },
+      }),
+    );
+    registrationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadTurnstileSecret',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: TURNSTILE_SECRET_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+    attachDestructiveActionGuardrail(registrationRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(registrationRole, this.table);
+
+    const postConfirmationRole = new Role(this, 'PostConfirmationFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    this.postConfirmationFunction = new NodejsFunction(this, 'PostConfirmationFunction', {
+      entry: `${moduleDir}../../services/api/src/post-confirmation-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: postConfirmationRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        REGISTRATION_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
+      },
+      logGroup: createLogGroup(
+        this,
+        'PostConfirmationFunctionLogGroup',
+        postConfirmationLogGroupName,
+      ),
+    });
+
+    // Reads the intake row and the patient profile (to be idempotent),
+    // writes the profile, the consumed marker and one audit row. Scoped to
+    // the three partitions it touches — a table-wide grant would let the
+    // one function Cognito can invoke reach every record in the estate.
+    postConfirmationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WritePatientProfile',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': ['PAT#*', 'REG#*', `${AUDIT_PARTITION_KEY_PREFIX}*`],
+          },
+        },
+      }),
+    );
+    postConfirmationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendRegistrationEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
+          }),
+        ],
+      }),
+    );
+    attachDestructiveActionGuardrail(postConfirmationRole, { buckets: [], tables: [this.table] });
+    // Writes audit rows, so it must not be able to read them — the same
+    // separation TASK 2.1.3 applies to every other writer. The `PutItem`
+    // above is what lets it append; there is no matching read.
+    attachAuditPartitionReadGuardrail(postConfirmationRole, this.table);
+
+    httpApi.addRoutes({
+      path: '/registrations',
+      methods: [HttpMethod.POST],
+      // Public by necessity: the caller has no account yet — that is what
+      // they are asking for. Turnstile and the per-IP rate limit are the
+      // gate, and the flag is default-off until TASK 2.5.1 can approve
+      // anyone.
+      authorizer: PUBLIC_ROUTE,
+      integration: new HttpLambdaIntegration('RegistrationIntegration', registrationFunction),
+    });
 
     httpApi.addRoutes({
       path: '/audit',

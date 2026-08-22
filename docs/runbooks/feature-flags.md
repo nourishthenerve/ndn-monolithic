@@ -69,6 +69,7 @@ Every name in `FlagName` (`services/api/src/flags.ts`) is a valid parameter suff
 | `payments.stripeCheckout.enabled` | Stripe Checkout session creation (also gated on LL-03) |
 | `sms.enabled`, `sms.killSwitchEngaged` | SMS sending (no sender wired yet — M2.2) |
 | `audit.readApi.enabled` | `GET /audit?date=` — the principal clinician's read of the audit log (TASK 2.1.3). The audit *writer* is deliberately unflagged: a log that can be switched off is not a log ([audit-log.md](audit-log.md)) |
+| `auth.patientRegistration.enabled` | `POST /registrations` — patient self-registration (TASK 2.2.3). Stays off until TASK 2.5.1 can approve someone, and until mail can reach an unverified address ([patient-registration.md](patient-registration.md)) |
 
 **All of them are off right now**, and deliberately so: no parameter exists for any of them. This task restored the ability to turn them on; it turned nothing on. Enabling any of them is a separate, deliberate decision — and for the two form-backed ones, it should not happen before the Turnstile test key is replaced with a real one ([contact-form.md](contact-form.md)).
 

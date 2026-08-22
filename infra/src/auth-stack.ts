@@ -28,8 +28,10 @@ import {
   UserPool,
   UserPoolClient,
   UserPoolClientIdentityProvider,
+  UserPoolOperation,
   type UserPoolProps,
 } from 'aws-cdk-lib/aws-cognito';
+import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
 
 import {
@@ -94,13 +96,26 @@ const SHARED_POOL_PROPS = {
   removalPolicy: RemovalPolicy.RETAIN,
 } satisfies UserPoolProps;
 
+export interface AuthStackProps extends StackProps {
+  /**
+   * TASK 2.2.3: `NdnDataStack`'s Post-Confirmation function
+   * (data-stack.ts), attached here as the patient pool's trigger. The
+   * function lives there because everything it writes is on that stack's
+   * table; the pool lives here. Optional so this stack still synthesizes
+   * on its own — a pool with no trigger is a pool nobody can register
+   * into usefully, but it is not a broken one, and auth-stack.test.ts
+   * asserts both shapes.
+   */
+  readonly postConfirmationFunction?: IFunction;
+}
+
 export class AuthStack extends Stack {
   public readonly patientUserPool: UserPool;
   public readonly clinicianUserPool: UserPool;
   public readonly patientUserPoolClient: UserPoolClient;
   public readonly clinicianUserPoolClient: UserPoolClient;
 
-  constructor(scope: Construct, id: string, props: StackProps = {}) {
+  constructor(scope: Construct, id: string, props: AuthStackProps = {}) {
     super(scope, id, props);
 
     this.patientUserPool = new UserPool(this, 'PatientUserPool', {
@@ -184,6 +199,18 @@ export class AuthStack extends Stack {
       // `SOFTWARE_TOKEN_MFA` challenge the pool requires.
       authFlows: { userSrp: true },
     });
+
+    // TASK 2.2.3 step 3: the only thing that creates a `PAT#` record, and
+    // it fires after the patient has proved they can read the mailbox they
+    // signed up with. Attached to the **patient** pool only — the
+    // clinician pool has self sign-up disabled, so nothing there ever
+    // confirms a sign-up.
+    if (props.postConfirmationFunction) {
+      this.patientUserPool.addTrigger(
+        UserPoolOperation.POST_CONFIRMATION,
+        props.postConfirmationFunction,
+      );
+    }
 
     // "This task deploys infrastructure and exports identifiers." The four
     // identifiers below are what 2.2.2's authorizer verifies tokens
