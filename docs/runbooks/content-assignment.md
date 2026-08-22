@@ -58,3 +58,31 @@ The task's own Files line names `content-assignment.ts`/`content-assignment-repo
 ## Cost (TASK 3.5.1)
 
 £0.00 net-new — `ContentRepository`, GSI2, and every content Lambda already exist from Phase 1; this adds one thin row per assignment on the existing `PAT#`/`CONTENT#` key shape, inside the existing DynamoDB line. One more 128 MB arm64 Lambda inside the always-free allowance.
+
+## TASK 3.5.2 — The patient's "my content" page
+
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.5.2](../plan/05-execution-plan.md) · **Requirements:** §5 · **Depends on:** 3.5.1
+
+### What this covers
+
+The read side of 3.5.1 exposed via the account shell — the same "backend task ships its own page" shape `caseload-view.md`'s own TASK 2.5.3 section and `patient-record.md`'s own TASK 3.1.1 section already establish, rather than a separate frontend-only task with nothing new to build against. A signed-in patient visiting `/account/content` sees their assigned articles, each linking straight into the existing public blog article page (`/${locale}/blog/{contentId}`, TASK 1.3.2) — no new content-rendering surface, per this task's own "Do NOT."
+
+### What was built
+
+- **`apps/web/src/account/AssignedContent.tsx`** (new) — a React island, the same shape `ClinicalRecordTimeline.tsx`/`CaseloadView.tsx` already establish: fetches `GET /patients/me/content` (the same `/me` resolution `ClinicalRecordTimeline.tsx`'s own header documents — this component has no way to know its own patient id), treats a `403`/`401` as an ordinary "forbidden" state rather than an error (the server-side `can()` check is the real boundary), and renders each entry as a `Card` linking to the real article via `contentId`.
+- **`apps/web/src/pages/[locale]/account/content.astro`** (new) — statically generated and empty, `RequireAuth`-gated, the identical shell `account/caseload.astro` already establishes. Deliberately absent from `routes.ts` for the same reason every other authenticated-only page is: TASK 1.1.3's a11y gate scans every registered route unauthenticated, and this page has no accessible content in its static HTML to find that way.
+- **`packages/i18n/src/locales/en.json`** — `assignedContent.*` keys (heading, description, loading/forbidden/error/empty states, the read-more link label).
+
+### Verification
+
+- `pnpm --filter @ndn/web build` — the static output includes an empty `/en/account/content/index.html`, the same size class as `caseload/index.html`'s own empty shell.
+- `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green. No new component-level tests, for the same reason this task's own Tests line and `caseload-view.md`'s own TASK 2.5.3 section both give: no React Testing Library/jsdom pattern exists anywhere in `apps/web` yet, and inventing one for a single page is out of this task's scope. Coverage is the backend handler tests (TASK 3.5.1) plus construction-time accessibility — semantic HTML, `role="status"`/`role="alert"` live regions, matching `CaseloadView.tsx`'s own established shape rather than inventing a new one — documented honestly rather than claimed as more than it is.
+
+### What was deliberately not built here
+
+- **A second content-rendering surface.** This task's own explicit "Do NOT" — the article itself is always the existing public blog page, never re-rendered inside the account shell.
+- **Component-level tests.** See Verification above.
+
+### Cost (TASK 3.5.2)
+
+£0.00 — one more statically generated, empty Astro page and one React island; no new AWS resource of any kind, and no new backend route (this task consumes 3.5.1's `GET /patients/{id}/content` unchanged).
