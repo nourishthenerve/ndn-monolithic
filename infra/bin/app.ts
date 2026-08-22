@@ -1,5 +1,6 @@
 import { App, Tags } from 'aws-cdk-lib';
 
+import { AuthStack } from '../src/auth-stack.js';
 import { BudgetStack } from '../src/budget-stack.js';
 import {
   ACCOUNT_ID,
@@ -64,6 +65,17 @@ if (prNumber) {
   });
 
   new BudgetStack(app, 'NdnBudgetStack', {
+    env: { account: ACCOUNT_ID, region: REGION },
+  });
+
+  // TASK 2.2.1: production only, for DataStack's reason above and one of
+  // its own — these pools are RETAIN plus deletion protection, so an
+  // ephemeral per-PR copy would be a directory nothing could clean up.
+  // No cross-stack reference in either direction yet: nothing is in front
+  // of the pools until 2.2.2's authorizer, and the identifiers this stack
+  // exports reach the rest of the estate through config.ts rather than a
+  // CloudFormation export, so the stacks can deploy in any order.
+  new AuthStack(app, 'NdnAuthStack', {
     env: { account: ACCOUNT_ID, region: REGION },
   });
 }

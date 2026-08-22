@@ -14,7 +14,7 @@ Planning rate **£1 = $1.2105**. All figures ex-VAT. New account ⇒ its own alw
 | API Gateway HTTP API | $0.12 | $0.35 | $0.58 | 500k req @ $1.16/M |
 | DynamoDB on-demand | $0.05 | $0.40 | $0.67 | 2M RRU + 500k WRU |
 | DynamoDB PITR | $0 | $0.12 | $0.24 | ~1 GB @ $0.23772 |
-| Cognito Essentials | $0 | $0 | $0 | 509 MAU ≪ 10,000 free |
+| Cognito Essentials | $0 | $0 | $0 | 509 MAU ≪ 10,000 free — re-verified 2026-08-22 at TASK 2.2.1 (unchanged; always-free, $0.015/MAU beyond, `eu-west-2`) |
 | SES outbound | $0.05 | $0.18 | $0.30 | 3,000 emails @ $0.10/1k |
 | **SMS** | $0 | $2.00 | **$3.63** | Hard-capped at £5 = $6.05 |
 | CloudWatch alarms | $0.80 | $0.80 | $0.80 | 8 × $0.10 |

@@ -1,0 +1,15 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": [
+        "cognito-idp:DeleteUserPool",
+        "cognito-idp:DeleteUserPoolClient",
+        "cognito-idp:AdminDeleteUser"
+      ],
+      "Effect": "Deny",
+      "Resource": "*",
+      "Sid": "DenyDirectoryDestructivePrimitives"
+    }
+  ]
+}
