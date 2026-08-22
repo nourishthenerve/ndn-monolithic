@@ -22,17 +22,25 @@ import { describe, expect, it } from 'vitest';
 
 import {
   attachDestructiveActionGuardrail,
+  buildDeployRoleDirectoryPolicyDocument,
   buildExampleRuntimePolicyDocument,
   denyAuditPartitionReadStatements,
   denyBucketDeleteToPrincipalStatement,
   denyDestructiveActionsStatement,
+  denyDirectoryDestructiveActionsStatement,
   AUDIT_PARTITION_KEY_PREFIX,
   BreakGlassRole,
   DENIED_DESTRUCTIVE_ACTIONS,
+  DENIED_DIRECTORY_ACTIONS,
 } from './guardrails.js';
 
 const EXAMPLE_POLICY_FIXTURE_PATH = new URL(
   './__fixtures__/guardrails/example-runtime-policy.json',
+  import.meta.url,
+);
+
+const DEPLOY_ROLE_POLICY_FIXTURE_PATH = new URL(
+  './__fixtures__/guardrails/deploy-role-directory-policy.json',
   import.meta.url,
 );
 
@@ -264,5 +272,63 @@ describe('denyAuditPartitionReadStatements', () => {
     for (const prefix of ['CONTENT#', 'TESTIMONIAL#', 'WORKSHOP#', 'PAT#', 'STRIPE_EVENT#']) {
       expect(patterns.some((pattern) => prefix.startsWith(pattern.replace('*', '')))).toBe(false);
     }
+  });
+});
+
+// TASK 2.2.1 step 9. Unlike everything above, the role this policy lands on
+// is not a CDK construct — `ndn-deploy` is CI's OIDC role, created out of
+// band, and its `PowerUserAccess` excludes IAM, so it cannot attach a
+// policy to itself and nothing CDK synthesizes could ever contain this.
+// The checked-in fixture *is* the applied document, and CI's oidc-dry-run
+// job simulates the real role on every PR — see
+// docs/runbooks/cognito-user-pools.md.
+describe('denyDirectoryDestructiveActionsStatement', () => {
+  it('denies exactly the three directory-destroying actions, nothing broader', () => {
+    const json = denyDirectoryDestructiveActionsStatement().toStatementJson() as {
+      Effect: string;
+      Action: string[];
+      Resource: string;
+      Sid: string;
+    };
+
+    expect(json.Effect).toBe('Deny');
+    expect(json.Sid).toBe('DenyDirectoryDestructivePrimitives');
+    expect(json.Action).toEqual([
+      'cognito-idp:DeleteUserPool',
+      'cognito-idp:DeleteUserPoolClient',
+      'cognito-idp:AdminDeleteUser',
+    ]);
+    // Everything the auth stack actually does must survive this Deny, or
+    // the guard would break the deploy it is meant to outlive.
+    for (const action of [
+      'cognito-idp:CreateUserPool',
+      'cognito-idp:UpdateUserPool',
+      'cognito-idp:CreateUserPoolClient',
+      'cognito-idp:AdminCreateUser',
+      'cognito-idp:AdminDisableUser',
+    ]) {
+      expect(json.Action).not.toContain(action);
+    }
+  });
+
+  it('is unscoped on purpose — there is no user pool this role may delete', () => {
+    const json = denyDirectoryDestructiveActionsStatement().toStatementJson() as {
+      Resource: string;
+    };
+    expect(json.Resource).toBe('*');
+  });
+
+  it('keeps 2.4.1 honest: AdminDisableUser is the deactivation path, AdminDeleteUser is denied', () => {
+    expect(DENIED_DIRECTORY_ACTIONS).toContain('cognito-idp:AdminDeleteUser');
+    expect(DENIED_DIRECTORY_ACTIONS).not.toContain('cognito-idp:AdminDisableUser');
+  });
+
+  it('matches the checked-in fixture applied to the real ndn-deploy role', () => {
+    const fixture = JSON.parse(readFileSync(DEPLOY_ROLE_POLICY_FIXTURE_PATH, 'utf8'));
+    expect(buildDeployRoleDirectoryPolicyDocument()).toEqual(fixture);
+  });
+
+  it('is the whole policy — a stray Allow beside the Deny would be the bug', () => {
+    expect(buildDeployRoleDirectoryPolicyDocument().Statement).toHaveLength(1);
   });
 });

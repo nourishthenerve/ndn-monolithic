@@ -200,6 +200,35 @@ jobs:
           echo "$result"
           echo "$result" | grep -qE '^cloudformation:DescribeStacks[[:space:]]+allowed$'
           echo "$result" | grep -qE '^iam:CreateUser[[:space:]]+implicitDeny$'
+      # TASK 2.2.1 step 9: the same proof, one layer up — this one runs
+      # against the *real* ndn-deploy role rather than a policy document
+      # passed in, because the Deny it checks is a real inline policy on
+      # that role (DenyDirectoryDestructivePrimitives, applied by hand:
+      # ndn-deploy's PowerUserAccess excludes IAM, so it cannot attach a
+      # policy to itself and no CDK deploy could ever create this). The
+      # checked-in copy of the applied document is infra/src/__fixtures__/
+      # guardrails/deploy-role-directory-policy.json, and guardrails.test.ts
+      # fails the `quality` job if it drifts from guardrails.ts.
+      #
+      # The `allowed` half matters as much as the `explicitDeny` half: a
+      # guard that also blocked CreateUserPool would break the deploy it
+      # exists to outlive, and this is where that would surface.
+      - name: Prove the deploy role cannot delete a user pool, a client or a user
+        run: |
+          set -euo pipefail
+          result=$(aws iam simulate-principal-policy \
+            --policy-source-arn arn:aws:iam::357601815388:role/ndn-deploy \
+            --action-names cognito-idp:DeleteUserPool cognito-idp:DeleteUserPoolClient cognito-idp:AdminDeleteUser \
+                           cognito-idp:CreateUserPool cognito-idp:CreateUserPoolClient cognito-idp:AdminDisableUser \
+            --query 'EvaluationResults[].[EvalActionName,EvalDecision]' \
+            --output text)
+          echo "$result"
+          for action in cognito-idp:DeleteUserPool cognito-idp:DeleteUserPoolClient cognito-idp:AdminDeleteUser; do
+            echo "$result" | grep -qE "^${action}[[:space:]]+explicitDeny\$"
+          done
+          for action in cognito-idp:CreateUserPool cognito-idp:CreateUserPoolClient cognito-idp:AdminDisableUser; do
+            echo "$result" | grep -qE "^${action}[[:space:]]+allowed\$"
+          done
       # TASK 0.3.2 (IAM deny guardrails): proves guardrails.ts's Deny
       # statement against the real IAM policy evaluation engine, not a
       # mock of it — ndn-ci-readonly holds iam:SimulateCustomPolicy

@@ -233,3 +233,30 @@ export const STRIPE_WEBHOOK_SECRET_PARAMETER_NAME = '/ndn/stripe-webhook-secret'
 // needs to, because an absent parameter is the documented "off". See
 // docs/runbooks/feature-flags.md.
 export const FLAG_PARAMETER_NAME_PREFIX = '/ndn/flags/';
+
+// TASK 2.2.1 (ADR-0004's two-pool amendment): the two Cognito directories
+// and the one browser redirect pair they both trust.
+//
+// The pool *names* are constants here because they are ours to choose and
+// two files need to agree on them (auth-stack.ts creates them,
+// docs/runbooks/cognito-user-pools.md's verification commands name them).
+// The pool and client **ids are not here yet, deliberately**: Cognito
+// generates them, so they cannot exist until the first deploy has run.
+// `NdnAuthStack` emits all four plus both issuer URLs as CloudFormation
+// outputs; the post-deploy step in that runbook records them here as plain
+// constants (they are identifiers, not secrets — the same standing
+// CERTIFICATE_ARN above has). Nothing reads them until TASK 2.2.2's
+// authorizer, which is why an absent constant is a sequencing fact rather
+// than a gap.
+export const PATIENT_USER_POOL_NAME = 'ndn-patients';
+export const CLINICIAN_USER_POOL_NAME = 'ndn-clinicians';
+
+// Where Cognito is permitted to send a browser back to. Both are on
+// SITE_ORIGIN (the apex) and nowhere else — TASK 2.2.4 puts `/auth/*`
+// behind the same CloudFront distribution, so the whole exchange stays
+// same-origin and the existing CSP already covers it. `next.` is
+// deliberately absent even though it serves the same distribution: a
+// second valid redirect target is a second place an authorization code
+// can be delivered.
+export const AUTH_CALLBACK_URL = `${SITE_ORIGIN}/auth/callback`;
+export const AUTH_SIGN_OUT_URL = `${SITE_ORIGIN}/`;

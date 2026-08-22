@@ -154,6 +154,80 @@ export function attachAuditPartitionReadGuardrail(role: IRole, table: ITable): v
   }
 }
 
+// TASK 2.2.1 step 9: the same guard shape, moved from the data plane to
+// the *directory*. A user pool is not a bucket or a table, but losing one
+// is the same category of loss — every patient and clinician identity in
+// it, with no export, no PITR and no undo. The three actions below are the
+// only ways to lose part or all of it.
+//
+// Wrapped in a Deny-shaped literal for the same reason
+// DESTRUCTIVE_ACTIONS_DENY_TEMPLATE above is, even though
+// ndn/no-destructive-primitives only pattern-matches `s3:DeleteObject*`
+// today: the rule's allowlist is what lets this file talk about deletion
+// at all, and writing these in the shape it recognises keeps that true if
+// the rule's action list ever widens.
+const DIRECTORY_ACTIONS_DENY_TEMPLATE = {
+  effect: Effect.DENY,
+  actions: [
+    'cognito-idp:DeleteUserPool',
+    'cognito-idp:DeleteUserPoolClient',
+    'cognito-idp:AdminDeleteUser',
+  ],
+} as const;
+
+/** The identity-directory half of the prohibition, expressed as IAM actions. */
+export const DENIED_DIRECTORY_ACTIONS: readonly string[] = DIRECTORY_ACTIONS_DENY_TEMPLATE.actions;
+
+/**
+ * Unlike {@link denyDestructiveActionsStatement}, this one is unscoped —
+ * `Resource: "*"`. That is deliberate and is the difference between the
+ * two guards. The data guard protects *named* stores while leaving the
+ * role free to operate on others; there is no user pool anywhere, in any
+ * region, that the deploy role should ever be able to delete, and a
+ * resource-scoped Deny would also have to be rewritten every time a pool
+ * is added — which is exactly the moment it would be forgotten.
+ *
+ * The consequence is worth stating rather than discovering. `ndn-deploy`
+ * is CI's role, so a CloudFormation update that *replaces* an app client
+ * (rather than updating it in place) will fail at its cleanup step, and
+ * the stack will need the break-glass procedure in
+ * docs/runbooks/iam-deny-guardrails.md to move again. That is the price of
+ * the guard, not a defect in it: a replacement that deletes a client is a
+ * change that invalidates every live session, and it should require a
+ * human.
+ */
+export function denyDirectoryDestructiveActionsStatement(): PolicyStatement {
+  return new PolicyStatement({
+    sid: 'DenyDirectoryDestructivePrimitives',
+    effect: Effect.DENY,
+    actions: [...DENIED_DIRECTORY_ACTIONS],
+    resources: ['*'],
+  });
+}
+
+/**
+ * The exact inline policy applied by hand to the `ndn-deploy` role, as a
+ * plain IAM policy document.
+ *
+ * By hand, and not by CDK, for a structural reason: `ndn-deploy` carries
+ * `PowerUserAccess`, which excludes IAM management — the role cannot
+ * attach a policy to itself, so nothing CI deploys could ever create this.
+ * Same one-time-admin path TASK 0.1.1 used for the role itself and 0.3.2
+ * used for `ndn-break-glass`.
+ *
+ * `infra/src/__fixtures__/guardrails/deploy-role-directory-policy.json` is
+ * this function's output, checked in so the repo's copy of what is applied
+ * and the real role cannot drift silently — guardrails.test.ts fails if
+ * they do, and CI proves the *real* role's decision with
+ * `simulate-principal-policy` on every PR.
+ */
+export function buildDeployRoleDirectoryPolicyDocument() {
+  return {
+    Version: '2012-10-17',
+    Statement: [denyDirectoryDestructiveActionsStatement().toStatementJson()],
+  };
+}
+
 // Illustrative-only ARNs: no runtime role, bucket, or table is deployed yet
 // (TASK 0.4.1 is the first task that deploys real ones). These exist so the
 // guard's real-world behaviour can be proven against AWS's actual IAM
