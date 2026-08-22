@@ -82,3 +82,38 @@ describe('VersionedRepository.createVersion', () => {
     await expect(repository.getVersion('pat-1', 1)).resolves.toBeUndefined();
   });
 });
+
+describe('VersionedRepository.listVersions', () => {
+  it('returns every version, oldest first', async () => {
+    const { repository } = buildRepository();
+    await repository.createVersion('pat-1', 1, ACTOR, { summary: 'Initial plan' });
+    await repository.createVersion('pat-1', 2, ACTOR, { summary: 'Revised plan' });
+    await repository.createVersion('pat-1', 3, ACTOR, { summary: 'Latest plan' });
+
+    const versions = await repository.listVersions('pat-1');
+    expect(versions.map((v) => v.summary)).toEqual(['Initial plan', 'Revised plan', 'Latest plan']);
+  });
+
+  it('returns an empty array for an id with no versions', async () => {
+    const { repository } = buildRepository();
+    await expect(repository.listVersions('nobody')).resolves.toEqual([]);
+  });
+
+  it('stops at the first gap rather than skipping over it', async () => {
+    const { repository } = buildRepository();
+    await repository.createVersion('pat-1', 1, ACTOR, { summary: 'Initial plan' });
+    await repository.createVersion('pat-1', 3, ACTOR, { summary: 'Out of sequence' });
+
+    const versions = await repository.listVersions('pat-1');
+    expect(versions.map((v) => v.summary)).toEqual(['Initial plan']);
+  });
+
+  it('keeps two different ids fully independent', async () => {
+    const { repository } = buildRepository();
+    await repository.createVersion('pat-1', 1, ACTOR, { summary: 'Patient 1 plan' });
+    await repository.createVersion('pat-2', 1, ACTOR, { summary: 'Patient 2 plan' });
+
+    const patient1Versions = await repository.listVersions('pat-1');
+    expect(patient1Versions.map((v) => v.summary)).toEqual(['Patient 1 plan']);
+  });
+});

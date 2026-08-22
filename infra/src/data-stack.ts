@@ -162,6 +162,12 @@ export class DataStack extends Stack {
     const patientLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/patient-function`
       : '/ndn/patient-function';
+    const clinicalRecordLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/clinical-record-function`
+      : '/ndn/clinical-record-function';
+    const assessmentLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/assessment-function`
+      : '/ndn/assessment-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1342,10 +1348,30 @@ export class DataStack extends Stack {
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
       }),
     );
+    // TASK 3.1.2: the GSI1 `Query` grant TASK 2.5.1's own runbook deferred
+    // — "nothing this function's own routes call reaches
+    // listPatientIdsForClinician; that grant lands with whichever future
+    // task first calls it." This is that task. `dynamodb:Query` on the
+    // table *and* GSI1's own index ARN, not `grantReadData()` (which also
+    // carries `Scan`) — the identical shape `CaseloadFunction`'s own
+    // `QueryCaseloadIndex` statement already uses for GSI3.
+    patientRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryOwnCaseloadIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [this.table.tableArn, `${this.table.tableArn}/index/${GSI1_INDEX_NAME}`],
+      }),
+    );
     attachDestructiveActionGuardrail(patientRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(patientRole, this.table);
 
     const patientIntegration = new HttpLambdaIntegration('PatientIntegration', patientFunction);
+    httpApi.addRoutes({
+      path: '/caseload/mine',
+      methods: [HttpMethod.GET],
+      integration: patientIntegration,
+    });
     httpApi.addRoutes({
       path: '/patients/{id}',
       methods: [HttpMethod.GET],
@@ -1355,6 +1381,162 @@ export class DataStack extends Stack {
       path: '/patients/{id}',
       methods: [HttpMethod.PATCH],
       integration: patientIntegration,
+    });
+
+    // TASK 3.2.1: diagnosis and care plan — R-09's first real entity
+    // through `projectFor`. A separate function and role from
+    // `PatientFunction`, even though both read the `PAT#*` partition: this
+    // one's write half reaches DynamoDB's `attribute_not_exists(pk)`
+    // conditional `PutItem` path (`DynamoClinicalRecordStore`,
+    // dynamo-store.ts) that a diagnosis/care-plan version needs and a
+    // patient-profile edit does not, and keeping the two functions' IAM
+    // roles separate means a change to one's policy can never silently
+    // widen the other's.
+    const clinicalRecordRole = new Role(this, 'ClinicalRecordFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const clinicalRecordFunction = new NodejsFunction(this, 'ClinicalRecordFunction', {
+      entry: `${moduleDir}../../services/api/src/clinical-record-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: clinicalRecordRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'ClinicalRecordFunctionLogGroup', clinicalRecordLogGroupName),
+    });
+    grantFlagReads(this, clinicalRecordRole);
+
+    // `GetItem` (the patient lookup `can()`'s relationship check needs)
+    // and `PutItem` (a new `DIAG#v<n>`/`PLAN#v<n>` version) on the same
+    // `PAT#*` partition — `dynamodb:LeadingKeys` restricts by partition
+    // key only, the same granularity `PatientFunction`'s own
+    // `ReadWritePatientProfile` statement already accepts, so this grant
+    // is technically also capable of a `PAT#<id>`/`PROFILE` write; nothing
+    // in `clinical-record.ts`/`clinical-record-repository.ts` ever issues
+    // one — `patients` (`PatientDeps`) is called through `findById` only.
+    clinicalRecordRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPatientAndWriteClinicalRecords',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // A separate statement, on `AUDIT#*` alone — every version
+    // `ClinicalRecordRepository.createVersion` writes reaches the same
+    // `DynamoAuditLog` every other writer in this stack uses.
+    clinicalRecordRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(clinicalRecordRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(clinicalRecordRole, this.table);
+
+    const clinicalRecordIntegration = new HttpLambdaIntegration(
+      'ClinicalRecordIntegration',
+      clinicalRecordFunction,
+    );
+    httpApi.addRoutes({
+      path: '/patients/{id}/diagnosis',
+      methods: [HttpMethod.POST],
+      integration: clinicalRecordIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/care-plan',
+      methods: [HttpMethod.POST],
+      integration: clinicalRecordIntegration,
+    });
+    // TASK 3.2.2: the read half, same integration — one Lambda already
+    // serves both verbs on both paths.
+    httpApi.addRoutes({
+      path: '/patients/{id}/diagnosis',
+      methods: [HttpMethod.GET],
+      integration: clinicalRecordIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/care-plan',
+      methods: [HttpMethod.GET],
+      integration: clinicalRecordIntegration,
+    });
+
+    // TASK 3.3.1: assessment forms — a separate function/role from
+    // `ClinicalRecordFunction`, even though both read/write `PAT#*`: this
+    // is the entity `authz-matrix.ts` gives *two* matrix rows
+    // (`visible{}`/`private{}`) rather than one row with an internal
+    // split, and keeping it on its own role means a future change to
+    // either entity's IAM policy can never silently widen the other's.
+    const assessmentRole = new Role(this, 'AssessmentFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const assessmentFunction = new NodejsFunction(this, 'AssessmentFunction', {
+      entry: `${moduleDir}../../services/api/src/assessment-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: assessmentRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'AssessmentFunctionLogGroup', assessmentLogGroupName),
+    });
+    grantFlagReads(this, assessmentRole);
+
+    // `GetItem` (the patient lookup) and `PutItem` (a new
+    // `ASSESS#<assessmentId>#v<n>` version) on the same `PAT#*` partition
+    // — the identical `ReadPatientAndWrite*` shape `ClinicalRecordFunction`
+    // already carries, and the identical partition-key-only granularity
+    // limit its own comment names.
+    assessmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPatientAndWriteAssessments',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    assessmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(assessmentRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(assessmentRole, this.table);
+
+    const assessmentIntegration = new HttpLambdaIntegration('AssessmentIntegration', assessmentFunction);
+    httpApi.addRoutes({
+      path: '/patients/{id}/assessments/{assessmentId}',
+      methods: [HttpMethod.POST],
+      integration: assessmentIntegration,
+    });
+    // TASK 3.3.2: the read half, same integration — one Lambda already
+    // serves both verbs on this path.
+    httpApi.addRoutes({
+      path: '/patients/{id}/assessments/{assessmentId}',
+      methods: [HttpMethod.GET],
+      integration: assessmentIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST
