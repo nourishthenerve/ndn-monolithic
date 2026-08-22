@@ -66,3 +66,36 @@ Step 5's own requirement: a new message triggers a `Notifier` send to "the other
 ## Cost (TASK 3.6.1)
 
 £0.00 net-new — `PAT#`/`MSG#<ts>#<id>` rows are a few hundred bytes each, inside the existing DynamoDB line. No new SMS spend (`newMessage` is never `smsEligible`). One more 128 MB arm64 Lambda inside the always-free allowance.
+
+## TASK 3.6.2 — The message thread, on both sides of the account shell
+
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.6.2](../plan/05-execution-plan.md) · **Requirements:** §5 · **Depends on:** 3.6.1
+
+### What this covers
+
+The read/compose surface for TASK 3.6.1's now genuinely bidirectional messaging — the last page this phase adds to the account shell TASK 2.2.4 built with nothing behind it. `MessageThread.tsx` fetches `GET /patients/me/messages` on mount, renders the thread oldest-first, and offers a compose box that `POST`s a new message and appends it to local state on success — no full page refresh, no real-time transport (step 2's own explicit scope line: no WebSocket, no polling loop; a new message from the other party appears on next page load or an explicit refresh, the same "static page, island decides what to fetch" posture every other Phase 2/3 page takes).
+
+### An honest reading of "both sides"
+
+This task's own title says "on both sides of the account shell," but its Files line names exactly one new component and one new page, its Steps name no patient-id selector, and its Interfaces line says "none new — consumes 3.6.1's two routes" (both of which are patient-scoped, `/patients/{id}/messages`, resolving `/me` only for a signed-in patient principal). There is no mechanism named anywhere in this task for a signed-in clinician to choose which patient's thread to view on this page. Built here as the patient's own account page, consuming `/patients/me/messages` — the identical `/me` resolution every other patient-scoped account page in this phase already uses (`PatientProfile.tsx`, `ClinicalRecordTimeline.tsx`, `NextAppointmentPanel.tsx`, `AssignedContent.tsx`). "Both sides" is read here as both directions of the conversation — read *and* compose — on the patient's own page, which is a real, if narrower, reading than a second UI this task does not otherwise specify. A clinician-facing per-patient thread view (e.g. reached from a future per-patient link on `CaseloadView.tsx`) is a real gap, named honestly rather than invented past what this task actually asks for.
+
+### What was built
+
+- **`apps/web/src/account/MessageThread.tsx`** (new) — a React island: the thread as an ordered list (oldest-first, matching the store's own chronological read), a compose `<form>` with a `<textarea>`, `RequireAuth`-gated, statically-empty-page discipline unchanged. `429` from a rate-limited send surfaces as its own state (`rateLimited`), distinct from a generic `error` — the caller is told to wait, not that something is broken. A sent message is appended to local state immediately from the `POST` response's own `item`, so the sender sees their own message without waiting on a second `GET`.
+- **`apps/web/src/pages/[locale]/account/messages.astro`** (new) — statically generated and empty, the identical shell `account/caseload.astro`/`account/content.astro` already establish. Deliberately absent from `routes.ts` for the same reason every other authenticated-only page is.
+- **`packages/i18n/src/locales/en.json`** — `messageThread.*` keys (heading, description, loading/forbidden/error/empty states, compose placeholder, send/sending/send-error/rate-limited labels).
+
+### Verification
+
+- `pnpm --filter @ndn/web build` — the static output includes an empty `/en/account/messages/index.html`, the same size class as `caseload/index.html`'s/`content/index.html`'s own empty shells.
+- `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green. No new component-level tests, for the same reason this task's own Tests line and every prior page this phase added both give: no React Testing Library/jsdom pattern exists anywhere in `apps/web` yet, and inventing one for a single page is out of this task's scope. Coverage is the backend handler tests (TASK 3.6.1) plus construction-time accessibility — semantic HTML, `role="status"`/`role="alert"` live regions, a `<label>`-associated `<textarea>` for the compose box's own keyboard reachability (this task's own Tests line calls this out explicitly: "a text-entry control is a more direct a11y risk than a read-only list").
+
+### What was deliberately not built here
+
+- **A clinician-facing per-patient thread view.** See "An honest reading of 'both sides'" above.
+- **Real-time delivery.** This task's own explicit scope line — see What this covers above.
+- **Component-level tests.** See Verification above.
+
+### Cost (TASK 3.6.2)
+
+£0.00 — one more statically generated, empty Astro page and one React island; no new AWS resource of any kind, and no new backend route (this task consumes 3.6.1's two routes unchanged).
