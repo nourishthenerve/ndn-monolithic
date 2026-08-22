@@ -31,6 +31,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import type {
   AssignmentRequest,
+  ClinicalRecord,
   Clinician,
   ContentItem,
   Patient,
@@ -957,5 +958,82 @@ export class DynamoCaseloadStore implements CaseloadStore {
       return undefined;
     }
     return withoutTableKeys<Patient>(result.Item);
+  }
+}
+
+// TASK 3.2.1: `PK = PAT#<id>` (the same partition every other patient-owned
+// row lives in), `SK = DIAG#v<n>` / `PLAN#v<n>` per
+// docs/plan/04-data-model-rbac.md's own key shape. `versionKey`'s
+// `${id}#v${version}` (versioned-repository.ts, private to that file) is
+// this store's own `KeyValueStore<T>` key — parsed back apart here rather
+// than re-exported, so the split-key format stays this pair of files'
+// concern and no third file has to know it.
+const CLINICAL_RECORD_SK_PREFIX = { diagnosis: 'DIAG', 'care-plan': 'PLAN' } as const;
+
+function parseVersionKey(key: string): { readonly patientId: string; readonly version: string } {
+  const marker = key.lastIndexOf('#v');
+  return { patientId: key.slice(0, marker), version: key.slice(marker + 2) };
+}
+
+export interface DynamoClinicalRecordStoreOptions {
+  readonly tableName: string;
+  readonly kind: keyof typeof CLINICAL_RECORD_SK_PREFIX;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoClinicalRecordStore implements KeyValueStore<ClinicalRecord> {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+  private readonly skPrefix: string;
+
+  constructor(options: DynamoClinicalRecordStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+    this.skPrefix = CLINICAL_RECORD_SK_PREFIX[options.kind];
+  }
+
+  async get(key: string): Promise<ClinicalRecord | undefined> {
+    const { patientId, version } = parseVersionKey(key);
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: PATIENT_PK(patientId), sk: `${this.skPrefix}#v${version}` },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<ClinicalRecord>(result.Item);
+  }
+
+  /**
+   * `VersionedRepository.createVersion` already checks-then-throws at the
+   * application layer before ever calling this — the `ConditionExpression`
+   * below is the atomic backstop for the race that check alone cannot
+   * close (two concurrent writers both passing the pre-check for the same
+   * version), the same defence-in-depth shape `DynamoWorkshopCapacityStore`
+   * and `DynamoAssignmentStore` already use elsewhere in this file. Both
+   * paths surface the identical `AppError` code, so `clinical-record.ts`'s
+   * one `catch` handles either.
+   */
+  async put(key: string, item: ClinicalRecord): Promise<void> {
+    const { patientId, version } = parseVersionKey(key);
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: { ...item, pk: PATIENT_PK(patientId), sk: `${this.skPrefix}#v${version}` },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'VERSION_ALREADY_EXISTS',
+          `version ${version} already exists for patient ${patientId}`,
+        );
+      }
+      throw error;
+    }
   }
 }

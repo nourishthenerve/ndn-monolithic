@@ -175,6 +175,10 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // flag. Bounded by patient count, the same low-volume reasoning as
   // clinician-admin/assignment/caseload above. Displacing nothing.
   '/ndn/patient-function',
+  // TASK 3.2.1: a clinician authoring successive diagnosis/care-plan
+  // versions, behind a default-off flag. The same bounded-by-patient-count
+  // reasoning as patient-function above. Displacing nothing.
+  '/ndn/clinical-record-function',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret

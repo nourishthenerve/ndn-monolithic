@@ -118,6 +118,67 @@ describe('projectFor — who sees private{}', () => {
   });
 });
 
+// TASK 3.2.1: diagnosis/care-plan's role-gated path — a single matrix row
+// (unlike assessment's two), so `mayReadPrivate` cannot ask `can()` a
+// fabricated `fieldSet` question here; see projection.ts's own comment on
+// `ROLE_GATED_PRIVATE_ENTITY_TYPES` for why role is the second axis
+// instead. No handler calls `projectFor` in the read direction against
+// this entity type until TASK 3.2.2, but R-09's "100% coverage on the
+// boundary" is a bar on this file at the commit that introduces the
+// branch, not one deferred to whichever task first has a route that
+// reaches it — so this suite exercises `projectFor` directly.
+interface DiagnosisFixture {
+  readonly id: string;
+  readonly visible: { readonly summary: string };
+  readonly private: { readonly notes: string };
+}
+
+const DIAGNOSIS: DiagnosisFixture = {
+  id: 'DIAG#1',
+  visible: { summary: 'Chronic lower back pain' },
+  private: { notes: 'query non-organic presentation' },
+};
+
+const DIAGNOSIS_RESOURCE: Resource = {
+  entityType: 'diagnosis',
+  ownerPatientId: 'PAT#1',
+  assignedClinicianId: 'CLI#1',
+};
+
+describe('projectFor — diagnosis/care-plan, a single row with an internal visible/private split', () => {
+  it('keeps private{} for the assigned sub-clinician', () => {
+    expect(projectFor(ASSIGNED_SUB_CLINICIAN, DIAGNOSIS, DIAGNOSIS_RESOURCE)).toEqual(DIAGNOSIS);
+  });
+
+  it('keeps private{} for the principal clinician', () => {
+    expect(projectFor(PRINCIPAL_CLINICIAN, DIAGNOSIS, DIAGNOSIS_RESOURCE)).toEqual(DIAGNOSIS);
+  });
+
+  it('keeps private{} for the principal on a care-plan resource too — both entity types resolve the same row', () => {
+    const carePlanResource: Resource = { ...DIAGNOSIS_RESOURCE, entityType: 'care-plan' };
+    expect(projectFor(PRINCIPAL_CLINICIAN, DIAGNOSIS, carePlanResource)).toEqual(DIAGNOSIS);
+  });
+
+  it('strips private{} for the owning patient — the row grants them bare R, not the private half', () => {
+    const projected = projectFor(OWNING_PATIENT, DIAGNOSIS, DIAGNOSIS_RESOURCE);
+    expect(projected).toEqual({ id: 'DIAG#1', visible: { summary: 'Chronic lower back pain' } });
+    expect(containsPrivateField(projected)).toBe(false);
+  });
+
+  it('strips private{} for an unassigned sub-clinician — denied the row at all, not merely the private half', () => {
+    const projected = projectFor(UNASSIGNED_SUB_CLINICIAN, DIAGNOSIS, DIAGNOSIS_RESOURCE);
+    expect(projected).toEqual({ id: 'DIAG#1', visible: { summary: 'Chronic lower back pain' } });
+  });
+
+  it('denies an inoperative assigned sub-clinician the private half', () => {
+    const suspended: Principal = { ...ASSIGNED_SUB_CLINICIAN, accountStatus: 'deactivated' };
+    expect(projectFor(suspended, DIAGNOSIS, DIAGNOSIS_RESOURCE)).toEqual({
+      id: 'DIAG#1',
+      visible: { summary: 'Chronic lower back pain' },
+    });
+  });
+});
+
 describe('projectFor — shape of the walk', () => {
   it('strips private{} nested below the top level and inside arrays', () => {
     const nested = {

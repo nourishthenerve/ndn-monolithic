@@ -162,6 +162,9 @@ export class DataStack extends Stack {
     const patientLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/patient-function`
       : '/ndn/patient-function';
+    const clinicalRecordLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/clinical-record-function`
+      : '/ndn/clinical-record-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1375,6 +1378,83 @@ export class DataStack extends Stack {
       path: '/patients/{id}',
       methods: [HttpMethod.PATCH],
       integration: patientIntegration,
+    });
+
+    // TASK 3.2.1: diagnosis and care plan — R-09's first real entity
+    // through `projectFor`. A separate function and role from
+    // `PatientFunction`, even though both read the `PAT#*` partition: this
+    // one's write half reaches DynamoDB's `attribute_not_exists(pk)`
+    // conditional `PutItem` path (`DynamoClinicalRecordStore`,
+    // dynamo-store.ts) that a diagnosis/care-plan version needs and a
+    // patient-profile edit does not, and keeping the two functions' IAM
+    // roles separate means a change to one's policy can never silently
+    // widen the other's.
+    const clinicalRecordRole = new Role(this, 'ClinicalRecordFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const clinicalRecordFunction = new NodejsFunction(this, 'ClinicalRecordFunction', {
+      entry: `${moduleDir}../../services/api/src/clinical-record-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: clinicalRecordRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'ClinicalRecordFunctionLogGroup', clinicalRecordLogGroupName),
+    });
+    grantFlagReads(this, clinicalRecordRole);
+
+    // `GetItem` (the patient lookup `can()`'s relationship check needs)
+    // and `PutItem` (a new `DIAG#v<n>`/`PLAN#v<n>` version) on the same
+    // `PAT#*` partition — `dynamodb:LeadingKeys` restricts by partition
+    // key only, the same granularity `PatientFunction`'s own
+    // `ReadWritePatientProfile` statement already accepts, so this grant
+    // is technically also capable of a `PAT#<id>`/`PROFILE` write; nothing
+    // in `clinical-record.ts`/`clinical-record-repository.ts` ever issues
+    // one — `patients` (`PatientDeps`) is called through `findById` only.
+    clinicalRecordRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPatientAndWriteClinicalRecords',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // A separate statement, on `AUDIT#*` alone — every version
+    // `ClinicalRecordRepository.createVersion` writes reaches the same
+    // `DynamoAuditLog` every other writer in this stack uses.
+    clinicalRecordRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(clinicalRecordRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(clinicalRecordRole, this.table);
+
+    const clinicalRecordIntegration = new HttpLambdaIntegration(
+      'ClinicalRecordIntegration',
+      clinicalRecordFunction,
+    );
+    httpApi.addRoutes({
+      path: '/patients/{id}/diagnosis',
+      methods: [HttpMethod.POST],
+      integration: clinicalRecordIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/care-plan',
+      methods: [HttpMethod.POST],
+      integration: clinicalRecordIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST
