@@ -12,8 +12,9 @@
 // `@ndn/i18n`'s registry) never reaches the SMS path, however its flags
 // are set. The one template that is eligible is attempted over SMS first;
 // when SMS is unavailable for any reason — capped, killed, rate-limited,
-// not a UK number, or the guard chain otherwise says no — the send
-// degrades to email and the record says why (step 4). A `marketing`
+// not a UK number, or the provider itself fails (TASK 2.3.2's
+// `ProviderError`) — the send degrades to email and the record says why
+// (step 4). A `marketing`
 // template additionally checks the recipient's own preference first
 // (`PatientPersonal.marketingOptIn`, already on the record since 2.2.3):
 // declining silences marketing, and only marketing — a clinical or safety
@@ -26,12 +27,11 @@ import type { DeliveryLog, DeliveryOutcome, DeliveryRecord } from './notificatio
 import { renderNotification, templateDef } from './notification-templates.js';
 import type { SendSms } from './sms.js';
 
-// ADR-0008's Twilio figure, re-verified $0.056/message, converted at the
-// plan's own FX rate — the same 5p sms.test.ts already fixtures for
-// `costPence`. Provisional: TASK 2.3.2 re-verifies both providers' live
-// prices before any provider is actually wired — `sms.ts` still calls
-// none, so this number bounds a spend-cap check today, not a real charge.
-const APPOINTMENT_REMINDER_SMS_COST_PENCE = 5;
+// ADR-0008's chosen provider (AWS End User Messaging, TASK 2.3.2):
+// $0.035/message, converted at the plan's own FX rate (£1 = $1.2105) and
+// rounded up to the nearest penny so this never under-counts spend against
+// the app-level cap.
+const APPOINTMENT_REMINDER_SMS_COST_PENCE = 3;
 
 export interface NotificationRecipient {
   /** e.g. a patient's Cognito `sub` — the id a delivery record carries, never an address. */
@@ -118,6 +118,11 @@ export function createNotifier(deps: NotifierDeps): Notifier {
           to: recipient.phone ?? '',
           template,
           vars,
+          // The registry guarantees an smsBodyKey — and so a rendered
+          // smsBody — for every smsEligible template (proven by
+          // packages/i18n/src/notifications/index.test.ts); the fallback
+          // is type-satisfying only, never reached.
+          body: rendered.smsBody ?? '',
           principal: recipient.id,
           costPence: APPOINTMENT_REMINDER_SMS_COST_PENCE,
         });
