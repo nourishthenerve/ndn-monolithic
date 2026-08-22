@@ -17,6 +17,7 @@ import type {
   Clinician,
   ContentAssignment,
   ContentItem,
+  Message,
   Patient as RealPatient,
   Registration,
   Testimonial,
@@ -36,6 +37,7 @@ import {
   DynamoClinicianStore,
   DynamoContentAssignmentStore,
   DynamoContentStore,
+  DynamoMessageStore,
   DynamoRegistrationStore,
   DynamoStore,
   DynamoTestimonialStore,
@@ -1513,5 +1515,106 @@ describe('DynamoContentAssignmentStore', () => {
     ddbMock.on(QueryCommand).resolves({ Items: [] });
     const result = await store.listForPatient('pat-1');
     expect(result).toEqual([]);
+  });
+});
+
+function buildMessage(overrides: Partial<Message> = {}): Message {
+  return {
+    patientId: 'pat-1',
+    senderId: 'pat-1',
+    senderRole: 'patient',
+    body: 'Hello',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    status: 'active',
+    ...overrides,
+  };
+}
+
+// TASK 3.6.1: `04-data-model-rbac.md`'s own key shape, exercised for real
+// for the first time — `create()`'s conditional `PutCommand` (the sort
+// key's disambiguating suffix, the identical `DynamoAuditLog` idiom this
+// store's own header names); `listForThread()`'s main-table `Query`,
+// `begins_with(sk, 'MSG#')` — never a `Scan`, the same assertion shape
+// `DynamoAppointmentStore`'s own `listForPatient` test already uses.
+describe('DynamoMessageStore', () => {
+  const store = new DynamoMessageStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+    newMessageId: () => 'fixed-id',
+  });
+
+  it('create() writes a conditional PutCommand keyed PAT#<patientId> / MSG#<created_at>#<id>', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(buildMessage());
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'MSG#2026-08-22T09:00:00.000Z#fixed-id',
+        patientId: 'pat-1',
+        senderId: 'pat-1',
+        senderRole: 'patient',
+        body: 'Hello',
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() throws AppError(RECORD_ALREADY_EXISTS) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.create(buildMessage())).rejects.toThrow(AppError);
+  });
+
+  it('listForThread() issues a main-table Query, never a Scan, scoped to PAT#<id> with the MSG# prefix', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ ...buildMessage(), pk: 'PAT#pat-1', sk: 'MSG#2026-08-22T09:00:00.000Z#fixed-id' }],
+    });
+
+    const result = await store.listForThread('pat-1', undefined, 50);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).not.toHaveProperty('pk');
+    expect(result.nextCursor).toBeUndefined();
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :messagePrefix)',
+      ExpressionAttributeValues: { ':patientKey': 'PAT#pat-1', ':messagePrefix': 'MSG#' },
+      Limit: 50,
+    });
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.IndexName).toBeUndefined();
+  });
+
+  it('listForThread() decodes a cursor into ExclusiveStartKey and encodes LastEvaluatedKey into nextCursor', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [],
+      LastEvaluatedKey: { pk: 'PAT#pat-1', sk: 'MSG#2026-08-22T09:00:00.000Z#fixed-id' },
+    });
+    const cursor = Buffer.from(JSON.stringify({ pk: 'PAT#pat-1', sk: 'MSG#a' }), 'utf-8').toString(
+      'base64url',
+    );
+
+    const result = await store.listForThread('pat-1', cursor, 50);
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ExclusiveStartKey).toEqual({
+      pk: 'PAT#pat-1',
+      sk: 'MSG#a',
+    });
+    expect(result.nextCursor).toBeDefined();
+    const decoded = JSON.parse(Buffer.from(result.nextCursor ?? '', 'base64url').toString('utf-8')) as unknown;
+    expect(decoded).toEqual({ pk: 'PAT#pat-1', sk: 'MSG#2026-08-22T09:00:00.000Z#fixed-id' });
+  });
+
+  it('listForThread() throws AppError(INVALID_CURSOR) for a cursor that cannot be decoded', async () => {
+    await expect(store.listForThread('pat-1', 'not-valid-base64url-json', 50)).rejects.toThrow(AppError);
+  });
+
+  it('listForThread() returns an empty page, not an error, when the thread has no messages', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const result = await store.listForThread('pat-1', undefined, 50);
+    expect(result).toEqual({ items: [], nextCursor: undefined });
   });
 });

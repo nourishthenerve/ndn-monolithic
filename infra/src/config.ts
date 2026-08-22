@@ -196,6 +196,11 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // list, behind a default-off flag. The same bounded-by-patient-count
   // reasoning as appointment-function above. Displacing nothing.
   '/ndn/content-assignment-function',
+  // TASK 3.6.1: patient<->clinician messaging, behind a default-off flag.
+  // The same bounded-by-patient-count reasoning as appointment-function
+  // above — one conversation per patient, not open traffic. Displacing
+  // nothing.
+  '/ndn/message-function',
 ];
 
 // TASK 3.4.3 (ADR-0008): the leased origination identity (a UK long code

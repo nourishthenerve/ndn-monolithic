@@ -206,6 +206,9 @@ export class DataStack extends Stack {
     const contentAssignmentLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-assignment-function`
       : '/ndn/content-assignment-function';
+    const messageLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/message-function`
+      : '/ndn/message-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1898,6 +1901,109 @@ export class DataStack extends Stack {
       path: '/patients/{id}/content',
       methods: [HttpMethod.GET],
       integration: contentAssignmentIntegration,
+    });
+
+    // TASK 3.6.1: patient<->clinician messaging, and the matrix
+    // correction that makes it genuinely bidirectional — see message.ts's
+    // own header for the doc-first correction and the real finding
+    // against this task's own prose (the principal's cell was never
+    // touched by the correction and stays read-only).
+    const messageRole = new Role(this, 'MessageFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const messageFunction = new NodejsFunction(this, 'MessageFunction', {
+      entry: `${moduleDir}../../services/api/src/message-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: messageRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        NOTIFICATION_TABLE_NAME: this.table.tableName,
+        MESSAGE_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
+        // Resolves the assigned sub-clinician's email for a patient-sent
+        // message's notification (AdminGetUser) — see the IAM grant below.
+        CLINICIAN_USER_POOL_ID,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'MessageFunctionLogGroup', messageLogGroupName),
+    });
+    grantFlagReads(this, messageRole);
+
+    // `GetItem` (the patient lookup), `PutItem` (a new `MSG#<ts>#<id>`
+    // row), and `Query` (`listForThread`'s own main-table `begins_with`
+    // read) — all on `PAT#*` alone. Deliberately no `UpdateItem`: a
+    // message is never edited, so this role has no action that could.
+    messageRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWriteAndQueryPatientMessages',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    messageRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditAndDeliveryRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
+          },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(messageRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(messageRole, this.table);
+    // `AdminGetUser` only, on the same clinician pool ARN
+    // AssignmentFunction's own grant uses — resolving an email to notify,
+    // never a create/disable/enable action.
+    messageRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianEmailForMessageNotice',
+        effect: Effect.ALLOW,
+        actions: ['cognito-idp:AdminGetUser'],
+        resources: [clinicianUserPoolArn],
+      }),
+    );
+    messageRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendMessageNotificationEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
+          }),
+        ],
+      }),
+    );
+
+    const messageIntegration = new HttpLambdaIntegration('MessageIntegration', messageFunction);
+    httpApi.addRoutes({
+      path: '/patients/{id}/messages',
+      methods: [HttpMethod.POST],
+      integration: messageIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/messages',
+      methods: [HttpMethod.GET],
+      integration: messageIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

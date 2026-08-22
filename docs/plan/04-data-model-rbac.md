@@ -29,7 +29,7 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | R |
 | Appointments | R | — | C R U | — | R |
 | Content assignment | R | — | C R U | — | R |
-| Messages | C R (own thread) | — | R (own patients) | — | R |
+| Messages | C R (own thread) | — | C R (own patients) | — | R |
 | Clinician accounts | — | — | — | — | C R U (deactivate only) |
 | Audit log | — | — | — | — | R |
 | Content item | — | — | C R U | C R U | C R U |

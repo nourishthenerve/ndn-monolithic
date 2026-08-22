@@ -37,6 +37,7 @@ import type {
   Clinician,
   ContentAssignment,
   ContentItem,
+  Message,
   Patient,
   Registration,
   Testimonial,
@@ -50,6 +51,7 @@ import type { ClinicianStore } from './clinician-repository.js';
 import type { ContentAssignmentStore } from './content-assignment-repository.js';
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
+import type { MessagePage, MessageStore } from './message-repository.js';
 import type { RegistrationStore, WorkshopCapacityStore } from './registration-repository.js';
 import type { KeyValueStore } from './store.js';
 import type { WebhookEventStore } from './stripe-webhook.js';
@@ -1470,5 +1472,95 @@ export class DynamoContentAssignmentStore implements ContentAssignmentStore {
       }),
     );
     return (result.Items ?? []).map((item) => withoutTableKeys<ContentAssignment>(item));
+  }
+}
+
+// TASK 3.6.1: `PAT#<id>` / `MSG#<created_at>#<id>` — the disambiguating
+// suffix is the identical idiom `DynamoAuditLog`'s own sort key already
+// establishes (`<iso-instant>#<newEventId()>`): the timestamp prefix gives
+// the ordering, the suffix only has to be unique, so two messages sent in
+// the same clinician↔patient thread within the same millisecond (a real
+// possibility once this is genuinely bidirectional, per this task's own
+// finding) can never collide.
+const MESSAGE_SORT_KEY_PREFIX = 'MSG#';
+const MESSAGE_SORT_KEY = (createdAt: string, id: string) => `MSG#${createdAt}#${id}`;
+
+function encodeMessageCursor(key: Record<string, unknown> | undefined): string | undefined {
+  if (!key) {
+    return undefined;
+  }
+  return Buffer.from(JSON.stringify(key), 'utf-8').toString('base64url');
+}
+
+function decodeMessageCursor(cursor: string | undefined): Record<string, unknown> | undefined {
+  if (!cursor) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8')) as Record<string, unknown>;
+  } catch {
+    throw new AppError('INVALID_CURSOR', 'cursor could not be decoded');
+  }
+}
+
+export interface DynamoMessageStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+  /** Defaults to node:crypto's randomUUID — injectable so a test can force a key collision. */
+  readonly newMessageId?: () => string;
+}
+
+export class DynamoMessageStore implements MessageStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+  private readonly newMessageId: () => string;
+
+  constructor(options: DynamoMessageStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+    this.newMessageId = options.newMessageId ?? randomUUID;
+  }
+
+  async create(message: Message): Promise<void> {
+    const sk = MESSAGE_SORT_KEY(message.created_at, this.newMessageId());
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: { ...message, pk: PATIENT_PK(message.patientId), sk },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'RECORD_ALREADY_EXISTS',
+          `message collision for patient ${message.patientId} at ${sk}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** Main-table `Query`, never a `Scan` — ascending sort-key order threads the conversation oldest-first without a separate `ScanIndexForward` override. */
+  async listForThread(
+    patientId: string,
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<MessagePage> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :messagePrefix)',
+        ExpressionAttributeValues: {
+          ':patientKey': PATIENT_PK(patientId),
+          ':messagePrefix': MESSAGE_SORT_KEY_PREFIX,
+        },
+        Limit: limit,
+        ExclusiveStartKey: decodeMessageCursor(cursor),
+      }),
+    );
+    const items = (result.Items ?? []).map((item) => withoutTableKeys<Message>(item));
+    return { items, nextCursor: encodeMessageCursor(result.LastEvaluatedKey) };
   }
 }

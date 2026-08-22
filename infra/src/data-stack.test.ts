@@ -474,6 +474,8 @@ describe('DataStack — feature-flag reads', () => {
     'reminder-sweep-handler',
     // TASK 3.5.1: contentAssignment.enabled, default off.
     'content-assignment-handler',
+    // TASK 3.6.1: messaging.enabled, default off.
+    'message-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -589,11 +591,12 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // 3.3.1's assessment function, TASK 3.4.1's appointment function,
     // TASK 3.4.3's reminder-sweep function (the identical "wired to
     // satisfy the constructor, never actually reached" reasoning as
-    // caseload-function — this task's own runbook names it directly), and
-    // TASK 3.5.1's content-assignment function.
+    // caseload-function — this task's own runbook names it directly),
+    // TASK 3.5.1's content-assignment function, and TASK 3.6.1's message
+    // function.
     // The authorizer is deliberately absent — it reads a status and
     // writes nothing.
-    expect(withAuditTable).toHaveLength(19);
+    expect(withAuditTable).toHaveLength(20);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -644,10 +647,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // TASK 2.5.1's assignment role, TASK 2.5.3's caseload role, TASK
     // 3.1.1's patient role, TASK 3.2.1's clinical-record role, TASK
     // 3.3.1's assessment role, TASK 3.4.1's appointment role, TASK
-    // 3.4.3's reminder-sweep role, and TASK 3.5.1's content-assignment
-    // role; the audit reader is deliberately not among them, being the
-    // one role that is supposed to read that partition.
-    expect(denials).toHaveLength(19);
+    // 3.4.3's reminder-sweep role, TASK 3.5.1's content-assignment role,
+    // and TASK 3.6.1's message role; the audit reader is deliberately not
+    // among them, being the one role that is supposed to read that
+    // partition.
+    expect(denials).toHaveLength(20);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -664,7 +668,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(19);
+    expect(denials).toHaveLength(20);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -721,7 +725,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1/3.1.2)/clinical-record (3.2.1/3.2.2)/assessment (3.3.1/3.3.2)/appointment (3.4.1)/content-assignment (3.5.1) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
+  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1/3.1.2)/clinical-record (3.2.1/3.2.2)/assessment (3.3.1/3.3.2)/appointment (3.4.1)/content-assignment (3.5.1)/message (3.6.1) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
     // The first seven took no `authorizer:` override at all, ahead of
     // ADMIN_TOKEN_ROUTE's own retirement — every route before them opted
     // out with `PUBLIC_ROUTE` or the now-deleted `ADMIN_TOKEN_ROUTE`
@@ -741,7 +745,9 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // /clinicians/me/calendar`; TASK 3.4.2 adds `POST
     // /patients/{id}/appointments/{apptId}/cancel`, all served by a new
     // `AppointmentFunction`; TASK 3.5.1 added `POST`/`GET
-    // /patients/{id}/content`, served by a new `ContentAssignmentFunction`.
+    // /patients/{id}/content`, served by a new `ContentAssignmentFunction`;
+    // TASK 3.6.1 added `POST`/`GET /patients/{id}/messages`, served by a
+    // new `MessageFunction`.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
@@ -754,6 +760,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'GET /patients/{id}/care-plan',
         'GET /patients/{id}/content',
         'GET /patients/{id}/diagnosis',
+        'GET /patients/{id}/messages',
         'GET /testimonials/pending',
         'PATCH /content/{id}',
         'PATCH /patients/{id}',
@@ -772,6 +779,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /patients/{id}/content',
         'POST /patients/{id}/decline',
         'POST /patients/{id}/diagnosis',
+        'POST /patients/{id}/messages',
         'POST /patients/{id}/reassign',
         'POST /testimonials/{id}/publish',
         'POST /testimonials/{id}/reject',
@@ -1059,6 +1067,62 @@ describe('DataStack — content assignment function (TASK 3.5.1)', () => {
     const policy = Object.values(synth().findResources('AWS::IAM::Policy')).find((candidate) =>
       JSON.stringify(candidate.Properties?.PolicyDocument ?? {}).includes(
         'ReadWriteAndQueryPatientContentAssignments',
+      ),
+    );
+    const statements = policy?.Properties?.PolicyDocument?.Statement as { Sid?: string }[];
+
+    expect(statements.some((statement) => statement.Sid === 'DenyAuditPartitionReads')).toBe(true);
+    expect(statements.some((statement) => statement.Sid === 'DenyKeylessTableReads')).toBe(true);
+  });
+});
+
+describe('DataStack — message function (TASK 3.6.1)', () => {
+  function statementsWithSid(sid: string): Record<string, unknown>[] {
+    return Object.values(synth().findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } })
+            .Properties.PolicyDocument.Statement,
+      )
+      .filter((statement) => statement.Sid === sid);
+  }
+
+  it('is wired to the table name and routed at POST/GET /patients/{id}/messages', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: {
+        Variables: Match.objectLike({ PRINCIPAL_TABLE_NAME: Match.anyValue() }),
+      },
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /patients/{id}/messages',
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'GET /patients/{id}/messages',
+    });
+  });
+
+  it('grants GetItem/PutItem/Query on PAT#* alone — no UpdateItem, a message is never edited', () => {
+    const statements = statementsWithSid('ReadWriteAndQueryPatientMessages');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query']);
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] },
+    });
+  });
+
+  it('grants cognito-idp:AdminGetUser on the clinician pool alone — resolving an email to notify, never a write action', () => {
+    const statements = statementsWithSid('ReadClinicianEmailForMessageNotice');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('cognito-idp:AdminGetUser');
+  });
+
+  it("is denied every other role's AUDIT# partition read and keyless-scan guardrails, the same as every function in this stack", () => {
+    const policy = Object.values(synth().findResources('AWS::IAM::Policy')).find((candidate) =>
+      JSON.stringify(candidate.Properties?.PolicyDocument ?? {}).includes(
+        'ReadWriteAndQueryPatientMessages',
       ),
     );
     const statements = policy?.Properties?.PolicyDocument?.Statement as { Sid?: string }[];
