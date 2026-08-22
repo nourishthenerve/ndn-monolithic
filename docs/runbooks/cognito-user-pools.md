@@ -52,7 +52,7 @@ Cognito's MFA policy is **pool-wide**. `REQUIRED` would stack a second factor on
 | SMS | Nowhere — not as a factor, not as a channel; no SNS role is synthesized | same |
 | Password policy | none configured (nothing sets one) | 8 chars, upper + lower + digit + symbol |
 | Recovery | Verified email only | Verified email only |
-| Attributes | `email` (required, mutable). Nothing else. | same |
+| Attributes | `email`, required and mutable — the only one configured, the only one required, and the only one either client can write. Cognito's 21 unremovable standard attributes are still present but unreachable; see "One imprecision" below | same |
 | Tier | Essentials | Essentials |
 | Threat protection | Not enabled (paid tier) | Not enabled (paid tier) |
 | Deletion | `DeletionProtection: ACTIVE` + `RemovalPolicy.RETAIN` | same |
@@ -110,33 +110,72 @@ The `allowed` half matters as much as the `explicitDeny` half: a guard that also
 
 `ndn-deploy-pr` is deliberately not given the same policy — no ephemeral stack creates a pool, so there is nothing there to protect.
 
-## Owner actions, after the first deploy
+## The first deploy, and what it actually reported
 
-The stack deploys on merge to `main` (CI's `deploy` job, `cdk deploy --all`). Two things follow, in order.
+Deployed by CI on the merge of PR #56, **2026-08-22**. Everything below is the deployed state, not the template's intent — three things came back differently from what `describe-user-pool` alone suggests, and all three are recorded rather than smoothed over.
 
-**1. Confirm the pools are what the template said.**
+**The identifiers, now in `infra/src/config.ts`** (step 8's necessarily post-deploy half — Cognito generates these, CDK cannot name them):
 
-```bash
-for pool in ndn-patients ndn-clinicians; do
-  id=$(aws --profile ndn-prod cognito-idp list-user-pools --max-results 20 --region eu-west-2 \
-        --query "UserPools[?Name=='$pool'].Id | [0]" --output text)
-  aws --profile ndn-prod cognito-idp describe-user-pool --user-pool-id "$id" --region eu-west-2 \
-    --query 'UserPool.{Name:Name,Tier:UserPoolTier,Mfa:MfaConfiguration,Mfas:EnabledMfas,
-             SelfSignUp:AdminCreateUserConfig.AllowAdminCreateUserOnly,
-             Deletion:DeletionProtection,SignIn:Policies.SignInPolicy}'
-done
-```
+| | Pool id | App client id |
+|---|---|---|
+| `ndn-patients` | `eu-west-2_lMonWXA0b` | `6r45vfhjv9atkq3iojfinr3lda` |
+| `ndn-clinicians` | `eu-west-2_1SFN2y0Jt` | `2dt02jv4lstdvh9fl4cnsqn4gn` |
 
-Expect: patients → `MfaConfiguration: OFF`, `AllowAdminCreateUserOnly: false`, `AllowedFirstAuthFactors: [PASSWORD, EMAIL_OTP]`; clinicians → `ON` with `[SOFTWARE_TOKEN_MFA]`, `AllowAdminCreateUserOnly: true`, no `SignInPolicy`; both `ESSENTIALS` and `ACTIVE`.
-
-**2. Record the four identifiers in `infra/src/config.ts`.** Cognito generates pool and client ids, so they cannot be constants before the first deploy — this is the one part of step 8 that is necessarily post-deploy, and it is also TASK 2.2.2's first move (its authorizer verifies `iss` and `aud` against exactly these).
+Read from the stack's own outputs, never the console:
 
 ```bash
 aws --profile ndn-prod cloudformation describe-stacks --stack-name NdnAuthStack --region eu-west-2 \
   --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output text
 ```
 
-They are identifiers, not secrets — the same standing `CERTIFICATE_ARN` has. Nothing reads them until 2.2.2, so the gap between deploy and recording is inert.
+`config.ts` **derives** the two issuer URLs from the pool ids rather than pasting them a second time, and `auth-stack.test.ts` asserts the derived pair equals what this deploy reported — so a mistyped pool id fails in `pnpm test` rather than at 2.2.2's first token verification, where it would present as every sign-in failing on a signature error.
+
+### Verifying the pools — use `get-user-pool-mfa-config`, not `describe-user-pool`
+
+`describe-user-pool` **does not populate `EnabledMfas`**. It returns `null` there even on a pool with TOTP correctly enabled, which reads alarmingly like "MFA is on but no factor is configured". The authoritative call is `get-user-pool-mfa-config`:
+
+```bash
+for pool in ndn-patients ndn-clinicians; do
+  id=$(aws --profile ndn-prod cognito-idp list-user-pools --max-results 20 --region eu-west-2 \
+        --query "UserPools[?Name=='$pool'].Id | [0]" --output text)
+  aws --profile ndn-prod cognito-idp get-user-pool-mfa-config --user-pool-id "$id" --region eu-west-2
+  aws --profile ndn-prod cognito-idp describe-user-pool --user-pool-id "$id" --region eu-west-2 \
+    --query 'UserPool.{Name:Name,Tier:UserPoolTier,AdminOnly:AdminCreateUserConfig.AllowAdminCreateUserOnly,
+             Deletion:DeletionProtection,SignIn:Policies.SignInPolicy,Addons:UserPoolAddOns}'
+done
+```
+
+What it returned, 2026-08-22:
+
+```text
+ndn-patients    { "MfaConfiguration": "OFF" }
+ndn-clinicians  { "MfaConfiguration": "ON",
+                  "SoftwareTokenMfaConfiguration": { "Enabled": true },
+                  "WebAuthnConfiguration": { "FactorConfiguration": "SINGLE_FACTOR" } }
+```
+
+**No `SmsMfaConfiguration` on either.** TOTP is the clinician pool's only second factor, exactly as designed, and the absence is what proves it rather than a setting saying so.
+
+Both pools: `ESSENTIALS`, `DeletionProtection: ACTIVE`, no `UserPoolAddOns` (threat protection off). Patients `AllowAdminCreateUserOnly: false` with `AllowedFirstAuthFactors: [PASSWORD, EMAIL_OTP]`; clinicians `true`, and Cognito filled the unset policy in as `[PASSWORD]` explicitly — the default this task wanted, now visible rather than implied.
+
+Both clients came back with `ClientSecret: null`, `ExplicitAuthFlows` exactly as synthesized (`ALLOW_USER_AUTH` / `ALLOW_USER_SRP_AUTH`, each plus refresh), `code` as the only OAuth flow, both redirect URLs on the apex, `ReadAttributes [email, email_verified]`, `WriteAttributes [email]`, revocation on, 60-minute tokens on a 43200-minute refresh.
+
+### `WebAuthnConfiguration` appears on the clinician pool by default. It is inert — and here is what would change that
+
+Cognito set `WebAuthnConfiguration: { FactorConfiguration: SINGLE_FACTOR }` on `ndn-clinicians` without being asked. Read plainly, "single factor" means a passkey alone could sign someone in — which would be a TOTP bypass on the one pool that must not have one.
+
+It cannot happen today, for two independent reasons:
+
+1. `AllowedFirstAuthFactors` on that pool is `[PASSWORD]`. `WEB_AUTHN` is not in the list, so Cognito will not offer it.
+2. `WEB_AUTHN` is only reachable through choice-based authentication (`ALLOW_USER_AUTH`), and the clinician app client holds `ALLOW_USER_SRP_AUTH` instead.
+
+**Either one of those changing turns a dormant default into a live bypass.** If a future task adds `ALLOW_USER_AUTH` to `ndn-clinicians-web` — for a nicer sign-in UI, say — it must also set that pool's `webAuthnUserVerification` deliberately or keep `WEB_AUTHN` out of the first-factor list. Written here because nothing in the template mentions WebAuthn at all, so nothing would remind anyone.
+
+### One imprecision in this runbook's own table, corrected
+
+The "Attributes" row below reads `email` and nothing else. That is true of what **CDK configures** and of what the **app clients can touch**, and it is *not* true of `SchemaAttributes` in the deployed pool: every Cognito user pool carries all 21 standard OIDC attributes (`name`, `birthdate`, `address`, `phone_number`, …) whether you ask for them or not. They cannot be removed.
+
+So the real guarantee is not "the schema has one attribute" — it is that `email` is the only one marked `Required`, no custom attribute exists, and **both app clients can read only `email`/`email_verified` and write only `email`**. A handler cannot put a patient's name or phone number into the directory because the client it goes through cannot write those fields. That is the assertion `auth-stack.test.ts` makes, and it is the one that holds.
 
 ## Email delivery is the open constraint, and 2.2.3 owns it
 
@@ -153,10 +192,10 @@ So the correct order is: SES production access first, then point both pools at t
 
 ## Verification
 
-- `pnpm -r lint && pnpm -r typecheck && pnpm test` — green; `infra` goes from 129 tests across 7 files to **161 across 8** — 27 new in `auth-stack.test.ts`, 5 new in `guardrails.test.ts`.
+- `pnpm -r lint && pnpm -r typecheck && pnpm test` — green; `infra` goes from 129 tests across 7 files to **164 across 8** — 30 new in `auth-stack.test.ts` (27 on the synthesized template, 3 on the recorded identifiers), 5 new in `guardrails.test.ts`.
 - `pnpm --filter @ndn/infra run synth` — `NdnAuthStack` synthesizes.
 - The policy simulator output above, against the real `ndn-deploy` role.
-- Post-deploy: the two `describe-user-pool` commands under "Owner actions".
+- Post-deploy, 2026-08-22: the `get-user-pool-mfa-config` and `describe-user-pool` output recorded under "The first deploy" — including the three things that differ from what the template alone implies.
 
 ## Rollback
 

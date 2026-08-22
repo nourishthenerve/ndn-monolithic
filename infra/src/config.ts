@@ -240,16 +240,48 @@ export const FLAG_PARAMETER_NAME_PREFIX = '/ndn/flags/';
 // The pool *names* are constants here because they are ours to choose and
 // two files need to agree on them (auth-stack.ts creates them,
 // docs/runbooks/cognito-user-pools.md's verification commands name them).
-// The pool and client **ids are not here yet, deliberately**: Cognito
-// generates them, so they cannot exist until the first deploy has run.
-// `NdnAuthStack` emits all four plus both issuer URLs as CloudFormation
-// outputs; the post-deploy step in that runbook records them here as plain
-// constants (they are identifiers, not secrets — the same standing
-// CERTIFICATE_ARN above has). Nothing reads them until TASK 2.2.2's
-// authorizer, which is why an absent constant is a sequencing fact rather
-// than a gap.
 export const PATIENT_USER_POOL_NAME = 'ndn-patients';
 export const CLINICIAN_USER_POOL_NAME = 'ndn-clinicians';
+
+// TASK 2.2.1 step 8, completed after the first deploy (2026-08-22) — the
+// one part of that step that could not be done before it, because Cognito
+// generates these and CDK cannot name them. Read from `NdnAuthStack`'s own
+// CloudFormation outputs, not from the console:
+//
+//   aws --profile ndn-prod cloudformation describe-stacks \
+//     --stack-name NdnAuthStack --region eu-west-2 \
+//     --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output text
+//
+// Identifiers, not secrets — the same standing CERTIFICATE_ARN above has.
+// A user pool id appears in every OIDC discovery document these pools
+// serve and a public app client id is sent to the browser by design;
+// treating either as a secret would be theatre. What is *not* here and
+// never will be is a client secret: both clients are public
+// (`generateSecret: false`, auth-stack.ts).
+//
+// They are constants rather than a CloudFormation cross-stack import
+// because two of the three consumers are not CDK: TASK 2.2.2's authorizer
+// takes them as Lambda environment variables, and TASK 2.2.4's browser
+// bundle needs them at `astro build` time.
+//
+// **If a pool is ever rebuilt, these change and every session dies.** That
+// is not a reason to avoid recording them; it is the reason the pools are
+// `RETAIN` plus deletion protection and the deploy role is denied
+// `DeleteUserPool` (docs/runbooks/cognito-user-pools.md).
+export const PATIENT_USER_POOL_ID = 'eu-west-2_lMonWXA0b';
+export const PATIENT_USER_POOL_CLIENT_ID = '6r45vfhjv9atkq3iojfinr3lda';
+export const CLINICIAN_USER_POOL_ID = 'eu-west-2_1SFN2y0Jt';
+export const CLINICIAN_USER_POOL_CLIENT_ID = '2dt02jv4lstdvh9fl4cnsqn4gn';
+
+// The two `iss` values TASK 2.2.2 verifies a token against, and the only
+// two it may ever accept. Derived from the ids above rather than pasted
+// from the stack outputs a second time: an issuer that disagreed with its
+// own pool id would be a token-verification bug of exactly the kind this
+// authorizer exists to prevent, and deriving it makes that unrepresentable.
+// Cognito's own format, unchanged since the service shipped:
+// https://cognito-idp.<region>.amazonaws.com/<pool-id>.
+export const PATIENT_USER_POOL_ISSUER = `https://cognito-idp.${REGION}.amazonaws.com/${PATIENT_USER_POOL_ID}`;
+export const CLINICIAN_USER_POOL_ISSUER = `https://cognito-idp.${REGION}.amazonaws.com/${CLINICIAN_USER_POOL_ID}`;
 
 // Where Cognito is permitted to send a browser back to. Both are on
 // SITE_ORIGIN (the apex) and nowhere else — TASK 2.2.4 puts `/auth/*`
