@@ -62,6 +62,21 @@ const TRANSITION_AUDIT_ACTIONS = {
   suspend: 'update',
 } as const;
 
+/**
+ * TASK 3.1.1's own patch shape: `personal{}`/`clinical{}` merge into the
+ * *existing* sub-object field by field, never replace it wholesale — a
+ * caller that PATCHes `{ personal: { phone } }` must not silently wipe
+ * `fullName`/`email`/`marketingOptIn`. Which of the two halves a given
+ * caller may populate is a handler/schema decision (`patient.ts`'s two
+ * Zod schemas), not this method's — `Repository.update`'s own shallow
+ * merge is exactly wrong for nested objects, which is the reason this
+ * wrapper exists rather than calling it directly with a raw patch.
+ */
+export interface PatientProfilePatch {
+  readonly personal?: Partial<PatientPersonal>;
+  readonly clinical?: Partial<PatientClinical>;
+}
+
 export class PatientRepository {
   private readonly repository: Repository<Patient>;
 
@@ -144,6 +159,30 @@ export class PatientRepository {
   /** Still readable in every status, `declined` and `suspended` included. */
   findById(id: string): Promise<Unprojected<Patient> | undefined> {
     return this.repository.findById(id);
+  }
+
+  /**
+   * TASK 3.1.1: the patient's own profile, edited for real. Field-merges
+   * each given sub-object into the *existing* one — see
+   * `PatientProfilePatch`'s own comment for why a raw `Repository.update`
+   * call would be wrong here. Throws `RECORD_NOT_FOUND` the same way
+   * `transition` does; the caller (`patient.ts`) is expected to have
+   * already resolved *who* may reach this record via `can()` before
+   * calling it, the same contract every repository in this codebase keeps.
+   */
+  async update(
+    id: string,
+    actor: ActorContext,
+    patch: PatientProfilePatch,
+  ): Promise<Unprojected<Patient>> {
+    const existing = await this.repository.findById(id);
+    if (!existing) {
+      throw new AppError('RECORD_NOT_FOUND', `patient ${id} not found`);
+    }
+    return this.repository.update(id, actor, {
+      ...(patch.personal ? { personal: { ...existing.personal, ...patch.personal } } : {}),
+      ...(patch.clinical ? { clinical: { ...existing.clinical, ...patch.clinical } } : {}),
+    });
   }
 }
 

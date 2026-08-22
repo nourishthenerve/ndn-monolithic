@@ -171,6 +171,10 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // occasionally, behind a default-off flag. Displacing nothing — the
   // smallest volume of any function in the estate: reads only, one person.
   '/ndn/caseload-function',
+  // TASK 3.1.1: a patient's own profile read/update, behind a default-off
+  // flag. Bounded by patient count, the same low-volume reasoning as
+  // clinician-admin/assignment/caseload above. Displacing nothing.
+  '/ndn/patient-function',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret

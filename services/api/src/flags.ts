@@ -41,7 +41,10 @@ export type FlagName =
   // people there, which is this flag's own DoD line.
   | 'assignment.enabled'
   // TASK 2.5.3: the cross-caseload admin view. Default off.
-  | 'caseload.view.enabled';
+  | 'caseload.view.enabled'
+  // TASK 3.1.1: a patient's own profile read/update, and the sub-clinician
+  // caseload list 3.1.2 adds on the same surface. Default off.
+  | 'patients.profile.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

@@ -1,0 +1,76 @@
+---
+// TASK 3.1.1 step 5: the patient's own profile — the first page inside
+// the account shell (TASK 2.2.4) with a real capability behind it.
+// Statically generated and **empty**, same discipline account/index.astro
+// and account/caseload.astro already state — what makes this page private
+// is not server rendering but that its content is not in the HTML at all.
+// The island below decides whether to fetch anything, and renders nothing
+// until the session resolves.
+//
+// Deliberately absent from routes.ts, same as every other authenticated
+// account page — TASK 1.1.3's a11y gate (tests/pr-env/a11y-full.test.ts)
+// scans every registered route unauthenticated, and an authenticated-only
+// page has no accessible content to find that way. See
+// docs/runbooks/patient-record.md for what accessibility verification
+// this page actually has instead, and the real gap it names honestly:
+// this codebase has no live-session pr-env testing mechanism yet, for
+// this page or for every authenticated page before it.
+//
+// A clinician who signs in and browses here sees the same "forbidden"
+// state `PatientProfile.tsx`'s own header already treats as an ordinary,
+// expected outcome (its `/patients/me` fetch resolves to nothing a
+// clinician principal owns) — not an error, and not worth branching the
+// page itself on role for, the same posture every other account page in
+// this codebase already takes.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { PatientProfile } from '../../../account/PatientProfile.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('patientProfile.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('patientProfile.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    signedOut={
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signIn', undefined, locale)} />
+      </p>
+    }
+  >
+    <PatientProfile
+      client:only="react"
+      strings={{
+        loadingLabel: t('patientProfile.loading', undefined, locale),
+        forbiddenLabel: t('patientProfile.forbidden', undefined, locale),
+        errorLabel: t('patientProfile.error', undefined, locale),
+        savedLabel: t('patientProfile.saved', undefined, locale),
+        fullNameLabel: t('patientProfile.fullName', undefined, locale),
+        emailLabel: t('patientProfile.email', undefined, locale),
+        phoneLabel: t('patientProfile.phone', undefined, locale),
+        marketingOptInLabel: t('patientProfile.marketingOptIn', undefined, locale),
+        saveLabel: t('patientProfile.save', undefined, locale),
+        savingLabel: t('patientProfile.saving', undefined, locale),
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>
