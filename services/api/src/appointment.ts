@@ -4,10 +4,13 @@
 // CLI#<clinicianId>` AND `gsi1sk BETWEEN 'APPT#<start>' AND 'APPT#<end>'`
 // … key shape checked now, while the index is still cheap to shape."
 //
-// Three routes, one file: `POST /patients/{id}/appointments` (schedule),
+// Four routes, one file: `POST /patients/{id}/appointments` (schedule),
 // `GET /clinicians/me/calendar?from=&to=` (the clinician's own calendar,
 // GSI1), `GET /patients/{id}/appointments` (a patient's own list,
-// main-table). No `PATCH`/cancel here — TASK 3.4.2's own scope.
+// main-table), `POST /patients/{id}/appointments/{apptId}/cancel` (TASK
+// 3.4.2). No `PATCH` that changes `scheduledAt`: rescheduling is
+// cancel-the-old, `POST` a new one, so the append-only property every
+// entity in this table keeps holds here without a special case.
 //
 // A real finding, matching the identical mistake `assessment.ts`'s own
 // header names for its write row: `authz-matrix.ts`'s `Appointments` row
@@ -149,9 +152,10 @@ export function createAppointmentHandler(
       return respond(200, { items });
     }
 
-    const isPost = routeKey === 'POST /patients/{id}/appointments';
-    const isGet = routeKey === 'GET /patients/{id}/appointments';
-    if (!isPost && !isGet) {
+    const isSchedule = routeKey === 'POST /patients/{id}/appointments';
+    const isList = routeKey === 'GET /patients/{id}/appointments';
+    const isCancel = routeKey === 'POST /patients/{id}/appointments/{apptId}/cancel';
+    if (!isSchedule && !isList && !isCancel) {
       return respond(404, { error: 'NOT_FOUND' });
     }
 
@@ -175,8 +179,9 @@ export function createAppointmentHandler(
       ownerPatientId: patientId,
       assignedClinicianId: patient?.assigned_clinician_id,
     } as const;
+    const actor = actorFromPrincipal(principal, requestOriginOf(event));
 
-    if (isGet) {
+    if (isList) {
       if (!can(principal, 'read', resource).allowed) {
         return respond(403, { error: 'FORBIDDEN' });
       }
@@ -186,6 +191,35 @@ export function createAppointmentHandler(
       const appointments = await deps.appointments.listForPatient(patientId);
       const items = projectAllFor(principal, appointments, resource);
       return respond(200, { items });
+    }
+
+    if (isCancel) {
+      // TASK 3.4.2: `can()` gates `cancel` with `'update'`, the same
+      // action `create` reaches — `Appointments`'s own matrix row grants
+      // both to the identical single column (`'Sub-clinician
+      // (assigned)'` only), so a patient is denied here for the same
+      // reason they never reach booking in the first place.
+      if (!can(principal, 'update', resource).allowed) {
+        return respond(403, { error: 'FORBIDDEN' });
+      }
+      // Unreachable by construction today, kept as defence in depth —
+      // the identical reasoning the `create` branch's own line states.
+      if (!patient) {
+        return respond(404, { error: 'RECORD_NOT_FOUND' });
+      }
+      const apptId = event.pathParameters?.apptId;
+      if (!apptId) {
+        return respond(400, { error: 'ID_REQUIRED' });
+      }
+      try {
+        const cancelled = await deps.appointments.cancel(patientId, apptId, actor);
+        return respond(200, { item: projectFor(principal, cancelled, resource) });
+      } catch (error) {
+        if (error instanceof AppError && error.code === 'RECORD_NOT_FOUND') {
+          return respond(404, { error: error.code });
+        }
+        throw error;
+      }
     }
 
     if (!can(principal, 'create', resource).allowed) {
@@ -215,8 +249,6 @@ export function createAppointmentHandler(
       scheduledAt: parsed.data.scheduledAt,
       durationMinutes: parsed.data.durationMinutes,
     };
-
-    const actor = actorFromPrincipal(principal, requestOriginOf(event));
 
     try {
       const created = await deps.appointments.schedule(input, actor);

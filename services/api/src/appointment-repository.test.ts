@@ -5,6 +5,7 @@ import type { AppointmentStore } from './appointment-repository.js';
 import { AppointmentRepository } from './appointment-repository.js';
 import { actorContext, InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
+import { AppError } from './errors.js';
 
 const clock: Clock = { now: () => new Date('2026-08-22T09:00:00.000Z') };
 
@@ -35,9 +36,23 @@ class InMemoryAppointmentStore implements AppointmentStore {
     return this.items
       .filter(
         (item) =>
-          item.clinicianId === clinicianId && item.scheduledAt >= from && item.scheduledAt <= to,
+          item.clinicianId === clinicianId &&
+          item.scheduledAt >= from &&
+          item.scheduledAt <= to &&
+          item.appointment_status !== 'cancelled',
       )
       .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt));
+  }
+
+  async cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment> {
+    const item = this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
+    if (!item) {
+      throw new AppError('RECORD_NOT_FOUND', `no appointment for patient ${patientId} at ${scheduledAt}`);
+    }
+    const updated: Appointment = { ...item, appointment_status: 'cancelled', updated_at: now };
+    const index = this.items.indexOf(item);
+    this.items[index] = updated;
+    return updated;
   }
 }
 
@@ -146,5 +161,66 @@ describe('AppointmentRepository.listForClinicianCalendar', () => {
       '2026-09-30T00:00:00.000Z',
     );
     expect(items).toHaveLength(0);
+  });
+
+  it('excludes a cancelled appointment — a clinician\'s live calendar has no use for one', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    await repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR);
+    const items = await repository.listForClinicianCalendar(
+      'cli-1',
+      '2026-09-01T00:00:00.000Z',
+      '2026-09-02T00:00:00.000Z',
+    );
+    expect(items).toHaveLength(0);
+  });
+});
+
+describe('AppointmentRepository.cancel', () => {
+  it('transitions appointment_status to cancelled without touching gsi1pk/gsi1sk-deriving fields', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    const cancelled = await repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR);
+    expect(cancelled.appointment_status).toBe('cancelled');
+    expect(cancelled.clinicianId).toBe('cli-1');
+    expect(cancelled.scheduledAt).toBe('2026-09-01T10:00:00.000Z');
+  });
+
+  it('leaves a cancelled appointment in the patient\'s own full history', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    await repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR);
+    const items = await repository.listForPatient('pat-1');
+    expect(items).toHaveLength(1);
+    expect(items[0]?.appointment_status).toBe('cancelled');
+  });
+
+  it('writes an audit entry for the cancellation', async () => {
+    const { repository, audit } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    await repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR);
+    expect(audit.list()).toEqual([
+      expect.objectContaining({ action: 'create', entityId: 'pat-1#2026-09-01T10:00:00.000Z' }),
+      expect.objectContaining({ action: 'update', entityId: 'pat-1#2026-09-01T10:00:00.000Z' }),
+    ]);
+  });
+
+  it('throws AppError(RECORD_NOT_FOUND) rather than a silent no-op for an appointment that was never scheduled', async () => {
+    const { repository } = build();
+    await expect(repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR)).rejects.toThrow(
+      AppError,
+    );
   });
 });

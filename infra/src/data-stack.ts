@@ -1571,15 +1571,17 @@ export class DataStack extends Stack {
     grantFlagReads(this, appointmentRole);
 
     // `GetItem` (the patient lookup), `PutItem` (a new `APPT#<scheduledAt>`
-    // row), and `Query` (`listForPatient`'s own main-table `begins_with`
-    // read) — all on the same `PAT#*` partition, the same
+    // row), `Query` (`listForPatient`'s own main-table `begins_with`
+    // read), and `UpdateItem` (TASK 3.4.2's `cancel`, an atomic
+    // `appointment_status` transition — never a new row, never
+    // `scheduledAt`) — all on the same `PAT#*` partition, the same
     // partition-key-only granularity every other patient-scoped function
     // in this stack already accepts.
     appointmentRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'ReadWriteAndQueryPatientAppointments',
         effect: Effect.ALLOW,
-        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem'],
         resources: [this.table.tableArn],
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
       }),
@@ -1630,6 +1632,13 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/clinicians/me/calendar',
       methods: [HttpMethod.GET],
+      integration: appointmentIntegration,
+    });
+    // TASK 3.4.2: cancel — same integration, no new route pattern beyond
+    // one more path segment.
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments/{apptId}/cancel',
+      methods: [HttpMethod.POST],
       integration: appointmentIntegration,
     });
 

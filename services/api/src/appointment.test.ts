@@ -82,9 +82,23 @@ class InMemoryAppointmentStore implements AppointmentStore {
     return this.items
       .filter(
         (item) =>
-          item.clinicianId === clinicianId && item.scheduledAt >= from && item.scheduledAt <= to,
+          item.clinicianId === clinicianId &&
+          item.scheduledAt >= from &&
+          item.scheduledAt <= to &&
+          item.appointment_status !== 'cancelled',
       )
       .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt));
+  }
+
+  async cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment> {
+    const item = this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
+    if (!item) {
+      throw new AppError('RECORD_NOT_FOUND', `no appointment for patient ${patientId} at ${scheduledAt}`);
+    }
+    const updated: Appointment = { ...item, appointment_status: 'cancelled', updated_at: now };
+    const index = this.items.indexOf(item);
+    this.items[index] = updated;
+    return updated;
   }
 }
 
@@ -149,6 +163,7 @@ async function invoke(
 const SCHEDULE_ROUTE = 'POST /patients/{id}/appointments';
 const PATIENT_LIST_ROUTE = 'GET /patients/{id}/appointments';
 const CALENDAR_ROUTE = 'GET /clinicians/me/calendar';
+const CANCEL_ROUTE = 'POST /patients/{id}/appointments/{apptId}/cancel';
 
 describe('POST /patients/{id}/appointments', () => {
   it('schedules an appointment for an assigned sub-clinician', async () => {
@@ -523,6 +538,142 @@ describe('GET /clinicians/me/calendar', () => {
         routeKey: CALENDAR_ROUTE,
         queryStringParameters: { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' },
       }),
+    );
+    expect(response.statusCode).toBe(404);
+  });
+});
+
+describe('POST /patients/{id}/appointments/{apptId}/cancel', () => {
+  const APPT_ID = '2026-09-01T10:00:00.000Z';
+
+  async function seedOne(handler: ReturnType<typeof createAppointmentHandler>) {
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_ID, durationMinutes: 30 },
+      }),
+    );
+  }
+
+  it('cancels the appointment for an assigned sub-clinician, leaving the row readable', async () => {
+    const { handler } = await build();
+    await seedOne(handler);
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CANCEL_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_ID },
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as { item: { appointment_status: string } };
+    expect(body.item.appointment_status).toBe('cancelled');
+  });
+
+  it('excludes the cancelled appointment from the clinician calendar but keeps it in the patient\'s own history', async () => {
+    const { handler } = await build();
+    await seedOne(handler);
+    await invoke(
+      handler,
+      fakeEvent({ routeKey: CANCEL_ROUTE, pathParameters: { id: 'pat-1', apptId: APPT_ID } }),
+    );
+
+    const calendar = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' },
+      }),
+    );
+    expect(JSON.parse(calendar.body)).toEqual({ items: [] });
+
+    const history = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: PATIENT_LIST_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    const body = JSON.parse(history.body) as { items: { appointment_status: string }[] };
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]?.appointment_status).toBe('cancelled');
+  });
+
+  it('is 403 for the principal — the same Appointments row column as create, not a separate grant', async () => {
+    const { handler } = await build();
+    await seedOne(handler);
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CANCEL_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_ID },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 403 for the owning patient — cancelling one\'s own appointment is out of scope for this route', async () => {
+    const { handler } = await build();
+    await seedOne(handler);
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CANCEL_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_ID },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 403 for an unassigned sub-clinician', async () => {
+    const { handler } = await build();
+    await seedOne(handler);
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CANCEL_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_ID },
+        principal: UNASSIGNED_SUB_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 404, not a silent no-op, for an appointment that was never scheduled', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CANCEL_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: '2026-12-25T09:00:00.000Z' },
+      }),
+    );
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('is 401 with no verified principal', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CANCEL_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_ID },
+        principal: undefined,
+      }),
+    );
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('is 404 when the flag is off', async () => {
+    const { handler } = await build({ flagEnabled: false });
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: CANCEL_ROUTE, pathParameters: { id: 'pat-1', apptId: APPT_ID } }),
     );
     expect(response.statusCode).toBe(404);
   });

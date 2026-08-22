@@ -1248,10 +1248,48 @@ export class DynamoAppointmentStore implements AppointmentStore {
       const result = await this.client.send(
         new GetCommand({ TableName: this.tableName, Key: { pk, sk } }),
       );
-      if (result.Item) {
+      // TASK 3.4.2: "index gives candidates, the read confirms them" —
+      // the identical discipline `DynamoCaseloadStore.queryPage` already
+      // uses for its own stale-row case. A cancelled appointment stays a
+      // real GSI1 row (cancelling never touches `gsi1pk`/`gsi1sk`) but
+      // has no business on a clinician's live calendar; `listForPatient`
+      // below applies no such filter, since a patient's own history is a
+      // different question this file answers differently on purpose.
+      if (result.Item && result.Item.appointment_status !== 'cancelled') {
         appointments.push(withoutTableKeys<Appointment>(result.Item));
       }
     }
     return appointments;
+  }
+
+  /**
+   * `appointment_status` alone — never `scheduledAt`, so `gsi1pk`/`gsi1sk`
+   * (derived from `clinicianId`/`scheduledAt`) never need re-deriving.
+   * `ReturnValues: 'ALL_NEW'` hands back the updated row in the same
+   * round trip a separate `GetItem` would otherwise cost.
+   */
+  async cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment> {
+    const sk = APPOINTMENT_SORT_KEY(scheduledAt);
+    try {
+      const result = await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: PATIENT_PK(patientId), sk },
+          UpdateExpression: 'SET appointment_status = :cancelled, updated_at = :now',
+          ConditionExpression: 'attribute_exists(pk)',
+          ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': now },
+          ReturnValues: 'ALL_NEW',
+        }),
+      );
+      return withoutTableKeys<Appointment>(result.Attributes ?? {});
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'RECORD_NOT_FOUND',
+          `no appointment for patient ${patientId} at ${scheduledAt}`,
+        );
+      }
+      throw error;
+    }
   }
 }

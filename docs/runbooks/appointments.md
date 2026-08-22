@@ -49,13 +49,58 @@ The task's own "Do NOT" is explicit: "let the calendar query accept a `clinician
 - `pnpm --filter @ndn/web build` — the static output still includes an empty `/en/account/patient/index.html`.
 - `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green.
 
-## What was deliberately not built here
+## What was deliberately not built here (as of TASK 3.4.1)
 
-- **Reschedule, cancel, `completed`/`no-show` transitions.** TASK 3.4.2's own scope — "never delete."
+- **Reschedule, cancel, `completed`/`no-show` transitions.** TASK 3.4.2's own scope — "never delete." Built below.
 - **A video/call field.** Phase 4's own addition, deliberately deferred so it needs no migration (`05-execution-plan.md`'s own "Do NOT").
 - **Gap/collision handling beyond the same-instant `409`.** Two different clinicians double-booking the *same patient* at *overlapping but not identical* times is not checked — the conditional write only catches an exact `scheduledAt` collision. Not a currently reachable failure mode this task's own scope names, but worth naming rather than silently accepting; a real scheduling-conflict check would need to read the patient's existing appointments first, which no step of this task asks for.
 - **Pagination on either list.** The same "inherently bounded" reasoning `clinical-record.md`/`patient-record.md`'s own runbook sections already give for a single patient's or clinician's own bounded list.
 
-## Cost
+## Cost (TASK 3.4.1)
 
 £0.00 net-new — GSI1 already exists; this adds write units on `PAT#`/`APPT#` writes only, inside the existing DynamoDB line. One more 128 MB arm64 Lambda inside the always-free allowance.
+
+## TASK 3.4.2 — Reschedule and cancel, never delete
+
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.4.2](../plan/05-execution-plan.md) · **Requirements:** §5 · **Depends on:** 3.4.1
+
+### What this covers
+
+`POST /patients/{id}/appointments/{apptId}/cancel` transitions `appointment_status` to `'cancelled'`. The row, its `gsi1pk`/`gsi1sk`, and its history all stay exactly as they were — nothing is removed from GSI1 or the main table, matching every other entity in this codebase's own append-only discipline. Rescheduling is **not** an edit to `scheduledAt` on the existing row: it is cancel-the-old, `POST` a new one — the same append-only property `04-data-model-rbac.md` asks of every entity in this table, held here without a special case. `{apptId}` is the appointment's own `scheduledAt` value (URL-encoded by the caller, decoded transparently by API Gateway) — the same "identified by `patientId` + `scheduledAt`, no synthetic id" design TASK 3.4.1 already established.
+
+### Files this task actually touched, vs. its own Files line
+
+The task's own Files line names only `services/api/src/appointment.ts`/`appointment-handler.ts`. In practice, `cancel` needed a new `AppointmentStore` method (`appointment-repository.ts`), a real `UpdateItem` implementation (`dynamo-store.ts`), a `dynamodb:UpdateItem` grant and a fourth route (`infra/src/data-stack.ts`), and this runbook section — the same honestly-noted Files-line omission `clinical-record.md`'s own TASK 3.2.2 section and `assessment-forms.md`'s own TASK 3.3.2 section already name for their respective tasks. `appointment-handler.ts` itself needed no change at all — the same repository/store instances TASK 3.4.1 already wired serve the new method.
+
+### Only the assigned sub-clinician cancels — the identical column `create` reaches
+
+`can(principal, 'update', resource)` gates `cancel`, and `Appointments`'s own matrix row grants `'update'` to the identical single column `'create'` reaches (`'Sub-clinician (assigned)'` only — the same finding TASK 3.4.1's own runbook section already documents for booking). A patient cannot cancel their own appointment through this route, and neither can the principal — both denied for the same reason they never reach booking in the first place. The `if (!patient) return 404` branch is unreachable by construction here too, for the identical reason.
+
+### "Index gives candidates, the read confirms them" — the calendar's own filter, not a second index
+
+Cancelling never touches `gsi1pk`/`gsi1sk`, so a cancelled appointment remains a real, findable GSI1 row. Excluding it from a clinician's *live* calendar is the read's own job: `DynamoAppointmentStore.listForClinicianCalendar`'s per-row `GetItem` follow-up (already necessary because GSI1 is `KEYS_ONLY`) now also checks `appointment_status !== 'cancelled'` before including a row — the identical "index gives candidates, the read confirms them" discipline `DynamoCaseloadStore.queryPage` already uses for its own stale-row case (TASK 2.5.3). `listForPatient` applies no such filter — a patient's own full history is a different question, and shows the real cancelled appointment rather than hiding it.
+
+### What was built
+
+- **`services/api/src/appointment-repository.ts`** — `AppointmentStore.cancel(patientId, scheduledAt, now)`; `AppointmentRepository.cancel`, writing an `'update'` audit row.
+- **`services/api/src/appointment.ts`** — `POST /patients/{id}/appointments/{apptId}/cancel`, gated as described above.
+- **`services/api/src/dynamo-store.ts`** — `DynamoAppointmentStore.cancel`: an atomic `UpdateItem` (`SET appointment_status = :cancelled, updated_at = :now`, `ConditionExpression: 'attribute_exists(pk)'`, `ReturnValues: 'ALL_NEW'`), a `ConditionalCheckFailedException` mapped to `AppError('RECORD_NOT_FOUND')`. `listForClinicianCalendar`'s cancelled-row filter, described above.
+- **`infra/src/data-stack.ts`** — `dynamodb:UpdateItem` added to `AppointmentFunction`'s existing `ReadWriteAndQueryPatientAppointments` statement (already scoped to `PAT#*`, no widening); one new route on the existing integration.
+
+### Verification
+
+- `appointment-repository.test.ts` — 4 new tests: `cancel` transitions `appointment_status` without touching `clinicianId`/`scheduledAt`; a cancelled appointment stays in the patient's own `listForPatient` history; the audit log records both the original `create` and the `update`; cancelling an appointment that was never scheduled throws `AppError('RECORD_NOT_FOUND')` rather than a silent no-op. Plus one addition to the existing `listForClinicianCalendar` suite proving a cancelled appointment is excluded.
+- `appointment.test.ts` — 8 new tests: `200` with `appointment_status: 'cancelled'` for an assigned sub-clinician; excluded from the clinician calendar but present (and cancelled) in the patient's own history, in one end-to-end test; `403` for the principal, the owning patient, and an unassigned sub-clinician; `404` (not a silent no-op) for an appointment that was never scheduled; `401`; `404` when the flag is off.
+- `dynamo-store.test.ts` — 3 new tests: the real `UpdateCommand` shape (`Key`, `UpdateExpression`, `ConditionExpression`, `ReturnValues`); a `ConditionalCheckFailedException` mapped to `AppError`; a cancelled row still surfacing from the GSI1 `Query` but excluded after the follow-up `GetItem` confirms its status.
+- **The "no delete-shaped call" property** the task's own Tests line names is a static one, not a new runtime test: the repo-wide `no-destructive-primitives` eslint rule (TASK 0.3.1) already scans every file in `services/api/src`, `appointment.ts`/`appointment-repository.ts`/`dynamo-store.ts` included, and `pnpm -r lint`'s own green run over this PR is that property held, not merely asserted.
+- `infra/data-stack.test.ts` — the new route asserts `AuthorizationType: 'CUSTOM'`; the `CUSTOM` route-key list updated. No function-count changes — `cancel` reuses `AppointmentFunction`, not a new Lambda.
+- `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green.
+
+### What was deliberately not built here
+
+- **A state machine preventing, say, cancelling an already-`completed` appointment.** `cancel`'s own condition is `attribute_exists(pk)` alone — any existing row can be transitioned to `'cancelled'` regardless of its current `appointment_status`. The task's own DoD says "the row survives," not "transitions are validated," and no step asks for one; worth naming as a real, if minor, gap rather than silently accepting it.
+- **`completed`/`no-show` transitions.** Named in this task's own Context as a reason the four-state field exists, but no step of TASK 3.4.2 itself builds a route for either — plausibly a later task's scope (a clinician marking attendance), not invented here ahead of being asked for.
+
+### Cost (TASK 3.4.2)
+
+£0.00 net-new — one more route and one widened (still `PAT#*`-scoped) IAM action on the already-deployed `AppointmentFunction`; no new AWS resource of any kind.
