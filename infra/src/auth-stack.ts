@@ -28,7 +28,9 @@ import {
   UserPool,
   UserPoolClient,
   UserPoolClientIdentityProvider,
+  UserPoolDomain,
   UserPoolOperation,
+  ManagedLoginVersion,
   type UserPoolProps,
 } from 'aws-cdk-lib/aws-cognito';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
@@ -37,7 +39,9 @@ import type { Construct } from 'constructs';
 import {
   AUTH_CALLBACK_URL,
   AUTH_SIGN_OUT_URL,
+  CLINICIAN_USER_POOL_DOMAIN_PREFIX,
   CLINICIAN_USER_POOL_NAME,
+  PATIENT_USER_POOL_DOMAIN_PREFIX,
   PATIENT_USER_POOL_NAME,
 } from './config.js';
 
@@ -114,6 +118,8 @@ export class AuthStack extends Stack {
   public readonly clinicianUserPool: UserPool;
   public readonly patientUserPoolClient: UserPoolClient;
   public readonly clinicianUserPoolClient: UserPoolClient;
+  public readonly patientUserPoolDomain: UserPoolDomain;
+  public readonly clinicianUserPoolDomain: UserPoolDomain;
 
   constructor(scope: Construct, id: string, props: AuthStackProps = {}) {
     super(scope, id, props);
@@ -198,6 +204,35 @@ export class AuthStack extends Stack {
       // than transmitted. Cognito follows it with the
       // `SOFTWARE_TOKEN_MFA` challenge the pool requires.
       authFlows: { userSrp: true },
+    });
+
+    // TASK 2.2.4: the hosted sign-in pages and, more importantly, the
+    // `/oauth2/*` endpoints — `authorize`, `token` and `revoke` all live on
+    // this domain and none of them exists without it. TASK 2.2.1
+    // deliberately left it out ("2.2.4 decides whether it needs the hosted
+    // UI at all"); the answer is yes, because the authorization-code flow
+    // is what keeps a refresh token out of the browser entirely.
+    //
+    // `NEWER_MANAGED_LOGIN` rather than the classic hosted UI: passwordless
+    // email OTP is only offered by the newer pages, so the classic version
+    // would show a patient a password box for an account that has no
+    // password. Both are free at the Essentials tier.
+    //
+    // A Cognito-prefix domain rather than a custom one: a custom domain
+    // needs its own ACM certificate in `us-east-1` and a DNS record in a
+    // hosted zone that lives in another account
+    // (docs/runbooks/iac-baseline.md), which is a manual cross-account step
+    // for cosmetics. The prefix is visible to the patient for the seconds
+    // they are on the sign-in page.
+    this.patientUserPoolDomain = new UserPoolDomain(this, 'PatientUserPoolDomain', {
+      userPool: this.patientUserPool,
+      cognitoDomain: { domainPrefix: PATIENT_USER_POOL_DOMAIN_PREFIX },
+      managedLoginVersion: ManagedLoginVersion.NEWER_MANAGED_LOGIN,
+    });
+    this.clinicianUserPoolDomain = new UserPoolDomain(this, 'ClinicianUserPoolDomain', {
+      userPool: this.clinicianUserPool,
+      cognitoDomain: { domainPrefix: CLINICIAN_USER_POOL_DOMAIN_PREFIX },
+      managedLoginVersion: ManagedLoginVersion.NEWER_MANAGED_LOGIN,
     });
 
     // TASK 2.2.3 step 3: the only thing that creates a `PAT#` record, and

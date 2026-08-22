@@ -12,11 +12,14 @@ import { describe, expect, it } from 'vitest';
 import {
   ALERT_EMAIL,
   APEX_DOMAIN_NAME,
+  AUTH_CALLBACK_URL,
   CERTIFICATE_ARN,
   DOMAIN_NAME,
   FLAG_PARAMETER_NAME_PREFIX,
+  MONITORED_LOG_GROUP_NAMES,
   PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME,
   SES_CONFIGURATION_SET_NAME,
+  UNMONITORED_LOG_GROUP_NAMES,
   WWW_DOMAIN_NAME,
 } from './config.js';
 import { DataStack } from './data-stack.js';
@@ -1041,7 +1044,7 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
 // for the other seven and for the prefix's scoping; these prove the wiring
 // reached this stack too, rather than only the one it was written against.
 describe('WebStack — feature-flag reads', () => {
-  it('gives the contact-form and media-upload functions the flag prefix and a scoped read grant', () => {
+  it('gives every flag-reading function in this stack the prefix and a scoped read grant', () => {
     const template = synth();
 
     const withPrefix = Object.values(template.findResources('AWS::Lambda::Function')).filter(
@@ -1050,7 +1053,10 @@ describe('WebStack — feature-flag reads', () => {
           .Properties?.Environment?.Variables?.FLAG_PARAMETER_NAME_PREFIX ===
         FLAG_PARAMETER_NAME_PREFIX,
     );
-    expect(withPrefix).toHaveLength(2);
+    // contact-form, media-upload, and TASK 2.2.4's auth-token function —
+    // whose flag is `auth.webSignIn.enabled`, the outermost gate on all
+    // four `/auth/*` routes.
+    expect(withPrefix).toHaveLength(3);
 
     const grants = Object.values(template.findResources('AWS::IAM::Policy'))
       .flatMap(
@@ -1063,7 +1069,7 @@ describe('WebStack — feature-flag reads', () => {
       )
       .filter((s) => s.Sid === 'ReadFeatureFlags');
 
-    expect(grants).toHaveLength(2);
+    expect(grants).toHaveLength(3);
     for (const grant of grants) {
       expect(grant.Action).toBe('ssm:GetParameter');
       expect(JSON.stringify(grant.Resource)).toContain('parameter/ndn/flags/*');
@@ -1199,7 +1205,11 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
     expect(open).toEqual(UNAUTHENTICATED_ROUTE_KEYS.filter((key) => open.includes(key)).sort());
     // The site API's four, named so a diff shows which one moved.
     expect(open).toEqual([
+      'GET /auth/signin',
       'GET /health',
+      'POST /auth/refresh',
+      'POST /auth/signout',
+      'POST /auth/token',
       'POST /contact',
       'POST /stripe/webhook',
       'POST /workshops/media-upload-url',
@@ -1220,6 +1230,110 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
     // out explicitly; if one ever relied on the default, this stack would
     // deploy it wide open.
     expect(routeKeys(synth(), 'CUSTOM')).toEqual([]);
-    expect(routeKeys(synth(), 'NONE')).toEqual(['GET /health', 'POST /contact', 'POST /workshops/media-upload-url']);
+    expect(routeKeys(synth(), 'NONE')).toEqual([
+      'GET /auth/signin',
+      'GET /health',
+      'POST /auth/refresh',
+      'POST /auth/signout',
+      'POST /auth/token',
+      'POST /contact',
+      'POST /workshops/media-upload-url',
+    ]);
+  });
+});
+
+// TASK 2.2.4: the same-origin `/auth/*` surface. What makes the whole
+// design work is that these are on the site's own origin — so the refresh
+// cookie is first-party, and 1.2.3's CSP covers the calls with no
+// `connect-src` exception.
+describe('WebStack — the authenticated web shell (TASK 2.2.4)', () => {
+  it('proxies /auth/* to the HTTP API with caching disabled and all methods allowed', () => {
+    // A cached `Set-Cookie` on this path would be a session handed to the
+    // next visitor.
+    synthWithTable().hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: {
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: '/auth/*',
+            // CachingDisabled's AWS-managed policy id.
+            CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad',
+            ViewerProtocolPolicy: 'redirect-to-https',
+            // arrayWith matches a subsequence, so the order here is the
+            // order CloudFront emits.
+            AllowedMethods: Match.arrayWith(['GET', 'OPTIONS', 'POST']),
+          }),
+        ]),
+      },
+    });
+  });
+
+  it('gives /auth/* the same security-header policy as every other behaviour', () => {
+    // An auth response gets no weaker headers than a blog page.
+    const distribution = Object.values(
+      synthWithTable().findResources('AWS::CloudFront::Distribution'),
+    )[0] as {
+      Properties: {
+        DistributionConfig: {
+          DefaultCacheBehavior: { ResponseHeadersPolicyId: unknown };
+          CacheBehaviors: { PathPattern: string; ResponseHeadersPolicyId: unknown }[];
+        };
+      };
+    };
+    const config = distribution.Properties.DistributionConfig;
+    const authBehavior = config.CacheBehaviors.find(
+      (behavior) => behavior.PathPattern === '/auth/*',
+    );
+
+    expect(authBehavior?.ResponseHeadersPolicyId).toEqual(
+      config.DefaultCacheBehavior.ResponseHeadersPolicyId,
+    );
+  });
+
+  it('exposes exactly the four auth routes, all public', () => {
+    const routes = Object.values(synthWithTable().findResources('AWS::ApiGatewayV2::Route'))
+      .map((route) => String(route.Properties?.RouteKey))
+      .filter((key) => key.includes('/auth/'))
+      .sort();
+
+    expect(routes).toEqual([
+      'GET /auth/signin',
+      'POST /auth/refresh',
+      'POST /auth/signout',
+      'POST /auth/token',
+    ]);
+  });
+
+  it('gives the auth function both pools, both clients, and no data-plane permission', () => {
+    const template = synthWithTable();
+    const authFunction = Object.values(template.findResources('AWS::Lambda::Function')).find((fn) =>
+      JSON.stringify(fn.Properties?.Environment ?? {}).includes('PATIENT_OAUTH_BASE_URL'),
+    );
+    const variables = authFunction?.Properties?.Environment?.Variables as Record<string, string>;
+
+    expect(variables.PATIENT_OAUTH_BASE_URL).toContain('ndn-patients.auth');
+    expect(variables.CLINICIAN_OAUTH_BASE_URL).toContain('ndn-clinicians.auth');
+    expect(variables.AUTH_CALLBACK_URL).toBe(AUTH_CALLBACK_URL);
+
+    // It touches no table and no bucket: the only thing its role holds is
+    // the SSM flag read. A client secret would be worse still, and there
+    // is none to hold — TASK 2.2.1's clients are public.
+    expect(variables).not.toHaveProperty('PRINCIPAL_TABLE_NAME');
+
+    const authPolicy = Object.entries(template.findResources('AWS::IAM::Policy')).find(([id]) =>
+      id.startsWith('AuthTokenFunctionRole'),
+    )?.[1] as { Properties: { PolicyDocument: { Statement: { Sid?: string }[] } } };
+
+    expect(authPolicy.Properties.PolicyDocument.Statement.map((entry) => entry.Sid)).toEqual([
+      'ReadFeatureFlags',
+    ]);
+  });
+
+  it('writes the auth decision log to its own unmonitored group', () => {
+    synthWithTable().hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/auth-token-function',
+      RetentionInDays: 14,
+    });
+    expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/auth-token-function');
+    expect(MONITORED_LOG_GROUP_NAMES).not.toContain('/ndn/auth-token-function');
   });
 });
