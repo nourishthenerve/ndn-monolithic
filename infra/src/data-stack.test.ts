@@ -708,14 +708,17 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // route-protection.ts's own header named as easy to miss. TASK 3.1.1
     // added `GET`/`PATCH /patients/{id}`; TASK 3.1.2 added `GET
     // /caseload/mine`, served by the same `PatientFunction`; TASK 3.2.1
-    // adds `POST /patients/{id}/diagnosis` and `POST
-    // /patients/{id}/care-plan`, served by a new `ClinicalRecordFunction`.
+    // added `POST /patients/{id}/diagnosis` and `POST
+    // /patients/{id}/care-plan`; TASK 3.2.2 adds the `GET` half of both,
+    // all four served by `ClinicalRecordFunction`.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
         'GET /caseload',
         'GET /caseload/mine',
         'GET /patients/{id}',
+        'GET /patients/{id}/care-plan',
+        'GET /patients/{id}/diagnosis',
         'GET /testimonials/pending',
         'PATCH /content/{id}',
         'PATCH /patients/{id}',

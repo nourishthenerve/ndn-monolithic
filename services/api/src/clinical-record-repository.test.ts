@@ -91,3 +91,14 @@ describe('ClinicalRecordRepository.createVersion', () => {
     await expect(repository.getVersion('pat-1', 1)).resolves.toBeUndefined();
   });
 });
+
+describe('ClinicalRecordRepository.listVersions', () => {
+  it('returns every version for the patient, oldest first', async () => {
+    const { repository } = build();
+    await repository.createVersion('pat-1', 1, ACTOR, { visible: { summary: 'Initial' } });
+    await repository.createVersion('pat-1', 2, ACTOR, { visible: { summary: 'Revised' } });
+
+    const versions = await repository.listVersions('pat-1');
+    expect(versions.map((v) => v.visible.summary)).toEqual(['Initial', 'Revised']);
+  });
+});

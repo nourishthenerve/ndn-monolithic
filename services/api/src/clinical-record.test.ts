@@ -325,6 +325,194 @@ describe('POST /patients/{id}/diagnosis', () => {
   });
 });
 
+describe('GET /patients/{id}/diagnosis', () => {
+  async function seedTwoVersions(handler: ReturnType<typeof createClinicalRecordHandler>) {
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'POST /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        body: {
+          version: 1,
+          visible: { summary: 'Initial diagnosis' },
+          private: { notes: 'first note' },
+        },
+      }),
+    );
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'POST /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        body: {
+          version: 2,
+          visible: { summary: 'Revised diagnosis' },
+          private: { notes: 'second note' },
+        },
+      }),
+    );
+  }
+
+  it('returns every version newest first, with the private half intact, for an assigned sub-clinician', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: 'GET /patients/{id}/diagnosis', pathParameters: { id: 'pat-1' } }),
+    );
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as {
+      items: { version: number; visible: { summary: string }; private?: { notes: string } }[];
+    };
+    expect(body.items.map((item) => item.version)).toEqual([2, 1]);
+    expect(body.items[0]?.private?.notes).toBe('second note');
+    expect(body.items[1]?.private?.notes).toBe('first note');
+  });
+
+  it('returns every version with the private half intact for the principal', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'GET /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    const body = JSON.parse(response.body) as { items: { private?: { notes: string } }[] };
+    expect(body.items.every((item) => item.private !== undefined)).toBe(true);
+  });
+
+  it('returns every version for the owning patient with zero occurrences of "private" at any depth', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'GET /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain('private');
+    const body = JSON.parse(response.body) as { items: { visible: { summary: string } }[] };
+    expect(body.items.map((item) => item.visible.summary)).toEqual([
+      'Revised diagnosis',
+      'Initial diagnosis',
+    ]);
+  });
+
+  it('returns an empty array, not a 404, when the patient has no diagnosis history yet', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'GET /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ items: [] });
+  });
+
+  it('is 403, never a 200 with an empty array, for a patient reading another patient\'s diagnosis by a guessed id', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'GET /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        principal: { ...OWNING_PATIENT_CONTEXT, subjectId: 'pat-2', patientId: 'pat-2' },
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 403 for an unassigned sub-clinician', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'GET /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        principal: UNASSIGNED_SUB_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 401 with no verified principal', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'GET /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        principal: undefined,
+      }),
+    );
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('is 404 when the flag is off', async () => {
+    const { handler } = await build({ flagEnabled: false });
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: 'GET /patients/{id}/diagnosis', pathParameters: { id: 'pat-1' } }),
+    );
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('resolves /patients/me/diagnosis to the owning patient — the account page has no other way to learn its own id', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'GET /patients/{id}/diagnosis',
+        pathParameters: { id: 'me' },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.body).not.toContain('private');
+    const body = JSON.parse(response.body) as { items: unknown[] };
+    expect(body.items).toHaveLength(2);
+  });
+});
+
+describe('GET /patients/{id}/care-plan', () => {
+  it('is kept fully independent of the diagnosis history', async () => {
+    const { handler } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'POST /patients/{id}/diagnosis',
+        pathParameters: { id: 'pat-1' },
+        body: { version: 1, visible: { summary: 'Diagnosis only' } },
+      }),
+    );
+
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: 'GET /patients/{id}/care-plan', pathParameters: { id: 'pat-1' } }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ items: [] });
+  });
+});
+
 describe('POST /patients/{id}/care-plan', () => {
   it('creates a version, kept fully independent of the diagnosis repository', async () => {
     const { handler, diagnosis } = await build();

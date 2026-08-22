@@ -16,16 +16,26 @@
 // rather than a route that would accept the request.
 //
 // **Who names the next version number.** `VersionedRepository` (TASK
-// 0.3.3/2.1.2) has no "what's the latest version" method — 3.2.2 is the
-// task that adds `listVersions`, deliberately not this one (this file's
-// own scope per docs/plan/05-execution-plan.md). Until then, the caller
-// states which version it is creating, the same way an `If-Match` ETag
-// states which revision a client believes it is building on: a clinician
-// revising a diagnosis they just read supplies that version's successor,
-// and `createVersion`'s own guard turns a stale or duplicate guess into a
-// thrown `VERSION_ALREADY_EXISTS` (mapped to `409` below) rather than a
-// silent overwrite. Documented as a deliberate, scoped decision in
+// 0.3.3/2.1.2) had no "what's the latest version" method until TASK 3.2.2
+// added `listVersions` below — used only by the read routes this task
+// adds, never by `createVersion`'s own caller: the caller still states
+// which version it is creating, the same way an `If-Match` ETag states
+// which revision a client believes it is building on. `createVersion`'s
+// own guard turns a stale or duplicate guess into a thrown
+// `VERSION_ALREADY_EXISTS` (mapped to `409` below) rather than a silent
+// overwrite. Documented as a deliberate, scoped decision in
 // docs/runbooks/clinical-record.md, not a gap discovered by accident.
+//
+// TASK 3.2.2: `GET /patients/{id}/diagnosis`, `GET /patients/{id}/care-plan`
+// — every version, newest first, each projected individually before the
+// array is returned. This is the first handler in the whole platform
+// where `projectFor` runs in the **allow** direction against a real,
+// populated `private{}` field: an assigned sub-clinician's or the
+// principal's response carries every version's private half intact; the
+// owning patient's has it stripped from every version, not only the
+// latest — a single missed element in the map below would be exactly the
+// leak R-09 exists to prevent, which is why every version goes through
+// its own `projectFor` call rather than one call against the whole array.
 import type { Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
@@ -41,7 +51,7 @@ import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
 import type { PatientRepository } from './patient-repository.js';
-import { projectFor, serialiseResponse, type ResponseBody } from './projection.js';
+import { projectAllFor, projectFor, serialiseResponse, type ResponseBody } from './projection.js';
 import { requirePrincipal } from './request-principal.js';
 
 const CLINICAL_RECORDS_FLAG = 'clinicalRecords.enabled';
@@ -54,11 +64,15 @@ const clinicalRecordBodySchema = z
   })
   .strict();
 
-/** The two routes this file serves, and the entity type/repository each names — one lookup, not two parallel switch arms. */
+/** The four routes this file serves, and the entity type/action each names — one lookup, not four parallel switch arms. */
 const ROUTES = {
-  'POST /patients/{id}/diagnosis': 'diagnosis',
-  'POST /patients/{id}/care-plan': 'care-plan',
-} as const satisfies Readonly<Record<string, 'diagnosis' | 'care-plan'>>;
+  'POST /patients/{id}/diagnosis': { entityType: 'diagnosis', action: 'create' },
+  'POST /patients/{id}/care-plan': { entityType: 'care-plan', action: 'create' },
+  'GET /patients/{id}/diagnosis': { entityType: 'diagnosis', action: 'read' },
+  'GET /patients/{id}/care-plan': { entityType: 'care-plan', action: 'read' },
+} as const satisfies Readonly<
+  Record<string, { entityType: 'diagnosis' | 'care-plan'; action: 'create' | 'read' }>
+>;
 
 export interface ClinicalRecordDeps {
   /** For the assignment-relationship lookup `can()` needs — never for a clinical read or write, which stay on `diagnosis`/`carePlan` below. */
@@ -125,22 +139,33 @@ export function createClinicalRecordHandler(
     if (!(routeKey in ROUTES)) {
       return respond(404, { error: 'NOT_FOUND' });
     }
-    const entityType = ROUTES[routeKey as keyof typeof ROUTES];
+    const { entityType, action } = ROUTES[routeKey as keyof typeof ROUTES];
 
-    const patientId = event.pathParameters?.id;
-    if (!patientId) {
+    const rawId = event.pathParameters?.id;
+    if (!rawId) {
       return respond(400, { error: 'ID_REQUIRED' });
     }
+    // `/patients/me/diagnosis`, `/patients/me/care-plan` — the identical
+    // `/me` resolution `patient.ts` gives `/patients/me`, needed for the
+    // identical reason: the account page (TASK 3.2.2 step 3) has no other
+    // way to learn its own patient id before the very request that would
+    // need it. A clinician's `me` resolves to nothing (`principal.patientId`
+    // is only ever set for a patient role), so `patientId` stays the
+    // literal string `'me'` for them, matching no real record and
+    // therefore no relationship column either — denied the same way any
+    // other malformed guess is, no special-cased branch required.
+    const patientId =
+      rawId === 'me' && principal.role === 'patient' ? (principal.patientId ?? rawId) : rawId;
 
     // Fetched before `can()`, the same reason patient.ts's own handler
     // does: the sub-clinician column of this row depends on
     // `assigned_clinician_id`, which only the patient record can answer.
-    // A patient role never reaches `create` on this row regardless (the
-    // matrix's `'Patient (own)'` cell for `'Diagnosis / care plan'` is
-    // bare `R`) — so the only principal that can ever observe a `404`
-    // below is the principal clinician, who already has unrestricted
-    // caseload visibility, and for whom "does this patient id exist" is
-    // not a leak.
+    // A non-owning patient is denied both actions regardless (the
+    // `'Patient (other)'` column is denied outright, and the owning
+    // patient's own record always exists once they hold a session) — so
+    // the only principal that can ever observe a `404` below is the
+    // principal clinician, who already has unrestricted caseload
+    // visibility, and for whom "does this patient id exist" is not a leak.
     const patient = await deps.patients.findById(patientId);
     const resource = {
       entityType,
@@ -148,11 +173,23 @@ export function createClinicalRecordHandler(
       assignedClinicianId: patient?.assigned_clinician_id,
     } as const;
 
-    if (!can(principal, 'create', resource).allowed) {
+    if (!can(principal, action, resource).allowed) {
       return respond(403, { error: 'FORBIDDEN' });
     }
     if (!patient) {
       return respond(404, { error: 'RECORD_NOT_FOUND' });
+    }
+
+    const repository = entityType === 'diagnosis' ? deps.diagnosis : deps.carePlan;
+
+    if (action === 'read') {
+      // Newest first; every version projected individually — see this
+      // file's own header for why a per-element `projectAllFor` call,
+      // not one decision applied to the array as a whole, is what R-09
+      // actually requires here.
+      const versions = await repository.listVersions(patientId);
+      const items = projectAllFor(principal, versions.slice().reverse(), resource);
+      return respond(200, { items });
     }
 
     const parsed = clinicalRecordBodySchema.safeParse(parseJsonBody(event));
@@ -173,7 +210,6 @@ export function createClinicalRecordHandler(
     };
 
     const actor = actorFromPrincipal(principal, requestOriginOf(event));
-    const repository = entityType === 'diagnosis' ? deps.diagnosis : deps.carePlan;
 
     try {
       const created = await repository.createVersion(patientId, parsed.data.version, actor, input);

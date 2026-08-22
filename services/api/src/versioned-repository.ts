@@ -71,6 +71,32 @@ export class VersionedRepository<T extends VersionedRecord> {
     return found === undefined ? undefined : unprojected(found);
   }
 
+  /**
+   * TASK 3.2.2: every version, oldest first (`getVersion(id, 1)`,
+   * `getVersion(id, 2)`, …, stopping at the first gap). The simplest
+   * correct implementation for a low-version-count entity — a clinician
+   * revises a diagnosis or care plan occasionally, not thousands of times
+   * — and one method every future versioned entity benefits from, not a
+   * bespoke query in whichever handler reads first. Relies on the same
+   * no-gaps assumption `docs/runbooks/clinical-record.md`'s TASK 3.2.1
+   * section already names as an accepted, documented limit of the
+   * caller-supplied version number: a version created out of sequence
+   * (e.g. `3` before `1`/`2` exist) would end this list early rather than
+   * skip the gap.
+   */
+  async listVersions(id: string): Promise<Unprojected<T>[]> {
+    const versions: Unprojected<T>[] = [];
+    let version = 1;
+    for (;;) {
+      const found = await this.getVersion(id, version);
+      if (!found) {
+        return versions;
+      }
+      versions.push(found);
+      version += 1;
+    }
+  }
+
   private versionKey(id: string, version: number): string {
     return `${id}#v${version}`;
   }

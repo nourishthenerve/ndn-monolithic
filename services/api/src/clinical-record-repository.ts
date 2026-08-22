@@ -51,4 +51,9 @@ export class ClinicalRecordRepository {
   getVersion(patientId: string, version: number): Promise<Unprojected<ClinicalRecord> | undefined> {
     return this.versioned.getVersion(patientId, version);
   }
+
+  /** TASK 3.2.2: every version for `patientId`, oldest first — see `VersionedRepository.listVersions`'s own doc. */
+  listVersions(patientId: string): Promise<Unprojected<ClinicalRecord>[]> {
+    return this.versioned.listVersions(patientId);
+  }
 }

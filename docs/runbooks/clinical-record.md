@@ -56,13 +56,64 @@ Step 5 of this task: every create response is projected before it is returned, e
 - `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green.
 - `infra/data-stack.test.ts` — both new routes assert `AuthorizationType: 'CUSTOM'`; the flag-reading/audit-table function counts and the `CUSTOM` route-key list all updated for the new function; the audit-partition and keyless-read guardrail counts updated (14 → 15).
 
-## What was deliberately not built here
+## What was deliberately not built here (as of TASK 3.2.1)
 
-- **`GET /patients/{id}/diagnosis`, `GET /patients/{id}/care-plan`.** TASK 3.2.2's own scope — the read half, `listVersions`, and the account-page timeline.
+- **`GET /patients/{id}/diagnosis`, `GET /patients/{id}/care-plan`.** TASK 3.2.2's own scope — the read half, `listVersions`, and the account-page timeline. Built below.
 - **A "what's the latest version" lookup.** Named above; closed by 3.2.2's `listVersions`, not invented early here as a shortcut.
 - **Gap/sequence validation on the client-supplied version number.** Nothing here rejects a POST for version `5` when versions `1`–`4` don't exist. Not a currently reachable failure mode for a single clinician working through the UI TASK 3.2.2/a future authoring page will build (which will always know the current latest version, once `listVersions` exists) — but worth naming rather than silently accepting.
 - **Merging diagnosis and care plan into one record type with a discriminator field.** They are two entities that happen to share a shape (`04-data-model-rbac.md`'s own two key prefixes), not one entity with a type field — `05-execution-plan.md`'s own "Do NOT" for this task.
 
-## Cost
+## Cost (TASK 3.2.1)
 
 £0.00 net-new — one more 128 MB arm64 Lambda inside the always-free allowance; `DIAG#<v>`/`PLAN#<v>` rows are a few hundred bytes each, inside the existing DynamoDB line.
+
+## TASK 3.2.2 — The read half: diagnosis and care plan, visible to a patient, both halves to a clinician
+
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.2.2](../plan/05-execution-plan.md) · **Requirements:** §5, FR-DP-05, R-09 · **Depends on:** 3.2.1
+
+### What this covers
+
+TASK 3.2.1 built the write side and the record shape; nothing yet let a patient — or a clinician catching up on a colleague's notes — read it back. `GET /patients/{id}/diagnosis` and `GET /patients/{id}/care-plan` return every version, newest first, each individually projected through `projectFor`. This is the first handler in the whole platform where `projectFor` runs in the **allow** direction against a real, populated `private{}` field, rather than the no-op it has been against `Patient`'s empty one: an assigned sub-clinician's or the principal's response carries every version's private half intact; the owning patient's has it stripped from every version, not only the latest.
+
+### Why every version is projected individually, not the array as a whole
+
+`projectAllFor` (`projection.ts`, already existed since TASK 2.1.2 with no caller until now) applies one `mayReadPrivate` decision and maps it across every element — the decision does not vary per version, so this is not a performance concern, but it is a correctness one: a single call against the *array* rather than the *elements* would have to either strip nothing (wrong, if a patient is asking) or reconstruct each element's shape by hand, reopening exactly the "a client-side filter of a fuller payload" anti-pattern `private-field-boundary.md` warns against, this time on the server. Calling the existing, already-100%-covered `projectAllFor` directly means this task adds no new branch to `projection.ts` at all — the read direction was already proven at TASK 2.1.2; this task is the first real caller.
+
+### `VersionedRepository.listVersions` — the "simplest correct implementation" the task's own steps name
+
+`VersionedRepository` had no way to answer "every version for this id" before this task. `listVersions` reads `getVersion(id, 1)`, `getVersion(id, 2)`, … in order, stopping at the first gap — deliberately not a DynamoDB `Query` against a sort-key prefix (which would need `DynamoClinicalRecordStore` to grow a second method beyond `KeyValueStore<T>`'s `get`/`put`, and `VersionedRepository` itself has no notion of "the store also supports range queries"). This is the exact "no-gaps" assumption TASK 3.2.1's own section above already names as an accepted, documented limit of the caller-supplied version number: a version created out of sequence would end this list early rather than skip the gap. Correct for a low-version-count entity — a clinician revises a diagnosis or care plan occasionally, not thousands of times — and the same reasoning the task's own steps state directly.
+
+`versioned-repository.ts` and `clinical-record-repository.ts` were not in this task's own Files line (only `clinical-record.ts`/`clinical-record-handler.ts`/`patient.astro`/this runbook were named), but step 1 explicitly requires adding `listVersions` to `VersionedRepository` — an omission in the plan text's Files line, not a real scope boundary; both files are touched here, the same honestly-noted adjustment this codebase's runbooks make wherever the plan's Files line and Steps text disagree.
+
+### The `/patients/me/{diagnosis,care-plan}` gap TASK 3.1.1 already found once
+
+`clinical-record.ts`'s `POST` routes never needed a `/me` resolution — a patient can never reach `create` on this row. The new `GET` routes are different: the matrix's `'Patient (own)'` cell for `'Diagnosis / care plan'` grants bare `R`, so a patient reading their **own** history is a real, intended case, and the account page has exactly the same problem TASK 3.1.1's own runbook section already named for `/patients/{id}`: `SessionClient` never decodes the access token, so the frontend has no way to know its own patient id. Resolved identically: `clinical-record.ts` now resolves the literal path segment `'me'` to `principal.patientId` for a patient principal, before any lookup or `can()` call — the read routes this task adds are the first ones on this file that actually need it.
+
+### What was built
+
+- **`services/api/src/versioned-repository.ts`** — `VersionedRepository.listVersions(id): Promise<Unprojected<T>[]>`, described above.
+- **`services/api/src/clinical-record-repository.ts`** — `ClinicalRecordRepository.listVersions`, a thin delegation to the above.
+- **`services/api/src/clinical-record.ts`** — `GET /patients/{id}/diagnosis`, `GET /patients/{id}/care-plan`; the `ROUTES` table now carries an `action: 'create' | 'read'` alongside each route's entity type, and `can()` is called with that action rather than a hard-coded `'create'`. The `/me` resolution above. Response shape `{ items: Projected<ClinicalRecord>[] }`, newest first.
+- **`services/api/src/clinical-record-handler.ts`** — unchanged in substance; the same `patients`/`diagnosis`/`carePlan` wiring TASK 3.2.1 built already serves the new routes.
+- **`apps/web/src/account/ClinicalRecordTimeline.tsx`** (new) — the read-only timeline, one component instantiated twice (`kind: 'diagnosis' | 'care-plan'`) on `patient.astro`, fetching `/patients/me/{kind}` and rendering exactly what it received — no client-side filtering of a fuller payload.
+- **`apps/web/src/pages/[locale]/account/patient.astro`** — two `<ClinicalRecordTimeline>` instances added below `<PatientProfile>`.
+- **`packages/i18n/src/locales/en.json`** — `clinicalRecordTimeline.*` keys.
+- **`infra/src/data-stack.ts`** — two new `GET` routes on the existing `ClinicalRecordFunction`/`ClinicalRecordIntegration`, no new AWS resource.
+
+### Verification
+
+- `versioned-repository.test.ts` — `listVersions` returns every version oldest first; an id with no versions returns `[]`; a gap (version 3 written with no version 2) stops the list at the gap rather than skipping it; two ids stay independent.
+- `clinical-record-repository.test.ts` — `listVersions` delegates correctly, oldest first.
+- `clinical-record.test.ts` — 9 new assertions: newest-first ordering with the private half intact for an assigned sub-clinician and the principal; zero occurrences of the string `"private"` at any depth in the owning patient's response body (`private-field-boundary.md`'s own "negative test per endpoint, forever" convention, its first two real entries); an empty array (not a `404`) for a patient with no history yet; `403`, never a `200` with an empty array, for a patient reading another patient's history by a guessed id; `403` for an unassigned sub-clinician; `401`/`404` (flag off); care-plan history kept independent of diagnosis; the `/patients/me/diagnosis` resolution.
+- `infra/data-stack.test.ts` — the two new `GET` routes assert `AuthorizationType: 'CUSTOM'`; the `CUSTOM` route-key list updated.
+- `pnpm --filter @ndn/web build` — the static output still includes an empty `/en/account/patient/index.html`.
+- `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green.
+
+### What was deliberately not built here
+
+- **pr-env axe + keyboard verification against a live authenticated session.** The same honestly-named gap as every prior authenticated page in this codebase (TASK 3.1.1's own runbook section states it first): no live-session pr-env testing mechanism exists yet. The timeline is built from semantic HTML (a labelled `<section>`, heading levels that continue the page's own h1 → h2 → h3 structure, `role="status"`/`role="alert"` regions matching every other island in this codebase) and verified by construction, not claimed as more than that.
+- **Pagination on the version list.** The same "inherently bounded, unlike a cross-caseload view" reasoning TASK 3.1.2's own runbook section gives for `GET /caseload/mine`: one patient's own diagnosis or care-plan history is not the kind of list that grows toward DynamoDB's page-size concerns.
+
+### Cost (TASK 3.2.2)
+
+£0.00 net-new — two more routes on the already-deployed `ClinicalRecordFunction`; no new AWS resource of any kind.
