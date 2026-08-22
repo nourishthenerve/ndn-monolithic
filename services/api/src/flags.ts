@@ -48,7 +48,10 @@ export type FlagName =
   // TASK 3.2.1: diagnosis/care-plan authoring (write) and, 3.2.2, the read
   // half over the same records. One flag for both — a read half with no
   // write half to read is not a useful flag state. Default off.
-  | 'clinicalRecords.enabled';
+  | 'clinicalRecords.enabled'
+  // TASK 3.3.1: assessment-form authoring (write) and, 3.3.2, the read
+  // half over the same records. Default off.
+  | 'assessments.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

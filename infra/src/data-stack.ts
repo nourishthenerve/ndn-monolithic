@@ -165,6 +165,9 @@ export class DataStack extends Stack {
     const clinicalRecordLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/clinical-record-function`
       : '/ndn/clinical-record-function';
+    const assessmentLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/assessment-function`
+      : '/ndn/assessment-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1467,6 +1470,66 @@ export class DataStack extends Stack {
       path: '/patients/{id}/care-plan',
       methods: [HttpMethod.GET],
       integration: clinicalRecordIntegration,
+    });
+
+    // TASK 3.3.1: assessment forms — a separate function/role from
+    // `ClinicalRecordFunction`, even though both read/write `PAT#*`: this
+    // is the entity `authz-matrix.ts` gives *two* matrix rows
+    // (`visible{}`/`private{}`) rather than one row with an internal
+    // split, and keeping it on its own role means a future change to
+    // either entity's IAM policy can never silently widen the other's.
+    const assessmentRole = new Role(this, 'AssessmentFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const assessmentFunction = new NodejsFunction(this, 'AssessmentFunction', {
+      entry: `${moduleDir}../../services/api/src/assessment-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: assessmentRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'AssessmentFunctionLogGroup', assessmentLogGroupName),
+    });
+    grantFlagReads(this, assessmentRole);
+
+    // `GetItem` (the patient lookup) and `PutItem` (a new
+    // `ASSESS#<assessmentId>#v<n>` version) on the same `PAT#*` partition
+    // — the identical `ReadPatientAndWrite*` shape `ClinicalRecordFunction`
+    // already carries, and the identical partition-key-only granularity
+    // limit its own comment names.
+    assessmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPatientAndWriteAssessments',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    assessmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(assessmentRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(assessmentRole, this.table);
+
+    const assessmentIntegration = new HttpLambdaIntegration('AssessmentIntegration', assessmentFunction);
+    httpApi.addRoutes({
+      path: '/patients/{id}/assessments/{assessmentId}',
+      methods: [HttpMethod.POST],
+      integration: assessmentIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

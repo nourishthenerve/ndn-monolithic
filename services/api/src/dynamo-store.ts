@@ -30,6 +30,7 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type {
+  Assessment,
   AssignmentRequest,
   ClinicalRecord,
   Clinician,
@@ -1031,6 +1032,105 @@ export class DynamoClinicalRecordStore implements KeyValueStore<ClinicalRecord> 
         throw new AppError(
           'VERSION_ALREADY_EXISTS',
           `version ${version} already exists for patient ${patientId}`,
+        );
+      }
+      throw error;
+    }
+  }
+}
+
+// TASK 3.3.1: `PK = PAT#<patientId>`, `SK = ASSESS#<assessmentId>#v<n>` —
+// unlike diagnosis/care-plan's single timeline per patient, an assessment
+// versions per *named form*, so the sort key carries both the form's own
+// id and its version. `assessment-repository.ts`'s own `compositeId`
+// packs `patientId`/`assessmentId` into `VersionedRepository`'s one `id`
+// string as `${patientId}#${assessmentId}`; this store is what unpacks it
+// back into `pk`/`sk` — parsed here, not passed in pre-split, the same
+// division of concerns `DynamoClinicalRecordStore` keeps just above.
+//
+// The parse is unambiguous in both directions regardless of what
+// characters `assessmentId` itself contains: `lastIndexOf('#v')` finds
+// the version marker because it is always the literal suffix nothing
+// follows, and `indexOf('#')` on what remains finds the patient/assessment
+// boundary because a patient id (a Cognito `sub`, a UUID) never contains
+// `#` — the same guarantee `caseload-repository.ts`'s own GSI3 sort-key
+// parsing already relies on.
+const ASSESSMENT_SK_PREFIX = 'ASSESS';
+
+function parseAssessmentVersionKey(key: string): {
+  readonly patientId: string;
+  readonly assessmentId: string;
+  readonly version: string;
+} {
+  const versionMarker = key.lastIndexOf('#v');
+  const withoutVersion = key.slice(0, versionMarker);
+  const version = key.slice(versionMarker + 2);
+  const patientSeparator = withoutVersion.indexOf('#');
+  return {
+    patientId: withoutVersion.slice(0, patientSeparator),
+    assessmentId: withoutVersion.slice(patientSeparator + 1),
+    version,
+  };
+}
+
+function assessmentSortKey(assessmentId: string, version: string): string {
+  return `${ASSESSMENT_SK_PREFIX}#${assessmentId}#v${version}`;
+}
+
+export interface DynamoAssessmentStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoAssessmentStore implements KeyValueStore<Assessment> {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoAssessmentStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async get(key: string): Promise<Assessment | undefined> {
+    const { patientId, assessmentId, version } = parseAssessmentVersionKey(key);
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: PATIENT_PK(patientId), sk: assessmentSortKey(assessmentId, version) },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Assessment>(result.Item);
+  }
+
+  /**
+   * The same defence-in-depth shape `DynamoClinicalRecordStore.put` uses:
+   * `VersionedRepository.createVersion`'s own check-then-throw is the
+   * common path, and this `ConditionExpression` is the atomic backstop
+   * for two concurrent writers targeting the same named form's same
+   * version — both surface the identical `AppError` code.
+   */
+  async put(key: string, item: Assessment): Promise<void> {
+    const { patientId, assessmentId, version } = parseAssessmentVersionKey(key);
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: {
+            ...item,
+            pk: PATIENT_PK(patientId),
+            sk: assessmentSortKey(assessmentId, version),
+          },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'VERSION_ALREADY_EXISTS',
+          `assessment ${assessmentId} version ${version} already exists for patient ${patientId}`,
         );
       }
       throw error;

@@ -179,6 +179,10 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // versions, behind a default-off flag. The same bounded-by-patient-count
   // reasoning as patient-function above. Displacing nothing.
   '/ndn/clinical-record-function',
+  // TASK 3.3.1: a clinician authoring successive assessment-form
+  // versions, behind a default-off flag. The same bounded-by-patient-count
+  // reasoning as clinical-record-function above. Displacing nothing.
+  '/ndn/assessment-function',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret

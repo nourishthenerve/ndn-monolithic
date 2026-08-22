@@ -26,6 +26,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
+  DynamoAssessmentStore,
   DynamoAssignmentStore,
   DynamoCaseloadStore,
   DynamoClinicalRecordStore,
@@ -1024,5 +1025,108 @@ describe('DynamoClinicalRecordStore', () => {
   it('get() returns undefined for a version that was never written', async () => {
     ddbMock.on(GetCommand).resolves({});
     await expect(diagnosisStore.get('pat-1#v9')).resolves.toBeUndefined();
+  });
+});
+
+// TASK 3.3.1: `assessment-repository.ts`'s own composite key
+// (`${patientId}#${assessmentId}`) becomes `VersionedRepository`'s own
+// `${id}#v${version}` store key, so the real key this store parses is
+// `${patientId}#${assessmentId}#v${version}` — this suite is what proves
+// that three-part parse against the real `pk`/`sk` shape, not just
+// against `InMemoryStore` (assessment-repository.test.ts's own suite).
+describe('DynamoAssessmentStore', () => {
+  const store = new DynamoAssessmentStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('put() writes a conditional PutCommand keyed PAT#<patientId> / ASSESS#<assessmentId>#v<n>', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.put('pat-1#mobility-initial#v1', {
+      version: 1,
+      patientId: 'pat-1',
+      assessmentId: 'mobility-initial',
+      visible: { formType: 'mobility', responses: { painScore: 4 } },
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      status: 'active',
+    });
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'ASSESS#mobility-initial#v1',
+        patientId: 'pat-1',
+        assessmentId: 'mobility-initial',
+        version: 1,
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('put() splits the assessment id correctly even when it contains its own "#v" substring', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    // A pathological but not impossible form id — proves the parse keys
+    // off the *last* `#v` (the real version marker, always the literal
+    // suffix) rather than the first one it happens to find.
+    await store.put('pat-1#check#v-status#v3', {
+      version: 3,
+      patientId: 'pat-1',
+      assessmentId: 'check#v-status',
+      visible: { formType: 'check', responses: {} },
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      status: 'active',
+    });
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      Item: { pk: 'PAT#pat-1', sk: 'ASSESS#check#v-status#v3' },
+    });
+  });
+
+  it('put() throws AppError(VERSION_ALREADY_EXISTS) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(
+      store.put('pat-1#mobility-initial#v1', {
+        version: 1,
+        patientId: 'pat-1',
+        assessmentId: 'mobility-initial',
+        visible: { formType: 'mobility', responses: {} },
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+        status: 'active',
+      }),
+    ).rejects.toThrow(AppError);
+  });
+
+  it('get() reads the same three-part key and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'ASSESS#mobility-initial#v2',
+        version: 2,
+        patientId: 'pat-1',
+        assessmentId: 'mobility-initial',
+        visible: { formType: 'mobility', responses: { painScore: 2 } },
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+        status: 'active',
+      },
+    });
+
+    const result = await store.get('pat-1#mobility-initial#v2');
+    expect(result).toMatchObject({ version: 2, visible: { responses: { painScore: 2 } } });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'PAT#pat-1', sk: 'ASSESS#mobility-initial#v2' },
+    });
+  });
+
+  it('get() returns undefined for a version that was never written', async () => {
+    ddbMock.on(GetCommand).resolves({});
+    await expect(store.get('pat-1#mobility-initial#v9')).resolves.toBeUndefined();
   });
 });
