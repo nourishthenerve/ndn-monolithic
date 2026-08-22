@@ -2,6 +2,10 @@
 
 **Date:** 2026-08-09 · **Task:** [05-execution-plan.md § TASK 0.3.1](../plan/05-execution-plan.md) · **Requirements:** C-03, §6.7 · **Risks:** R-06
 
+## Amendment, TASK 2.4.1 (2026-08-22) — identity joins the protected estate
+
+`BANNED_IDENTIFIERS` gained `AdminDeleteUserCommand` (Cognito) alongside the original DynamoDB/S3 delete commands — C-03's protection extends to identity as of Phase 2 ("a clinician is deactivated, a Cognito user is disabled — never `AdminDeleteUser`"), and this task's own "no code path calls it" negative test is implemented as an extension of this exact mechanism rather than a bespoke check. See `docs/runbooks/clinician-accounts.md`. Nothing else below changed.
+
 ## What this covers
 
 The code-layer half of the two-layer data-protection guard (00-conventions.md's prohibition: "no `DeleteItem`, `DeleteObject`, `TRUNCATE`, `DROP`, or destructive migration against protected stores"). The IAM-layer half (runtime `Deny` policies) is TASK 0.3.2. This lands first so the guard exists before anything writes data.

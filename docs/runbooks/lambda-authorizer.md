@@ -2,6 +2,8 @@
 
 **Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.2.2](../plan/05-execution-plan.md) · **Milestone:** M2.2 · **Requirements:** NFR-03, NFR-05, NFR-06 · **Decisions:** D-06 · **Risks:** R-09 · **Depends on:** 2.2.1, 2.1.1, 2.1.3
 
+**The "Protected unless it says otherwise" table below is superseded by [TASK 2.5.4](admin-token-retirement.md), 2026-08-22.** `ADMIN_TOKEN_ROUTE` and `ADMIN_TOKEN_ROUTE_KEYS` are deleted — the thirteen routes that stood behind them now sit behind this same authorizer, described here. See the linked runbook for the current route count and the one behavioural wrinkle (`GET /testimonials` splitting off `GET /testimonials/pending`) that migration required.
+
 ## The invariant
 
 > No protected route is reachable without a verified token from a known pool. The role a request runs as comes from the issuer, not from anything the caller can set. Every failure mode denies.
@@ -84,10 +86,10 @@ Both HTTP APIs set `defaultAuthorizer`. A route added without thinking about aut
 
 | Reason | Meaning | Count today |
 |---|---|---|
-| `PUBLIC_ROUTE` | No caller identity by design — a blog reader, a testimonial submitter, a workshop buyer, and Stripe (which authenticates by signature, not token) | 7 |
-| `ADMIN_TOKEN_ROUTE` | Still behind `admin-auth.ts`'s single shared bearer secret. **Temporary** — TASK 2.5.4 moves these onto this authorizer and `can()` | 13 |
+| `PUBLIC_ROUTE` | No caller identity by design — a blog reader, a testimonial submitter, a workshop buyer, and Stripe (which authenticates by signature, not token) | 7, at TASK 2.2.2 |
+| `ADMIN_TOKEN_ROUTE` | *(Historical.)* Behind `admin-auth.ts`'s single shared bearer secret at TASK 2.2.2's own time. Retired by TASK 2.5.4 — the construct and every route that opted out through it are gone; see [admin-token-retirement.md](admin-token-retirement.md) for where those thirteen routes (fourteen counting `GET /testimonials/pending`, new at 2.5.4) sit now. | 13, at TASK 2.2.2 |
 
-`ADMIN_TOKEN_ROUTE_KEYS` is TASK 2.5.4's work list, as data. **It contains one route 2.5.4's own text does not:** that task names four functions (content authoring, workshop authoring, testimonial moderation, media upload), which is thirteen routes — and misses `GET /audit`, added later by TASK 2.1.3 behind the same shared secret. It is in the list so 2.5.4 finds it by reading the file rather than by remembering.
+`ADMIN_TOKEN_ROUTE_KEYS` was TASK 2.5.4's work list, as data, before that task deleted the export along with the construct it named. **It contained one route 2.5.4's own text did not:** that task named four functions (content authoring, workshop authoring, testimonial moderation, media upload), which is thirteen routes — and missed `GET /audit`, added later by TASK 2.1.3 behind the same shared secret. It was in the list so 2.5.4 would find it by reading the file rather than by remembering — and it did.
 
 ## Nothing is protected yet, and that is the honest state
 

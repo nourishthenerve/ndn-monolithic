@@ -18,6 +18,7 @@ const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string
   //                            | Patient (own)      | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Principal                 |
   'Own profile':              { 'Patient (own)': 'R U',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'R U' },
   'Patient profile':          { 'Patient (own)': 'R U (self)',     'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'R U' },
+  'Patient assignment':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
   'Diagnosis / care plan':    { 'Patient (own)': '**R**',          'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
   'Assessment — `visible{}`': { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'R' },
   'Assessment — `private{}`': { 'Patient (own)': '**—**',          'Patient (other)': '**—**', 'Sub-clinician (assigned)': 'C R U',        'Sub-clinician (unassigned)': '**—**', Principal: 'R' },
@@ -26,6 +27,9 @@ const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string
   Messages:                   { 'Patient (own)': 'C R (own thread)', 'Patient (other)': '—', 'Sub-clinician (assigned)': 'R (own patients)', 'Sub-clinician (unassigned)': '—', Principal: 'R' },
   'Clinician accounts':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'C R U (deactivate only)' },
   'Audit log':                { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'R' },
+  'Content item':             { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Principal: 'C R U' },
+  'Testimonial moderation':   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Principal: 'C R U' },
+  Workshop:                   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Principal: 'C R U' },
 };
 
 const CELL_LETTERS: Record<string, Action> = { C: 'create', R: 'read', U: 'update' };
@@ -65,6 +69,7 @@ const ACTIONS: readonly Action[] = ['create', 'read', 'update'];
 const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   'Own profile': 'own-profile',
   'Patient profile': 'patient-profile',
+  'Patient assignment': 'patient-assignment',
   'Diagnosis / care plan': 'diagnosis',
   'Assessment — `visible{}`': 'assessment',
   'Assessment — `private{}`': 'assessment',
@@ -73,6 +78,9 @@ const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   Messages: 'message',
   'Clinician accounts': 'clinician-account',
   'Audit log': 'audit',
+  'Content item': 'content-item',
+  'Testimonial moderation': 'testimonial-moderation',
+  Workshop: 'workshop',
 };
 
 const ROW_FIELD_SETS: Partial<Readonly<Record<MatrixRow, FieldSet>>> = {
@@ -286,7 +294,17 @@ describe('R-09: a patient reaches no private assessment field, in any relationsh
 });
 
 describe('a sub-clinician reaches nothing belonging to a patient they are not assigned', () => {
-  for (const row of ROWS) {
+  // TASK 2.5.4's three rows are deliberately excluded: "unassigned" for a
+  // patient-relationship row means "someone else's patient," but Content
+  // item/Testimonial moderation/Workshop carry no patient relationship at
+  // all, so every sub-clinician is "unassigned" on them by construction —
+  // that column is where 2.5.4's "any clinician" grant actually lives, not
+  // a denial this test's premise applies to. See docs/plan/04-data-model-rbac.md's
+  // own note on those three rows.
+  const PATIENT_RELATIONSHIP_ROWS = ROWS.filter(
+    (row) => row !== 'Content item' && row !== 'Testimonial moderation' && row !== 'Workshop',
+  );
+  for (const row of PATIENT_RELATIONSHIP_ROWS) {
     it(`${row} → deny, for every action`, () => {
       for (const action of ACTIONS) {
         const decision = can(SUB_CLINICIAN, action, resourceFor(row, 'Sub-clinician (unassigned)'));

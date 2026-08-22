@@ -42,7 +42,6 @@ import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
 
 import {
-  ADMIN_API_TOKEN_PARAMETER_NAME,
   APEX_DOMAIN_NAME,
   AUTH_CALLBACK_URL,
   AUTH_SIGN_OUT_URL,
@@ -71,11 +70,7 @@ import {
   attachDestructiveActionGuardrail,
 } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
-import {
-  ADMIN_TOKEN_ROUTE,
-  createRequestAuthorizer,
-  PUBLIC_ROUTE,
-} from './route-protection.js';
+import { createRequestAuthorizer, PUBLIC_ROUTE } from './route-protection.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -118,9 +113,11 @@ export interface WebStackProps extends StackProps {
    *
    * Optional for the same reason `table` is: no `DataStack` is deployed
    * alongside an ephemeral per-PR stack. When absent this API simply has
-   * no default authorizer — which is safe today only because every route
-   * on it is explicitly `PUBLIC_ROUTE` or `ADMIN_TOKEN_ROUTE`, and
-   * web-stack.test.ts asserts exactly that.
+   * no default authorizer — which is safe today only because every
+   * override-free route is gated on this prop being present at
+   * construction (TASK 2.5.4's `if (props.authorizerFunction)`, the same
+   * shape `if (props.table)` already uses above) or is explicitly
+   * `PUBLIC_ROUTE`, and web-stack.test.ts asserts exactly that.
    */
   readonly authorizerFunction?: IFunction;
 }
@@ -398,70 +395,72 @@ export class WebStack extends Stack {
     // (WebStack -> DataStack for the role) — two opposite-direction
     // references, an unresolvable cycle. This function needs no DynamoDB
     // access at all, so keeping it here avoids the cycle entirely.
-    const mediaUploadRole = new Role(this, 'MediaUploadFunctionRole', {
-      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-    });
+    //
+    // TASK 2.5.4: gated on `props.authorizerFunction` the same way the
+    // Stripe webhook function above is gated on `props.table` — this route
+    // now authenticates with `can()` against a real clinician `Principal`,
+    // which an ephemeral per-PR stack (no `DataStack`, no authorizer
+    // function) has no way to produce. Before this task the route stood on
+    // `ADMIN_TOKEN_ROUTE`, which needed no authorizer function to be safe;
+    // falling through to `defaultAuthorizer` when that prop is absent would
+    // leave the route with `AuthorizationType: NONE` — wide open, not
+    // merely unauthenticated in the deliberate way `PUBLIC_ROUTE_KEYS`
+    // means it. Not building the function or its route at all is the same
+    // "closed, not open" default `route-protection.ts`'s own header states.
+    if (props.authorizerFunction) {
+      const mediaUploadRole = new Role(this, 'MediaUploadFunctionRole', {
+        assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+      });
 
-    const mediaUploadFunction = new NodejsFunction(this, 'MediaUploadFunction', {
-      entry: `${moduleDir}../../services/api/src/media-upload-handler.ts`,
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
-      memorySize: 128,
-      timeout: Duration.seconds(5),
-      role: mediaUploadRole,
-      environment: {
-        MEDIA_BUCKET_NAME: mediaBucket.bucketName,
-        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
-        ...FLAG_ENVIRONMENT,
-      },
-      logGroup: createLogGroup(
-        this,
-        'MediaUploadFunctionLogGroup',
-        logGroupName('media-upload-function'),
-      ),
-    });
-    grantFlagReads(this, mediaUploadRole);
+      const mediaUploadFunction = new NodejsFunction(this, 'MediaUploadFunction', {
+        entry: `${moduleDir}../../services/api/src/media-upload-handler.ts`,
+        handler: 'handler',
+        runtime: Runtime.NODEJS_22_X,
+        architecture: Architecture.ARM_64,
+        memorySize: 128,
+        timeout: Duration.seconds(5),
+        role: mediaUploadRole,
+        environment: {
+          MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+          ...FLAG_ENVIRONMENT,
+        },
+        logGroup: createLogGroup(
+          this,
+          'MediaUploadFunctionLogGroup',
+          logGroupName('media-upload-function'),
+        ),
+      });
+      grantFlagReads(this, mediaUploadRole);
 
-    // Scoped to the workshops/ prefix only (media-upload.ts's
-    // WORKSHOP_MEDIA_PREFIX) — TASK 1.5.1's own DoD: "the runtime role gets
-    // PutObject only, never DeleteObject," narrowed further than the
-    // guardrail's own bucket-wide Deny to the one prefix this function's
-    // presigned URLs ever target.
-    mediaUploadRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'MediaUploadPutWorkshopPosters',
-        effect: Effect.ALLOW,
-        actions: ['s3:PutObject'],
-        resources: [`${mediaBucket.bucketArn}/workshops/*`],
-      }),
-    );
-    // TASK 1.5.1 step 1: "Attach 0.3.2's attachDestructiveActionGuardrail
-    // to the runtime role against this bucket immediately." Bucket-wide
-    // (not just workshops/*), matching every other guardrail call in this
-    // repo.
-    attachDestructiveActionGuardrail(mediaUploadRole, { buckets: [mediaBucket], tables: [] });
-    mediaUploadRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
+      // Scoped to the workshops/ prefix only (media-upload.ts's
+      // WORKSHOP_MEDIA_PREFIX) — TASK 1.5.1's own DoD: "the runtime role
+      // gets PutObject only, never DeleteObject," narrowed further than
+      // the guardrail's own bucket-wide Deny to the one prefix this
+      // function's presigned URLs ever target.
+      mediaUploadRole.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'MediaUploadPutWorkshopPosters',
+          effect: Effect.ALLOW,
+          actions: ['s3:PutObject'],
+          resources: [`${mediaBucket.bucketArn}/workshops/*`],
+        }),
+      );
+      // TASK 1.5.1 step 1: "Attach 0.3.2's attachDestructiveActionGuardrail
+      // to the runtime role against this bucket immediately." Bucket-wide
+      // (not just workshops/*), matching every other guardrail call in
+      // this repo.
+      attachDestructiveActionGuardrail(mediaUploadRole, { buckets: [mediaBucket], tables: [] });
 
-    httpApi.addRoutes({
-      path: '/workshops/media-upload-url',
-      methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
-      integration: new HttpLambdaIntegration('MediaUploadIntegration', mediaUploadFunction),
-    });
+      // No `authorizer:` override — `defaultAuthorizer` (the real Lambda
+      // authorizer, shared from DataStack) applies. No new IAM grant
+      // needed for that: `can()` is a pure function of the principal the
+      // authorizer already resolved, not a second AWS call.
+      httpApi.addRoutes({
+        path: '/workshops/media-upload-url',
+        methods: [HttpMethod.POST],
+        integration: new HttpLambdaIntegration('MediaUploadIntegration', mediaUploadFunction),
+      });
+    }
 
     // TASK 1.5.2 (ADR-0010): the Stripe webhook function/route — placed
     // here (not alongside the checkout function in data-stack.ts) so it's

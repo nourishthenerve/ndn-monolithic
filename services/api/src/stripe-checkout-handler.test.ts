@@ -16,7 +16,7 @@ import { InMemoryWorkshopStore, WorkshopRepository } from './workshop-repository
 
 // TASK 2.1.3: the admin seeding the fixture workshop, as an `ActorContext`.
 const ADMIN_ACTOR = actorContext(
-  { subjectId: 'admin-token', role: 'admin-token' },
+  { subjectId: 'principal-sub', role: 'principal-clinician' },
   { requestId: 'req-seed', sourceIp: '198.51.100.1' },
 );
 

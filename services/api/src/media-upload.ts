@@ -1,23 +1,34 @@
-// TASK 1.5.1 step 3: "an admin-token-gated endpoint issuing a presigned S3
+// TASK 1.5.1 step 3: "a clinician-gated endpoint issuing a presigned S3
 // PutObject URL scoped to workshops/ — the runtime role gets PutObject
 // only, never DeleteObject." Kept SDK-free (no `@aws-sdk/client-s3` import
 // here) so it's unit-testable without AWS — `createPresignedPutUrl` is
 // injected; media-upload-handler.ts is the only place that calls the real
-// S3 presigner. Same flag/admin-token-gate ordering as
-// content-authoring.ts/workshop-authoring.ts: flag first, then the token
-// (checked before any S3 call — a rejected token must produce no
-// presigned URL, not even for a bucket key nobody will ever write to).
+// S3 presigner.
+//
+// TASK 2.5.4: the admin-token bridge this file stood behind since 1.5.1 is
+// retired — `requirePrincipal`/`can()` against `authz-matrix.ts`'s
+// 'Workshop' row now gate this route (a presigned poster upload has no
+// independent existence from the workshop it is for, so it reuses that row
+// rather than getting its own — see docs/plan/04-data-model-rbac.md's own
+// note). Same flag-then-authorisation ordering the old token check had: a
+// rejected/absent principal must produce no presigned URL, not even for a
+// bucket key nobody will ever write to.
 import { randomUUID } from 'node:crypto';
 
-import type { APIGatewayProxyEventV2, APIGatewayProxyHandlerV2 } from 'aws-lambda';
+import type { Principal } from '@ndn/shared-types';
+import type {
+  APIGatewayProxyEventV2,
+  APIGatewayProxyHandlerV2WithLambdaAuthorizer,
+} from 'aws-lambda';
 import { z } from 'zod';
 
-import { verifyAdminToken } from './admin-auth.js';
+import { can } from './authz.js';
 import { systemClock, type Clock } from './clock.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
+import { requirePrincipal } from './request-principal.js';
 
-/** infra/src/data-stack.ts's MediaUploadFunctionRole is granted `s3:PutObject` on exactly this prefix — every key this file generates must stay inside it. */
+/** infra/src/web-stack.ts's MediaUploadFunctionRole is granted `s3:PutObject` on exactly this prefix — every key this file generates must stay inside it. */
 export const WORKSHOP_MEDIA_PREFIX = 'workshops/';
 
 const ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -41,7 +52,7 @@ function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
   }
 }
 
-/** Strips anything but ASCII letters/digits/dot/dash/underscore — an admin-supplied file name is never used as-is in a key or a bucket path. */
+/** Strips anything but ASCII letters/digits/dot/dash/underscore — a caller-supplied file name is never used as-is in a key or a bucket path. */
 function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[^a-zA-Z0-9._-]/g, '-');
 }
@@ -49,10 +60,11 @@ function sanitizeFileName(fileName: string): string {
 const MEDIA_UPLOAD_LOG_SAMPLE_RATE = 1;
 const MEDIA_UPLOAD_ROUTE = 'POST /workshops/media-upload-url';
 
+/** TASK 2.5.4: the matrix row this route is governed by — `authz-matrix.ts`'s 'Workshop', reused rather than a dedicated row. */
+const WORKSHOP_RESOURCE = { entityType: 'workshop' } as const;
+
 export interface MediaUploadDeps {
   readonly flags: FlagReader;
-  /** Resolves the current `ADMIN_API_TOKEN` (SSM SecureString, D-14) — same shared secret every other admin-gated handler in this repo resolves. */
-  readonly getAdminToken: () => Promise<string>;
   /** Presigned `PutObject` URL for `key`/`contentType`, scoped to the media bucket's `workshops/` prefix — the one S3 call this handler ever needs, injected so no test calls real S3. */
   readonly createPresignedPutUrl: (key: string, contentType: string) => Promise<string>;
   readonly clock?: Clock;
@@ -61,7 +73,9 @@ export interface MediaUploadDeps {
   readonly generateId?: () => string;
 }
 
-export function createMediaUploadHandler(deps: MediaUploadDeps): APIGatewayProxyHandlerV2 {
+export function createMediaUploadHandler(
+  deps: MediaUploadDeps,
+): APIGatewayProxyHandlerV2WithLambdaAuthorizer<Record<string, unknown> | undefined> {
   const clock = deps.clock ?? systemClock;
   const logger =
     deps.logger ?? createSampledLogger({ clock, sampleRate: MEDIA_UPLOAD_LOG_SAMPLE_RATE });
@@ -91,10 +105,14 @@ export function createMediaUploadHandler(deps: MediaUploadDeps): APIGatewayProxy
       return respond(404, { error: 'NOT_FOUND' });
     }
 
-    const authHeader = event.headers?.authorization ?? event.headers?.Authorization;
-    const adminToken = await deps.getAdminToken();
-    if (!verifyAdminToken(authHeader, adminToken)) {
+    let principal: Principal;
+    try {
+      principal = requirePrincipal(event);
+    } catch {
       return respond(401, { error: 'UNAUTHORIZED' });
+    }
+    if (!can(principal, 'create', WORKSHOP_RESOURCE).allowed) {
+      return respond(403, { error: 'FORBIDDEN' });
     }
 
     const parsed = uploadBodySchema.safeParse(parseJsonBody(event));

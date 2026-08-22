@@ -158,13 +158,26 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // the account pages open. Displacing nothing, for the same reason.
   '/ndn/auth-token-function',
   '/ndn/site-deployment',
+  // TASK 2.4.1: one principal clinician, acting rarely (inviting or
+  // deactivating a colleague), behind a default-off flag. Displacing
+  // nothing — smaller volume than every function already in the
+  // monitored ten, and smaller than most already on this list.
+  '/ndn/clinician-admin-function',
+  // TASK 2.5.1: one principal clinician approving or declining a patient
+  // at a time, behind a default-off flag. Displacing nothing — the same
+  // low-volume reasoning as the clinician-admin function just above.
+  '/ndn/assignment-function',
+  // TASK 2.5.3: one principal clinician browsing the cross-caseload view
+  // occasionally, behind a default-off flag. Displacing nothing — the
+  // smallest volume of any function in the estate: reads only, one person.
+  '/ndn/caseload-function',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret
 // key (D-14) — same out-of-band `aws ssm put-parameter --type SecureString`
-// convention ADMIN_API_TOKEN_PARAMETER_NAME documents above; a Turnstile
-// account/widget is a manual step for the site owner (docs/runbooks/
-// contact-form.md), not something CDK can provision. Shared by
+// convention CERTIFICATE_ARN documents above; a Turnstile account/widget is
+// a manual step for the site owner (docs/runbooks/contact-form.md), not
+// something CDK can provision. Shared by
 // web-stack.ts (grants ssm:GetParameter and sets the Lambda's
 // TURNSTILE_SECRET_PARAMETER_NAME env var) and contact-form-handler.ts's
 // own fallback default.
@@ -222,15 +235,6 @@ export const PR_STACK_ID_PREFIX = 'NdnWebStackPr';
 // that any PR can race is the exact problem being solved. Production keeps
 // its own stack-owned `/ndn/site-deployment`.
 export const PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME = '/ndn/pr-env/site-deployment';
-
-// TASK 1.3.2: the SSM SecureString holding ADMIN_API_TOKEN (D-14). Created
-// out-of-band (`aws ssm put-parameter --type SecureString`), same reasoning
-// CERTIFICATE_ARN documents above — never committed as a value, only this
-// name. One constant shared by data-stack.ts (grants ssm:GetParameter and
-// sets the Lambda's ADMIN_TOKEN_PARAMETER_NAME env var) and
-// content-authoring-handler.ts's own fallback default, so the two can't
-// drift apart silently. See docs/runbooks/content-authoring.md.
-export const ADMIN_API_TOKEN_PARAMETER_NAME = '/ndn/admin-api-token';
 
 // TASK 1.5.2 (ADR-0010): the SSM SecureStrings holding the Stripe API
 // secret key and the webhook signing secret — same out-of-band

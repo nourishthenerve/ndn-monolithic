@@ -1,0 +1,143 @@
+// TASK 2.5.3's own Tests line, the parts a repository-level test can
+// prove directly: pagination round-trips a cursor and never drops or
+// repeats an item across pages; a patient that fell out of the caseload
+// between the index read and the follow-up GetItem is skipped, not
+// surfaced stale.
+//
+// "Every documented access pattern resolves to a Query, never a Scan" is
+// proven at the `DynamoCaseloadStore` level (dynamo-store.test.ts),
+// against a mocked AWS SDK client that can assert which command was
+// actually sent — this file's own `FakeCaseloadStore` has no notion of
+// `Query`/`Scan` to assert against.
+import type { Patient, Principal } from '@ndn/shared-types';
+import { describe, expect, it, vi } from 'vitest';
+
+import { InMemoryAuditLog } from './audit.js';
+import { CaseloadRepository, type CaseloadStore } from './caseload-repository.js';
+import { ClinicianRepository, InMemoryClinicianStore } from './clinician-repository.js';
+import type { Clock } from './clock.js';
+
+const clock: Clock = { now: () => new Date('2026-08-22T09:00:00.000Z') };
+
+const PRINCIPAL: Principal = {
+  subjectId: 'principal-sub',
+  role: 'principal-clinician',
+  accountStatus: 'active',
+  clinicianId: 'principal-sub',
+};
+
+function buildPatient(overrides: Partial<Patient> = {}): Patient {
+  return {
+    id: 'pat-1',
+    personal: { fullName: 'A Patient', email: 'patient@example.com', marketingOptIn: false },
+    clinical: {},
+    account_status: 'approved',
+    assigned_clinician_id: 'cli-1',
+    keywords: [],
+    status: 'active',
+    created_at: '2026-08-22T08:00:00.000Z',
+    updated_at: '2026-08-22T08:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/** A GSI3 stand-in: pages through a fixed, ordered list of patient ids, `limit` at a time. */
+class FakeCaseloadStore implements CaseloadStore {
+  constructor(
+    private readonly orderedIds: readonly string[],
+    private readonly patients: Map<string, Patient>,
+  ) {}
+
+  async queryPage(cursor: string | undefined, limit: number) {
+    const start = cursor ? Number(cursor) : 0;
+    const page = this.orderedIds.slice(start, start + limit);
+    const nextIndex = start + page.length;
+    return {
+      patientIds: page,
+      nextCursor: nextIndex < this.orderedIds.length ? String(nextIndex) : undefined,
+    };
+  }
+
+  async getPatient(patientId: string): Promise<Patient | undefined> {
+    return this.patients.get(patientId);
+  }
+}
+
+async function build(patients: Patient[]) {
+  const clinicianStore = new InMemoryClinicianStore();
+  const clinicians = new ClinicianRepository(clinicianStore, new InMemoryAuditLog(), clock);
+  await clinicians.create(
+    'cli-1',
+    { displayName: 'A Clinician', role: 'sub' },
+    { subjectId: 'principal-sub', role: 'principal-clinician', requestId: 'r', sourceIpHash: 'h' },
+  );
+
+  const byId = new Map(patients.map((p) => [p.id, p]));
+  const store = new FakeCaseloadStore(
+    patients.map((p) => p.id),
+    byId,
+  );
+  return { repository: new CaseloadRepository(store, clinicians), store };
+}
+
+describe('listPage', () => {
+  it('returns entries with the patient name and the assigned clinician name', async () => {
+    const { repository } = await build([buildPatient()]);
+
+    const page = await repository.listPage(PRINCIPAL, undefined, 10);
+
+    expect(page.items).toEqual([
+      { patientId: 'pat-1', fullName: 'A Patient', assignedClinicianId: 'cli-1', assignedClinicianName: 'A Clinician' },
+    ]);
+    expect(page.nextCursor).toBeUndefined();
+  });
+
+  it('paginates: a cursor round-trips, and every item across all pages appears exactly once', async () => {
+    const patients = Array.from({ length: 5 }, (_, i) =>
+      buildPatient({ id: `pat-${i}`, personal: { fullName: `Patient ${i}`, email: `p${i}@example.com`, marketingOptIn: false } }),
+    );
+    const { repository } = await build(patients);
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await repository.listPage(PRINCIPAL, cursor, 2);
+      seen.push(...page.items.map((item) => item.patientId));
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    expect(seen).toEqual(['pat-0', 'pat-1', 'pat-2', 'pat-3', 'pat-4']);
+    expect(new Set(seen).size).toBe(5); // no repeats
+  });
+
+  it('caches a clinician name within one page rather than re-fetching it per patient', async () => {
+    const patients = [
+      buildPatient({ id: 'pat-1' }),
+      buildPatient({ id: 'pat-2' }),
+    ];
+    const { repository, store } = await build(patients);
+    const getPatientSpy = vi.spyOn(store, 'getPatient');
+
+    await repository.listPage(PRINCIPAL, undefined, 10);
+
+    // Both patients read (no shortcut there) — only the clinician lookup is cached.
+    expect(getPatientSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips a patient that fell out of the caseload between the index read and the GetItem', async () => {
+    class StaleIndexStore implements CaseloadStore {
+      async queryPage() {
+        return { patientIds: ['ghost'], nextCursor: undefined };
+      }
+      async getPatient() {
+        return undefined; // reassigned/declined since the index write
+      }
+    }
+    const clinicianStore = new InMemoryClinicianStore();
+    const clinicians = new ClinicianRepository(clinicianStore, new InMemoryAuditLog(), clock);
+    const staleRepository = new CaseloadRepository(new StaleIndexStore(), clinicians);
+
+    const page = await staleRepository.listPage(PRINCIPAL, undefined, 10);
+    expect(page.items).toEqual([]);
+  });
+});

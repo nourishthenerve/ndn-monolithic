@@ -51,10 +51,13 @@ describe('DataStack — table', () => {
     });
   });
 
-  it('creates only GSI2 (keyword -> content), KEYS_ONLY, nothing else', () => {
+  it('creates only GSI1 (clinician -> patients/calendar), GSI2 (keyword -> content) and GSI3 (cross-caseload), all KEYS_ONLY, nothing else', () => {
     const template = synth();
     template.hasResourceProperties('AWS::DynamoDB::Table', {
-      GlobalSecondaryIndexes: [
+      // arrayWith matches patterns as an ordered subsequence, not a set —
+      // listed in synthesis order (GSI2's addGlobalSecondaryIndex call
+      // precedes GSI1's, which precedes GSI3's, in the stack's constructor).
+      GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({
           IndexName: 'GSI2',
           KeySchema: [
@@ -63,7 +66,59 @@ describe('DataStack — table', () => {
           ],
           Projection: { ProjectionType: 'KEYS_ONLY' },
         }),
-      ],
+        Match.objectLike({
+          IndexName: 'GSI1',
+          KeySchema: [
+            { AttributeName: 'gsi1pk', KeyType: 'HASH' },
+            { AttributeName: 'gsi1sk', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'KEYS_ONLY' },
+        }),
+        Match.objectLike({
+          IndexName: 'GSI3',
+          KeySchema: [
+            { AttributeName: 'gsi3pk', KeyType: 'HASH' },
+            { AttributeName: 'gsi3sk', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'KEYS_ONLY' },
+        }),
+      ]),
+    });
+    const table = Object.values(template.findResources('AWS::DynamoDB::Table'))[0] as {
+      Properties: { GlobalSecondaryIndexes: unknown[] };
+    };
+    // arrayWith (above) proves all three exist; this proves there is no fourth.
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(3);
+  });
+});
+
+// TASK 2.5.3 fix: ContentHttpApi's CORS policy allowed only `next.` — the
+// pre-G1-cutover origin — because the comment reminding a future task to
+// update it alongside TASK 1.6.1 was never acted on. This silently broke
+// testimonial submission and workshop checkout's live browser fetches from
+// the apex, the site's own canonical origin (apps/web/src/site-config.ts's
+// `siteUrl`), for however long the DNS cutover has been live. No test
+// caught it because none existed; these do now.
+describe('DataStack — ContentHttpApi CORS (TASK 2.5.3 fix)', () => {
+  it('allows the apex (canonical), www and next. — every real origin the site is served from', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: {
+        AllowOrigins: [
+          'https://nourishthenerve.com',
+          'https://www.nourishthenerve.com',
+          'https://next.nourishthenerve.com',
+        ],
+      },
+    });
+  });
+
+  it('allows the authorization header — needed for the caseload feature bearer-token fetch', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: {
+        AllowHeaders: ['content-type', 'authorization'],
+      },
     });
   });
 });
@@ -131,29 +186,34 @@ describe('DataStack — content read function', () => {
 });
 
 describe('DataStack — content authoring function', () => {
-  it('is wired to the table name and admin token parameter name via environment', () => {
+  it('is wired to the table name via environment, with no admin secret', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {
       Environment: {
         Variables: Match.objectLike({
           CONTENT_TABLE_NAME: Match.anyValue(),
-          ADMIN_TOKEN_PARAMETER_NAME: '/ndn/admin-api-token',
         }),
       },
     });
   });
 
-  it('routes all four authoring endpoints to the same function', () => {
+  it('routes all four authoring endpoints to the same function, behind the real authorizer', () => {
     const template = synth();
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'POST /content' });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /content',
+      AuthorizationType: 'CUSTOM',
+    });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'PATCH /content/{id}',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /content/{id}/publish',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /content/{id}/unpublish',
+      AuthorizationType: 'CUSTOM',
     });
   });
 
@@ -180,7 +240,6 @@ describe('DataStack — content authoring function', () => {
 
     expect(allowActions).toContain('dynamodb:PutItem');
     expect(allowActions).toContain('dynamodb:TransactWriteItems');
-    expect(allowActions).toContain('ssm:GetParameter');
     expect(allowActions).not.toContain('dynamodb:DeleteItem');
 
     const denyStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
@@ -190,28 +249,10 @@ describe('DataStack — content authoring function', () => {
       Sid: 'DenyDestructivePrimitives',
       Action: expect.arrayContaining(['dynamodb:DeleteItem']),
     });
-  });
 
-  it('scopes the SSM read to exactly the admin token parameter, not every parameter', () => {
-    const template = synth();
-    const policies = template.findResources('AWS::IAM::Policy');
-    const authoringPolicy = Object.values(policies).find((policy) =>
-      JSON.stringify((policy as { Properties: unknown }).Properties).includes('ReadAdminApiToken'),
-    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
-    const ssmStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
-      (statement) => statement.Sid === 'ReadAdminApiToken',
-    );
-
-    expect(ssmStatement?.Action).toBe('ssm:GetParameter');
-    // A CloudFormation intrinsic (Fn::Join with the account/region
-    // pseudo-parameters), not a literal string — resolved at deploy time
-    // to arn:aws:ssm:<region>:<account>:parameter/ndn/admin-api-token.
-    // Serialising it is the simplest way to prove the parameter *name*
-    // segment is baked in literally, rather than a wildcard covering every
-    // parameter in the account.
-    const resourceJson = JSON.stringify(ssmStatement?.Resource);
-    expect(resourceJson).toContain('parameter/ndn/admin-api-token');
-    expect(resourceJson).not.toContain('parameter/*');
+    // TASK 2.5.4: no admin-token SSM read anywhere on this role any more.
+    const sids = authoringPolicy.Properties.PolicyDocument.Statement.map((s) => s.Sid);
+    expect(sids).not.toContain('ReadAdminApiToken');
   });
 });
 
@@ -244,17 +285,23 @@ describe('DataStack — workshop read function (TASK 1.5.1)', () => {
 });
 
 describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
-  it('routes all four authoring endpoints to the same function', () => {
+  it('routes all four authoring endpoints to the same function, behind the real authorizer', () => {
     const template = synth();
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'POST /workshops' });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /workshops',
+      AuthorizationType: 'CUSTOM',
+    });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'PATCH /workshops/{id}',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /workshops/{id}/publish',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /workshops/{id}/cancel',
+      AuthorizationType: 'CUSTOM',
     });
   });
 
@@ -273,7 +320,6 @@ describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
 
     expect(allowActions).toContain('dynamodb:PutItem');
     expect(allowActions).toContain('dynamodb:TransactWriteItems');
-    expect(allowActions).toContain('ssm:GetParameter');
     expect(allowActions).not.toContain('dynamodb:DeleteItem');
 
     const denyStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
@@ -283,6 +329,10 @@ describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
       Sid: 'DenyDestructivePrimitives',
       Action: expect.arrayContaining(['dynamodb:DeleteItem']),
     });
+
+    // TASK 2.5.4: no admin-token SSM read anywhere on this role any more.
+    const sids = authoringPolicy.Properties.PolicyDocument.Statement.map((s) => s.Sid);
+    expect(sids).not.toContain('ReadAdminApiToken');
   });
 
   it('has an explicit 14-day-retention log group', () => {
@@ -397,6 +447,12 @@ describe('DataStack — feature-flag reads', () => {
     // TASK 2.2.3: auth.patientRegistration.enabled, default off until
     // TASK 2.5.1 can approve anyone.
     'registration-handler',
+    // TASK 2.4.1: clinicians.administration.enabled, default off.
+    'clinician-admin-handler',
+    // TASK 2.5.1: assignment.enabled, default off.
+    'assignment-handler',
+    // TASK 2.5.3: caseload.view.enabled, default off.
+    'caseload-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -482,9 +538,12 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     return policyStatements().filter((statement) => statement.Sid === sid);
   }
 
-  it('routes GET /audit to a function with its own 14-day-retention log group', () => {
+  it('routes GET /audit to a function with its own 14-day-retention log group, behind the real authorizer', () => {
     const template = synth();
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'GET /audit' });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'GET /audit',
+      AuthorizationType: 'CUSTOM',
+    });
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/ndn/audit-read-function',
       RetentionInDays: 14,
@@ -499,10 +558,15 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     );
 
     // Every Lambda in this stack that goes through a repository: the seven
-    // that existed before TASK 2.1.3, the audit reader itself, and TASK
-    // 2.2.3's two registration functions. The authorizer is deliberately
-    // absent — it reads a status and writes nothing.
-    expect(withAuditTable).toHaveLength(10);
+    // that existed before TASK 2.1.3, the audit reader itself, TASK 2.2.3's
+    // two registration functions, TASK 2.4.1's clinician-admin function,
+    // TASK 2.5.1's assignment function, and TASK 2.5.3's caseload
+    // function (it never writes an audit row — `ClinicianRepository`'s
+    // read-only `findById` never reaches one — but its constructor still
+    // takes an `AuditWriter`, so the env var is present regardless). The
+    // authorizer is deliberately absent — it reads a status and writes
+    // nothing.
+    expect(withAuditTable).toHaveLength(13);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -548,11 +612,12 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('denies every other role in the stack any read of the AUDIT# partition', () => {
     const denials = statementsWithSid('DenyAuditPartitionReads');
 
-    // The seven pre-existing functions, TASK 2.2.2's authorizer and TASK
-    // 2.2.3's two registration roles; the audit reader is deliberately not
-    // among them, being the one role that is supposed to read that
-    // partition.
-    expect(denials).toHaveLength(10);
+    // The seven pre-existing functions, TASK 2.2.2's authorizer, TASK
+    // 2.2.3's two registration roles, TASK 2.4.1's clinician-admin role,
+    // TASK 2.5.1's assignment role, and TASK 2.5.3's caseload role; the
+    // audit reader is deliberately not among them, being the one role
+    // that is supposed to read that partition.
+    expect(denials).toHaveLength(13);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -569,7 +634,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(10);
+    expect(denials).toHaveLength(13);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -602,16 +667,18 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
 
   // CDK materialises an `AWS::ApiGatewayV2::Authorizer` when a *route*
   // binds it, not when `defaultAuthorizer` is set — a route that opts out
-  // with `HttpNoneAuthorizer` overrides the default, and today every route
-  // does. So the authorizer function deploys and the API-Gateway-side
-  // resource appears with the first protected route (TASK 2.2.3's
-  // registration endpoints).
+  // with `HttpNoneAuthorizer` overrides the default, and every route did,
+  // until now. TASK 2.4.1's three clinician-admin routes are the first to
+  // take no `authorizer:` override at all, so `defaultAuthorizer` (the
+  // real Lambda authorizer, TASK 2.2.2) applies to them for real and the
+  // API-Gateway-side resource appears for the first time.
   //
   // Asserted rather than left implicit, because "the authorizer is
-  // configured" and "the authorizer exists in the deployed API" are
-  // different claims and only the first one is true today.
-  it('has no API Gateway authorizer resource yet, because no route binds it yet', () => {
-    synth().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 0);
+  // configured" and "the authorizer exists in the deployed API" were
+  // different claims for every task through 2.3.2, and are the same claim
+  // starting here.
+  it('has exactly one API Gateway authorizer resource, once TASK 2.4.1 binds the first route to it', () => {
+    synth().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
   });
 
   it('leaves exactly the routes route-protection.ts names outside the authorizer', () => {
@@ -624,11 +691,38 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('has no route on this API behind the authorizer yet, and says so out loud', () => {
-    // Today's honest state. TASK 2.2.3's registration routes are the first
-    // entries here; when this assertion starts failing, that is the task
-    // landing, not a regression.
-    expect(routeKeys('CUSTOM')).toEqual([]);
+  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
+    // The first seven took no `authorizer:` override at all, ahead of
+    // ADMIN_TOKEN_ROUTE's own retirement — every route before them opted
+    // out with `PUBLIC_ROUTE` or the now-deleted `ADMIN_TOKEN_ROUTE`
+    // (route-protection.ts). TASK 2.5.4 moves thirteen more onto this same
+    // list: content authoring (4), workshop authoring (4), testimonial
+    // moderation (3, `GET /testimonials/pending` new — `GET /testimonials`
+    // itself stays public), and `GET /audit` — the fifth admin-token route
+    // route-protection.ts's own header named as easy to miss.
+    expect(routeKeys('CUSTOM')).toEqual(
+      [
+        'GET /audit',
+        'GET /caseload',
+        'GET /testimonials/pending',
+        'PATCH /content/{id}',
+        'PATCH /workshops/{id}',
+        'POST /clinicians',
+        'POST /clinicians/{id}/deactivate',
+        'POST /clinicians/{id}/reactivate',
+        'POST /content',
+        'POST /content/{id}/publish',
+        'POST /content/{id}/unpublish',
+        'POST /patients/{id}/approve',
+        'POST /patients/{id}/decline',
+        'POST /patients/{id}/reassign',
+        'POST /testimonials/{id}/publish',
+        'POST /testimonials/{id}/reject',
+        'POST /workshops',
+        'POST /workshops/{id}/cancel',
+        'POST /workshops/{id}/publish',
+      ].sort(),
+    );
   });
 
   it('grants the authorizer one keyed read, scoped to the two profile partitions', () => {
@@ -730,7 +824,25 @@ describe('DataStack — patient registration (TASK 2.2.3)', () => {
     // says it "doesn't evaluate IAM policies". A grant here would be
     // permission that does nothing while reading as admin reach into the
     // directory.
-    expect(JSON.stringify(synth().findResources('AWS::IAM::Policy'))).not.toContain('cognito-idp:');
+    //
+    // Scoped to the registration function's *own* policy, not the whole
+    // template — TASK 2.4.1's clinician-admin function legitimately holds
+    // `cognito-idp:Admin*` grants (AdminCreateUser is authenticated,
+    // unlike SignUp), so a stack-wide string search would now be a false
+    // positive against the wrong role.
+    const template = synth();
+    const [registrationRoleId] = Object.entries(template.findResources('AWS::IAM::Role')).find(
+      ([logicalId]) => logicalId.startsWith('RegistrationFunctionRole'),
+    ) ?? [undefined];
+    expect(registrationRoleId).toBeDefined();
+
+    const registrationPolicies = Object.values(template.findResources('AWS::IAM::Policy')).filter(
+      (policy) =>
+        JSON.stringify(
+          (policy as { Properties: { Roles?: unknown } }).Properties.Roles ?? [],
+        ).includes(registrationRoleId as string),
+    );
+    expect(JSON.stringify(registrationPolicies)).not.toContain('cognito-idp:');
   });
 
   it('lets the registration endpoint write only the intake partition', () => {

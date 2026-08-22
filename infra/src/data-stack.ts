@@ -34,7 +34,6 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 
 import {
-  ADMIN_API_TOKEN_PARAMETER_NAME,
   CLINICIAN_USER_POOL_CLIENT_ID,
   CONTACT_FORM_FROM_EMAIL,
   CLINICIAN_USER_POOL_ID,
@@ -46,6 +45,7 @@ import {
   SITE_ORIGIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
+  WWW_DOMAIN_NAME,
 } from './config.js';
 import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
 import {
@@ -54,15 +54,13 @@ import {
   AUDIT_PARTITION_KEY_PREFIX,
 } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
-import {
-  ADMIN_TOKEN_ROUTE,
-  createRequestAuthorizer,
-  PUBLIC_ROUTE,
-} from './route-protection.js';
+import { createRequestAuthorizer, PUBLIC_ROUTE } from './route-protection.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
+const GSI1_INDEX_NAME = 'GSI1';
 const GSI2_INDEX_NAME = 'GSI2';
+const GSI3_INDEX_NAME = 'GSI3';
 
 
 export interface DataStackProps extends StackProps {
@@ -109,6 +107,37 @@ export class DataStack extends Stack {
       projectionType: ProjectionType.KEYS_ONLY,
     });
 
+    // TASK 2.5.1: clinician → patients, and (TASK 3.4.x, not built here)
+    // the clinician calendar — both proved against this one shape in
+    // docs/adr/0002-database.md before this GSI was added. Sparse: only a
+    // patient's PROFILE row carries gsi1pk/gsi1sk, and only while
+    // assigned_clinician_id is set (dynamo-store.ts's DynamoAssignmentStore).
+    // KEYS_ONLY, same reasoning GSI2 states — this task's own read
+    // (assignment-repository.ts's listPatientIdsForClinician) only ever
+    // needs the id off gsi1sk, and 3.4.x's future appointment rows would
+    // need their own real content read separately regardless of what this
+    // index projects.
+    this.table.addGlobalSecondaryIndex({
+      indexName: GSI1_INDEX_NAME,
+      partitionKey: { name: 'gsi1pk', type: AttributeType.STRING },
+      sortKey: { name: 'gsi1sk', type: AttributeType.STRING },
+      projectionType: ProjectionType.KEYS_ONLY,
+    });
+
+    // TASK 2.5.3: FR-DP-02's cross-caseload admin view, proved against
+    // this shape in docs/adr/0002-database.md before this index was
+    // added. Sparse: only a patient's PROFILE row carries gsi3pk, and only
+    // while approved and assigned (dynamo-store.ts's DynamoAssignmentStore
+    // — the same write that already derives GSI1's projection derives
+    // this one). KEYS_ONLY: caseload-repository.ts's own read follows up
+    // with a GetItem per id, the same shape GSI1/GSI2's own reads take.
+    this.table.addGlobalSecondaryIndex({
+      indexName: GSI3_INDEX_NAME,
+      partitionKey: { name: 'gsi3pk', type: AttributeType.STRING },
+      sortKey: { name: 'gsi3sk', type: AttributeType.STRING },
+      projectionType: ProjectionType.KEYS_ONLY,
+    });
+
     const logGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-read-function`
       : '/ndn/content-read-function';
@@ -121,6 +150,15 @@ export class DataStack extends Stack {
     const postConfirmationLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/post-confirmation-function`
       : '/ndn/post-confirmation-function';
+    const clinicianAdminLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/clinician-admin-function`
+      : '/ndn/clinician-admin-function';
+    const assignmentLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/assignment-function`
+      : '/ndn/assignment-function';
+    const caseloadLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/caseload-function`
+      : '/ndn/caseload-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -163,7 +201,7 @@ export class DataStack extends Stack {
     // TASK 1.3.2: the write side. A separate function/role from
     // ContentReadFunction — the read path stays exactly "read the table,
     // write its own logs" (comment above); this one additionally needs to
-    // write content and read the admin token.
+    // write content.
     const authoringLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-authoring-function`
       : '/ndn/content-authoring-function';
@@ -183,7 +221,6 @@ export class DataStack extends Stack {
       environment: {
         CONTENT_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
-        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'ContentAuthoringFunctionLogGroup', authoringLogGroupName),
@@ -221,21 +258,6 @@ export class DataStack extends Stack {
     // first place (see the comment on the write grant just above).
     attachDestructiveActionGuardrail(contentAuthoringRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(contentAuthoringRole, this.table);
-
-    contentAuthoringRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
 
     // TASK 2.2.2: the Lambda authorizer, and the single most
     // security-sensitive function in this repository — everything
@@ -302,14 +324,27 @@ export class DataStack extends Stack {
       // content, which apps/web only ever calls at `astro build` time —
       // see apps/web/src/blog/content-client.ts) — this API's own
       // execute-api.amazonaws.com origin differs from the site's own
-      // origin, so a browser POST needs CORS. Scoped to the site's own
-      // origin only; update DOMAIN_NAME here alongside TASK 1.6.1's G1
-      // cutover, same convention apps/web/src/site-config.ts's siteUrl
-      // documents.
+      // origin, so a browser POST needs CORS.
+      //
+      // TASK 2.5.3 fix: this comment used to say "update DOMAIN_NAME here
+      // alongside TASK 1.6.1's G1 cutover" — and TASK 1.6.1 never came
+      // back to do it. `apps/web/src/site-config.ts`'s own `siteUrl` moved
+      // to the apex at that cutover ("apex, not infra/src/config.ts's
+      // DOMAIN_NAME"); this API's CORS policy did not, and has allowed
+      // only `next.` ever since — silently breaking testimonial submission
+      // and workshop checkout's live browser fetches from the apex, the
+      // site's own canonical origin, for however long the DNS cutover has
+      // been live. Fixed here, found only because this task's own caseload
+      // fetch (the first authenticated browser call to this API) needed a
+      // correct CORS policy to work at all. All three real origins are
+      // listed — apex (canonical), www, and `next.` (kept as a staging
+      // alias, config.ts's own DOMAIN_NAME comment) — and `authorization`
+      // joins `content-type` in `allowHeaders`, the first header this API
+      // needs for a bearer-token request rather than a public POST.
       corsPreflight: {
-        allowOrigins: [`https://${DOMAIN_NAME}`],
+        allowOrigins: [SITE_ORIGIN, `https://${WWW_DOMAIN_NAME}`, `https://${DOMAIN_NAME}`],
         allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
-        allowHeaders: ['content-type'],
+        allowHeaders: ['content-type', 'authorization'],
       },
       // TASK 2.2.2: **protected unless it says otherwise.** Every route on
       // this API takes the Lambda authorizer unless it explicitly passes
@@ -327,6 +362,9 @@ export class DataStack extends Stack {
       integration: new HttpLambdaIntegration('ContentReadIntegration', contentReadFunction),
     });
 
+    // TASK 2.5.4: no `authorizer:` override on any of these four — the
+    // real Lambda authorizer (`httpApi`'s `defaultAuthorizer`) applies,
+    // same as the clinician-admin/assignment/caseload routes below.
     const contentAuthoringIntegration = new HttpLambdaIntegration(
       'ContentAuthoringIntegration',
       contentAuthoringFunction,
@@ -334,25 +372,21 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/content',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}',
       methods: [HttpMethod.PATCH],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}/publish',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}/unpublish',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
 
@@ -361,9 +395,10 @@ export class DataStack extends Stack {
     // functions/roles. TestimonialSubmissionFunction is the public write
     // path (Turnstile + rate-limited, see services/api/src/testimonial-submission.ts)
     // reachable by a live browser fetch, hence the CORS config on httpApi
-    // above; TestimonialModerationFunction is the admin-token-gated read/
-    // publish/reject path, reusing the same ADMIN_API_TOKEN as content
-    // authoring.
+    // above; TestimonialModerationFunction serves the public published-only
+    // read plus the clinician-gated moderation queue and publish/reject
+    // actions (TASK 2.5.4) — see testimonial-moderation.ts's own header for
+    // why the queue moved off `GET /testimonials` onto its own path.
     const testimonialSubmissionLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/testimonial-submission-function`
       : '/ndn/testimonial-submission-function';
@@ -463,7 +498,6 @@ export class DataStack extends Stack {
         environment: {
           TESTIMONIAL_TABLE_NAME: this.table.tableName,
           AUDIT_TABLE_NAME: this.table.tableName,
-          ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
           ...FLAG_ENVIRONMENT,
         },
         logGroup: createLogGroup(
@@ -490,21 +524,14 @@ export class DataStack extends Stack {
       tables: [this.table],
     });
     attachAuditPartitionReadGuardrail(testimonialModerationRole, this.table);
-    testimonialModerationRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
 
+    // TASK 2.5.4: `GET /testimonials` is genuinely public (PUBLIC_ROUTE —
+    // published-only, unconditionally) — the real Lambda authorizer denies
+    // outright on a missing bearer token, so it cannot also gate a route
+    // an anonymous visitor must reach. The moderation queue moved to its
+    // own path, `GET /testimonials/pending`, which takes no override and
+    // so falls to `defaultAuthorizer` (the real one), same as publish/reject
+    // below. See testimonial-moderation.ts's own header.
     const testimonialModerationIntegration = new HttpLambdaIntegration(
       'TestimonialModerationIntegration',
       testimonialModerationFunction,
@@ -512,19 +539,22 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/testimonials',
       methods: [HttpMethod.GET],
-      authorizer: ADMIN_TOKEN_ROUTE,
+      authorizer: PUBLIC_ROUTE,
+      integration: testimonialModerationIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/testimonials/pending',
+      methods: [HttpMethod.GET],
       integration: testimonialModerationIntegration,
     });
     httpApi.addRoutes({
       path: '/testimonials/{id}/publish',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: testimonialModerationIntegration,
     });
     httpApi.addRoutes({
       path: '/testimonials/{id}/reject',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: testimonialModerationIntegration,
     });
 
@@ -589,7 +619,6 @@ export class DataStack extends Stack {
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
-        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(
@@ -616,21 +645,9 @@ export class DataStack extends Stack {
     );
     attachDestructiveActionGuardrail(workshopAuthoringRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(workshopAuthoringRole, this.table);
-    workshopAuthoringRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
 
+    // TASK 2.5.4: no `authorizer:` override on any of these four —
+    // `defaultAuthorizer` (the real one) applies.
     const workshopAuthoringIntegration = new HttpLambdaIntegration(
       'WorkshopAuthoringIntegration',
       workshopAuthoringFunction,
@@ -638,25 +655,21 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/workshops',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}',
       methods: [HttpMethod.PATCH],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}/publish',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}/cancel',
       methods: [HttpMethod.POST],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
 
@@ -768,7 +781,6 @@ export class DataStack extends Stack {
       role: auditReadRole,
       environment: {
         AUDIT_TABLE_NAME: this.table.tableName,
-        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'AuditReadFunctionLogGroup', auditReadLogGroupName),
@@ -792,20 +804,6 @@ export class DataStack extends Stack {
     // Deliberately *not* attachAuditPartitionReadGuardrail — this is the
     // one role that is supposed to read that partition.
     attachDestructiveActionGuardrail(auditReadRole, { buckets: [], tables: [this.table] });
-    auditReadRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAdminApiToken',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
 
     // TASK 2.2.3: the front door. Two functions, deliberately — the plan
     // named one log group and this needs two, for a reason worth stating.
@@ -954,11 +952,338 @@ export class DataStack extends Stack {
       integration: new HttpLambdaIntegration('RegistrationIntegration', registrationFunction),
     });
 
+    // TASK 2.5.4: no `authorizer:` override — `defaultAuthorizer` applies,
+    // same as the content/testimonial/workshop authoring routes above.
     httpApi.addRoutes({
       path: '/audit',
       methods: [HttpMethod.GET],
-      authorizer: ADMIN_TOKEN_ROUTE,
       integration: new HttpLambdaIntegration('AuditReadIntegration', auditReadFunction),
+    });
+
+    // TASK 2.4.1: clinician accounts. `httpApi`'s `defaultAuthorizer` (the
+    // real Lambda authorizer, TASK 2.2.2) applies as-is — these three
+    // routes, like every other override-free route above, are not in
+    // `route-protection.ts`'s `PUBLIC_ROUTE_KEYS`, and data-stack.test.ts's
+    // opt-out-set assertion covers them by their absence.
+    const clinicianAdminRole = new Role(this, 'ClinicianAdminFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const clinicianAdminFunction = new NodejsFunction(this, 'ClinicianAdminFunction', {
+      entry: `${moduleDir}../../services/api/src/clinician-admin-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      // Up to four sequential Cognito Admin* calls on the deactivate path
+      // (disable, global sign-out, get-user, then the SES send), each its
+      // own HTTPS round trip.
+      timeout: Duration.seconds(15),
+      role: clinicianAdminRole,
+      environment: {
+        CLINICIAN_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        NOTIFICATION_TABLE_NAME: this.table.tableName,
+        CLINICIAN_USER_POOL_ID,
+        CLINICIAN_ADMIN_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'ClinicianAdminFunctionLogGroup', clinicianAdminLogGroupName),
+    });
+    grantFlagReads(this, clinicianAdminRole);
+
+    // Scoped to the `CLI#*` partition only — this function's repository
+    // reach is exactly clinician-repository.ts's own, nothing wider.
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWriteClinicianAccounts',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
+      }),
+    );
+    // The audit and delivery-log rows this function writes — `PutItem`
+    // only, on both prefixes: it writes audit rows and delivery records,
+    // never queries either back (attachAuditPartitionReadGuardrail below
+    // closes the audit half of that; the delivery log has no reader at
+    // all yet — dynamo-notification-log.ts's own header).
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditAndDeliveryRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
+          },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(clinicianAdminRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(clinicianAdminRole, this.table);
+
+    // The four Admin* calls clinician-admin-handler.ts's ports use —
+    // create, disable, enable, global-sign-out, get-user — and nothing
+    // wider. No `AdminDeleteUser` here or anywhere: `AdminDeleteUserCommand`
+    // is a banned identifier repo-wide (packages/eslint-plugin-no-destructive),
+    // so a future addition of it to this policy's own action list would
+    // still leave no *code path* able to call it — the IAM grant and the
+    // lint ban are independent guards on the same prohibition.
+    const clinicianUserPoolArn = Stack.of(this).formatArn({
+      service: 'cognito-idp',
+      resource: 'userpool',
+      resourceName: CLINICIAN_USER_POOL_ID,
+    });
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'AdministerClinicianCognitoUsers',
+        effect: Effect.ALLOW,
+        actions: [
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminDisableUser',
+          'cognito-idp:AdminEnableUser',
+          'cognito-idp:AdminUserGlobalSignOut',
+          'cognito-idp:AdminGetUser',
+        ],
+        resources: [clinicianUserPoolArn],
+      }),
+    );
+    // The deactivation notice, sent through 2.3.1's Notifier — same
+    // verified identity every other SES sender in this stack uses.
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendClinicianDeactivationEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
+          }),
+        ],
+      }),
+    );
+
+    const clinicianAdminIntegration = new HttpLambdaIntegration(
+      'ClinicianAdminIntegration',
+      clinicianAdminFunction,
+    );
+    httpApi.addRoutes({
+      path: '/clinicians',
+      methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/clinicians/{id}/deactivate',
+      methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/clinicians/{id}/reactivate',
+      methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
+    });
+
+    // TASK 2.5.1: approval and first assignment. No `authorizer:`
+    // override, same reasoning as ClinicianAdminFunction's own routes —
+    // only the principal ever passes `can()` on this row
+    // (authz-matrix.ts's 'Patient assignment'), so the real authorizer is
+    // exactly the gate this needs.
+    const assignmentRole = new Role(this, 'AssignmentFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const assignmentFunction = new NodejsFunction(this, 'AssignmentFunction', {
+      entry: `${moduleDir}../../services/api/src/assignment-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: assignmentRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        CLINICIAN_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        NOTIFICATION_TABLE_NAME: this.table.tableName,
+        ASSIGNMENT_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
+        // TASK 2.5.2: resolves a clinician's email for the reassignment
+        // notice (AdminGetUser) — see this file's own comment on the
+        // AssignmentFunctionRole IAM grant below.
+        CLINICIAN_USER_POOL_ID,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'AssignmentFunctionLogGroup', assignmentLogGroupName),
+    });
+    grantFlagReads(this, assignmentRole);
+
+    // The patient's own `PROFILE` row and the `ASSIGNREQ#` rows it writes
+    // alongside it — both under the same `PAT#*` partition prefix
+    // (dynamo-store.ts's DynamoAssignmentStore).
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWritePatientAssignment',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // Read-only: this function only ever calls `ClinicianRepository.findById`
+    // (validating the target of an approval) — it never creates,
+    // deactivates or reactivates a clinician, so it gets none of
+    // ClinicianAdminFunction's own write grant.
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianAccounts',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
+      }),
+    );
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditAndDeliveryRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
+          },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(assignmentRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(assignmentRole, this.table);
+    // TASK 2.5.2: `AdminGetUser` only, on the same clinician pool ARN
+    // ClinicianAdminFunction's own grant uses — resolving an email to
+    // notify, never a create/disable/enable action.
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianEmailForReassignmentNotice',
+        effect: Effect.ALLOW,
+        actions: ['cognito-idp:AdminGetUser'],
+        resources: [clinicianUserPoolArn],
+      }),
+    );
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendAssignmentDecisionEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
+          }),
+        ],
+      }),
+    );
+
+    const assignmentIntegration = new HttpLambdaIntegration('AssignmentIntegration', assignmentFunction);
+    httpApi.addRoutes({
+      path: '/patients/{id}/approve',
+      methods: [HttpMethod.POST],
+      integration: assignmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/decline',
+      methods: [HttpMethod.POST],
+      integration: assignmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/reassign',
+      methods: [HttpMethod.POST],
+      integration: assignmentIntegration,
+    });
+
+    // TASK 2.5.3: FR-DP-02's cross-caseload admin view. No `authorizer:`
+    // override, same reasoning as the clinician-admin and assignment
+    // routes — only the principal ever passes `can()` on `'Patient
+    // profile'`'s Principal column for an unscoped resource (caseload.ts's
+    // own comment on why that row, not a new one).
+    const caseloadRole = new Role(this, 'CaseloadFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const caseloadFunction = new NodejsFunction(this, 'CaseloadFunction', {
+      entry: `${moduleDir}../../services/api/src/caseload-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: caseloadRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        CLINICIAN_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'CaseloadFunctionLogGroup', caseloadLogGroupName),
+    });
+    grantFlagReads(this, caseloadRole);
+
+    // `dynamodb:Query` alone, on the table *and* GSI3's own index ARN —
+    // not `table.grantReadData()`, whose action list also includes `Scan`
+    // (the audit reader's own precedent, same reasoning: this task's DoD
+    // is "no Scan reaches the table", not "no Scan happens to be called").
+    caseloadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryCaseloadIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [this.table.tableArn, `${this.table.tableArn}/index/${GSI3_INDEX_NAME}`],
+      }),
+    );
+    // The follow-up `GetItem` per page item (caseload-repository.ts's
+    // `listPage`) — patient profiles only; this function never writes one.
+    caseloadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPatientProfiles',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // The clinician-name lookup per distinct clinician on a page
+    // (`ClinicianRepository.findById`) — read-only, same as
+    // `AssignmentFunction`'s own `ReadClinicianAccounts` grant.
+    caseloadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianAccounts',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(caseloadRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(caseloadRole, this.table);
+
+    httpApi.addRoutes({
+      path: '/caseload',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration('CaseloadIntegration', caseloadFunction),
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

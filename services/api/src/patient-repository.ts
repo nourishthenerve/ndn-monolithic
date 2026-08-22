@@ -1,13 +1,29 @@
-// TASK 2.2.3: the patient record and the four transitions a clinician can
-// put it through. Built on `Repository` (0.3.3), which already enforces
+// TASK 2.2.3: the patient record and the transitions a clinician can put
+// it through. Built on `Repository` (0.3.3), which already enforces
 // created_at/updated_at/status on every write, audits every write, and —
 // the part that matters here — **has no method that removes a row**.
 //
-// So the shape of this file is: one `register`, three status transitions,
+// So the shape of this file is: one `register`, one status transition,
 // and no delete. `declined` and `suspended` are values of
 // `account_status`, and the record stays fully readable in both. That is
 // not a policy this layer restates; it is the only thing the base class
 // can express.
+//
+// TASK 2.5.1: `approve`/`decline` are gone from `PatientTransition`.
+// Approving or declining a patient is now `assignment-repository.ts`'s
+// job — it needs an atomic, three-way `TransactWriteItems` (the new
+// `ASSIGNREQ#` decision row, the patient's own `account_status`/
+// `assigned_clinician_id`, and GSI1's projection) that this class's
+// single-item `KeyValueStore` cannot express, the same reason
+// `content-repository.ts`/`testimonial-repository.ts` are bespoke rather
+// than `Repository<T>`-based. Nothing in production ever called
+// `transition(id, 'approve' | 'decline', …)` — it would have written a
+// `account_status: 'approved'` with no `ASSIGNREQ#` row and no GSI1
+// projection behind it, silently producing exactly the "an approved
+// patient nobody is responsible for" state 2.5.1's own text warns
+// against — so narrowing this type is closing a footgun, not removing a
+// used feature. `suspend` is untouched: it is not an assignment decision
+// and has no atomicity requirement beyond what this class already gives it.
 import type { Patient, PatientClinical, PatientPersonal } from '@ndn/shared-types';
 
 import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
@@ -29,29 +45,20 @@ export interface PatientRegistration {
 }
 
 /**
- * The three moves a clinician makes on an account, as a closed set. Not a
- * free `account_status` patch: "set the status to whatever you pass" is
- * how a record ends up in a state nobody designed, and it is also how a
- * `deleted` sneaks into a field that has no such value.
+ * The one move left in this class's own closed set — see this file's
+ * header for why `approve`/`decline` moved to `assignment-repository.ts`.
+ * Not a free `account_status` patch: "set the status to whatever you
+ * pass" is how a record ends up in a state nobody designed, and it is
+ * also how a `deleted` sneaks into a field that has no such value.
  */
-export type PatientTransition = 'approve' | 'decline' | 'suspend';
+export type PatientTransition = 'suspend';
 
 const TRANSITIONS: Record<PatientTransition, Patient['account_status']> = {
-  approve: 'approved',
-  decline: 'declined',
   suspend: 'suspended',
 };
 
-/**
- * The audit action each transition is recorded as, from `AUDIT_ACTIONS`'s
- * existing vocabulary. `decline` maps to `reject` because that is the word
- * the log already uses for "a human refused this"; approve and suspend are
- * `update`, because they are exactly that and inventing a verb per
- * transition would make a day of audit rows harder to read, not easier.
- */
+/** The audit action this transition is recorded as, from `AUDIT_ACTIONS`'s existing vocabulary. */
 const TRANSITION_AUDIT_ACTIONS = {
-  approve: 'update',
-  decline: 'reject',
   suspend: 'update',
 } as const;
 

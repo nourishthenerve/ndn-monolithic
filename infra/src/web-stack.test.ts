@@ -50,6 +50,11 @@ const synth = memoize(() => {
 // TASK 1.5.2: the Stripe webhook function only exists when a `table` prop
 // is given (mirrors production's DataStack -> WebStack wiring in
 // infra/bin/app.ts) — same App so CDK resolves the cross-stack reference.
+// TASK 2.5.4: `authorizerFunction` is wired through too, the same way
+// production's bin/app.ts wires it — until now this helper never passed
+// it, so no test in this file had ever exercised a WebStack route actually
+// landing on the real authorizer; MediaUploadFunction's own new
+// `if (props.authorizerFunction)` gate is what makes that gap matter.
 const synthWithTable = memoize(() => {
   const app = new App();
   const dataStack = new DataStack(app, 'TestDataStackForWebStack', {
@@ -59,6 +64,7 @@ const synthWithTable = memoize(() => {
     env: { account: '357601815388', region: 'eu-west-2' },
     deployVersion: 'test-sha',
     table: dataStack.table,
+    authorizerFunction: dataStack.authorizerFunction,
   });
   return Template.fromStack(stack);
 });
@@ -510,30 +516,48 @@ describe('WebStack — contact form Lambda (TASK 1.4.1)', () => {
   });
 });
 
-describe('WebStack — media upload Lambda (TASK 1.5.1)', () => {
-  it('is reachable via a POST /workshops/media-upload-url route on the HTTP API', () => {
-    const template = synth();
+describe('WebStack — media upload Lambda (TASK 1.5.1 / 2.5.4)', () => {
+  // TASK 2.5.4: this function now authenticates with the real Lambda
+  // authorizer, and is gated on `props.authorizerFunction` being present
+  // (this file's own header comment on that prop) — so every test here
+  // needs `synthWithTable()`, the one helper that wires a real
+  // `authorizerFunction` through. Bare `synth()` (no table, no authorizer
+  // — the ephemeral-stack shape) builds neither the function nor its
+  // route at all; that absence is asserted in its own describe block
+  // below, not here.
+  it('is reachable via a POST /workshops/media-upload-url route on the HTTP API, behind the real authorizer', () => {
+    const template = synthWithTable();
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /workshops/media-upload-url',
+      AuthorizationType: 'CUSTOM',
     });
   });
 
-  it('runs on arm64 / Node 22, with the media bucket name and admin token parameter name wired through', () => {
-    const template = synth();
+  it('runs on arm64 / Node 22, with the media bucket name wired through and no admin secret', () => {
+    const template = synthWithTable();
     template.hasResourceProperties('AWS::Lambda::Function', {
       Architectures: ['arm64'],
       Runtime: 'nodejs22.x',
       Environment: {
         Variables: Match.objectLike({
           MEDIA_BUCKET_NAME: Match.anyValue(),
-          ADMIN_TOKEN_PARAMETER_NAME: '/ndn/admin-api-token',
         }),
       },
     });
+    const policies = template.findResources('AWS::IAM::Policy');
+    const uploadPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'MediaUploadPutWorkshopPosters',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const sids = uploadPolicy.Properties.PolicyDocument.Statement.map(
+      (statement) => statement.Sid,
+    );
+    expect(sids).not.toContain('ReadAdminApiToken');
   });
 
   it('grants s3:PutObject scoped to the workshops/ prefix only, and denies s3:DeleteObject* via the guardrail', () => {
-    const template = synth();
+    const template = synthWithTable();
     const policies = template.findResources('AWS::IAM::Policy');
     const uploadPolicy = Object.values(policies).find((policy) =>
       JSON.stringify((policy as { Properties: unknown }).Properties).includes(
@@ -561,27 +585,23 @@ describe('WebStack — media upload Lambda (TASK 1.5.1)', () => {
     });
   });
 
-  it('grants exactly ssm:GetParameter on the admin token parameter', () => {
-    const template = synth();
-    const policies = template.findResources('AWS::IAM::Policy');
-    const uploadPolicy = Object.values(policies).find((policy) =>
-      JSON.stringify((policy as { Properties: unknown }).Properties).includes('ReadAdminApiToken'),
-    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
-    const ssmStatement = uploadPolicy.Properties.PolicyDocument.Statement.find(
-      (statement) => statement.Sid === 'ReadAdminApiToken',
-    );
-    expect(ssmStatement?.Action).toBe('ssm:GetParameter');
-    const resourceJson = JSON.stringify(ssmStatement?.Resource);
-    expect(resourceJson).toContain('parameter/ndn/admin-api-token');
-    expect(resourceJson).not.toContain('parameter/*');
-  });
-
   it('sends logs to an explicit log group with 14-day retention', () => {
-    const template = synth();
+    const template = synthWithTable();
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/ndn/media-upload-function',
       RetentionInDays: 14,
     });
+  });
+
+  it('is absent (no route, no function) when no authorizer function is given — e.g. an ephemeral per-PR stack', () => {
+    const template = synth();
+    const routes = template.findResources('AWS::ApiGatewayV2::Route');
+    const routeKeys = Object.values(routes).map(
+      (route) => (route as { Properties: { RouteKey: string } }).Properties.RouteKey,
+    );
+    expect(routeKeys).not.toContain('POST /workshops/media-upload-url');
+    const functionNames = Object.keys(template.findResources('AWS::Lambda::Function'));
+    expect(functionNames.some((id) => id.startsWith('MediaUploadFunction'))).toBe(false);
   });
 });
 
@@ -1039,13 +1059,17 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
   });
 });
 
-// TASK 1.6.2: this stack's two flag-reading functions (contact-form-handler,
-// media-upload-handler). data-stack.test.ts carries the fuller assertions
-// for the other seven and for the prefix's scoping; these prove the wiring
-// reached this stack too, rather than only the one it was written against.
+// TASK 1.6.2: this stack's flag-reading functions (contact-form-handler,
+// media-upload-handler, and TASK 2.2.4's auth-token function).
+// data-stack.test.ts carries the fuller assertions for the rest and for
+// the prefix's scoping; these prove the wiring reached this stack too,
+// rather than only the one it was written against.
 describe('WebStack — feature-flag reads', () => {
   it('gives every flag-reading function in this stack the prefix and a scoped read grant', () => {
-    const template = synth();
+    // TASK 2.5.4: media-upload only builds with an authorizer function
+    // present (web-stack.ts's `if (props.authorizerFunction)` gate), so
+    // this needs synthWithTable() to see all three, not bare synth().
+    const template = synthWithTable();
 
     const withPrefix = Object.values(template.findResources('AWS::Lambda::Function')).filter(
       (fn) =>
@@ -1203,7 +1227,9 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
     const open = routeKeys(template, 'NONE');
 
     expect(open).toEqual(UNAUTHENTICATED_ROUTE_KEYS.filter((key) => open.includes(key)).sort());
-    // The site API's four, named so a diff shows which one moved.
+    // The site API's seven, named so a diff shows which one moved.
+    // `POST /workshops/media-upload-url` left this list in TASK 2.5.4 — it
+    // sits behind the real authorizer now (see the CUSTOM assertion below).
     expect(open).toEqual([
       'GET /auth/signin',
       'GET /health',
@@ -1212,23 +1238,26 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
       'POST /auth/token',
       'POST /contact',
       'POST /stripe/webhook',
-      'POST /workshops/media-upload-url',
     ]);
   });
 
-  it('has no route behind the authorizer yet, and no authorizer resource to bind', () => {
-    // Same lazy-binding note as data-stack.test.ts: CDK creates the
-    // authorizer resource when a route uses it. TASK 2.2.3 is where both
-    // of these assertions change.
-    expect(routeKeys(synthWithTable(), 'CUSTOM')).toEqual([]);
-    synthWithTable().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 0);
+  it('puts exactly the media-upload route (2.5.4) behind the real authorizer', () => {
+    // TASK 2.5.4 is this API's first route to rely on `defaultAuthorizer`
+    // rather than opting out — CDK materialises the authorizer resource
+    // only once a route actually binds it, same lazy-binding note
+    // data-stack.test.ts's own equivalent test states.
+    expect(routeKeys(synthWithTable(), 'CUSTOM')).toEqual(['POST /workshops/media-upload-url']);
+    synthWithTable().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
   });
 
   it('stands up without an authorizer function at all, for the ephemeral PR stack', () => {
     // 0.6.3's per-PR stack has no DataStack and therefore no authorizer
     // function. That is only safe because every route on this API opts
-    // out explicitly; if one ever relied on the default, this stack would
-    // deploy it wide open.
+    // out explicitly, or (TASK 2.5.4's `POST /workshops/media-upload-url`)
+    // isn't built at all when there's no authorizer function to protect it
+    // with — see this file's own header comment on that prop and
+    // web-stack.ts's `if (props.authorizerFunction)` gate. If a route ever
+    // relied on the default instead, this stack would deploy it wide open.
     expect(routeKeys(synth(), 'CUSTOM')).toEqual([]);
     expect(routeKeys(synth(), 'NONE')).toEqual([
       'GET /auth/signin',
@@ -1237,7 +1266,6 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
       'POST /auth/signout',
       'POST /auth/token',
       'POST /contact',
-      'POST /workshops/media-upload-url',
     ]);
   });
 });

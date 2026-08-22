@@ -6,9 +6,22 @@
 // notification is translatable the day a second locale exists (D-04) —
 // this registry never carries a string itself, only which keys render it
 // and whether SMS is allowed.
+// TASK 2.4.1: 'clinical' is really "never silenced by marketingOptIn" —
+// broader than clinical content specifically. `clinicianDeactivated` is an
+// operational notice to a clinician, not a patient, and carries no clinical
+// content either; it belongs here on that same "never silenced" property,
+// not because it is clinical.
 export type NotificationCategory = 'clinical' | 'marketing';
 
-export type NotificationTemplateId = 'appointmentReminder1Hour' | 'marketingNewsletter';
+export type NotificationTemplateId =
+  | 'appointmentReminder1Hour'
+  | 'marketingNewsletter'
+  | 'clinicianDeactivated'
+  | 'patientApproved'
+  | 'patientDeclined'
+  | 'patientReassigned'
+  | 'clinicianCaseloadPatientAdded'
+  | 'clinicianCaseloadPatientRemoved';
 
 export interface NotificationTemplateDef {
   readonly id: NotificationTemplateId;
@@ -41,6 +54,55 @@ export const NOTIFICATION_TEMPLATES: Readonly<Record<NotificationTemplateId, Not
     smsEligible: false,
     subjectKey: 'notifications.marketingNewsletter.subject',
     emailBodyKey: 'notifications.marketingNewsletter.emailBody',
+  },
+  clinicianDeactivated: {
+    id: 'clinicianDeactivated',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.clinicianDeactivated.subject',
+    emailBodyKey: 'notifications.clinicianDeactivated.emailBody',
+  },
+  // TASK 2.5.1: content-free by the task's own step 6 — no diagnosis, no
+  // referral, no clinician name. ses-registration.ts's own reasoning
+  // applies again: this address may not be a mailbox the patient alone
+  // reads.
+  patientApproved: {
+    id: 'patientApproved',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.patientApproved.subject',
+    emailBodyKey: 'notifications.patientApproved.emailBody',
+  },
+  patientDeclined: {
+    id: 'patientDeclined',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.patientDeclined.subject',
+    emailBodyKey: 'notifications.patientDeclined.emailBody',
+  },
+  // TASK 2.5.2: content-free the same way — no outgoing/incoming
+  // clinician's name in the patient's own copy either. Sent to the
+  // patient; the two clinician-facing templates below are separate.
+  patientReassigned: {
+    id: 'patientReassigned',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.patientReassigned.subject',
+    emailBodyKey: 'notifications.patientReassigned.emailBody',
+  },
+  clinicianCaseloadPatientAdded: {
+    id: 'clinicianCaseloadPatientAdded',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.clinicianCaseloadPatientAdded.subject',
+    emailBodyKey: 'notifications.clinicianCaseloadPatientAdded.emailBody',
+  },
+  clinicianCaseloadPatientRemoved: {
+    id: 'clinicianCaseloadPatientRemoved',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.clinicianCaseloadPatientRemoved.subject',
+    emailBodyKey: 'notifications.clinicianCaseloadPatientRemoved.emailBody',
   },
 };
 

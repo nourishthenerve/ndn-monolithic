@@ -126,7 +126,7 @@ export function createContactFormHttpHandler(deps: ContactFormHttpDeps): APIGate
 // Mirrors infra/src/config.ts's TURNSTILE_SECRET_PARAMETER_NAME — that
 // constant is what web-stack.ts actually sets this env var to at deploy
 // time; the literal here is only a local-dev/test fallback, same convention
-// content-authoring-handler.ts documents for ADMIN_TOKEN_PARAMETER_NAME.
+// stripe-webhook-handler.ts documents for its own secret parameter names.
 const TURNSTILE_SECRET_PARAMETER_NAME =
   process.env.TURNSTILE_SECRET_PARAMETER_NAME ?? '/ndn/turnstile-secret-key';
 const CONTACT_FORM_FROM_EMAIL =

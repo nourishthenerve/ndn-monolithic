@@ -18,7 +18,7 @@ const VISITOR = actorContext(
   { requestId: 'req-submit-1', sourceIp: '198.51.100.7' },
 );
 const MODERATOR = actorContext(
-  { subjectId: 'admin-token', role: 'admin-token' },
+  { subjectId: 'principal-sub', role: 'principal-clinician' },
   { requestId: 'req-moderate-1', sourceIp: '203.0.113.4' },
 );
 
@@ -83,7 +83,7 @@ describe('TestimonialRepository.publish/reject', () => {
     expect(published.consent).toEqual(submitted.consent);
     expect(audit.list()).toContainEqual(
       expect.objectContaining({
-        actor: 'admin-token',
+        actor: 'principal-sub',
         action: 'publish',
         entityId: 'testimonial-1',
       }),
@@ -101,7 +101,7 @@ describe('TestimonialRepository.publish/reject', () => {
     expect(await repository.findPublished()).toEqual([]);
     expect(audit.list()).toContainEqual(
       expect.objectContaining({
-        actor: 'admin-token',
+        actor: 'principal-sub',
         action: 'reject',
         entityId: 'testimonial-1',
       }),

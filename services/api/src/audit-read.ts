@@ -13,7 +13,7 @@
 // /audit as a patient and as a sub-clinician → 403") are assertions about
 // this file rather than about a policy restated inside it.
 import type { Principal } from '@ndn/shared-types';
-import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
+import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
 
 import type { AuditReader } from './audit.js';
 import { can } from './authz.js';
@@ -37,17 +37,19 @@ export interface AuditReadDeps {
   /**
    * Resolves the caller. Undefined means "no identity on this request" —
    * a 401, distinct from a resolved principal the matrix then denies (403).
-   * TASK 2.2.2's Lambda authorizer is what fills this in properly; see
-   * audit-read-handler.ts for the bridge standing in until then.
+   * TASK 2.5.4: audit-read-handler.ts wires this to the real Lambda
+   * authorizer's context (2.2.2) via `optionalPrincipal`.
    */
   readonly resolvePrincipal: (
-    event: Parameters<APIGatewayProxyHandlerV2>[0],
+    event: Parameters<APIGatewayProxyHandlerV2WithLambdaAuthorizer<Record<string, unknown> | undefined>>[0],
   ) => Promise<Principal | undefined>;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
 }
 
-export function createAuditReadHandler(deps: AuditReadDeps): APIGatewayProxyHandlerV2 {
+export function createAuditReadHandler(
+  deps: AuditReadDeps,
+): APIGatewayProxyHandlerV2WithLambdaAuthorizer<Record<string, unknown> | undefined> {
   const clock = deps.clock ?? systemClock;
   const logger =
     deps.logger ?? createSampledLogger({ clock, sampleRate: AUDIT_READ_LOG_SAMPLE_RATE });

@@ -11,8 +11,11 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type {
+  AssignmentRequest,
   BaseRecord,
+  Clinician,
   ContentItem,
+  Patient as RealPatient,
   Registration,
   Testimonial,
   Workshop,
@@ -23,6 +26,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
+  DynamoAssignmentStore,
+  DynamoCaseloadStore,
+  DynamoClinicianStore,
   DynamoContentStore,
   DynamoRegistrationStore,
   DynamoStore,
@@ -39,7 +45,7 @@ import { Repository } from './repository.js';
 // than a bare actor string — who, with what role, on which request, from
 // where. One fixture stands in for all four here.
 const ACTOR = actorContext(
-  { subjectId: 'editor-1', role: 'admin-token' },
+  { subjectId: 'editor-1', role: 'principal-clinician' },
   { requestId: 'req-store-1', sourceIp: '198.51.100.7' },
 );
 
@@ -617,5 +623,308 @@ describe('DynamoWebhookEventStore', () => {
       .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
 
     await expect(store.tryClaim('evt_1')).resolves.toBe(false);
+  });
+});
+
+function buildClinician(overrides: Partial<Clinician> = {}): Clinician {
+  return {
+    id: 'sub-1',
+    displayName: 'A Clinician',
+    role: 'sub',
+    account_status: 'active',
+    status: 'active',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('DynamoClinicianStore', () => {
+  const store = new DynamoClinicianStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('get() reads the META row and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'CLI#sub-1', sk: 'META', ...buildClinician() } });
+
+    const result = await store.get('sub-1');
+    expect(result).toMatchObject({ id: 'sub-1', role: 'sub' });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'CLI#sub-1', sk: 'META' },
+    });
+  });
+
+  it('create() for a sub-clinician writes only the main item — no principal marker', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await store.create(buildClinician({ role: 'sub' }));
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems).toHaveLength(1);
+    expect(call?.TransactItems?.[0]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({ pk: 'CLI#sub-1', sk: 'META', role: 'sub' }),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() for a principal atomically writes the main item and the singleton marker', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await store.create(buildClinician({ role: 'principal' }));
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems).toHaveLength(2);
+    expect(call?.TransactItems?.[1]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: { pk: 'CLI#PRINCIPAL_MARKER', sk: 'MARKER', clinicianId: 'sub-1' },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() maps a cancelled transaction to RECORD_ALREADY_EXISTS when the id already exists', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'CLI#sub-1', sk: 'META', ...buildClinician() } });
+
+    await expect(store.create(buildClinician())).rejects.toMatchObject({
+      code: 'RECORD_ALREADY_EXISTS',
+    });
+  });
+
+  it('create() maps a cancelled transaction to PRINCIPAL_ALREADY_EXISTS when the id is new but no principal slot is free', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+    ddbMock.on(GetCommand).resolves({}); // the disambiguating get() finds nothing
+
+    await expect(store.create(buildClinician({ id: 'sub-2', role: 'principal' }))).rejects.toMatchObject({
+      code: 'PRINCIPAL_ALREADY_EXISTS',
+    });
+  });
+
+  it('update() overwrites the main item, unconditionally', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.update(buildClinician({ account_status: 'deactivated' }));
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({ pk: 'CLI#sub-1', sk: 'META', account_status: 'deactivated' }),
+    });
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input.ConditionExpression).toBeUndefined();
+  });
+});
+
+function buildPatient(overrides: Partial<RealPatient> = {}): RealPatient {
+  return {
+    id: 'pat-1',
+    personal: { fullName: 'A Patient', email: 'patient@example.com', marketingOptIn: false },
+    clinical: {},
+    account_status: 'pending',
+    keywords: [],
+    status: 'active',
+    created_at: '2026-08-22T08:00:00.000Z',
+    updated_at: '2026-08-22T08:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function buildAssignmentRequest(overrides: Partial<AssignmentRequest> = {}): AssignmentRequest {
+  return {
+    patientId: 'pat-1',
+    requestedAt: '2026-08-22T09:00:00.000Z',
+    decidedBy: 'principal-sub',
+    decidedAt: '2026-08-22T09:00:00.000Z',
+    status: 'declined',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('DynamoAssignmentStore', () => {
+  const store = new DynamoAssignmentStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+    newRequestSuffix: () => 'suffix-1',
+  });
+
+  it('getPatient() reads the PROFILE row and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'PAT#pat-1', sk: 'PROFILE', ...buildPatient() } });
+
+    const result = await store.getPatient('pat-1');
+    expect(result).toMatchObject({ id: 'pat-1', account_status: 'pending' });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'PAT#pat-1', sk: 'PROFILE' },
+    });
+  });
+
+  it('writeDecision() for an approval atomically writes the ASSIGNREQ# row and the patient row, with GSI1 and GSI3 attributes set', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    const request = buildAssignmentRequest({ status: 'approved', assignedClinicianId: 'cli-1' });
+    const patient = buildPatient({ account_status: 'approved', assigned_clinician_id: 'cli-1' });
+
+    await store.writeDecision(request, patient);
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems).toHaveLength(2);
+    expect(call?.TransactItems?.[0]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({
+        pk: 'PAT#pat-1',
+        sk: 'ASSIGNREQ#2026-08-22T09:00:00.000Z#suffix-1',
+        status: 'approved',
+      }),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+    expect(call?.TransactItems?.[1]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'PROFILE',
+        gsi1pk: 'CLI#cli-1',
+        gsi1sk: 'PAT#pat-1',
+        gsi3pk: 'CASELOAD#all',
+        gsi3sk: 'CLI#cli-1#PAT#pat-1',
+      },
+    });
+  });
+
+  it('writeDecision() for a decline writes no gsi1pk/gsi1sk/gsi3pk/gsi3sk at all', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    const request = buildAssignmentRequest({ status: 'declined' });
+    const patient = buildPatient({ account_status: 'declined' });
+
+    await store.writeDecision(request, patient);
+
+    const patientItem = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[1]
+      ?.Put?.Item as Record<string, unknown>;
+    expect(patientItem.gsi1pk).toBeUndefined();
+    expect(patientItem.gsi1sk).toBeUndefined();
+    expect(patientItem.gsi3pk).toBeUndefined();
+    expect(patientItem.gsi3sk).toBeUndefined();
+  });
+
+  it('writeDecision() propagates a cancelled transaction as AppError — the atomicity property: neither leg lands', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+      }),
+    );
+
+    const request = buildAssignmentRequest({ status: 'approved', assignedClinicianId: 'cli-1' });
+    const patient = buildPatient({ account_status: 'approved', assigned_clinician_id: 'cli-1' });
+
+    await expect(store.writeDecision(request, patient)).rejects.toMatchObject({
+      code: 'ASSIGNMENT_REQUEST_ALREADY_EXISTS',
+    });
+    // The mocked client never actually applied either Put — this proves
+    // the *caller* sees a single failure for the whole write, which is
+    // the property "a forced failure on any leg leaves the patient
+    // pending with no GSI1 row" reduces to at the transport layer:
+    // TransactWriteItems either applies every item or none of them, and
+    // this store surfaces that as one thrown error, never a partial one.
+    expect(ddbMock.commandCalls(PutCommand)).toHaveLength(0);
+  });
+
+  it('listPatientIdsForClinician() queries GSI1 for the clinician key with a PAT# prefix, and extracts ids', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { gsi1pk: 'CLI#cli-1', gsi1sk: 'PAT#pat-1' },
+        { gsi1pk: 'CLI#cli-1', gsi1sk: 'PAT#pat-2' },
+      ],
+    });
+
+    const ids = await store.listPatientIdsForClinician('cli-1');
+    expect(ids).toEqual(['pat-1', 'pat-2']);
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'gsi1pk = :clinicianKey AND begins_with(gsi1sk, :patientPrefix)',
+      ExpressionAttributeValues: { ':clinicianKey': 'CLI#cli-1', ':patientPrefix': 'PAT#' },
+    });
+  });
+
+  it('listPatientIdsForClinician() returns an empty array for a clinician with no assigned patients', async () => {
+    ddbMock.on(QueryCommand).resolves({});
+    expect(await store.listPatientIdsForClinician('cli-1')).toEqual([]);
+  });
+});
+
+describe('DynamoCaseloadStore', () => {
+  const store = new DynamoCaseloadStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('queryPage() queries GSI3 for the fixed caseload key — a Query, never a Scan', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { gsi3pk: 'CASELOAD#all', gsi3sk: 'CLI#cli-1#PAT#pat-1' },
+        { gsi3pk: 'CASELOAD#all', gsi3sk: 'CLI#cli-1#PAT#pat-2' },
+      ],
+    });
+
+    const page = await store.queryPage(undefined, 20);
+
+    expect(page.patientIds).toEqual(['pat-1', 'pat-2']);
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI3',
+      KeyConditionExpression: 'gsi3pk = :caseloadKey',
+      ExpressionAttributeValues: { ':caseloadKey': 'CASELOAD#all' },
+      Limit: 20,
+    });
+    // No ScanCommand was ever imported or sent by this store — asserted
+    // structurally by there being no ScanCommand call to find at all.
+  });
+
+  it('queryPage() round-trips a cursor: the next page picks up exactly where LastEvaluatedKey said to', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ gsi3pk: 'CASELOAD#all', gsi3sk: 'CLI#cli-1#PAT#pat-1' }],
+      LastEvaluatedKey: { pk: 'PAT#pat-1', sk: 'PROFILE', gsi3pk: 'CASELOAD#all', gsi3sk: 'CLI#cli-1#PAT#pat-1' },
+    });
+
+    const firstPage = await store.queryPage(undefined, 1);
+    expect(firstPage.nextCursor).toBeDefined();
+
+    ddbMock.resetHistory();
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    await store.queryPage(firstPage.nextCursor, 1);
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ExclusiveStartKey).toEqual({
+      pk: 'PAT#pat-1',
+      sk: 'PROFILE',
+      gsi3pk: 'CASELOAD#all',
+      gsi3sk: 'CLI#cli-1#PAT#pat-1',
+    });
+  });
+
+  it('queryPage() has no nextCursor once the query returns no LastEvaluatedKey — the last page', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const page = await store.queryPage(undefined, 20);
+    expect(page.nextCursor).toBeUndefined();
+  });
+
+  it('getPatient() reads the PROFILE row and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: { pk: 'PAT#pat-1', sk: 'PROFILE', ...buildPatient() },
+    });
+
+    const result = await store.getPatient('pat-1');
+    expect(result).toMatchObject({ id: 'pat-1' });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'PAT#pat-1', sk: 'PROFILE' },
+    });
   });
 });

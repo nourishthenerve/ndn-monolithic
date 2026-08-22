@@ -4,6 +4,7 @@ import type { Clock } from './clock.js';
 import { InMemoryDeliveryLog, type DeliveryRecord } from './notification-log.js';
 import { createNotifier, type EmailSend, type NotificationRecipient } from './notifications.js';
 import { InMemorySmsFlagReader } from './sms-flags.js';
+import type { SmsProvider } from './sms-provider.js';
 import { InMemoryRateLimiter } from './sms-rate-limiter.js';
 import { InMemorySpendCounterStore, SMS_MONTHLY_CAP_PENCE } from './sms-spend-cap.js';
 import { createSmsSender } from './sms.js';
@@ -17,6 +18,11 @@ const PATIENT: NotificationRecipient = {
   marketingOptIn: true,
 };
 
+// A stub, not a mock — this suite is about the Notifier's channel/
+// degradation policy, not about what a real provider does with a message
+// (sms-provider.test.ts covers that).
+const stubProvider: SmsProvider = { send: async () => {} };
+
 function buildSms(overrides: { enabled?: boolean; killSwitchEngaged?: boolean } = {}) {
   const flags = new InMemorySmsFlagReader({
     enabled: overrides.enabled ?? true,
@@ -24,7 +30,7 @@ function buildSms(overrides: { enabled?: boolean; killSwitchEngaged?: boolean } 
   });
   const rateLimiter = new InMemoryRateLimiter({ clock: fixedClock, limit: 5, windowMs: 3_600_000 });
   const spendCounter = new InMemorySpendCounterStore();
-  return createSmsSender({ flags, rateLimiter, spendCounter, clock: fixedClock });
+  return createSmsSender({ flags, rateLimiter, spendCounter, provider: stubProvider, clock: fixedClock });
 }
 
 function build(overrides: { sendEmail?: EmailSend; sendSms?: ReturnType<typeof buildSms> } = {}) {
@@ -73,6 +79,7 @@ describe('createNotifier — smsEligible template', () => {
       flags: new InMemorySmsFlagReader({ enabled: true, killSwitchEngaged: false }),
       rateLimiter: new InMemoryRateLimiter({ clock: fixedClock, limit: 5, windowMs: 3_600_000 }),
       spendCounter,
+      provider: stubProvider,
       clock: fixedClock,
     });
 
@@ -85,6 +92,7 @@ describe('createNotifier — smsEligible template', () => {
       flags: new InMemorySmsFlagReader({ enabled: true, killSwitchEngaged: false }),
       rateLimiter,
       spendCounter: new InMemorySpendCounterStore(),
+      provider: stubProvider,
       clock: fixedClock,
     });
     // Exhaust this principal's window with an unrelated send first, so the
@@ -95,11 +103,29 @@ describe('createNotifier — smsEligible template', () => {
       to: PATIENT.phone as string,
       template: 'unrelated',
       vars: {},
+      body: 'unrelated',
       principal: PATIENT.id,
       costPence: 5,
     });
 
     await expectDegraded(sendSms, 'RateLimited');
+  });
+
+  it('degrades to email and names the reason when the provider itself fails', async () => {
+    const failingProvider: SmsProvider = {
+      send: async () => {
+        throw new Error('ThrottlingException');
+      },
+    };
+    const sendSms = createSmsSender({
+      flags: new InMemorySmsFlagReader({ enabled: true, killSwitchEngaged: false }),
+      rateLimiter: new InMemoryRateLimiter({ clock: fixedClock, limit: 5, windowMs: 3_600_000 }),
+      spendCounter: new InMemorySpendCounterStore(),
+      provider: failingProvider,
+      clock: fixedClock,
+    });
+
+    await expectDegraded(sendSms, 'ProviderError');
   });
 
   it('degrades to email with reason NotUk when the recipient has no phone', async () => {

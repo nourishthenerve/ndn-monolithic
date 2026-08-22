@@ -14,6 +14,8 @@
 // attributes `pk`/`sk`; GSI2's key attributes are `gsi2pk`/`gsi2sk`,
 // present only on keyword-projection rows (a sparse index) so GSI2 never
 // returns a content item's own META row.
+import { randomUUID } from 'node:crypto';
+
 import {
   ConditionalCheckFailedException,
   DynamoDBClient,
@@ -27,8 +29,19 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { ContentItem, Registration, Testimonial, Workshop } from '@ndn/shared-types';
+import type {
+  AssignmentRequest,
+  Clinician,
+  ContentItem,
+  Patient,
+  Registration,
+  Testimonial,
+  Workshop,
+} from '@ndn/shared-types';
 
+import type { AssignmentStore } from './assignment-repository.js';
+import type { CaseloadStore } from './caseload-repository.js';
+import type { ClinicianStore } from './clinician-repository.js';
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
 import type { RegistrationStore, WorkshopCapacityStore } from './registration-repository.js';
@@ -606,5 +619,343 @@ export class DynamoWebhookEventStore implements WebhookEventStore {
       }
       throw error;
     }
+  }
+}
+
+// TASK 2.4.1: `PK = CLI#<sub>` / `SK = META` — the clinician-repository.ts
+// header explains why the record is keyed by the Cognito `sub`. The
+// singleton "exactly one principal" marker is a second, fixed-key row
+// (`PK = CLI#PRINCIPAL_MARKER`), conditioned in the *same* transaction as
+// the main item so the invariant holds even under concurrent creates.
+const CLINICIAN_PK = (id: string) => `CLI#${id}`;
+const CLINICIAN_PRINCIPAL_MARKER_PK = 'CLI#PRINCIPAL_MARKER';
+const CLINICIAN_PRINCIPAL_MARKER_SK = 'MARKER';
+
+export interface DynamoClinicianStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoClinicianStore implements ClinicianStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoClinicianStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async get(id: string): Promise<Clinician | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: CLINICIAN_PK(id), sk: META_SORT_KEY },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Clinician>(result.Item);
+  }
+
+  /**
+   * On `TransactionCanceledException`, a follow-up `get` disambiguates
+   * which condition failed — deliberately not `CancellationReasons`
+   * parsing/ordering, which is a real but SDK/version-shaped detail this
+   * store does not want to depend on for choosing between two very
+   * differently-meaning errors. One extra read, on the (rare) failure path
+   * only.
+   */
+  async create(item: Clinician): Promise<void> {
+    const mainItem = { ...item, pk: CLINICIAN_PK(item.id), sk: META_SORT_KEY };
+    const transactItems = [
+      {
+        Put: {
+          TableName: this.tableName,
+          Item: mainItem,
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+      ...(item.role === 'principal'
+        ? [
+            {
+              Put: {
+                TableName: this.tableName,
+                Item: {
+                  pk: CLINICIAN_PRINCIPAL_MARKER_PK,
+                  sk: CLINICIAN_PRINCIPAL_MARKER_SK,
+                  clinicianId: item.id,
+                },
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
+            },
+          ]
+        : []),
+    ];
+
+    try {
+      await this.client.send(new TransactWriteCommand({ TransactItems: transactItems }));
+    } catch (error) {
+      if (error instanceof TransactionCanceledException) {
+        const existing = await this.get(item.id);
+        if (existing) {
+          throw new AppError('RECORD_ALREADY_EXISTS', `clinician ${item.id} already exists`);
+        }
+        throw new AppError('PRINCIPAL_ALREADY_EXISTS', 'a principal clinician already exists');
+      }
+      throw error;
+    }
+  }
+
+  /** Plain overwrite — deactivate/reactivate. Never touches the principal marker: role is immutable through this path. */
+  async update(item: Clinician): Promise<void> {
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: { ...item, pk: CLINICIAN_PK(item.id), sk: META_SORT_KEY },
+      }),
+    );
+  }
+}
+
+// TASK 2.5.1: `PK = PAT#<id>` / `SK = ASSIGNREQ#<ts>#<random>` for each
+// decision row (the random suffix guards a same-millisecond collision the
+// same way dynamo-audit-log.ts's does — low-odds here, given decisions
+// are single-principal, human-paced actions, but cheap insurance and the
+// established convention). The patient's own `PAT#<id>` / `PROFILE` row
+// (post-confirmation-handler.ts's key shape, unchanged) is overwritten in
+// the same transaction.
+//
+// **GSI1's shape, proved against both access patterns docs/adr/0002-
+// database.md records:** `gsi1pk = CLI#<clinicianId>`, `gsi1sk =
+// PAT#<patientId>` for the "clinician → patients" pattern this task
+// builds; `gsi1sk = APPT#<iso-utc>` (TASK 3.4.x, not built here) shares
+// the same partition for "clinician calendar" — each pattern queries its
+// own `gsi1sk` prefix, so the two entity types never collide in a query
+// even though they share a partition. Sparse: `gsi1pk`/`gsi1sk` exist on
+// a `PROFILE` row only while `assigned_clinician_id` is set, derived from
+// that field alone — never a second input a caller could pass out of
+// step with it.
+//
+// TASK 2.5.3 adds GSI3 (its own proof, same file): `gsi3pk =
+// 'CASELOAD#all'` / `gsi3sk = CLI#<clinicianId>#PAT#<patientId>`, set in
+// the same conditional block below, on the same condition — one write,
+// two indexes, no second decision about when a patient belongs in either.
+const PATIENT_PK = (id: string) => `PAT#${id}`;
+const PATIENT_PROFILE_SK = 'PROFILE';
+const ASSIGNMENT_REQUEST_SK = (at: string, suffix: string) => `ASSIGNREQ#${at}#${suffix}`;
+const GSI1_INDEX_NAME = 'GSI1';
+const GSI1_CLINICIAN_PK = (clinicianId: string) => `CLI#${clinicianId}`;
+const GSI1_PATIENT_SK = (patientId: string) => `PAT#${patientId}`;
+
+// TASK 2.5.3: GSI3's shape, proved in docs/adr/0002-database.md — one
+// fixed partition value (the same "_all" shape TESTIMONIAL_INDEX_GSI2PK/
+// WORKSHOP_INDEX_GSI2PK already use, on their own index rather than
+// sharing GSI2), sorted by clinician so one Query returns the whole
+// cross-caseload list already grouped.
+const GSI3_INDEX_NAME = 'GSI3';
+const GSI3_CASELOAD_PK = 'CASELOAD#all';
+const GSI3_CASELOAD_SK = (clinicianId: string, patientId: string) =>
+  `CLI#${clinicianId}#PAT#${patientId}`;
+
+export interface DynamoAssignmentStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+  /** Defaults to node:crypto's randomUUID — injectable so a test can force a key collision. */
+  readonly newRequestSuffix?: () => string;
+}
+
+export class DynamoAssignmentStore implements AssignmentStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+  private readonly newRequestSuffix: () => string;
+
+  constructor(options: DynamoAssignmentStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+    this.newRequestSuffix = options.newRequestSuffix ?? randomUUID;
+  }
+
+  async getPatient(patientId: string): Promise<Patient | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: PATIENT_PK(patientId), sk: PATIENT_PROFILE_SK },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Patient>(result.Item);
+  }
+
+  /**
+   * The atomic write step 2 asks for: the `ASSIGNREQ#` row (conditioned
+   * on not already existing — collision, not overwrite, on the
+   * vanishingly unlikely case) and the patient's `PROFILE` row, in one
+   * `TransactWriteItems`. Neither commits without the other — "an
+   * approved patient nobody is responsible for" is exactly the state a
+   * partial write would produce, and `TransactWriteItems` is what DynamoDB
+   * itself refuses to leave partially applied.
+   */
+  async writeDecision(request: AssignmentRequest, patient: Patient): Promise<void> {
+    const requestItem = {
+      ...request,
+      pk: PATIENT_PK(request.patientId),
+      sk: ASSIGNMENT_REQUEST_SK(request.decidedAt ?? request.requestedAt, this.newRequestSuffix()),
+    };
+    const patientItem: Record<string, unknown> = {
+      ...patient,
+      pk: PATIENT_PK(patient.id),
+      sk: PATIENT_PROFILE_SK,
+    };
+    // Sparse, derived from `assigned_clinician_id` alone — see this
+    // section's header. Simply omitted (not set to `undefined`) when
+    // there is no assignment, so a decline's `PutCommand` never tries to
+    // marshall an explicit `undefined` value. GSI3 (TASK 2.5.3) piggybacks
+    // on the same condition: `assigned_clinician_id` is only ever set by
+    // this store alongside `account_status: 'approved'` (approve/reassign
+    // both do both in the same write), so "carries a clinician" and
+    // "belongs in the caseload view" are the same fact here, not two
+    // conditions that could drift apart.
+    if (patient.assigned_clinician_id) {
+      patientItem.gsi1pk = GSI1_CLINICIAN_PK(patient.assigned_clinician_id);
+      patientItem.gsi1sk = GSI1_PATIENT_SK(patient.id);
+      patientItem.gsi3pk = GSI3_CASELOAD_PK;
+      patientItem.gsi3sk = GSI3_CASELOAD_SK(patient.assigned_clinician_id, patient.id);
+    }
+
+    try {
+      await this.client.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: this.tableName,
+                Item: requestItem,
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
+            },
+            { Put: { TableName: this.tableName, Item: patientItem } },
+          ],
+        }),
+      );
+    } catch (error) {
+      if (error instanceof TransactionCanceledException) {
+        throw new AppError(
+          'ASSIGNMENT_REQUEST_ALREADY_EXISTS',
+          `assignment request ${String(requestItem.sk)} already exists`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async listPatientIdsForClinician(clinicianId: string): Promise<string[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI1_INDEX_NAME,
+        KeyConditionExpression: 'gsi1pk = :clinicianKey AND begins_with(gsi1sk, :patientPrefix)',
+        ExpressionAttributeValues: {
+          ':clinicianKey': GSI1_CLINICIAN_PK(clinicianId),
+          ':patientPrefix': 'PAT#',
+        },
+      }),
+    );
+    const ids: string[] = [];
+    for (const row of result.Items ?? []) {
+      const gsi1sk = row.gsi1sk;
+      if (typeof gsi1sk === 'string' && gsi1sk.startsWith('PAT#')) {
+        ids.push(gsi1sk.slice('PAT#'.length));
+      }
+    }
+    return ids;
+  }
+}
+
+// TASK 2.5.3: the cross-caseload view's cursor — DynamoDB's own
+// `LastEvaluatedKey`, opaque to the caller, base64url-encoded so it
+// travels safely as a query-string value. Never anything else: no offset,
+// no page number, nothing that would let a caller skip into the middle of
+// a GSI3 partition without the key DynamoDB itself issued.
+function encodeCaseloadCursor(key: Record<string, unknown> | undefined): string | undefined {
+  if (!key) {
+    return undefined;
+  }
+  return Buffer.from(JSON.stringify(key), 'utf-8').toString('base64url');
+}
+
+function decodeCaseloadCursor(cursor: string | undefined): Record<string, unknown> | undefined {
+  if (!cursor) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8')) as Record<string, unknown>;
+  } catch {
+    throw new AppError('INVALID_CURSOR', 'cursor could not be decoded');
+  }
+}
+
+export interface DynamoCaseloadStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoCaseloadStore implements CaseloadStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoCaseloadStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  /**
+   * One bounded `Query` against GSI3 (docs/adr/0002-database.md's proof),
+   * sorted by clinician — never a `Scan`, never more than `limit` items
+   * read, never a second page fetched to build this one (step 5).
+   */
+  async queryPage(
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<{ patientIds: string[]; nextCursor?: string }> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI3_INDEX_NAME,
+        KeyConditionExpression: 'gsi3pk = :caseloadKey',
+        ExpressionAttributeValues: { ':caseloadKey': GSI3_CASELOAD_PK },
+        Limit: limit,
+        ExclusiveStartKey: decodeCaseloadCursor(cursor),
+      }),
+    );
+    const patientIds: string[] = [];
+    for (const row of result.Items ?? []) {
+      const gsi3sk = row.gsi3sk;
+      if (typeof gsi3sk === 'string') {
+        // `CLI#<clinicianId>#PAT#<patientId>` — the patient id is
+        // everything after the last `#PAT#` marker; clinician ids are
+        // Cognito subs (UUIDs, no `#`), so this is unambiguous.
+        const patientId = gsi3sk.split('#PAT#').pop();
+        if (patientId) {
+          patientIds.push(patientId);
+        }
+      }
+    }
+    return { patientIds, nextCursor: encodeCaseloadCursor(result.LastEvaluatedKey) };
+  }
+
+  async getPatient(patientId: string): Promise<Patient | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: PATIENT_PK(patientId), sk: PATIENT_PROFILE_SK },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Patient>(result.Item);
   }
 }

@@ -1,4 +1,5 @@
 import type { Testimonial } from '@ndn/shared-types';
+import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import { describe, expect, it } from 'vitest';
 
 import { InMemoryAuditLog, actorContext } from './audit.js';
@@ -15,36 +16,55 @@ import {
 } from './testimonial-repository.js';
 
 // TASK 2.1.3: the two actors these fixtures seed with. The handler under
-// test builds its own from the request (audit.ts's actorContext).
+// test builds its own from the request's principal (audit.ts's
+// actorFromPrincipal).
 const VISITOR = actorContext(
   { subjectId: 'visitor-1', role: 'public' },
   { requestId: 'req-submit-1', sourceIp: '198.51.100.7' },
 );
 const MODERATOR = actorContext(
-  { subjectId: 'admin-token', role: 'admin-token' },
+  { subjectId: 'principal-sub', role: 'principal-clinician' },
   { requestId: 'req-moderate-1', sourceIp: '203.0.113.4' },
 );
 
 const fixedClock: Clock = { now: () => new Date('2026-01-01T00:00:00.000Z') };
-const ADMIN_TOKEN = 'test-admin-token';
+
+type LambdaAuthorizerEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<
+  Record<string, unknown> | undefined
+>;
+
+const PRINCIPAL_CONTEXT = {
+  subjectId: 'principal-sub',
+  role: 'principal-clinician',
+  accountStatus: 'active',
+  clinicianId: 'principal-sub',
+};
+
+const PATIENT_CONTEXT = {
+  subjectId: 'pat-1',
+  role: 'patient',
+  accountStatus: 'approved',
+  patientId: 'pat-1',
+};
 
 function fakeEvent(overrides: {
   routeKey: string;
   pathParameters?: Record<string, string>;
-  queryStringParameters?: Record<string, string>;
-  headers?: Record<string, string>;
-}) {
+  principal?: Record<string, unknown>;
+}): LambdaAuthorizerEvent {
   return {
     routeKey: overrides.routeKey,
     pathParameters: overrides.pathParameters,
-    queryStringParameters: overrides.queryStringParameters,
-    headers: overrides.headers ?? { authorization: `Bearer ${ADMIN_TOKEN}` },
     // TASK 2.1.3: `http.sourceIp` is part of every real API Gateway v2
     // event and is what the audit row's `where` is derived from
     // (audit.ts's requestOriginOf) — the fixture carries it because
     // the real event always does.
-    requestContext: { requestId: 'req-1', http: { sourceIp: '198.51.100.7' } },
-  } as never;
+    requestContext: {
+      requestId: 'req-1',
+      http: { sourceIp: '198.51.100.7' },
+      authorizer: { lambda: 'principal' in overrides ? overrides.principal : PRINCIPAL_CONTEXT },
+    },
+  } as unknown as LambdaAuthorizerEvent;
 }
 
 function buildInput(overrides: Partial<SubmitTestimonialInput> = {}): SubmitTestimonialInput {
@@ -69,7 +89,6 @@ function buildDeps(overrides: Partial<TestimonialModerationDeps> = {}) {
   const deps: TestimonialModerationDeps = {
     repository,
     flags,
-    getAdminToken: async () => ADMIN_TOKEN,
     clock: fixedClock,
     ...overrides,
   };
@@ -91,7 +110,7 @@ describe('createTestimonialModerationHandler — GET /testimonials (public)', ()
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
-      fakeEvent({ routeKey: 'GET /testimonials', headers: {} }),
+      fakeEvent({ routeKey: 'GET /testimonials', principal: undefined }),
       {} as never,
       undefined as never,
     );
@@ -105,7 +124,7 @@ describe('createTestimonialModerationHandler — GET /testimonials (public)', ()
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
-      fakeEvent({ routeKey: 'GET /testimonials', headers: {} }),
+      fakeEvent({ routeKey: 'GET /testimonials', principal: undefined }),
       {} as never,
       undefined as never,
     );
@@ -114,8 +133,8 @@ describe('createTestimonialModerationHandler — GET /testimonials (public)', ()
   });
 });
 
-describe('createTestimonialModerationHandler — GET /testimonials?status=pending_review (moderation queue)', () => {
-  it('returns 404 when testimonials.moderationQueue.enabled is off, without checking the token', async () => {
+describe('createTestimonialModerationHandler — GET /testimonials/pending (moderation queue)', () => {
+  it('returns 404 when testimonials.moderationQueue.enabled is off, without resolving a principal', async () => {
     const source = new InMemoryFlagSource();
     source.set('testimonials.moderationQueue.enabled', false);
     const flags = new CachedFlagReader({ source, clock: fixedClock, ttlMs: 30_000 });
@@ -123,34 +142,38 @@ describe('createTestimonialModerationHandler — GET /testimonials?status=pendin
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
-      fakeEvent({
-        routeKey: 'GET /testimonials',
-        queryStringParameters: { status: 'pending_review' },
-        headers: {},
-      }),
+      fakeEvent({ routeKey: 'GET /testimonials/pending', principal: undefined }),
       {} as never,
       undefined as never,
     );
     expect(result).toMatchObject({ statusCode: 404 });
   });
 
-  it('rejects a missing token with 401', async () => {
+  it('rejects a request with no verified principal, 401', async () => {
     const { deps } = buildDeps();
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
-      fakeEvent({
-        routeKey: 'GET /testimonials',
-        queryStringParameters: { status: 'pending_review' },
-        headers: {},
-      }),
+      fakeEvent({ routeKey: 'GET /testimonials/pending', principal: undefined }),
       {} as never,
       undefined as never,
     );
     expect(result).toMatchObject({ statusCode: 401 });
   });
 
-  it('returns only pending_review testimonials for a valid token', async () => {
+  it('rejects a patient with 403', async () => {
+    const { deps } = buildDeps();
+    const handler = createTestimonialModerationHandler(deps);
+
+    const result = await handler(
+      fakeEvent({ routeKey: 'GET /testimonials/pending', principal: PATIENT_CONTEXT }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 403 });
+  });
+
+  it('returns only pending_review testimonials for a verified clinician', async () => {
     const { deps, repository } = buildDeps();
     await repository.submit(VISITOR, buildInput({ id: 'published-1' }));
     await repository.submit(VISITOR, buildInput({ id: 'pending-1' }));
@@ -158,10 +181,7 @@ describe('createTestimonialModerationHandler — GET /testimonials?status=pendin
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
-      fakeEvent({
-        routeKey: 'GET /testimonials',
-        queryStringParameters: { status: 'pending_review' },
-      }),
+      fakeEvent({ routeKey: 'GET /testimonials/pending' }),
       {} as never,
       undefined as never,
     );
@@ -190,7 +210,7 @@ describe('createTestimonialModerationHandler — POST /testimonials/{id}/publish
     expect(result).toMatchObject({ statusCode: 404 });
   });
 
-  it('rejects a wrong token with 401 and publishes nothing', async () => {
+  it('rejects a patient with 403 and publishes nothing', async () => {
     const { deps, repository } = buildDeps();
     await repository.submit(VISITOR, buildInput());
     const handler = createTestimonialModerationHandler(deps);
@@ -199,12 +219,12 @@ describe('createTestimonialModerationHandler — POST /testimonials/{id}/publish
       fakeEvent({
         routeKey: 'POST /testimonials/{id}/publish',
         pathParameters: { id: 'testimonial-1' },
-        headers: { authorization: 'Bearer wrong-token' },
+        principal: PATIENT_CONTEXT,
       }),
       {} as never,
       undefined as never,
     );
-    expect(result).toMatchObject({ statusCode: 401 });
+    expect(result).toMatchObject({ statusCode: 403 });
     expect(await repository.findById('testimonial-1')).toMatchObject({ status: 'pending_review' });
   });
 

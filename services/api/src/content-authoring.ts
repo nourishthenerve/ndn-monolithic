@@ -1,21 +1,29 @@
 // TASK 1.3.2: the write side of content-repository.ts's read/write split
 // (content-read-handler.ts stays public and read-only; this file is the
-// admin-token-gated counterpart). Every mutation goes through
+// clinician-gated counterpart). Every mutation goes through
 // ContentRepository.create/update/publish/unpublish — no endpoint here
 // calls anything delete-shaped, and `unpublish` only ever transitions
 // `status` (see ContentRepository.unpublish's own comment).
+//
+// TASK 2.5.4: the admin-token bridge this file stood behind since 1.3.2 is
+// retired — `requirePrincipal`/`can()` against `authz-matrix.ts`'s
+// 'Content item' row now gate every route, and the audit trail names
+// *which* clinician acted instead of one shared `admin-token` actor.
 //
 // Zod-validated request bodies (00-conventions.md: "Zod for runtime
 // validation at every boundary") — the first services/api handler that
 // parses an untrusted HTTP body; content-read-handler.ts only ever reads a
 // query-string keyword.
 import { supportedLocales } from '@ndn/i18n';
-import type { ContentItem } from '@ndn/shared-types';
-import type { APIGatewayProxyEventV2, APIGatewayProxyHandlerV2 } from 'aws-lambda';
+import type { ContentItem, Principal } from '@ndn/shared-types';
+import type {
+  APIGatewayProxyEventV2,
+  APIGatewayProxyHandlerV2WithLambdaAuthorizer,
+} from 'aws-lambda';
 import { z } from 'zod';
 
-import { verifyAdminToken } from './admin-auth.js';
-import { actorContext, requestOriginOf } from './audit.js';
+import { actorFromPrincipal, requestOriginOf } from './audit.js';
+import { can } from './authz.js';
 import { systemClock, type Clock } from './clock.js';
 import type {
   ContentRepository,
@@ -25,6 +33,7 @@ import type {
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
+import { requirePrincipal } from './request-principal.js';
 
 const SUPPORTED_LOCALES = new Set<string>(supportedLocales);
 
@@ -82,24 +91,19 @@ function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
 
 const CONTENT_AUTHORING_LOG_SAMPLE_RATE = 1;
 
+/** TASK 2.5.4: the matrix row this file's every mutation is governed by — `authz-matrix.ts`'s 'Content item'. */
+const CONTENT_RESOURCE = { entityType: 'content-item' } as const;
+
 export interface ContentAuthoringDeps {
   readonly repository: ContentRepository;
   readonly flags: FlagReader;
-  /**
-   * Resolves the current `ADMIN_API_TOKEN` (SSM SecureString, D-14).
-   * A function, not a plain string, so content-authoring-handler.ts's SSM
-   * fetch-and-cache can stay out of this file entirely — this file never
-   * touches AWS. Called once per request; a real resolver caches
-   * internally.
-   */
-  readonly getAdminToken: () => Promise<string>;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
 }
 
 export function createContentAuthoringHandler(
   deps: ContentAuthoringDeps,
-): APIGatewayProxyHandlerV2 {
+): APIGatewayProxyHandlerV2WithLambdaAuthorizer<Record<string, unknown> | undefined> {
   const clock = deps.clock ?? systemClock;
   const logger =
     deps.logger ?? createSampledLogger({ clock, sampleRate: CONTENT_AUTHORING_LOG_SAMPLE_RATE });
@@ -128,31 +132,26 @@ export function createContentAuthoringHandler(
       return respond(404, { error: 'NOT_FOUND' });
     }
 
-    // Checked before any repository call — a rejected token must mutate
-    // nothing, not even a read.
-    const authHeader = event.headers?.authorization ?? event.headers?.Authorization;
-    const adminToken = await deps.getAdminToken();
-    if (!verifyAdminToken(authHeader, adminToken)) {
+    // TASK 2.5.4: the real Lambda authorizer (2.2.2) replaces the admin
+    // bearer token — a rejected/absent principal must mutate nothing, not
+    // even a read, same ordering the token check had.
+    let principal: Principal;
+    try {
+      principal = requirePrincipal(event);
+    } catch {
       return respond(401, { error: 'UNAUTHORIZED' });
     }
 
-    // TASK 1.3.2: the bearer token proves "an authorised editor", not
-    // *which* one — there is no user identity yet (Phase 2's Cognito RBAC
-    // is what replaces this; see admin-auth.ts's own comment). The audit
-    // trail (audit.ts) still records every mutation, just against this one
-    // shared actor until then.
-    //
-    // TASK 2.1.3: that actor is now an `ActorContext` — the same "which
-    // one is unknown" claim, plus the role it acted with and the request
-    // it arrived on, because an audit row owes a `where` (audit.ts).
-    const actor = actorContext(
-      { subjectId: 'admin-token', role: 'admin-token' },
-      requestOriginOf(event),
-    );
+    // The audit trail (audit.ts) now records *which* clinician acted,
+    // replacing TASK 1.3.2's one shared `admin-token` actor.
+    const actor = actorFromPrincipal(principal, requestOriginOf(event));
 
     try {
       switch (routeKey) {
         case 'POST /content': {
+          if (!can(principal, 'create', CONTENT_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
           const parsed = createContentBodySchema.safeParse(parseJsonBody(event));
           if (!parsed.success) {
             return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
@@ -164,6 +163,9 @@ export function createContentAuthoringHandler(
           return respond(201, { item });
         }
         case 'PATCH /content/{id}': {
+          if (!can(principal, 'update', CONTENT_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
           const id = event.pathParameters?.id;
           if (!id) {
             return respond(400, { error: 'ID_REQUIRED' });
@@ -180,6 +182,9 @@ export function createContentAuthoringHandler(
           return respond(200, { item });
         }
         case 'POST /content/{id}/publish': {
+          if (!can(principal, 'update', CONTENT_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
           const id = event.pathParameters?.id;
           if (!id) {
             return respond(400, { error: 'ID_REQUIRED' });
@@ -188,6 +193,9 @@ export function createContentAuthoringHandler(
           return respond(200, { item });
         }
         case 'POST /content/{id}/unpublish': {
+          if (!can(principal, 'update', CONTENT_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
           const id = event.pathParameters?.id;
           if (!id) {
             return respond(400, { error: 'ID_REQUIRED' });

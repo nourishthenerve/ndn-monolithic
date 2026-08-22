@@ -30,7 +30,18 @@ export type FlagName =
   | 'auth.patientRegistration.enabled'
   // TASK 2.2.4: the whole `/auth/*` surface and the account pages. Off
   // means the site is exactly the brochure it is today.
-  | 'auth.webSignIn.enabled';
+  | 'auth.webSignIn.enabled'
+  // TASK 2.4.1: create/deactivate/reactivate clinician accounts. Default
+  // off until a principal clinician exists to operate it — the same
+  // "flag is not a convenience" reasoning auth.patientRegistration.enabled
+  // documents.
+  | 'clinicians.administration.enabled'
+  // TASK 2.5.1: turned on together with auth.patientRegistration.enabled
+  // — registering into a system with no route out of `pending` strands
+  // people there, which is this flag's own DoD line.
+  | 'assignment.enabled'
+  // TASK 2.5.3: the cross-caseload admin view. Default off.
+  | 'caseload.view.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */
