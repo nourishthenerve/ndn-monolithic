@@ -38,8 +38,13 @@ export interface NotificationRecipient {
   readonly id: string;
   readonly email: string;
   readonly phone?: string;
-  /** `PatientPersonal.marketingOptIn` — silences `marketing`-category templates only. */
-  readonly marketingOptIn: boolean;
+  /**
+   * `PatientPersonal.marketingOptIn` — silences `marketing`-category
+   * templates only. Optional (TASK 2.4.1): a clinician recipient has no
+   * such preference to have, and undefined reads as "not opted in" — safe,
+   * because no clinician-facing template is ever `category: 'marketing'`.
+   */
+  readonly marketingOptIn?: boolean;
 }
 
 export interface EmailSendInput {

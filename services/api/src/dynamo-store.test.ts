@@ -12,6 +12,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import type {
   BaseRecord,
+  Clinician,
   ContentItem,
   Registration,
   Testimonial,
@@ -23,6 +24,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
+  DynamoClinicianStore,
   DynamoContentStore,
   DynamoRegistrationStore,
   DynamoStore,
@@ -617,5 +619,102 @@ describe('DynamoWebhookEventStore', () => {
       .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
 
     await expect(store.tryClaim('evt_1')).resolves.toBe(false);
+  });
+});
+
+function buildClinician(overrides: Partial<Clinician> = {}): Clinician {
+  return {
+    id: 'sub-1',
+    displayName: 'A Clinician',
+    role: 'sub',
+    account_status: 'active',
+    status: 'active',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('DynamoClinicianStore', () => {
+  const store = new DynamoClinicianStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('get() reads the META row and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'CLI#sub-1', sk: 'META', ...buildClinician() } });
+
+    const result = await store.get('sub-1');
+    expect(result).toMatchObject({ id: 'sub-1', role: 'sub' });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'CLI#sub-1', sk: 'META' },
+    });
+  });
+
+  it('create() for a sub-clinician writes only the main item — no principal marker', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await store.create(buildClinician({ role: 'sub' }));
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems).toHaveLength(1);
+    expect(call?.TransactItems?.[0]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({ pk: 'CLI#sub-1', sk: 'META', role: 'sub' }),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() for a principal atomically writes the main item and the singleton marker', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await store.create(buildClinician({ role: 'principal' }));
+
+    const call = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input;
+    expect(call?.TransactItems).toHaveLength(2);
+    expect(call?.TransactItems?.[1]?.Put).toMatchObject({
+      TableName: 'ndn-data',
+      Item: { pk: 'CLI#PRINCIPAL_MARKER', sk: 'MARKER', clinicianId: 'sub-1' },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() maps a cancelled transaction to RECORD_ALREADY_EXISTS when the id already exists', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'CLI#sub-1', sk: 'META', ...buildClinician() } });
+
+    await expect(store.create(buildClinician())).rejects.toMatchObject({
+      code: 'RECORD_ALREADY_EXISTS',
+    });
+  });
+
+  it('create() maps a cancelled transaction to PRINCIPAL_ALREADY_EXISTS when the id is new but no principal slot is free', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+    ddbMock.on(GetCommand).resolves({}); // the disambiguating get() finds nothing
+
+    await expect(store.create(buildClinician({ id: 'sub-2', role: 'principal' }))).rejects.toMatchObject({
+      code: 'PRINCIPAL_ALREADY_EXISTS',
+    });
+  });
+
+  it('update() overwrites the main item, unconditionally', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.update(buildClinician({ account_status: 'deactivated' }));
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: expect.objectContaining({ pk: 'CLI#sub-1', sk: 'META', account_status: 'deactivated' }),
+    });
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input.ConditionExpression).toBeUndefined();
   });
 });

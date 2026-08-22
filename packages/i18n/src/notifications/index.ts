@@ -6,9 +6,17 @@
 // notification is translatable the day a second locale exists (D-04) —
 // this registry never carries a string itself, only which keys render it
 // and whether SMS is allowed.
+// TASK 2.4.1: 'clinical' is really "never silenced by marketingOptIn" —
+// broader than clinical content specifically. `clinicianDeactivated` is an
+// operational notice to a clinician, not a patient, and carries no clinical
+// content either; it belongs here on that same "never silenced" property,
+// not because it is clinical.
 export type NotificationCategory = 'clinical' | 'marketing';
 
-export type NotificationTemplateId = 'appointmentReminder1Hour' | 'marketingNewsletter';
+export type NotificationTemplateId =
+  | 'appointmentReminder1Hour'
+  | 'marketingNewsletter'
+  | 'clinicianDeactivated';
 
 export interface NotificationTemplateDef {
   readonly id: NotificationTemplateId;
@@ -41,6 +49,13 @@ export const NOTIFICATION_TEMPLATES: Readonly<Record<NotificationTemplateId, Not
     smsEligible: false,
     subjectKey: 'notifications.marketingNewsletter.subject',
     emailBodyKey: 'notifications.marketingNewsletter.emailBody',
+  },
+  clinicianDeactivated: {
+    id: 'clinicianDeactivated',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.clinicianDeactivated.subject',
+    emailBodyKey: 'notifications.clinicianDeactivated.emailBody',
   },
 };
 

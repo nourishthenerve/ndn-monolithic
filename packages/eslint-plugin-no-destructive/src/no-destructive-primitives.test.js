@@ -19,6 +19,8 @@ describe('ndn/no-destructive-primitives', () => {
         "const label = 'Delete this workshop registration';",
         "const hint = 'Drag and drop to reorder';",
         "const action = 's3:DeleteBucket';", // not the DeleteObject* family
+        'new AdminDisableUserCommand({ UserPoolId, Username });',
+        'new AdminEnableUserCommand({ UserPoolId, Username });',
         {
           code: `
             const denyS3Delete = {
@@ -55,6 +57,10 @@ describe('ndn/no-destructive-primitives', () => {
         {
           code: 'const req = { DeleteRequest: { Key: { id } } };',
           errors: [{ messageId: 'bannedIdentifier', data: { name: 'DeleteRequest' } }],
+        },
+        {
+          code: 'new AdminDeleteUserCommand({ UserPoolId, Username });',
+          errors: [{ messageId: 'bannedIdentifier', data: { name: 'AdminDeleteUserCommand' } }],
         },
         {
           code: 'const q = `DELETE FROM patients WHERE id = ${id}`;',

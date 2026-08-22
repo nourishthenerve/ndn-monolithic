@@ -397,6 +397,8 @@ describe('DataStack — feature-flag reads', () => {
     // TASK 2.2.3: auth.patientRegistration.enabled, default off until
     // TASK 2.5.1 can approve anyone.
     'registration-handler',
+    // TASK 2.4.1: clinicians.administration.enabled, default off.
+    'clinician-admin-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -499,10 +501,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     );
 
     // Every Lambda in this stack that goes through a repository: the seven
-    // that existed before TASK 2.1.3, the audit reader itself, and TASK
-    // 2.2.3's two registration functions. The authorizer is deliberately
-    // absent — it reads a status and writes nothing.
-    expect(withAuditTable).toHaveLength(10);
+    // that existed before TASK 2.1.3, the audit reader itself, TASK 2.2.3's
+    // two registration functions, and TASK 2.4.1's clinician-admin
+    // function. The authorizer is deliberately absent — it reads a status
+    // and writes nothing.
+    expect(withAuditTable).toHaveLength(11);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -548,11 +551,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('denies every other role in the stack any read of the AUDIT# partition', () => {
     const denials = statementsWithSid('DenyAuditPartitionReads');
 
-    // The seven pre-existing functions, TASK 2.2.2's authorizer and TASK
-    // 2.2.3's two registration roles; the audit reader is deliberately not
-    // among them, being the one role that is supposed to read that
-    // partition.
-    expect(denials).toHaveLength(10);
+    // The seven pre-existing functions, TASK 2.2.2's authorizer, TASK
+    // 2.2.3's two registration roles, and TASK 2.4.1's clinician-admin
+    // role; the audit reader is deliberately not among them, being the one
+    // role that is supposed to read that partition.
+    expect(denials).toHaveLength(11);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -569,7 +572,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(10);
+    expect(denials).toHaveLength(11);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -602,16 +605,18 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
 
   // CDK materialises an `AWS::ApiGatewayV2::Authorizer` when a *route*
   // binds it, not when `defaultAuthorizer` is set — a route that opts out
-  // with `HttpNoneAuthorizer` overrides the default, and today every route
-  // does. So the authorizer function deploys and the API-Gateway-side
-  // resource appears with the first protected route (TASK 2.2.3's
-  // registration endpoints).
+  // with `HttpNoneAuthorizer` overrides the default, and every route did,
+  // until now. TASK 2.4.1's three clinician-admin routes are the first to
+  // take no `authorizer:` override at all, so `defaultAuthorizer` (the
+  // real Lambda authorizer, TASK 2.2.2) applies to them for real and the
+  // API-Gateway-side resource appears for the first time.
   //
   // Asserted rather than left implicit, because "the authorizer is
-  // configured" and "the authorizer exists in the deployed API" are
-  // different claims and only the first one is true today.
-  it('has no API Gateway authorizer resource yet, because no route binds it yet', () => {
-    synth().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 0);
+  // configured" and "the authorizer exists in the deployed API" were
+  // different claims for every task through 2.3.2, and are the same claim
+  // starting here.
+  it('has exactly one API Gateway authorizer resource, once TASK 2.4.1 binds the first route to it', () => {
+    synth().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
   });
 
   it('leaves exactly the routes route-protection.ts names outside the authorizer', () => {
@@ -624,11 +629,14 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('has no route on this API behind the authorizer yet, and says so out loud', () => {
-    // Today's honest state. TASK 2.2.3's registration routes are the first
-    // entries here; when this assertion starts failing, that is the task
-    // landing, not a regression.
-    expect(routeKeys('CUSTOM')).toEqual([]);
+  it('puts exactly the three clinician-admin routes (TASK 2.4.1) behind the real authorizer', () => {
+    // The first routes on this API to take no `authorizer:` override —
+    // every route before them opted out with `PUBLIC_ROUTE` or
+    // `ADMIN_TOKEN_ROUTE` (route-protection.ts). When a fourth route joins
+    // this list, that is a task landing, not a regression.
+    expect(routeKeys('CUSTOM')).toEqual(
+      ['POST /clinicians', 'POST /clinicians/{id}/deactivate', 'POST /clinicians/{id}/reactivate'].sort(),
+    );
   });
 
   it('grants the authorizer one keyed read, scoped to the two profile partitions', () => {
@@ -730,7 +738,25 @@ describe('DataStack — patient registration (TASK 2.2.3)', () => {
     // says it "doesn't evaluate IAM policies". A grant here would be
     // permission that does nothing while reading as admin reach into the
     // directory.
-    expect(JSON.stringify(synth().findResources('AWS::IAM::Policy'))).not.toContain('cognito-idp:');
+    //
+    // Scoped to the registration function's *own* policy, not the whole
+    // template — TASK 2.4.1's clinician-admin function legitimately holds
+    // `cognito-idp:Admin*` grants (AdminCreateUser is authenticated,
+    // unlike SignUp), so a stack-wide string search would now be a false
+    // positive against the wrong role.
+    const template = synth();
+    const [registrationRoleId] = Object.entries(template.findResources('AWS::IAM::Role')).find(
+      ([logicalId]) => logicalId.startsWith('RegistrationFunctionRole'),
+    ) ?? [undefined];
+    expect(registrationRoleId).toBeDefined();
+
+    const registrationPolicies = Object.values(template.findResources('AWS::IAM::Policy')).filter(
+      (policy) =>
+        JSON.stringify(
+          (policy as { Properties: { Roles?: unknown } }).Properties.Roles ?? [],
+        ).includes(registrationRoleId as string),
+    );
+    expect(JSON.stringify(registrationPolicies)).not.toContain('cognito-idp:');
   });
 
   it('lets the registration endpoint write only the intake partition', () => {

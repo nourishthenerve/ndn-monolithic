@@ -121,6 +121,9 @@ export class DataStack extends Stack {
     const postConfirmationLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/post-confirmation-function`
       : '/ndn/post-confirmation-function';
+    const clinicianAdminLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/clinician-admin-function`
+      : '/ndn/clinician-admin-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -959,6 +962,140 @@ export class DataStack extends Stack {
       methods: [HttpMethod.GET],
       authorizer: ADMIN_TOKEN_ROUTE,
       integration: new HttpLambdaIntegration('AuditReadIntegration', auditReadFunction),
+    });
+
+    // TASK 2.4.1: clinician accounts. The first function on this API with
+    // no `authorizer:` override — `httpApi`'s `defaultAuthorizer` (the
+    // real Lambda authorizer, TASK 2.2.2) applies as-is, so these three
+    // routes are not in `route-protection.ts`'s `PUBLIC_ROUTE_KEYS` or
+    // `ADMIN_TOKEN_ROUTE_KEYS`, and data-stack.test.ts's opt-out-set
+    // assertion covers them by their absence.
+    const clinicianAdminRole = new Role(this, 'ClinicianAdminFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const clinicianAdminFunction = new NodejsFunction(this, 'ClinicianAdminFunction', {
+      entry: `${moduleDir}../../services/api/src/clinician-admin-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      // Up to four sequential Cognito Admin* calls on the deactivate path
+      // (disable, global sign-out, get-user, then the SES send), each its
+      // own HTTPS round trip.
+      timeout: Duration.seconds(15),
+      role: clinicianAdminRole,
+      environment: {
+        CLINICIAN_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        NOTIFICATION_TABLE_NAME: this.table.tableName,
+        CLINICIAN_USER_POOL_ID,
+        CLINICIAN_ADMIN_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'ClinicianAdminFunctionLogGroup', clinicianAdminLogGroupName),
+    });
+    grantFlagReads(this, clinicianAdminRole);
+
+    // Scoped to the `CLI#*` partition only — this function's repository
+    // reach is exactly clinician-repository.ts's own, nothing wider.
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWriteClinicianAccounts',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
+      }),
+    );
+    // The audit and delivery-log rows this function writes — `PutItem`
+    // only, on both prefixes: it writes audit rows and delivery records,
+    // never queries either back (attachAuditPartitionReadGuardrail below
+    // closes the audit half of that; the delivery log has no reader at
+    // all yet — dynamo-notification-log.ts's own header).
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditAndDeliveryRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
+          },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(clinicianAdminRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(clinicianAdminRole, this.table);
+
+    // The four Admin* calls clinician-admin-handler.ts's ports use —
+    // create, disable, enable, global-sign-out, get-user — and nothing
+    // wider. No `AdminDeleteUser` here or anywhere: `AdminDeleteUserCommand`
+    // is a banned identifier repo-wide (packages/eslint-plugin-no-destructive),
+    // so a future addition of it to this policy's own action list would
+    // still leave no *code path* able to call it — the IAM grant and the
+    // lint ban are independent guards on the same prohibition.
+    const clinicianUserPoolArn = Stack.of(this).formatArn({
+      service: 'cognito-idp',
+      resource: 'userpool',
+      resourceName: CLINICIAN_USER_POOL_ID,
+    });
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'AdministerClinicianCognitoUsers',
+        effect: Effect.ALLOW,
+        actions: [
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminDisableUser',
+          'cognito-idp:AdminEnableUser',
+          'cognito-idp:AdminUserGlobalSignOut',
+          'cognito-idp:AdminGetUser',
+        ],
+        resources: [clinicianUserPoolArn],
+      }),
+    );
+    // The deactivation notice, sent through 2.3.1's Notifier — same
+    // verified identity every other SES sender in this stack uses.
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendClinicianDeactivationEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
+          }),
+        ],
+      }),
+    );
+
+    const clinicianAdminIntegration = new HttpLambdaIntegration(
+      'ClinicianAdminIntegration',
+      clinicianAdminFunction,
+    );
+    httpApi.addRoutes({
+      path: '/clinicians',
+      methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/clinicians/{id}/deactivate',
+      methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/clinicians/{id}/reactivate',
+      methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

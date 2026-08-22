@@ -111,5 +111,7 @@
   "notifications.appointmentReminder1Hour.emailBody": "Your appointment with Nourish the Nerve is at {time} (UK time) — about an hour from now.\n\nIf you need to reschedule, please contact us as soon as you can.",
   "notifications.appointmentReminder1Hour.smsBody": "Reminder: your Nourish the Nerve appointment is at {time} today.",
   "notifications.marketingNewsletter.subject": "News from Nourish the Nerve",
-  "notifications.marketingNewsletter.emailBody": "{headline}\n\nYou're receiving this because you opted in to hear from Nourish the Nerve. You can change your preference at any time from your account."
+  "notifications.marketingNewsletter.emailBody": "{headline}\n\nYou're receiving this because you opted in to hear from Nourish the Nerve. You can change your preference at any time from your account.",
+  "notifications.clinicianDeactivated.subject": "Your Nourish the Nerve clinician account has been deactivated",
+  "notifications.clinicianDeactivated.emailBody": "Your clinician account has been deactivated by the principal clinician. You will not be able to sign in.\n\nIf you believe this is a mistake, please contact the principal clinician directly."
 }

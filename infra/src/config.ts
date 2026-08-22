@@ -158,6 +158,11 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // the account pages open. Displacing nothing, for the same reason.
   '/ndn/auth-token-function',
   '/ndn/site-deployment',
+  // TASK 2.4.1: one principal clinician, acting rarely (inviting or
+  // deactivating a colleague), behind a default-off flag. Displacing
+  // nothing — smaller volume than every function already in the
+  // monitored ten, and smaller than most already on this list.
+  '/ndn/clinician-admin-function',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret

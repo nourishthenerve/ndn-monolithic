@@ -27,8 +27,9 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { ContentItem, Registration, Testimonial, Workshop } from '@ndn/shared-types';
+import type { Clinician, ContentItem, Registration, Testimonial, Workshop } from '@ndn/shared-types';
 
+import type { ClinicianStore } from './clinician-repository.js';
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
 import type { RegistrationStore, WorkshopCapacityStore } from './registration-repository.js';
@@ -606,5 +607,101 @@ export class DynamoWebhookEventStore implements WebhookEventStore {
       }
       throw error;
     }
+  }
+}
+
+// TASK 2.4.1: `PK = CLI#<sub>` / `SK = META` — the clinician-repository.ts
+// header explains why the record is keyed by the Cognito `sub`. The
+// singleton "exactly one principal" marker is a second, fixed-key row
+// (`PK = CLI#PRINCIPAL_MARKER`), conditioned in the *same* transaction as
+// the main item so the invariant holds even under concurrent creates.
+const CLINICIAN_PK = (id: string) => `CLI#${id}`;
+const CLINICIAN_PRINCIPAL_MARKER_PK = 'CLI#PRINCIPAL_MARKER';
+const CLINICIAN_PRINCIPAL_MARKER_SK = 'MARKER';
+
+export interface DynamoClinicianStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoClinicianStore implements ClinicianStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoClinicianStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async get(id: string): Promise<Clinician | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: CLINICIAN_PK(id), sk: META_SORT_KEY },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<Clinician>(result.Item);
+  }
+
+  /**
+   * On `TransactionCanceledException`, a follow-up `get` disambiguates
+   * which condition failed — deliberately not `CancellationReasons`
+   * parsing/ordering, which is a real but SDK/version-shaped detail this
+   * store does not want to depend on for choosing between two very
+   * differently-meaning errors. One extra read, on the (rare) failure path
+   * only.
+   */
+  async create(item: Clinician): Promise<void> {
+    const mainItem = { ...item, pk: CLINICIAN_PK(item.id), sk: META_SORT_KEY };
+    const transactItems = [
+      {
+        Put: {
+          TableName: this.tableName,
+          Item: mainItem,
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+      ...(item.role === 'principal'
+        ? [
+            {
+              Put: {
+                TableName: this.tableName,
+                Item: {
+                  pk: CLINICIAN_PRINCIPAL_MARKER_PK,
+                  sk: CLINICIAN_PRINCIPAL_MARKER_SK,
+                  clinicianId: item.id,
+                },
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
+            },
+          ]
+        : []),
+    ];
+
+    try {
+      await this.client.send(new TransactWriteCommand({ TransactItems: transactItems }));
+    } catch (error) {
+      if (error instanceof TransactionCanceledException) {
+        const existing = await this.get(item.id);
+        if (existing) {
+          throw new AppError('RECORD_ALREADY_EXISTS', `clinician ${item.id} already exists`);
+        }
+        throw new AppError('PRINCIPAL_ALREADY_EXISTS', 'a principal clinician already exists');
+      }
+      throw error;
+    }
+  }
+
+  /** Plain overwrite — deactivate/reactivate. Never touches the principal marker: role is immutable through this path. */
+  async update(item: Clinician): Promise<void> {
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: { ...item, pk: CLINICIAN_PK(item.id), sk: META_SORT_KEY },
+      }),
+    );
   }
 }

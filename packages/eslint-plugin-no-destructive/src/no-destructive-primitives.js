@@ -5,11 +5,20 @@
 // AWS SDK v3 command constructors and the BatchWriteItem delete branch. Banning
 // the bare identifier (not just call sites) also catches imports, re-exports,
 // and shadow re-declarations of the same name.
+//
+// TASK 2.4.1: `AdminDeleteUserCommand` (Cognito) joins the set — identity is
+// C-03's protected estate too, and the same reasoning applies: "no code path
+// calls it" is stronger as a repo-wide lint fact than as a habit reviewers
+// have to remember to check on every clinician/patient-admin PR going
+// forward. `AdminDisableUserCommand`/`AdminEnableUserCommand` (deactivate/
+// reactivate) are unaffected — deactivation is the only lifecycle this
+// codebase's identity layer has.
 const BANNED_IDENTIFIERS = new Set([
   'DeleteItemCommand',
   'DeleteObjectCommand',
   'DeleteObjectsCommand',
   'DeleteRequest',
+  'AdminDeleteUserCommand',
 ]);
 
 // Multi-word, statement-shaped patterns only — a bare "delete"/"drop" is
