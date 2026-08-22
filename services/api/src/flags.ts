@@ -60,7 +60,10 @@ export type FlagName =
   // capabilities, and turning one on must never silently turn on real
   // SMS spend. Default off; the EventBridge rule keeps firing regardless,
   // this flag is the rollback with no deploy.
-  | 'appointments.reminders.enabled';
+  | 'appointments.reminders.enabled'
+  // TASK 3.5.1: a clinician assigning existing (published) content to a
+  // patient, and the patient's own hydrated read of it. Default off.
+  | 'contentAssignment.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

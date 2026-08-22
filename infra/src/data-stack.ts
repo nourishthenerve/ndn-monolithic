@@ -203,6 +203,9 @@ export class DataStack extends Stack {
     const reminderSweepLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/reminder-sweep-function`
       : '/ndn/reminder-sweep-function';
+    const contentAssignmentLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/content-assignment-function`
+      : '/ndn/content-assignment-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1806,6 +1809,95 @@ export class DataStack extends Stack {
     new Rule(this, 'ReminderSweepSchedule', {
       schedule: Schedule.rate(Duration.minutes(15)),
       targets: [new LambdaFunction(reminderSweepFunction)],
+    });
+
+    // TASK 3.5.1: content assignment — a clinician linking existing,
+    // published content to a patient, and the patient's own hydrated
+    // read of the list. `PAT#<id>` / `CONTENT#<id>`, no GSI of its own
+    // (`04-data-model-rbac.md`'s own minimal key shape for this entity).
+    const contentAssignmentRole = new Role(this, 'ContentAssignmentFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const contentAssignmentFunction = new NodejsFunction(this, 'ContentAssignmentFunction', {
+      entry: `${moduleDir}../../services/api/src/content-assignment-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: contentAssignmentRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(
+        this,
+        'ContentAssignmentFunctionLogGroup',
+        contentAssignmentLogGroupName,
+      ),
+    });
+    grantFlagReads(this, contentAssignmentRole);
+
+    // `GetItem` (the patient lookup), `PutItem` (a new `CONTENT#<id>`
+    // assignment row), and `Query` (`listForPatient`'s own main-table
+    // `begins_with` read) — all on `PAT#*` alone, the same
+    // partition-key-only granularity `appointmentRole`'s own
+    // `ReadWriteAndQueryPatientAppointments` statement already uses.
+    contentAssignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWriteAndQueryPatientContentAssignments',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // A separate statement, `CONTENT#*` alone, `GetItem` only — the
+    // publish-check `ContentAssignmentRepository.assign` performs before
+    // writing, and the title/excerpt hydration `listForPatient` performs
+    // on read (`content-assignment-repository.ts`). Never `Query`/`Scan`:
+    // both call sites already hold the exact `contentId` they need.
+    contentAssignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadContentForAssignment',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONTENT#*'] } },
+      }),
+    );
+    // A separate statement, on `AUDIT#*` alone — every assignment
+    // `ContentAssignmentRepository.assign` writes reaches the same
+    // `DynamoAuditLog` every other writer in this stack uses.
+    contentAssignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(contentAssignmentRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(contentAssignmentRole, this.table);
+
+    const contentAssignmentIntegration = new HttpLambdaIntegration(
+      'ContentAssignmentIntegration',
+      contentAssignmentFunction,
+    );
+    httpApi.addRoutes({
+      path: '/patients/{id}/content',
+      methods: [HttpMethod.POST],
+      integration: contentAssignmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/content',
+      methods: [HttpMethod.GET],
+      integration: contentAssignmentIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

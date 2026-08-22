@@ -35,6 +35,7 @@ import type {
   AssignmentRequest,
   ClinicalRecord,
   Clinician,
+  ContentAssignment,
   ContentItem,
   Patient,
   Registration,
@@ -46,6 +47,7 @@ import type { AppointmentStore } from './appointment-repository.js';
 import type { AssignmentStore } from './assignment-repository.js';
 import type { CaseloadStore } from './caseload-repository.js';
 import type { ClinicianStore } from './clinician-repository.js';
+import type { ContentAssignmentStore } from './content-assignment-repository.js';
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
 import type { RegistrationStore, WorkshopCapacityStore } from './registration-repository.js';
@@ -1407,5 +1409,66 @@ export class DynamoAppointmentStore implements AppointmentStore {
       }
       throw error;
     }
+  }
+}
+
+// TASK 3.5.1: `PAT#<id>` / `CONTENT#<id>` — the minimal key shape
+// `04-data-model-rbac.md` gives this entity, no GSI of its own. The
+// content item's own record stays at `CONTENT#<id>` / `META`
+// (`DynamoContentStore` above); this store only ever writes and reads the
+// assignment link.
+const CONTENT_ASSIGNMENT_SORT_KEY = (contentId: string) => `CONTENT#${contentId}`;
+const CONTENT_ASSIGNMENT_SORT_KEY_PREFIX = 'CONTENT#';
+
+export interface DynamoContentAssignmentStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoContentAssignmentStore implements ContentAssignmentStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoContentAssignmentStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async create(assignment: ContentAssignment): Promise<void> {
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: {
+            ...assignment,
+            pk: PATIENT_PK(assignment.patientId),
+            sk: CONTENT_ASSIGNMENT_SORT_KEY(assignment.contentId),
+          },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'RECORD_ALREADY_EXISTS',
+          `patient ${assignment.patientId} already has content ${assignment.contentId} assigned`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async listForPatient(patientId: string): Promise<ContentAssignment[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :contentPrefix)',
+        ExpressionAttributeValues: {
+          ':patientKey': PATIENT_PK(patientId),
+          ':contentPrefix': CONTENT_ASSIGNMENT_SORT_KEY_PREFIX,
+        },
+      }),
+    );
+    return (result.Items ?? []).map((item) => withoutTableKeys<ContentAssignment>(item));
   }
 }
