@@ -7,6 +7,12 @@ import { formatMessage } from './format.js';
 import type { MessageVars } from './format.js';
 import en from './locales/en.json' with { type: 'json' };
 
+// TASK 2.3.1: the notification template registry — re-exported from the
+// package root so services/api imports it the same way it imports `t()`,
+// rather than reaching into a subpath this package's `exports` map doesn't
+// declare.
+export * from './notifications/index.js';
+
 export type Locale = 'en'; // extended additively when a language is named (LL-08)
 
 export const defaultLocale: Locale = 'en';

@@ -106,5 +106,10 @@
   "account.signedInIntro": "You are signed in. Your care plan and appointments will appear here.",
   "account.callback.heading": "Signing you in",
   "account.callback.exchanging": "Completing your sign-in…",
-  "account.callback.failed": "That sign-in link could not be completed. Please try again."
+  "account.callback.failed": "That sign-in link could not be completed. Please try again.",
+  "notifications.appointmentReminder1Hour.subject": "Your appointment reminder",
+  "notifications.appointmentReminder1Hour.emailBody": "Your appointment with Nourish the Nerve is at {time} (UK time) — about an hour from now.\n\nIf you need to reschedule, please contact us as soon as you can.",
+  "notifications.appointmentReminder1Hour.smsBody": "Reminder: your Nourish the Nerve appointment is at {time} today.",
+  "notifications.marketingNewsletter.subject": "News from Nourish the Nerve",
+  "notifications.marketingNewsletter.emailBody": "{headline}\n\nYou're receiving this because you opted in to hear from Nourish the Nerve. You can change your preference at any time from your account."
 }

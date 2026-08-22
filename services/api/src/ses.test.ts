@@ -2,7 +2,11 @@ import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { createSesContactEmailSender, createSesRegistrationEmailSender } from './ses.js';
+import {
+  createSesContactEmailSender,
+  createSesGenericEmailSender,
+  createSesRegistrationEmailSender,
+} from './ses.js';
 
 const sesMock = mockClient(SESv2Client);
 
@@ -54,6 +58,36 @@ describe('createSesRegistrationEmailSender', () => {
       Content: {
         Simple: {
           Subject: { Data: "You're registered: Balance & Falls Prevention" },
+        },
+      },
+    });
+    expect(calls[0]?.args[0].input.ReplyToAddresses).toBeUndefined();
+  });
+});
+
+describe('createSesGenericEmailSender', () => {
+  it('sends the caller-supplied subject and body, no ReplyTo', async () => {
+    sesMock.on(SendEmailCommand).resolves({ MessageId: 'msg-1' });
+    const sendEmail = createSesGenericEmailSender({
+      fromAddress: 'noreply@nourishthenerve.com',
+      client: sesMock as unknown as SESv2Client,
+    });
+
+    await sendEmail({
+      to: 'patient@example.com',
+      subject: 'Your appointment reminder',
+      body: 'Your appointment is at 14:00.',
+    });
+
+    const calls = sesMock.commandCalls(SendEmailCommand);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args[0].input).toMatchObject({
+      FromEmailAddress: 'noreply@nourishthenerve.com',
+      Destination: { ToAddresses: ['patient@example.com'] },
+      Content: {
+        Simple: {
+          Subject: { Data: 'Your appointment reminder' },
+          Body: { Text: { Data: 'Your appointment is at 14:00.' } },
         },
       },
     });
