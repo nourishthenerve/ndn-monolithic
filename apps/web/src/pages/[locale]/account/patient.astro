@@ -30,11 +30,17 @@
 // /patients/me/{diagnosis,care-plan}` returns, already stripped of any
 // `private{}` half for a patient caller (`projection.ts`) — this page
 // never re-filters that response.
+//
+// TASK 3.4.1 step 6: `NextAppointmentPanel` added below `PatientProfile`,
+// ahead of the clinical-record timelines — an unambiguous data source
+// unlike TASK 3.3.2's assessment history (`GET /patients/me/appointments`
+// needs no per-form id the frontend would otherwise have no way to know).
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
 import { ClinicalRecordTimeline } from '../../../account/ClinicalRecordTimeline.js';
+import { NextAppointmentPanel } from '../../../account/NextAppointmentPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
@@ -79,6 +85,17 @@ const heading = t('patientProfile.heading', undefined, locale);
         marketingOptInLabel: t('patientProfile.marketingOptIn', undefined, locale),
         saveLabel: t('patientProfile.save', undefined, locale),
         savingLabel: t('patientProfile.saving', undefined, locale),
+      }}
+    />
+    <NextAppointmentPanel
+      client:only="react"
+      strings={{
+        heading: t('nextAppointment.heading', undefined, locale),
+        loadingLabel: t('nextAppointment.loading', undefined, locale),
+        forbiddenLabel: t('nextAppointment.forbidden', undefined, locale),
+        errorLabel: t('nextAppointment.error', undefined, locale),
+        emptyLabel: t('nextAppointment.empty', undefined, locale),
+        durationLabel: t('nextAppointment.duration', undefined, locale),
       }}
     />
     <ClinicalRecordTimeline

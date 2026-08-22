@@ -21,7 +21,8 @@ export type NotificationTemplateId =
   | 'patientDeclined'
   | 'patientReassigned'
   | 'clinicianCaseloadPatientAdded'
-  | 'clinicianCaseloadPatientRemoved';
+  | 'clinicianCaseloadPatientRemoved'
+  | 'newMessage';
 
 export interface NotificationTemplateDef {
   readonly id: NotificationTemplateId;
@@ -103,6 +104,18 @@ export const NOTIFICATION_TEMPLATES: Readonly<Record<NotificationTemplateId, Not
     smsEligible: false,
     subjectKey: 'notifications.clinicianCaseloadPatientRemoved.subject',
     emailBodyKey: 'notifications.clinicianCaseloadPatientRemoved.emailBody',
+  },
+  // TASK 3.6.1 step 5: content-free — "you have a new message," never the
+  // message body, the same privacy posture every other notification
+  // template in this codebase states for a mailbox that may not be the
+  // recipient's alone to read. Sent to whichever party did not send the
+  // message that triggered it.
+  newMessage: {
+    id: 'newMessage',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.newMessage.subject',
+    emailBodyKey: 'notifications.newMessage.emailBody',
   },
 };
 

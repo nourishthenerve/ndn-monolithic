@@ -1,0 +1,36 @@
+// TASK 3.4.1: the deployed Lambda entry for POST /patients/{id}/appointments,
+// GET /clinicians/me/calendar, and GET /patients/{id}/appointments
+// (infra/src/data-stack.ts) — same split every other endpoint uses:
+// appointment.ts is SDK-free and unit-testable, this file wires the real
+// DynamoDB-backed repositories together.
+import type { Patient } from '@ndn/shared-types';
+
+import { AppointmentRepository } from './appointment-repository.js';
+import { createAppointmentHandler } from './appointment.js';
+import { systemClock } from './clock.js';
+import { DynamoAuditLog } from './dynamo-audit-log.js';
+import { DynamoAppointmentStore, DynamoStore } from './dynamo-store.js';
+import { PatientRepository } from './patient-repository.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
+
+const flags = createSsmFlagReader();
+
+const tableName = process.env.PRINCIPAL_TABLE_NAME ?? '';
+const audit = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
+
+const patients = new PatientRepository(
+  new DynamoStore<Patient>({
+    tableName,
+    keys: { pk: (id: string) => `PAT#${id}`, sk: () => 'PROFILE' },
+  }),
+  audit,
+  systemClock,
+);
+
+const appointments = new AppointmentRepository(
+  new DynamoAppointmentStore({ tableName }),
+  audit,
+  systemClock,
+);
+
+export const handler = createAppointmentHandler({ patients, appointments, flags });

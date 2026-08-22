@@ -30,22 +30,28 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type {
+  Appointment,
   Assessment,
   AssignmentRequest,
   ClinicalRecord,
   Clinician,
+  ContentAssignment,
   ContentItem,
+  Message,
   Patient,
   Registration,
   Testimonial,
   Workshop,
 } from '@ndn/shared-types';
 
+import type { AppointmentStore } from './appointment-repository.js';
 import type { AssignmentStore } from './assignment-repository.js';
 import type { CaseloadStore } from './caseload-repository.js';
 import type { ClinicianStore } from './clinician-repository.js';
+import type { ContentAssignmentStore } from './content-assignment-repository.js';
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
+import type { MessagePage, MessageStore } from './message-repository.js';
 import type { RegistrationStore, WorkshopCapacityStore } from './registration-repository.js';
 import type { KeyValueStore } from './store.js';
 import type { WebhookEventStore } from './stripe-webhook.js';
@@ -1135,5 +1141,426 @@ export class DynamoAssessmentStore implements KeyValueStore<Assessment> {
       }
       throw error;
     }
+  }
+}
+
+// TASK 3.4.1: `docs/adr/0002-database.md` proved this shape before either
+// GSI1 or this entity existed — `gsi1pk = CLI#<clinicianId>`, `gsi1sk =
+// APPT#<scheduledAt>`, on the identical partition TASK 2.5.1's own
+// `PAT#<patientId>` clinician→patients projection already uses. The two
+// patterns never collide even sharing a partition: each query scopes its
+// own `gsi1sk` prefix (`PAT#` vs `APPT#`), and a `BETWEEN 'APPT#<from>'
+// AND 'APPT#<to>'` bound can never stray into the `PAT#` range.
+//
+// The main-table sort key and GSI1's projected sort key are the identical
+// string (`APPT#<scheduledAt>`) — one function derives both, so they
+// cannot drift apart the way two independently-written literals could.
+const APPOINTMENT_SORT_KEY = (scheduledAt: string) => `APPT#${scheduledAt}`;
+const APPOINTMENT_SORT_KEY_PREFIX = 'APPT#';
+
+// TASK 3.4.3: GSI4's shape, proved in docs/adr/0002-database.md — one
+// fixed partition value (the same "_all"-shaped precedent GSI3's own
+// `CASELOAD#all` already establishes for a query with no natural
+// per-entity partition), `gsi4sk = <iso-utc>#<patientId>` so the index
+// sorts chronologically and stays unique across two patients who share
+// an exact instant.
+const GSI4_INDEX_NAME = 'GSI4';
+const GSI4_REMINDER_PK = 'APPT#REMINDER';
+const GSI4_REMINDER_SK = (scheduledAt: string, patientId: string) => `${scheduledAt}#${patientId}`;
+
+export interface DynamoAppointmentStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoAppointmentStore implements AppointmentStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoAppointmentStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async create(appointment: Appointment): Promise<void> {
+    const sk = APPOINTMENT_SORT_KEY(appointment.scheduledAt);
+    // TASK 3.4.3: GSI4's projection, sparse — only while the appointment
+    // is genuinely a future one at the moment it's created.
+    // `scheduledAt > created_at` is that check without a second clock
+    // dependency in this store: `created_at` already *is* "now" at
+    // creation (the repository stamps both from the same `Clock` read).
+    // Never re-evaluated later — an appointment that ages past its own
+    // `scheduledAt` without being reminded (a missed sweep window) stays
+    // in GSI4 rather than silently falling out of it; `docs/adr/0002-
+    // database.md`'s own proof names cleanup as the sweep's job, not
+    // this store's.
+    const isFutureAtCreation = appointment.scheduledAt > appointment.created_at;
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: {
+            ...appointment,
+            pk: PATIENT_PK(appointment.patientId),
+            sk,
+            // Derived from `clinicianId`/`scheduledAt` alone — see this
+            // section's header — never a separate input a caller could
+            // pass out of step with the fields they're projected from.
+            gsi1pk: GSI1_CLINICIAN_PK(appointment.clinicianId),
+            gsi1sk: sk,
+            ...(isFutureAtCreation
+              ? {
+                  gsi4pk: GSI4_REMINDER_PK,
+                  gsi4sk: GSI4_REMINDER_SK(appointment.scheduledAt, appointment.patientId),
+                }
+              : {}),
+          },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'APPOINTMENT_ALREADY_EXISTS',
+          `patient ${appointment.patientId} already has an appointment at ${appointment.scheduledAt}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async listForPatient(patientId: string): Promise<Appointment[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :apptPrefix)',
+        ExpressionAttributeValues: {
+          ':patientKey': PATIENT_PK(patientId),
+          ':apptPrefix': APPOINTMENT_SORT_KEY_PREFIX,
+        },
+      }),
+    );
+    return (result.Items ?? []).map((item) => withoutTableKeys<Appointment>(item));
+  }
+
+  /**
+   * GSI1 is `KEYS_ONLY` (`infra/src/data-stack.ts`) — the query below
+   * returns only key attributes, which *does* include the table's own
+   * `pk`/`sk` (DynamoDB always projects the base table's primary key into
+   * every secondary index, regardless of the index's own projection
+   * type), so each row names exactly the `GetItem` that fetches its full
+   * record. The same two-step shape `DynamoCaseloadStore.queryPage` +
+   * `getPatient` already uses for GSI3, for the identical reason.
+   */
+  async listForClinicianCalendar(
+    clinicianId: string,
+    from: string,
+    to: string,
+  ): Promise<Appointment[]> {
+    const queryResult = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI1_INDEX_NAME,
+        KeyConditionExpression: 'gsi1pk = :clinicianKey AND gsi1sk BETWEEN :fromKey AND :toKey',
+        ExpressionAttributeValues: {
+          ':clinicianKey': GSI1_CLINICIAN_PK(clinicianId),
+          ':fromKey': APPOINTMENT_SORT_KEY(from),
+          ':toKey': APPOINTMENT_SORT_KEY(to),
+        },
+      }),
+    );
+    const appointments: Appointment[] = [];
+    for (const row of queryResult.Items ?? []) {
+      const pk = row.pk;
+      const sk = row.sk;
+      if (typeof pk !== 'string' || typeof sk !== 'string') {
+        continue;
+      }
+      const result = await this.client.send(
+        new GetCommand({ TableName: this.tableName, Key: { pk, sk } }),
+      );
+      // TASK 3.4.2: "index gives candidates, the read confirms them" —
+      // the identical discipline `DynamoCaseloadStore.queryPage` already
+      // uses for its own stale-row case. A cancelled appointment stays a
+      // real GSI1 row (cancelling never touches `gsi1pk`/`gsi1sk`) but
+      // has no business on a clinician's live calendar; `listForPatient`
+      // below applies no such filter, since a patient's own history is a
+      // different question this file answers differently on purpose.
+      if (result.Item && result.Item.appointment_status !== 'cancelled') {
+        appointments.push(withoutTableKeys<Appointment>(result.Item));
+      }
+    }
+    return appointments;
+  }
+
+  /**
+   * `appointment_status` alone — never `scheduledAt`, so `gsi1pk`/`gsi1sk`
+   * (derived from `clinicianId`/`scheduledAt`) never need re-deriving.
+   * `ReturnValues: 'ALL_NEW'` hands back the updated row in the same
+   * round trip a separate `GetItem` would otherwise cost.
+   */
+  async cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment> {
+    const sk = APPOINTMENT_SORT_KEY(scheduledAt);
+    try {
+      const result = await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: PATIENT_PK(patientId), sk },
+          UpdateExpression: 'SET appointment_status = :cancelled, updated_at = :now',
+          ConditionExpression: 'attribute_exists(pk)',
+          ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': now },
+          ReturnValues: 'ALL_NEW',
+        }),
+      );
+      return withoutTableKeys<Appointment>(result.Attributes ?? {});
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'RECORD_NOT_FOUND',
+          `no appointment for patient ${patientId} at ${scheduledAt}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * GSI4 is `KEYS_ONLY` — the query below returns only key attributes
+   * (which does include the table's own `pk`/`sk`, always projected
+   * regardless of the index's own projection type), so each row names
+   * exactly the `GetItem` that fetches its full record. `appointment_
+   * status`/`reminder_sent_at` are not attributes GSI4 carries, so
+   * excluding an ineligible row can only happen after that fetch —
+   * `docs/adr/0002-database.md`'s own proof states why a literal
+   * DynamoDB `FilterExpression` naming either could never do this here.
+   *
+   * The upper bound is `windowEnd` plus one millisecond, not `windowEnd`
+   * itself: `gsi4sk` is `<iso-utc>#<patientId>`, always strictly longer
+   * than a bare `windowEnd` string that shares its prefix, and a longer
+   * string that starts with a shorter one sorts *after* it — so an
+   * appointment scheduled at the exact instant `windowEnd` names would
+   * otherwise fall just outside an inclusive `BETWEEN`. Nudging the bound
+   * forward by the smallest real unit of time this key format can
+   * resolve closes that gap without needing a sentinel character.
+   */
+  async listReminderCandidates(windowStart: string, windowEnd: string): Promise<Appointment[]> {
+    const inclusiveWindowEnd = new Date(new Date(windowEnd).getTime() + 1).toISOString();
+    const queryResult = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI4_INDEX_NAME,
+        KeyConditionExpression: 'gsi4pk = :reminderKey AND gsi4sk BETWEEN :fromKey AND :toKey',
+        ExpressionAttributeValues: {
+          ':reminderKey': GSI4_REMINDER_PK,
+          ':fromKey': windowStart,
+          ':toKey': inclusiveWindowEnd,
+        },
+      }),
+    );
+    const appointments: Appointment[] = [];
+    for (const row of queryResult.Items ?? []) {
+      const pk = row.pk;
+      const sk = row.sk;
+      if (typeof pk !== 'string' || typeof sk !== 'string') {
+        continue;
+      }
+      const result = await this.client.send(
+        new GetCommand({ TableName: this.tableName, Key: { pk, sk } }),
+      );
+      const item = result.Item;
+      if (
+        item &&
+        item.appointment_status === 'scheduled' &&
+        item.reminder_sent_at === undefined
+      ) {
+        appointments.push(withoutTableKeys<Appointment>(item));
+      }
+    }
+    return appointments;
+  }
+
+  /**
+   * The atomic claim: conditioned on `reminder_sent_at` being absent
+   * *and* the row existing, so two overlapping sweeps (or one sweep's
+   * candidate appearing again on the next tick before it's excluded by
+   * the check above) can never both proceed to send. `gsi4pk`/`gsi4sk`
+   * are untouched — the same "index gives candidates, the read confirms
+   * them" split `listReminderCandidates` and `cancel` both already keep,
+   * never a write that also has to re-derive an index projection.
+   */
+  async claimForReminder(
+    patientId: string,
+    scheduledAt: string,
+    now: string,
+  ): Promise<Appointment | undefined> {
+    try {
+      const result = await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: PATIENT_PK(patientId), sk: APPOINTMENT_SORT_KEY(scheduledAt) },
+          UpdateExpression: 'SET reminder_sent_at = :now',
+          ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(reminder_sent_at)',
+          ExpressionAttributeValues: { ':now': now },
+          ReturnValues: 'ALL_NEW',
+        }),
+      );
+      return withoutTableKeys<Appointment>(result.Attributes ?? {});
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+}
+
+// TASK 3.5.1: `PAT#<id>` / `CONTENT#<id>` — the minimal key shape
+// `04-data-model-rbac.md` gives this entity, no GSI of its own. The
+// content item's own record stays at `CONTENT#<id>` / `META`
+// (`DynamoContentStore` above); this store only ever writes and reads the
+// assignment link.
+const CONTENT_ASSIGNMENT_SORT_KEY = (contentId: string) => `CONTENT#${contentId}`;
+const CONTENT_ASSIGNMENT_SORT_KEY_PREFIX = 'CONTENT#';
+
+export interface DynamoContentAssignmentStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoContentAssignmentStore implements ContentAssignmentStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoContentAssignmentStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async create(assignment: ContentAssignment): Promise<void> {
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: {
+            ...assignment,
+            pk: PATIENT_PK(assignment.patientId),
+            sk: CONTENT_ASSIGNMENT_SORT_KEY(assignment.contentId),
+          },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'RECORD_ALREADY_EXISTS',
+          `patient ${assignment.patientId} already has content ${assignment.contentId} assigned`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async listForPatient(patientId: string): Promise<ContentAssignment[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :contentPrefix)',
+        ExpressionAttributeValues: {
+          ':patientKey': PATIENT_PK(patientId),
+          ':contentPrefix': CONTENT_ASSIGNMENT_SORT_KEY_PREFIX,
+        },
+      }),
+    );
+    return (result.Items ?? []).map((item) => withoutTableKeys<ContentAssignment>(item));
+  }
+}
+
+// TASK 3.6.1: `PAT#<id>` / `MSG#<created_at>#<id>` — the disambiguating
+// suffix is the identical idiom `DynamoAuditLog`'s own sort key already
+// establishes (`<iso-instant>#<newEventId()>`): the timestamp prefix gives
+// the ordering, the suffix only has to be unique, so two messages sent in
+// the same clinician↔patient thread within the same millisecond (a real
+// possibility once this is genuinely bidirectional, per this task's own
+// finding) can never collide.
+const MESSAGE_SORT_KEY_PREFIX = 'MSG#';
+const MESSAGE_SORT_KEY = (createdAt: string, id: string) => `MSG#${createdAt}#${id}`;
+
+function encodeMessageCursor(key: Record<string, unknown> | undefined): string | undefined {
+  if (!key) {
+    return undefined;
+  }
+  return Buffer.from(JSON.stringify(key), 'utf-8').toString('base64url');
+}
+
+function decodeMessageCursor(cursor: string | undefined): Record<string, unknown> | undefined {
+  if (!cursor) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8')) as Record<string, unknown>;
+  } catch {
+    throw new AppError('INVALID_CURSOR', 'cursor could not be decoded');
+  }
+}
+
+export interface DynamoMessageStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+  /** Defaults to node:crypto's randomUUID — injectable so a test can force a key collision. */
+  readonly newMessageId?: () => string;
+}
+
+export class DynamoMessageStore implements MessageStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+  private readonly newMessageId: () => string;
+
+  constructor(options: DynamoMessageStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+    this.newMessageId = options.newMessageId ?? randomUUID;
+  }
+
+  async create(message: Message): Promise<void> {
+    const sk = MESSAGE_SORT_KEY(message.created_at, this.newMessageId());
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: { ...message, pk: PATIENT_PK(message.patientId), sk },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'RECORD_ALREADY_EXISTS',
+          `message collision for patient ${message.patientId} at ${sk}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /** Main-table `Query`, never a `Scan` — ascending sort-key order threads the conversation oldest-first without a separate `ScanIndexForward` override. */
+  async listForThread(
+    patientId: string,
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<MessagePage> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :messagePrefix)',
+        ExpressionAttributeValues: {
+          ':patientKey': PATIENT_PK(patientId),
+          ':messagePrefix': MESSAGE_SORT_KEY_PREFIX,
+        },
+        Limit: limit,
+        ExclusiveStartKey: decodeMessageCursor(cursor),
+      }),
+    );
+    const items = (result.Items ?? []).map((item) => withoutTableKeys<Message>(item));
+    return { items, nextCursor: encodeMessageCursor(result.LastEvaluatedKey) };
   }
 }

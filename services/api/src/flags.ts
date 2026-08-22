@@ -51,7 +51,25 @@ export type FlagName =
   | 'clinicalRecords.enabled'
   // TASK 3.3.1: assessment-form authoring (write) and, 3.3.2, the read
   // half over the same records. Default off.
-  | 'assessments.enabled';
+  | 'assessments.enabled'
+  // TASK 3.4.1: scheduling, and both the clinician-calendar and
+  // patient's-own-list reads over the same records. Default off.
+  | 'appointments.enabled'
+  // TASK 3.4.3: the 1-hour reminder send, independent of
+  // appointments.enabled (D-11) — scheduling and reminding are two
+  // capabilities, and turning one on must never silently turn on real
+  // SMS spend. Default off; the EventBridge rule keeps firing regardless,
+  // this flag is the rollback with no deploy.
+  | 'appointments.reminders.enabled'
+  // TASK 3.5.1: a clinician assigning existing (published) content to a
+  // patient, and the patient's own hydrated read of it. Default off.
+  | 'contentAssignment.enabled'
+  // TASK 3.6.1: patient<->clinician messaging, both routes gated by one
+  // flag — a send half with no read half to read it back is not a useful
+  // flag state, the identical "one flag for both halves" reasoning
+  // clinicalRecords.enabled/assessments.enabled already establish.
+  // Default off.
+  | 'messaging.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

@@ -1,0 +1,67 @@
+---
+// TASK 3.6.2: the read/compose surface for TASK 3.6.1's messaging.
+// Statically generated and **empty**, same discipline account/
+// caseload.astro states — what makes this page private is not server
+// rendering but that its content is not in the HTML at all. The island
+// below decides whether to fetch anything, and renders nothing until the
+// session resolves.
+//
+// Deliberately absent from routes.ts, same as account/caseload.astro and
+// account/content.astro — TASK 1.1.3's a11y gate (tests/pr-env/
+// a11y-full.test.ts) scans every registered route unauthenticated, and an
+// authenticated-only page has no accessible content to find that way. See
+// docs/runbooks/messaging.md for what accessibility verification this
+// page actually has instead, and the same honestly-named gap every prior
+// page this phase added names: this codebase has no live-session pr-env
+// testing mechanism yet.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { MessageThread } from '../../../account/MessageThread.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('messageThread.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('messageThread.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    signedOut={
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signIn', undefined, locale)} />
+      </p>
+    }
+  >
+    <MessageThread
+      client:only="react"
+      strings={{
+        loadingLabel: t('messageThread.loading', undefined, locale),
+        forbiddenLabel: t('messageThread.forbidden', undefined, locale),
+        errorLabel: t('messageThread.error', undefined, locale),
+        emptyLabel: t('messageThread.empty', undefined, locale),
+        composePlaceholder: t('messageThread.composePlaceholder', undefined, locale),
+        sendLabel: t('messageThread.send', undefined, locale),
+        sendingLabel: t('messageThread.sending', undefined, locale),
+        sendErrorLabel: t('messageThread.sendError', undefined, locale),
+        rateLimitedLabel: t('messageThread.rateLimited', undefined, locale),
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>

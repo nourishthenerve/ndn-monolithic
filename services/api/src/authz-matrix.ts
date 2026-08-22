@@ -131,11 +131,16 @@ export const RBAC_MATRIX: RbacMatrix = {
     'Sub-clinician (unassigned)': DENIED,
     Principal: ['read'],
   },
-  // | Messages | C R (own thread) | — | R (own patients) | — | R |
+  // TASK 3.6.1: corrected from `R (own patients)` — the assigned
+  // sub-clinician's cell was read-only, which does not match the row's
+  // own key-shape description, "Patient↔clinician" (`04-data-model-
+  // rbac.md`). Corrected in the doc first, then transcribed here, per
+  // this file's own standing rule.
+  // | Messages | C R (own thread) | — | C R (own patients) | — | R |
   Messages: {
     'Patient (own)': ['create', 'read'],
     'Patient (other)': DENIED,
-    'Sub-clinician (assigned)': ['read'],
+    'Sub-clinician (assigned)': ['create', 'read'],
     'Sub-clinician (unassigned)': DENIED,
     Principal: ['read'],
   },
