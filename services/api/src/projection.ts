@@ -85,22 +85,45 @@ export function unprojected<T>(record: T): Unprojected<T> {
 }
 
 /**
- * The entity types docs/plan/04-data-model-rbac.md gives a `private{}`
- * half. Exactly one today: the assessment form. Anything else has its
- * private half stripped unconditionally — deny by default, the same
- * discipline authz.ts applies to an unrecognised entity type. Without this
- * the check would collapse for every other row of the matrix, because
- * `can()` ignores `fieldSet` outside the two assessment rows, so
- * "may you read the private half of a diagnosis?" would answer "yes, you
- * may read a diagnosis."
+ * The assessment form is `authz-matrix.ts`'s one entity governed by *two*
+ * matrix rows for one resource — `resolveRow` branches on `fieldSet` for
+ * this entity type alone, so asking `can()` "may you read the private
+ * half?" and "may you read the visible half?" are two different lookups.
  */
-const PRIVATE_BEARING_ENTITY_TYPES: readonly string[] = [ASSESSMENT_ENTITY_TYPE];
+const ASSESSMENT_SPLIT_ENTITY_TYPES: readonly string[] = [ASSESSMENT_ENTITY_TYPE];
+
+/**
+ * TASK 3.2.1: diagnosis and care plan (`04-data-model-rbac.md`'s
+ * `'Diagnosis / care plan'` row) carry a `private{}` half too, but — unlike
+ * assessment — under a *single* matrix row: `'Patient (own)'` and
+ * `'Sub-clinician (assigned)'`/`'Principal'` all resolve the same `read`
+ * action on the same row, so `resolveRow` has nothing to branch on and
+ * asking `can()` about a fabricated `fieldSet: 'private'` here would just
+ * re-ask "may you read a diagnosis at all?" — answering "yes" for the
+ * owning patient, exactly the leak this file exists to prevent.
+ *
+ * The row's own cells already draw the line the matrix can't: the patient
+ * column's cell is bare `R`, never `C`/`U`, and only the two clinician
+ * columns carry it — so "is this principal a clinician role" is the
+ * correct, and only available, second axis. `can()` still decides whether
+ * the read is allowed **at all** (an unassigned sub-clinician's `resource`
+ * fails there); this function only ever narrows an already-permitted read
+ * down to "with or without the private half."
+ */
+const ROLE_GATED_PRIVATE_ENTITY_TYPES: readonly string[] = ['diagnosis', 'care-plan'];
 
 function mayReadPrivate(principal: Principal, resource: Resource): boolean {
-  if (!PRIVATE_BEARING_ENTITY_TYPES.includes(resource.entityType)) {
-    return false;
+  if (ASSESSMENT_SPLIT_ENTITY_TYPES.includes(resource.entityType)) {
+    return can(principal, 'read', { ...resource, fieldSet: PRIVATE_FIELD_KEY }).allowed;
   }
-  return can(principal, 'read', { ...resource, fieldSet: PRIVATE_FIELD_KEY }).allowed;
+  if (ROLE_GATED_PRIVATE_ENTITY_TYPES.includes(resource.entityType)) {
+    return principal.role !== 'patient' && can(principal, 'read', resource).allowed;
+  }
+  // Deny by default: an entity type the data model gives no private half
+  // (or one this file has not been told about) never leaks one, even to
+  // the principal clinician — the same discipline authz.ts applies to an
+  // unrecognised entity type.
+  return false;
 }
 
 /**

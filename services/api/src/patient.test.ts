@@ -73,7 +73,12 @@ function fakeEvent(overrides: {
   } as unknown as LambdaAuthorizerEvent;
 }
 
-async function build(overrides: { flagEnabled?: boolean } = {}) {
+async function build(
+  overrides: {
+    flagEnabled?: boolean;
+    caseloadByClinicianId?: Record<string, string[]>;
+  } = {},
+) {
   const store = new InMemoryStore<Patient>();
   const audit = new InMemoryAuditLog();
   const repository = new PatientRepository(store, audit, clock);
@@ -89,7 +94,11 @@ async function build(overrides: { flagEnabled?: boolean } = {}) {
   flagSource.set('patients.profile.enabled', overrides.flagEnabled ?? true);
   const flags = new CachedFlagReader({ source: flagSource, clock, ttlMs: FLAG_CACHE_TTL_MS });
 
-  const handler = createPatientHandler({ repository, flags, clock });
+  const caseloadByClinicianId = overrides.caseloadByClinicianId ?? {};
+  const listPatientIdsForClinician = async (clinicianId: string) =>
+    caseloadByClinicianId[clinicianId] ?? [];
+
+  const handler = createPatientHandler({ repository, flags, listPatientIdsForClinician, clock });
   return { handler, repository, store };
 }
 
@@ -334,6 +343,80 @@ describe('PATCH /patients/{id} — a clinician patching an assigned patient', ()
         body: { personal: { phone: '1' } },
       }),
     );
+    expect(response.statusCode).toBe(404);
+  });
+});
+
+describe('GET /caseload/mine (TASK 3.1.2)', () => {
+  it("returns the sub-clinician's own assigned patients, hydrated with a full name", async () => {
+    const { handler, store } = await build({
+      caseloadByClinicianId: { 'cli-1': ['pat-1'] },
+    });
+    const existing = await store.get('pat-1');
+    await store.put('pat-1', { ...existing!, assigned_clinician_id: 'cli-1' });
+
+    const response = await invoke(handler, fakeEvent({ routeKey: 'GET /caseload/mine', principal: ASSIGNED_SUB_CONTEXT }));
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as { items: { patientId: string; fullName: string }[] };
+    expect(body.items).toEqual([{ patientId: 'pat-1', fullName: 'A Patient' }]);
+  });
+
+  it('never returns another clinician\'s patients — the GSI1 query is keyed on the caller alone', async () => {
+    const { handler, store } = await build({
+      caseloadByClinicianId: { 'cli-1': ['pat-1'] },
+    });
+    // Assigned to a *different* clinician than the one asking.
+    const existing = await store.get('pat-1');
+    await store.put('pat-1', { ...existing!, assigned_clinician_id: 'cli-9' });
+
+    const response = await invoke(handler, fakeEvent({ routeKey: 'GET /caseload/mine', principal: ASSIGNED_SUB_CONTEXT }));
+
+    const body = JSON.parse(response.body) as { items: unknown[] };
+    expect(response.statusCode).toBe(200);
+    // listPatientIdsForClinician named it, but the follow-up read shows it
+    // no longer belongs — skipped, not surfaced stale, the same property
+    // caseload-repository.test.ts already proves for GSI3.
+    expect(body.items).toEqual([]);
+  });
+
+  it('returns an empty list, not an error, for a clinician with no assigned patients', async () => {
+    const { handler } = await build();
+    const response = await invoke(handler, fakeEvent({ routeKey: 'GET /caseload/mine', principal: ASSIGNED_SUB_CONTEXT }));
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ items: [] });
+  });
+
+  it('is 403 for a patient — there is no clinicianId to self-assign against', async () => {
+    const { handler } = await build();
+    const response = await invoke(handler, fakeEvent({ routeKey: 'GET /caseload/mine', principal: OWNER_CONTEXT }));
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("resolves the principal's own caseload the same way, regardless of assignment", async () => {
+    const { handler, store } = await build({
+      caseloadByClinicianId: { 'principal-sub': ['pat-1'] },
+    });
+    const existing = await store.get('pat-1');
+    await store.put('pat-1', { ...existing!, assigned_clinician_id: 'principal-sub' });
+
+    const response = await invoke(handler, fakeEvent({ routeKey: 'GET /caseload/mine', principal: PRINCIPAL_CONTEXT }));
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as { items: unknown[] };
+    expect(body.items).toHaveLength(1);
+  });
+
+  it('is 401 with no verified principal', async () => {
+    const { handler } = await build();
+    const response = await invoke(handler, fakeEvent({ routeKey: 'GET /caseload/mine', principal: undefined }));
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('is 404 when the flag is off', async () => {
+    const { handler } = await build({ flagEnabled: false });
+    const response = await invoke(handler, fakeEvent({ routeKey: 'GET /caseload/mine', principal: ASSIGNED_SUB_CONTEXT }));
     expect(response.statusCode).toBe(404);
   });
 });

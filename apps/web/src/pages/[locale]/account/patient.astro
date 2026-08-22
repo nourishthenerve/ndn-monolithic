@@ -22,10 +22,19 @@
 // clinician principal owns) — not an error, and not worth branching the
 // page itself on role for, the same posture every other account page in
 // this codebase already takes.
+//
+// TASK 3.2.2: two `ClinicalRecordTimeline` instances (`diagnosis`,
+// `care-plan`) added below `PatientProfile` — one component, two
+// `kind` values, the same "one shape, two key prefixes" choice the
+// backend already makes. Each renders exactly what `GET
+// /patients/me/{diagnosis,care-plan}` returns, already stripped of any
+// `private{}` half for a patient caller (`projection.ts`) — this page
+// never re-filters that response.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
+import { ClinicalRecordTimeline } from '../../../account/ClinicalRecordTimeline.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
@@ -70,6 +79,30 @@ const heading = t('patientProfile.heading', undefined, locale);
         marketingOptInLabel: t('patientProfile.marketingOptIn', undefined, locale),
         saveLabel: t('patientProfile.save', undefined, locale),
         savingLabel: t('patientProfile.saving', undefined, locale),
+      }}
+    />
+    <ClinicalRecordTimeline
+      client:only="react"
+      kind="diagnosis"
+      strings={{
+        heading: t('clinicalRecordTimeline.diagnosisHeading', undefined, locale),
+        loadingLabel: t('clinicalRecordTimeline.loading', undefined, locale),
+        forbiddenLabel: t('clinicalRecordTimeline.forbidden', undefined, locale),
+        errorLabel: t('clinicalRecordTimeline.error', undefined, locale),
+        emptyLabel: t('clinicalRecordTimeline.diagnosisEmpty', undefined, locale),
+        versionLabel: t('clinicalRecordTimeline.version', undefined, locale),
+      }}
+    />
+    <ClinicalRecordTimeline
+      client:only="react"
+      kind="care-plan"
+      strings={{
+        heading: t('clinicalRecordTimeline.carePlanHeading', undefined, locale),
+        loadingLabel: t('clinicalRecordTimeline.loading', undefined, locale),
+        forbiddenLabel: t('clinicalRecordTimeline.forbidden', undefined, locale),
+        errorLabel: t('clinicalRecordTimeline.error', undefined, locale),
+        emptyLabel: t('clinicalRecordTimeline.carePlanEmpty', undefined, locale),
+        versionLabel: t('clinicalRecordTimeline.version', undefined, locale),
       }}
     />
   </RequireAuth>
