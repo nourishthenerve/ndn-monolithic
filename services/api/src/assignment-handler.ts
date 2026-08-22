@@ -21,6 +21,7 @@ import { DynamoAssignmentStore, DynamoClinicianStore } from './dynamo-store.js';
 import { createNotifier } from './notifications.js';
 import { createSesGenericEmailSender } from './ses.js';
 import { InMemorySmsFlagReader } from './sms-flags.js';
+import { createAwsEndUserMessagingSmsProvider } from './sms-provider.js';
 import { InMemoryRateLimiter } from './sms-rate-limiter.js';
 import { InMemorySpendCounterStore } from './sms-spend-cap.js';
 import { createSmsSender } from './sms.js';
@@ -58,6 +59,12 @@ const notifier = createNotifier({
     flags: new InMemorySmsFlagReader(),
     rateLimiter: new InMemoryRateLimiter({ clock: systemClock, limit: 0, windowMs: 3_600_000 }),
     spendCounter: new InMemorySpendCounterStore(),
+    // Inert alongside the rest of this wiring (comment above) — no
+    // origination identity is provisioned for this function, and none
+    // needs to be while nothing reachable through it is ever smsEligible.
+    provider: createAwsEndUserMessagingSmsProvider({
+      originationIdentity: process.env.SMS_ORIGINATION_IDENTITY ?? '',
+    }),
     clock: systemClock,
   }),
   log: new DynamoDeliveryLog({ tableName: process.env.NOTIFICATION_TABLE_NAME ?? '' }),

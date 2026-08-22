@@ -26,6 +26,7 @@ import { DynamoClinicianStore } from './dynamo-store.js';
 import { createNotifier } from './notifications.js';
 import { createSesGenericEmailSender } from './ses.js';
 import { InMemorySmsFlagReader } from './sms-flags.js';
+import { createAwsEndUserMessagingSmsProvider } from './sms-provider.js';
 import { InMemoryRateLimiter } from './sms-rate-limiter.js';
 import { InMemorySpendCounterStore } from './sms-spend-cap.js';
 import { createSmsSender } from './sms.js';
@@ -107,8 +108,8 @@ const reactivateClinicianUser: AdminReactivateClinicianPort = {
 // (packages/i18n/src/notifications/index.ts), so the SMS path below is
 // wired only to satisfy `NotifierDeps`'s type — `InMemorySmsFlagReader`'s
 // default (`enabled: false`) means it could not send even if somehow
-// reached, and TASK 2.3.2 (a separate, stacked branch) is what wires a
-// real provider for the one template that does need one.
+// reached. No origination identity is provisioned for this function, and
+// none needs to be while nothing reachable through it is ever smsEligible.
 const notifier = createNotifier({
   sendEmail: createSesGenericEmailSender({
     fromAddress: process.env.CLINICIAN_ADMIN_FROM_EMAIL ?? 'noreply@nourishthenerve.com',
@@ -118,6 +119,9 @@ const notifier = createNotifier({
     flags: new InMemorySmsFlagReader(),
     rateLimiter: new InMemoryRateLimiter({ clock: systemClock, limit: 0, windowMs: 3_600_000 }),
     spendCounter: new InMemorySpendCounterStore(),
+    provider: createAwsEndUserMessagingSmsProvider({
+      originationIdentity: process.env.SMS_ORIGINATION_IDENTITY ?? '',
+    }),
     clock: systemClock,
   }),
   log: new DynamoDeliveryLog({ tableName: process.env.NOTIFICATION_TABLE_NAME ?? '' }),
