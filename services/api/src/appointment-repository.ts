@@ -51,6 +51,32 @@ export interface AppointmentStore {
    * no-op.
    */
   cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment>;
+  /**
+   * TASK 3.4.3: GSI4 `Query` (`gsi4pk = 'APPT#REMINDER'`, `gsi4sk BETWEEN
+   * windowStart AND windowEnd`), never a `Scan`. GSI4 is `KEYS_ONLY`
+   * (`docs/adr/0002-database.md`'s own proof), so this is a two-step read
+   * like `listForClinicianCalendar`'s own: a follow-up `GetItem` per
+   * candidate, with rows excluded — `appointment_status !== 'scheduled'`
+   * or `reminder_sent_at` already set — after the fetch confirms them,
+   * never via a `FilterExpression` naming an attribute the index does
+   * not project. Candidates only: the caller still must
+   * `claimForReminder` each one before treating it as truly eligible.
+   */
+  listReminderCandidates(windowStart: string, windowEnd: string): Promise<Appointment[]>;
+  /**
+   * The one atomic step that makes replay-safety a property of the store,
+   * not the caller's own care: `SET reminder_sent_at`, conditioned on it
+   * being currently absent *and* the row existing. Returns the claimed
+   * appointment on success; `undefined` on a failed condition — always a
+   * benign, expected outcome during normal sweep operation (already
+   * claimed by an earlier tick, or the row no longer exists), never an
+   * error to throw for.
+   */
+  claimForReminder(
+    patientId: string,
+    scheduledAt: string,
+    now: string,
+  ): Promise<Appointment | undefined>;
 }
 
 export interface AppointmentInput {
@@ -134,5 +160,33 @@ export class AppointmentRepository {
       }),
     );
     return unprojected(updated);
+  }
+
+  /**
+   * No `can()`/`ActorContext` gate — unlike every other method here,
+   * this one is never reached through an authenticated HTTP request.
+   * `reminder-sweep.ts` is the only caller, invoked on an EventBridge
+   * schedule with no principal to authorise against; `audit.ts`'s own
+   * log exists to say *who* did something, and nobody did — the
+   * `Notifier`'s own delivery record (`notification-log.ts`), written
+   * for every claimed appointment regardless of outcome, is this flow's
+   * durable record instead.
+   */
+  async listReminderCandidates(
+    windowStart: string,
+    windowEnd: string,
+  ): Promise<Unprojected<Appointment>[]> {
+    const items = await this.store.listReminderCandidates(windowStart, windowEnd);
+    return items.map(unprojected);
+  }
+
+  /** See `AppointmentStore.claimForReminder`'s own doc — the same no-principal reasoning as `listReminderCandidates` applies here too. */
+  async claimForReminder(
+    patientId: string,
+    scheduledAt: string,
+  ): Promise<Unprojected<Appointment> | undefined> {
+    const now = this.clock.now().toISOString();
+    const claimed = await this.store.claimForReminder(patientId, scheduledAt, now);
+    return claimed ? unprojected(claimed) : undefined;
   }
 }

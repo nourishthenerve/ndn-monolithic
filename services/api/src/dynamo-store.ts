@@ -1154,6 +1154,16 @@ export class DynamoAssessmentStore implements KeyValueStore<Assessment> {
 const APPOINTMENT_SORT_KEY = (scheduledAt: string) => `APPT#${scheduledAt}`;
 const APPOINTMENT_SORT_KEY_PREFIX = 'APPT#';
 
+// TASK 3.4.3: GSI4's shape, proved in docs/adr/0002-database.md — one
+// fixed partition value (the same "_all"-shaped precedent GSI3's own
+// `CASELOAD#all` already establishes for a query with no natural
+// per-entity partition), `gsi4sk = <iso-utc>#<patientId>` so the index
+// sorts chronologically and stays unique across two patients who share
+// an exact instant.
+const GSI4_INDEX_NAME = 'GSI4';
+const GSI4_REMINDER_PK = 'APPT#REMINDER';
+const GSI4_REMINDER_SK = (scheduledAt: string, patientId: string) => `${scheduledAt}#${patientId}`;
+
 export interface DynamoAppointmentStoreOptions {
   readonly tableName: string;
   readonly client?: DynamoDBDocumentClient;
@@ -1170,6 +1180,17 @@ export class DynamoAppointmentStore implements AppointmentStore {
 
   async create(appointment: Appointment): Promise<void> {
     const sk = APPOINTMENT_SORT_KEY(appointment.scheduledAt);
+    // TASK 3.4.3: GSI4's projection, sparse — only while the appointment
+    // is genuinely a future one at the moment it's created.
+    // `scheduledAt > created_at` is that check without a second clock
+    // dependency in this store: `created_at` already *is* "now" at
+    // creation (the repository stamps both from the same `Clock` read).
+    // Never re-evaluated later — an appointment that ages past its own
+    // `scheduledAt` without being reminded (a missed sweep window) stays
+    // in GSI4 rather than silently falling out of it; `docs/adr/0002-
+    // database.md`'s own proof names cleanup as the sweep's job, not
+    // this store's.
+    const isFutureAtCreation = appointment.scheduledAt > appointment.created_at;
     try {
       await this.client.send(
         new PutCommand({
@@ -1183,6 +1204,12 @@ export class DynamoAppointmentStore implements AppointmentStore {
             // pass out of step with the fields they're projected from.
             gsi1pk: GSI1_CLINICIAN_PK(appointment.clinicianId),
             gsi1sk: sk,
+            ...(isFutureAtCreation
+              ? {
+                  gsi4pk: GSI4_REMINDER_PK,
+                  gsi4sk: GSI4_REMINDER_SK(appointment.scheduledAt, appointment.patientId),
+                }
+              : {}),
           },
           ConditionExpression: 'attribute_not_exists(pk)',
         }),
@@ -1288,6 +1315,95 @@ export class DynamoAppointmentStore implements AppointmentStore {
           'RECORD_NOT_FOUND',
           `no appointment for patient ${patientId} at ${scheduledAt}`,
         );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * GSI4 is `KEYS_ONLY` — the query below returns only key attributes
+   * (which does include the table's own `pk`/`sk`, always projected
+   * regardless of the index's own projection type), so each row names
+   * exactly the `GetItem` that fetches its full record. `appointment_
+   * status`/`reminder_sent_at` are not attributes GSI4 carries, so
+   * excluding an ineligible row can only happen after that fetch —
+   * `docs/adr/0002-database.md`'s own proof states why a literal
+   * DynamoDB `FilterExpression` naming either could never do this here.
+   *
+   * The upper bound is `windowEnd` plus one millisecond, not `windowEnd`
+   * itself: `gsi4sk` is `<iso-utc>#<patientId>`, always strictly longer
+   * than a bare `windowEnd` string that shares its prefix, and a longer
+   * string that starts with a shorter one sorts *after* it — so an
+   * appointment scheduled at the exact instant `windowEnd` names would
+   * otherwise fall just outside an inclusive `BETWEEN`. Nudging the bound
+   * forward by the smallest real unit of time this key format can
+   * resolve closes that gap without needing a sentinel character.
+   */
+  async listReminderCandidates(windowStart: string, windowEnd: string): Promise<Appointment[]> {
+    const inclusiveWindowEnd = new Date(new Date(windowEnd).getTime() + 1).toISOString();
+    const queryResult = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI4_INDEX_NAME,
+        KeyConditionExpression: 'gsi4pk = :reminderKey AND gsi4sk BETWEEN :fromKey AND :toKey',
+        ExpressionAttributeValues: {
+          ':reminderKey': GSI4_REMINDER_PK,
+          ':fromKey': windowStart,
+          ':toKey': inclusiveWindowEnd,
+        },
+      }),
+    );
+    const appointments: Appointment[] = [];
+    for (const row of queryResult.Items ?? []) {
+      const pk = row.pk;
+      const sk = row.sk;
+      if (typeof pk !== 'string' || typeof sk !== 'string') {
+        continue;
+      }
+      const result = await this.client.send(
+        new GetCommand({ TableName: this.tableName, Key: { pk, sk } }),
+      );
+      const item = result.Item;
+      if (
+        item &&
+        item.appointment_status === 'scheduled' &&
+        item.reminder_sent_at === undefined
+      ) {
+        appointments.push(withoutTableKeys<Appointment>(item));
+      }
+    }
+    return appointments;
+  }
+
+  /**
+   * The atomic claim: conditioned on `reminder_sent_at` being absent
+   * *and* the row existing, so two overlapping sweeps (or one sweep's
+   * candidate appearing again on the next tick before it's excluded by
+   * the check above) can never both proceed to send. `gsi4pk`/`gsi4sk`
+   * are untouched — the same "index gives candidates, the read confirms
+   * them" split `listReminderCandidates` and `cancel` both already keep,
+   * never a write that also has to re-derive an index projection.
+   */
+  async claimForReminder(
+    patientId: string,
+    scheduledAt: string,
+    now: string,
+  ): Promise<Appointment | undefined> {
+    try {
+      const result = await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: PATIENT_PK(patientId), sk: APPOINTMENT_SORT_KEY(scheduledAt) },
+          UpdateExpression: 'SET reminder_sent_at = :now',
+          ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(reminder_sent_at)',
+          ExpressionAttributeValues: { ':now': now },
+          ReturnValues: 'ALL_NEW',
+        }),
+      );
+      return withoutTableKeys<Appointment>(result.Attributes ?? {});
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        return undefined;
       }
       throw error;
     }

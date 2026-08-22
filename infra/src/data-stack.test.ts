@@ -51,12 +51,13 @@ describe('DataStack — table', () => {
     });
   });
 
-  it('creates only GSI1 (clinician -> patients/calendar), GSI2 (keyword -> content) and GSI3 (cross-caseload), all KEYS_ONLY, nothing else', () => {
+  it('creates only GSI1 (clinician -> patients/calendar), GSI2 (keyword -> content), GSI3 (cross-caseload) and GSI4 (reminder window), all KEYS_ONLY, nothing else', () => {
     const template = synth();
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       // arrayWith matches patterns as an ordered subsequence, not a set —
       // listed in synthesis order (GSI2's addGlobalSecondaryIndex call
-      // precedes GSI1's, which precedes GSI3's, in the stack's constructor).
+      // precedes GSI1's, which precedes GSI3's, which precedes GSI4's,
+      // in the stack's constructor).
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({
           IndexName: 'GSI2',
@@ -82,13 +83,21 @@ describe('DataStack — table', () => {
           ],
           Projection: { ProjectionType: 'KEYS_ONLY' },
         }),
+        Match.objectLike({
+          IndexName: 'GSI4',
+          KeySchema: [
+            { AttributeName: 'gsi4pk', KeyType: 'HASH' },
+            { AttributeName: 'gsi4sk', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'KEYS_ONLY' },
+        }),
       ]),
     });
     const table = Object.values(template.findResources('AWS::DynamoDB::Table'))[0] as {
       Properties: { GlobalSecondaryIndexes: unknown[] };
     };
-    // arrayWith (above) proves all three exist; this proves there is no fourth.
-    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(3);
+    // arrayWith (above) proves all four exist; this proves there is no fifth.
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(4);
   });
 });
 
@@ -461,6 +470,8 @@ describe('DataStack — feature-flag reads', () => {
     'assessment-handler',
     // TASK 3.4.1: appointments.enabled, default off.
     'appointment-handler',
+    // TASK 3.4.3: appointments.reminders.enabled, default off.
+    'reminder-sweep-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -573,10 +584,13 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // `findById` never reaches one — but its constructor still takes an
     // `AuditWriter`, so the env var is present regardless), TASK 3.1.1's
     // patient function, TASK 3.2.1's clinical-record function, TASK
-    // 3.3.1's assessment function, and TASK 3.4.1's appointment function.
+    // 3.3.1's assessment function, TASK 3.4.1's appointment function, and
+    // TASK 3.4.3's reminder-sweep function (the identical "wired to
+    // satisfy the constructor, never actually reached" reasoning as
+    // caseload-function — this task's own runbook names it directly).
     // The authorizer is deliberately absent — it reads a status and
     // writes nothing.
-    expect(withAuditTable).toHaveLength(17);
+    expect(withAuditTable).toHaveLength(18);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -626,10 +640,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // 2.2.3's two registration roles, TASK 2.4.1's clinician-admin role,
     // TASK 2.5.1's assignment role, TASK 2.5.3's caseload role, TASK
     // 3.1.1's patient role, TASK 3.2.1's clinical-record role, TASK
-    // 3.3.1's assessment role, and TASK 3.4.1's appointment role; the
-    // audit reader is deliberately not among them, being the one role
-    // that is supposed to read that partition.
-    expect(denials).toHaveLength(17);
+    // 3.3.1's assessment role, TASK 3.4.1's appointment role, and TASK
+    // 3.4.3's reminder-sweep role; the audit reader is deliberately not
+    // among them, being the one role that is supposed to read that
+    // partition.
+    expect(denials).toHaveLength(18);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -646,7 +661,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(17);
+    expect(denials).toHaveLength(18);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -929,5 +944,61 @@ describe('DataStack — patient registration (TASK 2.2.3)', () => {
     expect(statements).toHaveLength(1);
     expect(statements[0]?.Action).toEqual('ses:SendEmail');
     expect(JSON.stringify(statements[0]?.Resource)).toContain('identity/nourishthenerve.com');
+  });
+});
+
+// TASK 3.4.3: the reminder sweep — no HTTP route, so its own shape needs
+// its own describe block rather than the CUSTOM route-key list every
+// other function's routes are already covered by.
+describe('DataStack — reminder sweep function (TASK 3.4.3)', () => {
+  function statementsWithSid(sid: string): Record<string, unknown>[] {
+    return Object.values(synth().findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } })
+            .Properties.PolicyDocument.Statement,
+      )
+      .filter((statement) => statement.Sid === sid);
+  }
+
+  it('fires every 15 minutes and targets ReminderSweepFunction', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'rate(15 minutes)',
+      State: 'ENABLED',
+      Targets: Match.arrayWith([
+        Match.objectLike({
+          Arn: { 'Fn::GetAtt': Match.arrayWith([Match.stringLikeRegexp('^ReminderSweepFunction')]) },
+        }),
+      ]),
+    });
+  });
+
+  it('grants dynamodb:Query on GSI4 alone, never a Scan', () => {
+    const statements = statementsWithSid('QueryReminderWindowIndex');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('dynamodb:Query');
+    expect(JSON.stringify(statements[0]?.Resource)).toContain('index/GSI4');
+  });
+
+  it('grants GetItem/UpdateItem on PAT#* alone — no PutItem, no audit-partition write', () => {
+    const statements = statementsWithSid('ReadAndClaimPatientAppointments');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual(['dynamodb:GetItem', 'dynamodb:UpdateItem']);
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] },
+    });
+  });
+
+  it('is denied every other role\'s AUDIT# partition read and keyless-scan guardrails, the same as every function in this stack', () => {
+    const policy = Object.values(synth().findResources('AWS::IAM::Policy')).find((candidate) =>
+      JSON.stringify(candidate.Properties?.PolicyDocument ?? {}).includes('QueryReminderWindowIndex'),
+    );
+    const statements = policy?.Properties?.PolicyDocument?.Statement as { Sid?: string }[];
+
+    expect(statements.some((statement) => statement.Sid === 'DenyAuditPartitionReads')).toBe(true);
+    expect(statements.some((statement) => statement.Sid === 'DenyKeylessTableReads')).toBe(true);
   });
 });

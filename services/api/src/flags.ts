@@ -54,7 +54,13 @@ export type FlagName =
   | 'assessments.enabled'
   // TASK 3.4.1: scheduling, and both the clinician-calendar and
   // patient's-own-list reads over the same records. Default off.
-  | 'appointments.enabled';
+  | 'appointments.enabled'
+  // TASK 3.4.3: the 1-hour reminder send, independent of
+  // appointments.enabled (D-11) — scheduling and reminding are two
+  // capabilities, and turning one on must never silently turn on real
+  // SMS spend. Default off; the EventBridge rule keeps firing regardless,
+  // this flag is the rollback with no deploy.
+  | 'appointments.reminders.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */
