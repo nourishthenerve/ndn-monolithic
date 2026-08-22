@@ -153,6 +153,10 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   '/ndn/media-upload-function',
   '/ndn/registration-function',
   '/ndn/post-confirmation-function',
+  // TASK 2.2.4: one call per sign-in, refresh or sign-out — a handful of
+  // lines per patient per day at most, and behind a default-off flag until
+  // the account pages open. Displacing nothing, for the same reason.
+  '/ndn/auth-token-function',
   '/ndn/site-deployment',
 ];
 
@@ -312,5 +316,22 @@ export const CLINICIAN_USER_POOL_ISSUER = `https://cognito-idp.${REGION}.amazona
 // deliberately absent even though it serves the same distribution: a
 // second valid redirect target is a second place an authorization code
 // can be delivered.
-export const AUTH_CALLBACK_URL = `${SITE_ORIGIN}/auth/callback`;
+export const AUTH_CALLBACK_URL = `${SITE_ORIGIN}/en/account/callback`;
 export const AUTH_SIGN_OUT_URL = `${SITE_ORIGIN}/`;
+
+// TASK 2.2.4: the Cognito-hosted sign-in domains. Globally unique per
+// region across all AWS accounts, which is why they carry the project
+// prefix; `<prefix>.auth.eu-west-2.amazoncognito.com` is where a patient
+// enters their one-time code and a clinician their password and TOTP.
+//
+// A Cognito prefix domain rather than a custom one: a custom domain needs
+// its own us-east-1 certificate and a DNS record in the hosted zone that
+// lives in account 803129122420 (docs/runbooks/iac-baseline.md) — a manual
+// cross-account step, for cosmetics on a page a patient sees for seconds.
+export const PATIENT_USER_POOL_DOMAIN_PREFIX = 'ndn-patients';
+export const CLINICIAN_USER_POOL_DOMAIN_PREFIX = 'ndn-clinicians';
+
+/** The `/oauth2/*` base for a pool's hosted domain — where `authorize`, `token` and `revoke` live. */
+export function userPoolOAuthBaseUrl(domainPrefix: string): string {
+  return `https://${domainPrefix}.auth.${REGION}.amazoncognito.com`;
+}

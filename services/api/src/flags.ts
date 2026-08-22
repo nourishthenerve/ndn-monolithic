@@ -27,7 +27,10 @@ export type FlagName =
   // TASK 2.2.3: default off until TASK 2.5.1 exists to approve anyone.
   // Registering into a system with no route out of `pending` is not a
   // smaller feature, it is a worse one.
-  | 'auth.patientRegistration.enabled';
+  | 'auth.patientRegistration.enabled'
+  // TASK 2.2.4: the whole `/auth/*` surface and the account pages. Off
+  // means the site is exactly the brochure it is today.
+  | 'auth.webSignIn.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

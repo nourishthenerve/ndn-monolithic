@@ -1,0 +1,44 @@
+---
+// TASK 2.2.4: the first page behind a session. Statically generated and
+// **empty** — ADR-0017's static-output decision is intact, because what
+// makes this page private is not server rendering but that its content is
+// not in the HTML at all. The island below decides whether to build any,
+// and renders nothing until the session resolves.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('account.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('account.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    signedOut={
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signIn', undefined, locale)} />
+      </p>
+    }
+  >
+    <p>{t('account.signedInIntro', undefined, locale)}</p>
+    <SignOutButton label={t('account.signOut', undefined, locale)} />
+  </RequireAuth>
+</BaseLayout>

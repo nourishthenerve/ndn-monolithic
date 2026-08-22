@@ -61,13 +61,23 @@ export const ADMIN_TOKEN_ROUTE = new HttpNoneAuthorizer();
  * no account, because an account is what they are asking for. Turnstile
  * and a per-IP rate limit are its gate, and its flag is default-off until
  * TASK 2.5.1 can approve anyone.
+ *
+ * The four `/auth/*` routes (TASK 2.2.4) are here by definition: they are
+ * what a caller uses when they have no token yet or are giving one up.
+ * Putting them behind the authorizer would make signing in require being
+ * signed in. Their own gate is the PKCE state cookie, `SameSite=Lax` and
+ * the `auth.webSignIn.enabled` flag.
  */
 export const PUBLIC_ROUTE_KEYS: readonly string[] = [
+  'GET /auth/signin',
   'GET /content',
   'GET /health',
   'GET /workshops',
   'POST /contact',
   'POST /stripe/webhook',
+  'POST /auth/refresh',
+  'POST /auth/signout',
+  'POST /auth/token',
   'POST /registrations',
   'POST /testimonials',
   'POST /workshops/{id}/checkout',

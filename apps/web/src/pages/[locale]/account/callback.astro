@@ -1,0 +1,40 @@
+---
+// TASK 2.2.4: where Cognito sends the browser back with `?code=`. The page
+// itself is an empty static shell; the island posts the code to
+// `/auth/token` on this same origin, which performs the PKCE exchange and
+// sets the `HttpOnly` refresh cookie. No token ever appears in this URL —
+// that is what the authorization-code flow buys over the implicit grant.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { AuthCallback } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('account.callback.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('account.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <AuthCallback
+    client:only="react"
+    destination={`/${locale}/account`}
+    strings={{
+      signInLabel: t('account.signIn', undefined, locale),
+      signOutLabel: t('account.signOut', undefined, locale),
+      exchangingLabel: t('account.callback.exchanging', undefined, locale),
+      failedLabel: t('account.callback.failed', undefined, locale),
+    }}
+  />
+</BaseLayout>

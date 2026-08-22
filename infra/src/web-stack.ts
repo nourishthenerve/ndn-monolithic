@@ -44,16 +44,24 @@ import type { Construct } from 'constructs';
 import {
   ADMIN_API_TOKEN_PARAMETER_NAME,
   APEX_DOMAIN_NAME,
+  AUTH_CALLBACK_URL,
+  AUTH_SIGN_OUT_URL,
+  CLINICIAN_USER_POOL_CLIENT_ID,
+  CLINICIAN_USER_POOL_DOMAIN_PREFIX,
   CERTIFICATE_ARN,
   CONTACT_FORM_FROM_EMAIL,
   CONTACT_FORM_TO_EMAIL,
   DOMAIN_NAME,
+  PATIENT_USER_POOL_CLIENT_ID,
+  PATIENT_USER_POOL_DOMAIN_PREFIX,
   PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME,
   SES_CONFIGURATION_SET_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
+  SITE_ORIGIN,
   STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
+  userPoolOAuthBaseUrl,
   WWW_DOMAIN_NAME,
 } from './config.js';
 import { createEmailEventPipeline } from './email-events.js';
@@ -314,6 +322,62 @@ export class WebStack extends Stack {
         ],
       }),
     );
+
+    // TASK 2.2.4: the token exchange. In this stack rather than
+    // data-stack.ts because it belongs to the site's own API — the one
+    // CloudFront already proxies same-origin — and it touches no table at
+    // all: it holds no data-plane permission of any kind, only the SSM
+    // flag read every function here has.
+    const authTokenRole = new Role(this, 'AuthTokenFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const authTokenFunction = new NodejsFunction(this, 'AuthTokenFunction', {
+      entry: `${moduleDir}../../services/api/src/auth-token-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      // Two outbound HTTPS calls at most (Cognito's `/oauth2/token` or
+      // `/oauth2/revoke`), no AWS SDK client, no table.
+      timeout: Duration.seconds(10),
+      role: authTokenRole,
+      environment: {
+        PATIENT_USER_POOL_CLIENT_ID,
+        CLINICIAN_USER_POOL_CLIENT_ID,
+        PATIENT_OAUTH_BASE_URL: userPoolOAuthBaseUrl(PATIENT_USER_POOL_DOMAIN_PREFIX),
+        CLINICIAN_OAUTH_BASE_URL: userPoolOAuthBaseUrl(CLINICIAN_USER_POOL_DOMAIN_PREFIX),
+        AUTH_CALLBACK_URL,
+        AUTH_SIGN_OUT_URL,
+        SITE_ORIGIN,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(
+        this,
+        'AuthTokenFunctionLogGroup',
+        logGroupName('auth-token-function'),
+      ),
+    });
+    grantFlagReads(this, authTokenRole);
+
+    const authIntegration = new HttpLambdaIntegration('AuthTokenIntegration', authTokenFunction);
+    for (const [path, method] of [
+      ['/auth/signin', HttpMethod.GET],
+      ['/auth/token', HttpMethod.POST],
+      ['/auth/refresh', HttpMethod.POST],
+      ['/auth/signout', HttpMethod.POST],
+    ] as const) {
+      httpApi.addRoutes({
+        path,
+        methods: [method],
+        // Public by definition: these are the routes a caller uses when
+        // they have no token yet, or are giving one up. Putting them
+        // behind the authorizer would make signing in require being
+        // signed in.
+        authorizer: PUBLIC_ROUTE,
+        integration: authIntegration,
+      });
+    }
 
     httpApi.addRoutes({
       path: '/contact',
@@ -650,6 +714,24 @@ function handler(event) {
           viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           allowedMethods: AllowedMethods.ALLOW_ALL,
           cachePolicy: CachePolicy.CACHING_DISABLED,
+          responseHeadersPolicy: securityHeaders,
+        },
+        // TASK 2.2.4: `/auth/*` on the same origin as the site, which is
+        // what makes the whole flow same-origin and lets 1.2.3's CSP cover
+        // it with no `connect-src` exception. `ALLOW_ALL` because three of
+        // the four routes are `POST` (`GET /auth/signin` is the redirect
+        // that starts the flow), and caching is disabled because every
+        // response either sets or spends a credential — a cached
+        // `Set-Cookie` would be a session handed to the next visitor.
+        '/auth/*': {
+          origin: new HttpOrigin(
+            `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
+          ),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_ALL,
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          // The same policy every other behaviour uses. Auth responses get
+          // no weaker headers than a blog page.
           responseHeadersPolicy: securityHeaders,
         },
         // TASK 1.5.1: workshop posters, served same-origin from this
