@@ -4,8 +4,11 @@
 // and turning it on later would lose the window between "table exists" and
 // "PITR enabled"), RemovalPolicy.RETAIN (matches every other protected
 // resource in this repo — 0.4.1's site bucket). Only GSI2 (keyword ->
-// content) is created now; GSI1/3/4 land with the Phase 2/3 tasks that
-// first need them (adding a GSI later is additive, not a migration).
+// content) was created at this task's own commit; GSI1 (2.5.1), GSI3
+// (2.5.3) and GSI4 (3.4.3) each landed additively with the Phase 2/3 task
+// that first needed them — adding a GSI later is additive, not a
+// migration, and every one of the four was proved in docs/adr/0002-
+// database.md before its own `addGlobalSecondaryIndex` call.
 //
 // Also the guardrail's (0.3.2) first real exercise against a deployed table
 // and a deployed runtime role — see attachDestructiveActionGuardrail below.
@@ -28,6 +31,8 @@ import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-
 import { CorsHttpMethod, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AttributeType, BillingMode, ProjectionType, Table } from 'aws-cdk-lib/aws-dynamodb';
+import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
+import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Architecture, Runtime, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -43,6 +48,7 @@ import {
   SES_CONFIGURATION_SET_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
   SITE_ORIGIN,
+  SMS_ORIGINATION_IDENTITY,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
   WWW_DOMAIN_NAME,
@@ -61,6 +67,7 @@ const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 const GSI1_INDEX_NAME = 'GSI1';
 const GSI2_INDEX_NAME = 'GSI2';
 const GSI3_INDEX_NAME = 'GSI3';
+const GSI4_INDEX_NAME = 'GSI4';
 
 
 export interface DataStackProps extends StackProps {
@@ -138,6 +145,28 @@ export class DataStack extends Stack {
       projectionType: ProjectionType.KEYS_ONLY,
     });
 
+    // TASK 3.4.3: appointment-window lookups for reminders, proved
+    // against this shape in docs/adr/0002-database.md before this index
+    // was added — named in 04-data-model-rbac.md since the plan's first
+    // draft, built only now that a real caller (the reminder sweep)
+    // exists. Sparse: only an appointment row carries gsi4pk/gsi4sk, and
+    // only while it was scheduled for the future at the moment it was
+    // created (dynamo-store.ts's DynamoAppointmentStore.create) —
+    // TASK 3.4.2's own cancel never removes either attribute, so a
+    // cancelled appointment stays a real GSI4 row; excluding it from a
+    // live sweep is the read's own job (the same "index gives
+    // candidates, the read confirms them" split GSI1's own cancelled-row
+    // exclusion already established for the calendar read). KEYS_ONLY,
+    // the same reasoning GSI1/GSI3 both state — the sweep's own read
+    // follows up with one GetItem per candidate regardless of what this
+    // index projects.
+    this.table.addGlobalSecondaryIndex({
+      indexName: GSI4_INDEX_NAME,
+      partitionKey: { name: 'gsi4pk', type: AttributeType.STRING },
+      sortKey: { name: 'gsi4sk', type: AttributeType.STRING },
+      projectionType: ProjectionType.KEYS_ONLY,
+    });
+
     const logGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-read-function`
       : '/ndn/content-read-function';
@@ -168,6 +197,18 @@ export class DataStack extends Stack {
     const assessmentLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/assessment-function`
       : '/ndn/assessment-function';
+    const appointmentLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/appointment-function`
+      : '/ndn/appointment-function';
+    const reminderSweepLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/reminder-sweep-function`
+      : '/ndn/reminder-sweep-function';
+    const contentAssignmentLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/content-assignment-function`
+      : '/ndn/content-assignment-function';
+    const messageLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/message-function`
+      : '/ndn/message-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1537,6 +1578,432 @@ export class DataStack extends Stack {
       path: '/patients/{id}/assessments/{assessmentId}',
       methods: [HttpMethod.GET],
       integration: assessmentIntegration,
+    });
+
+    // TASK 3.4.1: appointments, and GSI1's second half — the clinician
+    // calendar. `docs/adr/0002-database.md` proved this shape before
+    // either GSI1 or this entity existed: `gsi1pk = CLI#<clinicianId>`,
+    // `gsi1sk = APPT#<scheduledAt>`, on the identical partition TASK
+    // 2.5.1's own clinician→patients projection already uses — the two
+    // patterns never collide even sharing a partition, each query
+    // scoping its own `gsi1sk` prefix.
+    const appointmentRole = new Role(this, 'AppointmentFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const appointmentFunction = new NodejsFunction(this, 'AppointmentFunction', {
+      entry: `${moduleDir}../../services/api/src/appointment-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: appointmentRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'AppointmentFunctionLogGroup', appointmentLogGroupName),
+    });
+    grantFlagReads(this, appointmentRole);
+
+    // `GetItem` (the patient lookup), `PutItem` (a new `APPT#<scheduledAt>`
+    // row), `Query` (`listForPatient`'s own main-table `begins_with`
+    // read), and `UpdateItem` (TASK 3.4.2's `cancel`, an atomic
+    // `appointment_status` transition — never a new row, never
+    // `scheduledAt`) — all on the same `PAT#*` partition, the same
+    // partition-key-only granularity every other patient-scoped function
+    // in this stack already accepts.
+    appointmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWriteAndQueryPatientAppointments',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query', 'dynamodb:UpdateItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // A separate statement, GSI1's own index ARN — `dynamodb:Query` only
+    // (never `Scan`), the identical shape `patientRole`'s own
+    // `QueryOwnCaseloadIndex` statement already uses for the same index.
+    // `listForClinicianCalendar`'s per-row follow-up `GetItem` (GSI1 is
+    // `KEYS_ONLY`) reads the base table, already covered by the
+    // statement above.
+    appointmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryClinicianCalendarIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [`${this.table.tableArn}/index/${GSI1_INDEX_NAME}`],
+      }),
+    );
+    // A separate statement, on `AUDIT#*` alone — every appointment
+    // `AppointmentRepository.schedule` writes reaches the same
+    // `DynamoAuditLog` every other writer in this stack uses.
+    appointmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(appointmentRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(appointmentRole, this.table);
+
+    const appointmentIntegration = new HttpLambdaIntegration(
+      'AppointmentIntegration',
+      appointmentFunction,
+    );
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments',
+      methods: [HttpMethod.POST],
+      integration: appointmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments',
+      methods: [HttpMethod.GET],
+      integration: appointmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/clinicians/me/calendar',
+      methods: [HttpMethod.GET],
+      integration: appointmentIntegration,
+    });
+    // TASK 3.4.2: cancel — same integration, no new route pattern beyond
+    // one more path segment.
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments/{apptId}/cancel',
+      methods: [HttpMethod.POST],
+      integration: appointmentIntegration,
+    });
+
+    // TASK 3.4.3: the 1-hour reminder sweep — no HTTP route, no
+    // `authorizer:`/`can()` gate (there is no caller to authorise; an
+    // EventBridge scheduled rule invokes this directly), and its own
+    // least-privilege role, separate from `AppointmentFunction`'s: this
+    // is the one function in this stack that reaches a real SMS provider
+    // send and a real SES send, and keeping those grants off every
+    // other role means a future change to this function's own policy can
+    // never silently widen theirs.
+    const reminderSweepRole = new Role(this, 'ReminderSweepFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const reminderSweepFunction = new NodejsFunction(this, 'ReminderSweepFunction', {
+      entry: `${moduleDir}../../services/api/src/reminder-sweep-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(30),
+      role: reminderSweepRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        NOTIFICATION_TABLE_NAME: this.table.tableName,
+        REMINDER_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
+        SMS_ORIGINATION_IDENTITY,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'ReminderSweepFunctionLogGroup', reminderSweepLogGroupName),
+    });
+    grantFlagReads(this, reminderSweepRole);
+
+    // `GetItem` (the follow-up read GSI4's own `KEYS_ONLY` projection
+    // requires) and `UpdateItem` (`claimForReminder`'s atomic claim) —
+    // both on `PAT#*` alone. Deliberately no `PutItem`/audit-partition
+    // grant here: `reminder-sweep.ts`'s own header explains why this
+    // function never writes an audit row (no principal acted), so the
+    // `DynamoAuditLog`/`AuditWriter` this role's repositories are
+    // constructed with — required only to satisfy `AppointmentRepository`/
+    // `PatientRepository`'s own constructors — is wired but genuinely
+    // unreachable code, the identical "grant matches what the code can
+    // reach, not what the type merely requires" discipline
+    // `assignmentRole`'s own `ReadClinicianAccounts` statement (read-only,
+    // narrower than `ClinicianAdminFunction`'s own write grant) already
+    // establishes.
+    reminderSweepRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadAndClaimPatientAppointments',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // GSI4's own index ARN, `dynamodb:Query` only (never `Scan`) — the
+    // identical shape `patientRole`'s own `QueryOwnCaseloadIndex` and
+    // `appointmentRole`'s own `QueryClinicianCalendarIndex` statements
+    // already use for GSI1.
+    reminderSweepRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryReminderWindowIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [`${this.table.tableArn}/index/${GSI4_INDEX_NAME}`],
+      }),
+    );
+    // The delivery log (`notification-log.ts`'s durable record — this
+    // flow's own audit trail, per the comment above) and the real
+    // monthly SMS spend counter (`dynamo-sms-spend-cap.ts`) — both
+    // `PutItem`/`UpdateItem` on their own partition prefixes alone.
+    reminderSweepRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteDeliveryLog',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['NOTIFICATION#*'] } },
+      }),
+    );
+    reminderSweepRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteSmsSpendCounter',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:UpdateItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['SMS_SPEND#*'] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(reminderSweepRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(reminderSweepRole, this.table);
+    reminderSweepRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendReminderEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
+          }),
+        ],
+      }),
+    );
+    // Resource-unscoped, deliberately and temporarily: `SMS_ORIGINATION_
+    // IDENTITY` (config.ts) is empty until a real phone number/sender ID
+    // is leased in AWS End User Messaging (a manual, out-of-band AWS
+    // step — docs/runbooks/appointment-reminders.md), so there is no real
+    // resource ARN yet to scope this to. The action itself stays tightly
+    // scoped to the one API call `sms-provider.ts` ever issues; narrow
+    // this statement's `resources` to the leased identity's own ARN the
+    // same day it's provisioned.
+    reminderSweepRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendReminderSms',
+        effect: Effect.ALLOW,
+        actions: ['sms-voice:SendTextMessage'],
+        resources: ['*'],
+      }),
+    );
+
+    // rate(15 minutes): comfortably inside the 1-hour reminder window
+    // with margin for a missed tick — this task's own step 3.
+    new Rule(this, 'ReminderSweepSchedule', {
+      schedule: Schedule.rate(Duration.minutes(15)),
+      targets: [new LambdaFunction(reminderSweepFunction)],
+    });
+
+    // TASK 3.5.1: content assignment — a clinician linking existing,
+    // published content to a patient, and the patient's own hydrated
+    // read of the list. `PAT#<id>` / `CONTENT#<id>`, no GSI of its own
+    // (`04-data-model-rbac.md`'s own minimal key shape for this entity).
+    const contentAssignmentRole = new Role(this, 'ContentAssignmentFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const contentAssignmentFunction = new NodejsFunction(this, 'ContentAssignmentFunction', {
+      entry: `${moduleDir}../../services/api/src/content-assignment-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: contentAssignmentRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(
+        this,
+        'ContentAssignmentFunctionLogGroup',
+        contentAssignmentLogGroupName,
+      ),
+    });
+    grantFlagReads(this, contentAssignmentRole);
+
+    // `GetItem` (the patient lookup), `PutItem` (a new `CONTENT#<id>`
+    // assignment row), and `Query` (`listForPatient`'s own main-table
+    // `begins_with` read) — all on `PAT#*` alone, the same
+    // partition-key-only granularity `appointmentRole`'s own
+    // `ReadWriteAndQueryPatientAppointments` statement already uses.
+    contentAssignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWriteAndQueryPatientContentAssignments',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // A separate statement, `CONTENT#*` alone, `GetItem` only — the
+    // publish-check `ContentAssignmentRepository.assign` performs before
+    // writing, and the title/excerpt hydration `listForPatient` performs
+    // on read (`content-assignment-repository.ts`). Never `Query`/`Scan`:
+    // both call sites already hold the exact `contentId` they need.
+    contentAssignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadContentForAssignment',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONTENT#*'] } },
+      }),
+    );
+    // A separate statement, on `AUDIT#*` alone — every assignment
+    // `ContentAssignmentRepository.assign` writes reaches the same
+    // `DynamoAuditLog` every other writer in this stack uses.
+    contentAssignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(contentAssignmentRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(contentAssignmentRole, this.table);
+
+    const contentAssignmentIntegration = new HttpLambdaIntegration(
+      'ContentAssignmentIntegration',
+      contentAssignmentFunction,
+    );
+    httpApi.addRoutes({
+      path: '/patients/{id}/content',
+      methods: [HttpMethod.POST],
+      integration: contentAssignmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/content',
+      methods: [HttpMethod.GET],
+      integration: contentAssignmentIntegration,
+    });
+
+    // TASK 3.6.1: patient<->clinician messaging, and the matrix
+    // correction that makes it genuinely bidirectional — see message.ts's
+    // own header for the doc-first correction and the real finding
+    // against this task's own prose (the principal's cell was never
+    // touched by the correction and stays read-only).
+    const messageRole = new Role(this, 'MessageFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const messageFunction = new NodejsFunction(this, 'MessageFunction', {
+      entry: `${moduleDir}../../services/api/src/message-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: messageRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        NOTIFICATION_TABLE_NAME: this.table.tableName,
+        MESSAGE_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
+        // Resolves the assigned sub-clinician's email for a patient-sent
+        // message's notification (AdminGetUser) — see the IAM grant below.
+        CLINICIAN_USER_POOL_ID,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'MessageFunctionLogGroup', messageLogGroupName),
+    });
+    grantFlagReads(this, messageRole);
+
+    // `GetItem` (the patient lookup), `PutItem` (a new `MSG#<ts>#<id>`
+    // row), and `Query` (`listForThread`'s own main-table `begins_with`
+    // read) — all on `PAT#*` alone. Deliberately no `UpdateItem`: a
+    // message is never edited, so this role has no action that could.
+    messageRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWriteAndQueryPatientMessages',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    messageRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditAndDeliveryRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
+          },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(messageRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(messageRole, this.table);
+    // `AdminGetUser` only, on the same clinician pool ARN
+    // AssignmentFunction's own grant uses — resolving an email to notify,
+    // never a create/disable/enable action.
+    messageRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianEmailForMessageNotice',
+        effect: Effect.ALLOW,
+        actions: ['cognito-idp:AdminGetUser'],
+        resources: [clinicianUserPoolArn],
+      }),
+    );
+    messageRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendMessageNotificationEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
+          }),
+        ],
+      }),
+    );
+
+    const messageIntegration = new HttpLambdaIntegration('MessageIntegration', messageFunction);
+    httpApi.addRoutes({
+      path: '/patients/{id}/messages',
+      methods: [HttpMethod.POST],
+      integration: messageIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/messages',
+      methods: [HttpMethod.GET],
+      integration: messageIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

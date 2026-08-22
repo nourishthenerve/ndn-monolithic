@@ -11,10 +11,13 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type {
+  Appointment,
   AssignmentRequest,
   BaseRecord,
   Clinician,
+  ContentAssignment,
   ContentItem,
+  Message,
   Patient as RealPatient,
   Registration,
   Testimonial,
@@ -26,12 +29,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
+  DynamoAppointmentStore,
   DynamoAssessmentStore,
   DynamoAssignmentStore,
   DynamoCaseloadStore,
   DynamoClinicalRecordStore,
   DynamoClinicianStore,
+  DynamoContentAssignmentStore,
   DynamoContentStore,
+  DynamoMessageStore,
   DynamoRegistrationStore,
   DynamoStore,
   DynamoTestimonialStore,
@@ -1128,5 +1134,487 @@ describe('DynamoAssessmentStore', () => {
   it('get() returns undefined for a version that was never written', async () => {
     ddbMock.on(GetCommand).resolves({});
     await expect(store.get('pat-1#mobility-initial#v9')).resolves.toBeUndefined();
+  });
+});
+
+function buildAppointment(overrides: Partial<Appointment> = {}): Appointment {
+  return {
+    patientId: 'pat-1',
+    clinicianId: 'cli-1',
+    scheduledAt: '2026-09-01T10:00:00.000Z',
+    durationMinutes: 30,
+    appointment_status: 'scheduled',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    status: 'active',
+    ...overrides,
+  };
+}
+
+// TASK 3.4.1: `docs/adr/0002-database.md`'s own proof of this shape,
+// exercised for real for the first time — `create()`'s conditional
+// `PutCommand` and its derived `gsi1pk`/`gsi1sk`; `listForPatient()`'s
+// main-table `Query`; `listForClinicianCalendar()`'s GSI1 `Query` with a
+// `BETWEEN` bound, followed by the per-row `GetCommand` GSI1's `KEYS_ONLY`
+// projection requires — never a `Scan`, the same assertion shape TASK
+// 2.5.1/2.5.3's own GSI1/GSI3 store tests already use.
+describe('DynamoAppointmentStore', () => {
+  const store = new DynamoAppointmentStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('create() writes a conditional PutCommand keyed PAT#<patientId> / APPT#<scheduledAt>, with GSI1 derived from clinicianId/scheduledAt alone', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(buildAppointment());
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+        gsi1pk: 'CLI#cli-1',
+        gsi1sk: 'APPT#2026-09-01T10:00:00.000Z',
+        patientId: 'pat-1',
+        clinicianId: 'cli-1',
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() also derives GSI4 (gsi4pk/gsi4sk) when scheduledAt is after created_at — the "in the future at creation" check', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    // buildAppointment()'s own defaults: scheduledAt 2026-09-01, created_at 2026-08-22 — already future.
+    await store.create(buildAppointment());
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      Item: { gsi4pk: 'APPT#REMINDER', gsi4sk: '2026-09-01T10:00:00.000Z#pat-1' },
+    });
+  });
+
+  it('create() omits gsi4pk/gsi4sk entirely when scheduledAt is not after created_at — not set to a falsy value, absent', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(
+      buildAppointment({ scheduledAt: '2026-08-01T10:00:00.000Z', created_at: '2026-08-22T09:00:00.000Z' }),
+    );
+
+    const item = ddbMock.commandCalls(PutCommand)[0]?.args[0].input.Item;
+    expect(item).not.toHaveProperty('gsi4pk');
+    expect(item).not.toHaveProperty('gsi4sk');
+  });
+
+  it('create() throws AppError(APPOINTMENT_ALREADY_EXISTS) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.create(buildAppointment())).rejects.toThrow(AppError);
+  });
+
+  it('listForPatient() issues a main-table Query, never a Scan, scoped to PAT#<id> with the APPT# prefix', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ ...buildAppointment(), pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' }],
+    });
+
+    const result = await store.listForPatient('pat-1');
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty('pk');
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :apptPrefix)',
+      ExpressionAttributeValues: { ':patientKey': 'PAT#pat-1', ':apptPrefix': 'APPT#' },
+    });
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.IndexName).toBeUndefined();
+  });
+
+  it('listForClinicianCalendar() issues a GSI1 Query with a BETWEEN bound, never a Scan, then one GetCommand per row', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z', gsi1pk: 'CLI#cli-1', gsi1sk: 'APPT#2026-09-01T10:00:00.000Z' }],
+    });
+    ddbMock.on(GetCommand).resolves({
+      Item: { ...buildAppointment(), pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
+    });
+
+    const result = await store.listForClinicianCalendar(
+      'cli-1',
+      '2026-09-01T00:00:00.000Z',
+      '2026-09-02T00:00:00.000Z',
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ patientId: 'pat-1', clinicianId: 'cli-1' });
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'gsi1pk = :clinicianKey AND gsi1sk BETWEEN :fromKey AND :toKey',
+      ExpressionAttributeValues: {
+        ':clinicianKey': 'CLI#cli-1',
+        ':fromKey': 'APPT#2026-09-01T00:00:00.000Z',
+        ':toKey': 'APPT#2026-09-02T00:00:00.000Z',
+      },
+    });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
+    });
+  });
+
+  it('listForClinicianCalendar() returns an empty array, not an error, when nothing is in range', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const result = await store.listForClinicianCalendar(
+      'cli-1',
+      '2026-09-01T00:00:00.000Z',
+      '2026-09-02T00:00:00.000Z',
+    );
+    expect(result).toEqual([]);
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
+  });
+
+  // TASK 3.4.2: "index gives candidates, the read confirms them" — the
+  // GSI1 Query still names the row (cancelling never touches
+  // gsi1pk/gsi1sk), so the exclusion has to happen after the follow-up
+  // GetItem, against the fetched item's own appointment_status.
+  it('listForClinicianCalendar() excludes a cancelled row even though it still surfaces from the GSI1 Query', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z', gsi1pk: 'CLI#cli-1', gsi1sk: 'APPT#2026-09-01T10:00:00.000Z' }],
+    });
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        ...buildAppointment({ appointment_status: 'cancelled' }),
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    const result = await store.listForClinicianCalendar(
+      'cli-1',
+      '2026-09-01T00:00:00.000Z',
+      '2026-09-02T00:00:00.000Z',
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('cancel() issues an atomic UpdateItem on appointment_status alone, conditioned on the row existing', async () => {
+    ddbMock.on(UpdateCommand).resolves({
+      Attributes: {
+        ...buildAppointment({ appointment_status: 'cancelled' }),
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    const result = await store.cancel('pat-1', '2026-09-01T10:00:00.000Z', '2026-08-22T10:00:00.000Z');
+    expect(result.appointment_status).toBe('cancelled');
+    expect(result).not.toHaveProperty('pk');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Key: { pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
+      UpdateExpression: 'SET appointment_status = :cancelled, updated_at = :now',
+      ConditionExpression: 'attribute_exists(pk)',
+      ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': '2026-08-22T10:00:00.000Z' },
+      ReturnValues: 'ALL_NEW',
+    });
+  });
+
+  it('cancel() throws AppError(RECORD_NOT_FOUND) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(
+      store.cancel('pat-1', '2026-09-01T10:00:00.000Z', '2026-08-22T10:00:00.000Z'),
+    ).rejects.toThrow(AppError);
+  });
+
+  it('listReminderCandidates() issues a GSI4 Query with an inclusive BETWEEN bound, never a Scan, then one GetCommand per row', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T09:55:00.000Z', gsi4pk: 'APPT#REMINDER', gsi4sk: '2026-09-01T09:55:00.000Z#pat-1' }],
+    });
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        ...buildAppointment({ scheduledAt: '2026-09-01T09:55:00.000Z' }),
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T09:55:00.000Z',
+      },
+    });
+
+    const result = await store.listReminderCandidates(
+      '2026-09-01T09:00:00.000Z',
+      '2026-09-01T10:15:00.000Z',
+    );
+    expect(result).toHaveLength(1);
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI4',
+      KeyConditionExpression: 'gsi4pk = :reminderKey AND gsi4sk BETWEEN :fromKey AND :toKey',
+      ExpressionAttributeValues: {
+        ':reminderKey': 'APPT#REMINDER',
+        ':fromKey': '2026-09-01T09:00:00.000Z',
+        // One millisecond past the given windowEnd — see this method's own doc for why.
+        ':toKey': '2026-09-01T10:15:00.001Z',
+      },
+    });
+  });
+
+  it('listReminderCandidates() excludes a row whose appointment_status is not scheduled, after the follow-up GetItem confirms it', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T09:55:00.000Z' }],
+    });
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        ...buildAppointment({ scheduledAt: '2026-09-01T09:55:00.000Z', appointment_status: 'cancelled' }),
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T09:55:00.000Z',
+      },
+    });
+
+    const result = await store.listReminderCandidates(
+      '2026-09-01T09:00:00.000Z',
+      '2026-09-01T10:15:00.000Z',
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('listReminderCandidates() excludes a row that already has reminder_sent_at set', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T09:55:00.000Z' }],
+    });
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        ...buildAppointment({ scheduledAt: '2026-09-01T09:55:00.000Z' }),
+        reminder_sent_at: '2026-09-01T09:00:00.000Z',
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T09:55:00.000Z',
+      },
+    });
+
+    const result = await store.listReminderCandidates(
+      '2026-09-01T09:00:00.000Z',
+      '2026-09-01T10:15:00.000Z',
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('listReminderCandidates() returns an empty array, not an error, when the GSI4 Query itself finds nothing', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const result = await store.listReminderCandidates(
+      '2026-09-01T09:00:00.000Z',
+      '2026-09-01T10:15:00.000Z',
+    );
+    expect(result).toEqual([]);
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
+  });
+
+  it('claimForReminder() issues an atomic UpdateItem on reminder_sent_at alone, conditioned on the row existing and not already claimed', async () => {
+    ddbMock.on(UpdateCommand).resolves({
+      Attributes: {
+        ...buildAppointment(),
+        reminder_sent_at: '2026-08-22T09:00:00.000Z',
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    const result = await store.claimForReminder(
+      'pat-1',
+      '2026-09-01T10:00:00.000Z',
+      '2026-08-22T09:00:00.000Z',
+    );
+    expect(result?.reminder_sent_at).toBe('2026-08-22T09:00:00.000Z');
+    expect(result).not.toHaveProperty('pk');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Key: { pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
+      UpdateExpression: 'SET reminder_sent_at = :now',
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(reminder_sent_at)',
+      ExpressionAttributeValues: { ':now': '2026-08-22T09:00:00.000Z' },
+      ReturnValues: 'ALL_NEW',
+    });
+  });
+
+  it('claimForReminder() returns undefined, not a thrown error, on a conditional check failure — already claimed or nonexistent', async () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    const result = await store.claimForReminder(
+      'pat-1',
+      '2026-09-01T10:00:00.000Z',
+      '2026-08-22T09:00:00.000Z',
+    );
+    expect(result).toBeUndefined();
+  });
+});
+
+function buildContentAssignment(overrides: Partial<ContentAssignment> = {}): ContentAssignment {
+  return {
+    patientId: 'pat-1',
+    contentId: 'content-1',
+    assignedAt: '2026-08-22T09:00:00.000Z',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    status: 'active',
+    ...overrides,
+  };
+}
+
+// TASK 3.5.1: `04-data-model-rbac.md`'s own minimal key shape, exercised
+// for real for the first time — `create()`'s conditional `PutCommand`;
+// `listForPatient()`'s main-table `Query`, `begins_with(sk, 'CONTENT#')` —
+// never a `Scan`, the same assertion shape `DynamoAppointmentStore`'s own
+// `listForPatient` test already uses.
+describe('DynamoContentAssignmentStore', () => {
+  const store = new DynamoContentAssignmentStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('create() writes a conditional PutCommand keyed PAT#<patientId> / CONTENT#<contentId>', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(buildContentAssignment());
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'CONTENT#content-1',
+        patientId: 'pat-1',
+        contentId: 'content-1',
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() throws AppError(RECORD_ALREADY_EXISTS) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.create(buildContentAssignment())).rejects.toThrow(AppError);
+  });
+
+  it('listForPatient() issues a main-table Query, never a Scan, scoped to PAT#<id> with the CONTENT# prefix', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ ...buildContentAssignment(), pk: 'PAT#pat-1', sk: 'CONTENT#content-1' }],
+    });
+
+    const result = await store.listForPatient('pat-1');
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty('pk');
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :contentPrefix)',
+      ExpressionAttributeValues: { ':patientKey': 'PAT#pat-1', ':contentPrefix': 'CONTENT#' },
+    });
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.IndexName).toBeUndefined();
+  });
+
+  it('listForPatient() returns an empty array, not an error, when the patient has no assignments', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const result = await store.listForPatient('pat-1');
+    expect(result).toEqual([]);
+  });
+});
+
+function buildMessage(overrides: Partial<Message> = {}): Message {
+  return {
+    patientId: 'pat-1',
+    senderId: 'pat-1',
+    senderRole: 'patient',
+    body: 'Hello',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    status: 'active',
+    ...overrides,
+  };
+}
+
+// TASK 3.6.1: `04-data-model-rbac.md`'s own key shape, exercised for real
+// for the first time — `create()`'s conditional `PutCommand` (the sort
+// key's disambiguating suffix, the identical `DynamoAuditLog` idiom this
+// store's own header names); `listForThread()`'s main-table `Query`,
+// `begins_with(sk, 'MSG#')` — never a `Scan`, the same assertion shape
+// `DynamoAppointmentStore`'s own `listForPatient` test already uses.
+describe('DynamoMessageStore', () => {
+  const store = new DynamoMessageStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+    newMessageId: () => 'fixed-id',
+  });
+
+  it('create() writes a conditional PutCommand keyed PAT#<patientId> / MSG#<created_at>#<id>', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(buildMessage());
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'MSG#2026-08-22T09:00:00.000Z#fixed-id',
+        patientId: 'pat-1',
+        senderId: 'pat-1',
+        senderRole: 'patient',
+        body: 'Hello',
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() throws AppError(RECORD_ALREADY_EXISTS) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.create(buildMessage())).rejects.toThrow(AppError);
+  });
+
+  it('listForThread() issues a main-table Query, never a Scan, scoped to PAT#<id> with the MSG# prefix', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ ...buildMessage(), pk: 'PAT#pat-1', sk: 'MSG#2026-08-22T09:00:00.000Z#fixed-id' }],
+    });
+
+    const result = await store.listForThread('pat-1', undefined, 50);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).not.toHaveProperty('pk');
+    expect(result.nextCursor).toBeUndefined();
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :messagePrefix)',
+      ExpressionAttributeValues: { ':patientKey': 'PAT#pat-1', ':messagePrefix': 'MSG#' },
+      Limit: 50,
+    });
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.IndexName).toBeUndefined();
+  });
+
+  it('listForThread() decodes a cursor into ExclusiveStartKey and encodes LastEvaluatedKey into nextCursor', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [],
+      LastEvaluatedKey: { pk: 'PAT#pat-1', sk: 'MSG#2026-08-22T09:00:00.000Z#fixed-id' },
+    });
+    const cursor = Buffer.from(JSON.stringify({ pk: 'PAT#pat-1', sk: 'MSG#a' }), 'utf-8').toString(
+      'base64url',
+    );
+
+    const result = await store.listForThread('pat-1', cursor, 50);
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ExclusiveStartKey).toEqual({
+      pk: 'PAT#pat-1',
+      sk: 'MSG#a',
+    });
+    expect(result.nextCursor).toBeDefined();
+    const decoded = JSON.parse(Buffer.from(result.nextCursor ?? '', 'base64url').toString('utf-8')) as unknown;
+    expect(decoded).toEqual({ pk: 'PAT#pat-1', sk: 'MSG#2026-08-22T09:00:00.000Z#fixed-id' });
+  });
+
+  it('listForThread() throws AppError(INVALID_CURSOR) for a cursor that cannot be decoded', async () => {
+    await expect(store.listForThread('pat-1', 'not-valid-base64url-json', 50)).rejects.toThrow(AppError);
+  });
+
+  it('listForThread() returns an empty page, not an error, when the thread has no messages', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const result = await store.listForThread('pat-1', undefined, 50);
+    expect(result).toEqual({ items: [], nextCursor: undefined });
   });
 });
