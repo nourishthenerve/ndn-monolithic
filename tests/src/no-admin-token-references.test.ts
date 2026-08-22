@@ -39,9 +39,16 @@ describe('TASK 2.5.4: the admin-token bearer gate leaves no trace', () => {
   // jwt-verify.ts both still say, correctly, that admin-auth.ts *used to*
   // exist) — banning every prose mention would force deleting exactly the
   // history a reviewer most wants. What must be zero is *live code*: an
-  // import of the deleted modules, a construct or export that resolved the
-  // secret, or a route still opting out through the deleted authorizer.
-  it('has no live code path resolving, verifying or routing through the retired admin token', () => {
+  // import of the deleted modules, or a construct or export that resolved
+  // the secret. `ADMIN_TOKEN_ROUTE`/`ADMIN_TOKEN_ROUTE_KEYS` are
+  // deliberately not in this list even though they named the same
+  // retirement: both exports are deleted from route-protection.ts, so a
+  // live reference to either is already a TypeScript compile error —
+  // `pnpm -r typecheck` is the check for that, not a second grep for it,
+  // and route-protection.ts/data-stack.ts/web-stack.ts all correctly still
+  // mention the retired name in past-tense comments explaining what used
+  // to stand there, which a grep for the bare name would have banned.
+  it('has no live code path resolving or verifying the retired admin token', () => {
     const matches = gitGrep(
       [
         'verifyAdminToken\\(',
@@ -49,7 +56,6 @@ describe('TASK 2.5.4: the admin-token bearer gate leaves no trace', () => {
         'createAdminTokenResolver\\(',
         'ADMIN_TOKEN_PARAMETER_NAME[:=]',
         'ADMIN_API_TOKEN_PARAMETER_NAME',
-        'ADMIN_TOKEN_ROUTE\\b',
         "from '\\./admin-auth",
         "from '\\./admin-token",
       ].join('|'),
