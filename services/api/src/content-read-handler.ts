@@ -4,9 +4,9 @@
 // only place that wires the real DynamoDB-backed store together — same
 // split as web-stack.ts's health.ts (pure handler) vs. smoke-test.ts (owns
 // its own AWS client wiring).
-import { InMemoryAuditLog } from './audit.js';
 import { systemClock } from './clock.js';
 import { ContentRepository, createContentReadHandler } from './content-repository.js';
+import { DynamoAuditLog } from './dynamo-audit-log.js';
 import { DynamoContentStore } from './dynamo-store.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
 
@@ -18,10 +18,14 @@ const flags = createSsmFlagReader();
 // DynamoDBDocumentClient (dynamo-store.ts).
 const contentStore = new DynamoContentStore({ tableName: process.env.CONTENT_TABLE_NAME ?? '' });
 
-// This handler never calls ContentRepository.create() (it's read-only —
-// see content-repository.ts's createContentReadHandler), so the audit
-// writer below is never exercised; InMemoryAuditLog is enough to satisfy
-// ContentRepository's constructor without standing up a real audit sink.
-const repository = new ContentRepository(contentStore, new InMemoryAuditLog(), systemClock);
+// TASK 2.1.3: read-only handler — it never calls a repository method that
+// writes, so this writer is never exercised. It is the real
+// `DynamoAuditLog` rather than an in-memory stand-in anyway: this
+// function's role holds no `dynamodb:PutItem` (infra/src/data-stack.ts),
+// so if a write path ever did appear here it would fail loudly at IAM
+// instead of appending to an array nobody reads.
+const auditLog = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
+
+const repository = new ContentRepository(contentStore, auditLog, systemClock);
 
 export const handler = createContentReadHandler({ repository, flags });

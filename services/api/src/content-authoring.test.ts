@@ -1,11 +1,19 @@
 import type { ContentItem } from '@ndn/shared-types';
 import { describe, expect, it } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { createContentAuthoringHandler, type ContentAuthoringDeps } from './content-authoring.js';
 import { ContentRepository, InMemoryContentStore } from './content-repository.js';
 import { CachedFlagReader, InMemoryFlagSource } from './flags.js';
+
+// TASK 2.1.3: the seeding actor for fixtures these tests set up directly
+// through the repository. The handler under test builds its own
+// `ActorContext` from the request (audit.ts's actorContext).
+const SEED_ACTOR = actorContext(
+  { subjectId: 'seed', role: 'admin-token' },
+  { requestId: 'req-seed', sourceIp: '198.51.100.1' },
+);
 
 const fixedClock: Clock = { now: () => new Date('2026-01-01T00:00:00.000Z') };
 const ADMIN_TOKEN = 'test-admin-token';
@@ -21,7 +29,11 @@ function fakeEvent(overrides: {
     pathParameters: overrides.pathParameters,
     headers: overrides.headers ?? { authorization: `Bearer ${ADMIN_TOKEN}` },
     body: overrides.body === undefined ? undefined : JSON.stringify(overrides.body),
-    requestContext: { requestId: 'req-1' },
+    // TASK 2.1.3: `http.sourceIp` is part of every real API Gateway v2
+    // event and is what the audit row's `where` is derived from
+    // (audit.ts's requestOriginOf) — the fixture carries it because
+    // the real event always does.
+    requestContext: { requestId: 'req-1', http: { sourceIp: '198.51.100.7' } },
   } as never;
 }
 
@@ -178,7 +190,7 @@ describe('createContentAuthoringHandler — POST /content', () => {
 describe('createContentAuthoringHandler — PATCH /content/{id}', () => {
   it('updates translations and returns 200', async () => {
     const { deps, repository } = buildDeps();
-    await repository.create('seed', validBody as never);
+    await repository.create(SEED_ACTOR, validBody as never);
     const handler = createContentAuthoringHandler(deps);
 
     const result = await handler(
@@ -213,7 +225,7 @@ describe('createContentAuthoringHandler — PATCH /content/{id}', () => {
 
   it('rejects an empty patch body with 400', async () => {
     const { deps, repository } = buildDeps();
-    await repository.create('seed', validBody as never);
+    await repository.create(SEED_ACTOR, validBody as never);
     const handler = createContentAuthoringHandler(deps);
 
     const result = await handler(
@@ -228,7 +240,7 @@ describe('createContentAuthoringHandler — PATCH /content/{id}', () => {
 describe('createContentAuthoringHandler — publish/unpublish', () => {
   it('publish transitions status to published', async () => {
     const { deps, repository } = buildDeps();
-    await repository.create('seed', { ...validBody, status: 'draft' } as never);
+    await repository.create(SEED_ACTOR, { ...validBody, status: 'draft' } as never);
     const handler = createContentAuthoringHandler(deps);
 
     const result = await handler(
@@ -242,7 +254,7 @@ describe('createContentAuthoringHandler — publish/unpublish', () => {
 
   it('unpublish transitions status to unpublished without deleting the row', async () => {
     const { deps, repository } = buildDeps();
-    await repository.create('seed', { ...validBody, status: 'published' } as never);
+    await repository.create(SEED_ACTOR, { ...validBody, status: 'published' } as never);
     const handler = createContentAuthoringHandler(deps);
 
     const result = await handler(

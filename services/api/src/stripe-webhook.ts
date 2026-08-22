@@ -11,6 +11,7 @@
 // this is why `verifySignature` takes a string, not a parsed object),
 // resolves the real Stripe secrets, and maps `{ statusCode }` back into a
 // Lambda proxy response.
+import { actorContext, type ActorContext, type RequestOrigin } from './audit.js';
 import type { RegistrationRepository } from './registration-repository.js';
 import type { RegistrationEmailSender } from './ses.js';
 import type { WorkshopRepository } from './workshop-repository.js';
@@ -72,6 +73,16 @@ export class InMemoryWebhookEventStore implements WebhookEventStore {
 
 const REGISTRATION_CLIENT_REFERENCE_PREFIX = 'REGISTRATION#';
 
+/**
+ * TASK 2.1.3: the webhook's audit identity. `'system'` rather than a
+ * `Role` because there is no human behind a Stripe delivery — see
+ * audit.ts's `AuditActorRole` for why that is recorded honestly instead of
+ * being mapped onto a clinical role. The subject id is the same
+ * `'stripe-webhook'` string this handler has written into its audit rows
+ * since TASK 1.5.2; only the surrounding context is new.
+ */
+const WEBHOOK_ACTOR = { subjectId: 'stripe-webhook', role: 'system' } as const;
+
 export interface WebhookDeps {
   readonly verifySignature: VerifyStripeSignature;
   readonly eventStore: WebhookEventStore;
@@ -82,8 +93,16 @@ export interface WebhookDeps {
 
 export function createStripeWebhookHandler(
   deps: WebhookDeps,
-): (rawBody: string, signatureHeader: string) => Promise<{ statusCode: 200 | 400 }> {
-  return async (rawBody, signatureHeader) => {
+): (
+  rawBody: string,
+  signatureHeader: string,
+  origin: RequestOrigin,
+) => Promise<{ statusCode: 200 | 400 }> {
+  return async (rawBody, signatureHeader, origin) => {
+    // Built before the signature check so every path below shares one
+    // actor; nothing is written until an event verifies, so an
+    // unverifiable delivery still audits nothing.
+    const actor: ActorContext = actorContext(WEBHOOK_ACTOR, origin);
     let event: StripeEvent;
     try {
       event = await deps.verifySignature(rawBody, signatureHeader);
@@ -119,11 +138,7 @@ export function createStripeWebhookHandler(
     const registrationId = clientReferenceId.slice(REGISTRATION_CLIENT_REFERENCE_PREFIX.length);
 
     if (event.type === 'checkout.session.completed') {
-      const registration = await deps.registrations.confirm(
-        'stripe-webhook',
-        workshopId,
-        registrationId,
-      );
+      const registration = await deps.registrations.confirm(actor, workshopId, registrationId);
       if (registration.status === 'confirmed') {
         const workshop = await deps.workshops.findById(workshopId);
         const workshopTitle = workshop
@@ -136,7 +151,7 @@ export function createStripeWebhookHandler(
         });
       }
     } else {
-      await deps.registrations.cancel('stripe-webhook', workshopId, registrationId);
+      await deps.registrations.cancel(actor, workshopId, registrationId);
     }
 
     return { statusCode: 200 };

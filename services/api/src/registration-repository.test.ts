@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 import {
@@ -9,6 +9,19 @@ import {
   RegistrationRepository,
   type CreateRegistrationInput,
 } from './registration-repository.js';
+
+// TASK 2.1.3: the two actors a registration ever has — the visitor who
+// bought the place, and Stripe's webhook confirming or expiring it. The
+// webhook's role is `'system'`: no human is behind a delivery, and
+// audit.ts records that honestly rather than borrowing a clinical role.
+const BUYER = actorContext(
+  { subjectId: 'principal-hash', role: 'public' },
+  { requestId: 'req-checkout-1', sourceIp: '198.51.100.7' },
+);
+const WEBHOOK = actorContext(
+  { subjectId: 'stripe-webhook', role: 'system' },
+  { requestId: 'req-webhook-1', sourceIp: '203.0.113.9' },
+);
 
 const fixedClock: Clock = { now: () => new Date('2026-06-01T00:00:00.000Z') };
 
@@ -33,7 +46,7 @@ function buildRepository() {
 describe('RegistrationRepository.create', () => {
   it('creates as pending, stamps created_at/updated_at, and writes an audit entry', async () => {
     const { repository, audit } = buildRepository();
-    const item = await repository.create('principal-hash', buildInput());
+    const item = await repository.create(BUYER, buildInput());
 
     expect(item.status).toBe('pending');
     expect(item.created_at).toBe('2026-06-01T00:00:00.000Z');
@@ -50,8 +63,8 @@ describe('RegistrationRepository.create', () => {
 
   it('throws when a registration with the same id already exists under the same workshop', async () => {
     const { repository } = buildRepository();
-    await repository.create('principal-hash', buildInput());
-    await expect(repository.create('principal-hash', buildInput())).rejects.toThrow(AppError);
+    await repository.create(BUYER, buildInput());
+    await expect(repository.create(BUYER, buildInput())).rejects.toThrow(AppError);
   });
 
   it('has no method that removes a registration', () => {
@@ -64,9 +77,9 @@ describe('RegistrationRepository.create', () => {
 describe('RegistrationRepository.confirm', () => {
   it('transitions a pending registration to confirmed and audits it', async () => {
     const { repository, audit } = buildRepository();
-    await repository.create('principal-hash', buildInput());
+    await repository.create(BUYER, buildInput());
 
-    const confirmed = await repository.confirm('stripe-webhook', 'workshop-1', 'registration-1');
+    const confirmed = await repository.confirm(WEBHOOK, 'workshop-1', 'registration-1');
 
     expect(confirmed.status).toBe('confirmed');
     expect(audit.list()).toContainEqual(
@@ -80,11 +93,11 @@ describe('RegistrationRepository.confirm', () => {
 
   it('is a no-op (no second audit entry) when called again on an already-confirmed registration', async () => {
     const { repository, audit } = buildRepository();
-    await repository.create('principal-hash', buildInput());
-    await repository.confirm('stripe-webhook', 'workshop-1', 'registration-1');
+    await repository.create(BUYER, buildInput());
+    await repository.confirm(WEBHOOK, 'workshop-1', 'registration-1');
     const auditLengthAfterFirst = audit.list().length;
 
-    const result = await repository.confirm('stripe-webhook', 'workshop-1', 'registration-1');
+    const result = await repository.confirm(WEBHOOK, 'workshop-1', 'registration-1');
 
     expect(result.status).toBe('confirmed');
     expect(audit.list()).toHaveLength(auditLengthAfterFirst);
@@ -92,18 +105,16 @@ describe('RegistrationRepository.confirm', () => {
 
   it('does not resurrect a cancelled registration', async () => {
     const { repository } = buildRepository();
-    await repository.create('principal-hash', buildInput());
-    await repository.cancel('stripe-webhook', 'workshop-1', 'registration-1');
+    await repository.create(BUYER, buildInput());
+    await repository.cancel(WEBHOOK, 'workshop-1', 'registration-1');
 
-    const result = await repository.confirm('stripe-webhook', 'workshop-1', 'registration-1');
+    const result = await repository.confirm(WEBHOOK, 'workshop-1', 'registration-1');
     expect(result.status).toBe('cancelled');
   });
 
   it('throws AppError for an id that does not exist', async () => {
     const { repository } = buildRepository();
-    await expect(
-      repository.confirm('stripe-webhook', 'workshop-1', 'missing'),
-    ).rejects.toThrow(AppError);
+    await expect(repository.confirm(WEBHOOK, 'workshop-1', 'missing')).rejects.toThrow(AppError);
   });
 });
 
@@ -111,9 +122,9 @@ describe('RegistrationRepository.cancel', () => {
   it('transitions a pending registration to cancelled, releases capacity, and audits it', async () => {
     const { repository, capacity, audit } = buildRepository();
     await capacity.tryReserve('workshop-1', 10);
-    await repository.create('principal-hash', buildInput());
+    await repository.create(BUYER, buildInput());
 
-    const cancelled = await repository.cancel('stripe-webhook', 'workshop-1', 'registration-1');
+    const cancelled = await repository.cancel(WEBHOOK, 'workshop-1', 'registration-1');
 
     expect(cancelled.status).toBe('cancelled');
     expect(await repository.findById('workshop-1', 'registration-1')).toMatchObject({
@@ -133,10 +144,10 @@ describe('RegistrationRepository.cancel', () => {
   it('does not release capacity for an already-confirmed registration', async () => {
     const { repository, capacity } = buildRepository();
     await capacity.tryReserve('workshop-1', 1);
-    await repository.create('principal-hash', buildInput());
-    await repository.confirm('stripe-webhook', 'workshop-1', 'registration-1');
+    await repository.create(BUYER, buildInput());
+    await repository.confirm(WEBHOOK, 'workshop-1', 'registration-1');
 
-    await repository.cancel('stripe-webhook', 'workshop-1', 'registration-1');
+    await repository.cancel(WEBHOOK, 'workshop-1', 'registration-1');
 
     const result = await repository.findById('workshop-1', 'registration-1');
     expect(result?.status).toBe('confirmed');
@@ -147,9 +158,7 @@ describe('RegistrationRepository.cancel', () => {
 
   it('throws AppError for an id that does not exist', async () => {
     const { repository } = buildRepository();
-    await expect(
-      repository.cancel('stripe-webhook', 'workshop-1', 'missing'),
-    ).rejects.toThrow(AppError);
+    await expect(repository.cancel(WEBHOOK, 'workshop-1', 'missing')).rejects.toThrow(AppError);
   });
 });
 

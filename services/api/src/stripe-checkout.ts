@@ -7,6 +7,7 @@
 // request body, generates the registration id, hashes the caller's IP into
 // `principal` before this file ever sees it, resolves the real Stripe
 // secret key, and maps WorkshopCheckoutResult to a status code.
+import type { ActorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { systemClock } from './clock.js';
 import type { RegistrationRepository } from './registration-repository.js';
@@ -33,9 +34,7 @@ export interface CreateCheckoutSessionInput {
 }
 
 /** The one Stripe API call this file ever needs, injected so no test calls the real Stripe API — stripe-checkout-handler.ts is the only place that calls the real `stripe` SDK. */
-export type CreateCheckoutSession = (
-  input: CreateCheckoutSessionInput,
-) => Promise<CheckoutSession>;
+export type CreateCheckoutSession = (input: CreateCheckoutSessionInput) => Promise<CheckoutSession>;
 
 export type WorkshopCheckoutResult =
   | { kind: 'created'; checkoutUrl: string }
@@ -49,12 +48,15 @@ export interface WorkshopCheckoutRequest {
   readonly registrationId: string;
   readonly attendeeEmail: string;
   /**
-   * A hashed identity for the audit trail — stripe-checkout-handler.ts
-   * hashes the caller's source IP (SHA-256), same convention
-   * contact-form-handler.ts/testimonial-submission-handler.ts use; this
-   * file never receives, stores, or logs the raw address.
+   * The audit trail's actor (TASK 2.1.3, replacing the bare hashed
+   * `principal` string this request used to carry).
+   * stripe-checkout-handler.ts hashes the caller's source IP (SHA-256),
+   * same convention contact-form-handler.ts/testimonial-submission-handler.ts
+   * use; this file never receives, stores, or logs the raw address. The
+   * role is `'public'` — an unauthenticated visitor buying a workshop
+   * place.
    */
-  readonly principal: string;
+  readonly actor: ActorContext;
 }
 
 export interface WorkshopCheckoutDeps {
@@ -104,7 +106,7 @@ export function createWorkshopCheckoutHandler(
       throw error;
     }
 
-    await deps.registrations.create(req.principal, {
+    await deps.registrations.create(req.actor, {
       id: req.registrationId,
       workshopId: req.workshopId,
       attendeeEmail: req.attendeeEmail,

@@ -17,7 +17,7 @@
 import type { Workshop } from '@ndn/shared-types';
 import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
 
-import type { AuditWriter } from './audit.js';
+import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
@@ -70,17 +70,18 @@ export class WorkshopRepository {
     private readonly clock: Clock,
   ) {}
 
-  async create(actor: string, data: CreateWorkshopInput): Promise<Workshop> {
+  async create(actor: ActorContext, data: CreateWorkshopInput): Promise<Workshop> {
     const now = this.clock.now().toISOString();
     const item: Workshop = { ...data, created_at: now, updated_at: now };
     await this.store.create(item);
-    await this.audit.write({
-      at: now,
-      actor,
-      action: 'create',
-      entityType: 'Workshop',
-      entityId: item.id,
-    });
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: 'create',
+        entityType: 'Workshop',
+        entityId: item.id,
+      }),
+    );
     return item;
   }
 
@@ -104,7 +105,7 @@ export class WorkshopRepository {
    * workshop is cancelled, see publish/cancel below). Throws
    * AppError('RECORD_NOT_FOUND') if `id` doesn't exist.
    */
-  async update(actor: string, id: string, patch: UpdateWorkshopInput): Promise<Workshop> {
+  async update(actor: ActorContext, id: string, patch: UpdateWorkshopInput): Promise<Workshop> {
     const existing = await this.requireExists(id);
     const now = this.clock.now().toISOString();
     const record: Workshop = {
@@ -115,18 +116,19 @@ export class WorkshopRepository {
       updated_at: now,
     };
     await this.store.update(record);
-    await this.audit.write({
-      at: now,
-      actor,
-      action: 'update',
-      entityType: 'Workshop',
-      entityId: id,
-    });
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: 'update',
+        entityType: 'Workshop',
+        entityId: id,
+      }),
+    );
     return record;
   }
 
   /** Transitions `status` to 'published'. Never removes the row. */
-  async publish(actor: string, id: string): Promise<Workshop> {
+  async publish(actor: ActorContext, id: string): Promise<Workshop> {
     return this.transitionStatus(actor, id, 'published', 'publish');
   }
 
@@ -135,12 +137,12 @@ export class WorkshopRepository {
    * cancelled workshop's row and poster remain retrievable, and it's
    * simply excluded from `findPublishedUpcoming`.
    */
-  async cancel(actor: string, id: string): Promise<Workshop> {
+  async cancel(actor: ActorContext, id: string): Promise<Workshop> {
     return this.transitionStatus(actor, id, 'cancelled', 'cancel');
   }
 
   private async transitionStatus(
-    actor: string,
+    actor: ActorContext,
     id: string,
     status: Workshop['status'],
     action: 'publish' | 'cancel',
@@ -149,7 +151,9 @@ export class WorkshopRepository {
     const now = this.clock.now().toISOString();
     const record: Workshop = { ...existing, status, updated_at: now };
     await this.store.update(record);
-    await this.audit.write({ at: now, actor, action, entityType: 'Workshop', entityId: id });
+    await this.audit.write(
+      auditEventFor(actor, { at: now, action, entityType: 'Workshop', entityId: id }),
+    );
     return record;
   }
 

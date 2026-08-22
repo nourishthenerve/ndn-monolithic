@@ -135,6 +135,6 @@ pnpm run test:coverage
 
 1. **Do not delete anything** — C-03 and `00-conventions.md`'s prohibition still hold, and an audit row proving what was disclosed is worth more than a tidy table.
 2. Identify the exit from the three above. The `AppError` code tells you which: `PRIVATE_FIELD_IN_LOG` is the log path; a response leak has no code, because it means something bypassed `serialiseResponse` — find the `JSON.stringify` that did it.
-3. Query the audit log (TASK 2.1.3) for reads of the affected resource to bound who saw what.
+3. Query the audit log (`GET /audit?date=`, TASK 2.1.3 — see [audit-log.md](audit-log.md)) to bound **who wrote what** to the affected resource, and join its `requestId` into the function's CloudWatch group for the requests around it. Note what it cannot tell you: `AuditAction` has no `'read'` member, so reads are not recorded. Bounding *who saw* a leaked field means the log lines for the endpoint that served it, not the audit rows.
 4. Fix at the chokepoint, never at the call site. A second projection in a handler is how the single-chokepoint property is lost.
 5. Add the negative test for the endpoint that leaked before the fix ships — that is the "forever" in NFR-06.

@@ -382,6 +382,9 @@ describe('DataStack — feature-flag reads', () => {
     'workshop-read-handler',
     'workshop-authoring-handler',
     'stripe-checkout-handler',
+    // TASK 2.1.3: GET /audit is flag-gated too (audit.readApi.enabled,
+    // default off — the read API is flagged, the writer deliberately is not).
+    'audit-read-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -446,5 +449,114 @@ describe('DataStack — feature-flag reads', () => {
     expect(flagResources).not.toContain('admin-api-token');
     expect(flagResources).not.toContain('stripe-secret-key');
     expect(flagResources).not.toContain('turnstile-secret-key');
+  });
+});
+
+// TASK 2.1.3: the durable audit log's infrastructure half — one read
+// function whose role may Query the log and never append to it, and a
+// matching denial on every role that may append and must never read.
+describe('DataStack — audit log (TASK 2.1.3)', () => {
+  type Statement = Record<string, unknown>;
+
+  function policyStatements(): Statement[] {
+    return Object.values(synth().findResources('AWS::IAM::Policy')).flatMap(
+      (policy) =>
+        (policy as { Properties: { PolicyDocument: { Statement: Statement[] } } }).Properties
+          .PolicyDocument.Statement,
+    );
+  }
+
+  function statementsWithSid(sid: string): Statement[] {
+    return policyStatements().filter((statement) => statement.Sid === sid);
+  }
+
+  it('routes GET /audit to a function with its own 14-day-retention log group', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'GET /audit' });
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/audit-read-function',
+      RetentionInDays: 14,
+    });
+  });
+
+  it('gives every function that writes through a repository the audit table name', () => {
+    const withAuditTable = Object.values(synth().findResources('AWS::Lambda::Function')).filter(
+      (fn) =>
+        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
+          .Properties?.Environment?.Variables?.AUDIT_TABLE_NAME !== undefined,
+    );
+
+    // Every Lambda in this stack: the seven that existed before this task
+    // plus the audit reader itself.
+    expect(withAuditTable).toHaveLength(8);
+  });
+
+  it('grants the reader dynamodb:Query and nothing that could change a row', () => {
+    const readStatements = statementsWithSid('ReadAuditLog');
+
+    expect(readStatements).toHaveLength(1);
+    expect(readStatements[0]?.Effect).toBe('Allow');
+    expect(readStatements[0]?.Action).toEqual('dynamodb:Query');
+  });
+
+  it('gives the reader no write action anywhere in its policy', () => {
+    const template = synth();
+    const [auditReadRoleId] = Object.entries(template.findResources('AWS::IAM::Role')).find(
+      ([logicalId]) => logicalId.startsWith('AuditReadFunctionRole'),
+    ) ?? [undefined];
+    expect(auditReadRoleId).toBeDefined();
+
+    const auditReadPolicies = Object.values(template.findResources('AWS::IAM::Policy')).filter(
+      (policy) =>
+        JSON.stringify(
+          (policy as { Properties: { Roles?: unknown } }).Properties.Roles ?? [],
+        ).includes(auditReadRoleId as string),
+    );
+    const allowedActions = JSON.stringify(
+      auditReadPolicies.flatMap((policy) =>
+        (
+          policy as { Properties: { PolicyDocument: { Statement: Statement[] } } }
+        ).Properties.PolicyDocument.Statement.filter((s) => s.Effect === 'Allow').map(
+          (s) => s.Action,
+        ),
+      ),
+    );
+
+    expect(allowedActions).toContain('dynamodb:Query');
+    expect(allowedActions).not.toContain('dynamodb:PutItem');
+    expect(allowedActions).not.toContain('dynamodb:UpdateItem');
+    expect(allowedActions).not.toContain('dynamodb:DeleteItem');
+  });
+
+  // Step 4's property, expressed the way a single-table design allows: the
+  // writers keep the read grants their own entities need and are denied the
+  // audit partition by name. See infra/src/guardrails.ts.
+  it('denies every other role in the stack any read of the AUDIT# partition', () => {
+    const denials = statementsWithSid('DenyAuditPartitionReads');
+
+    // The seven pre-existing functions; the audit reader is deliberately
+    // not among them.
+    expect(denials).toHaveLength(7);
+    for (const statement of denials) {
+      expect(statement.Effect).toBe('Deny');
+      expect(statement.Action).toEqual([
+        'dynamodb:GetItem',
+        'dynamodb:Query',
+        'dynamodb:BatchGetItem',
+      ]);
+      expect(statement.Condition).toEqual({
+        'ForAnyValue:StringLike': { 'dynamodb:LeadingKeys': ['AUDIT#*'] },
+      });
+    }
+  });
+
+  it('closes the keyless read that the LeadingKeys condition cannot see', () => {
+    const denials = statementsWithSid('DenyKeylessTableReads');
+
+    expect(denials).toHaveLength(7);
+    for (const statement of denials) {
+      expect(statement.Effect).toBe('Deny');
+      expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
+    }
   });
 });

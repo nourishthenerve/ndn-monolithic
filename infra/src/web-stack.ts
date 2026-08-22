@@ -58,7 +58,10 @@ import {
 } from './config.js';
 import { createEmailEventPipeline } from './email-events.js';
 import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
-import { attachDestructiveActionGuardrail } from './guardrails.js';
+import {
+  attachAuditPartitionReadGuardrail,
+  attachDestructiveActionGuardrail,
+} from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
@@ -399,6 +402,10 @@ export class WebStack extends Stack {
         role: stripeWebhookRole,
         environment: {
           WORKSHOP_TABLE_NAME: props.table.tableName,
+          // TASK 2.1.3: the same table, named separately for the audit
+          // rows confirm/cancel now write durably (data-stack.ts sets the
+          // same pair on every function that writes through a repository).
+          AUDIT_TABLE_NAME: props.table.tableName,
           STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
           STRIPE_SECRET_KEY_PARAMETER_NAME,
           CONTACT_FORM_FROM_EMAIL,
@@ -426,6 +433,10 @@ export class WebStack extends Stack {
         }),
       );
       attachDestructiveActionGuardrail(stripeWebhookRole, { buckets: [], tables: [props.table] });
+      // TASK 2.1.3 step 4: this role's `dynamodb:PutItem` above is what
+      // appends its audit rows; this denies it every way of reading them
+      // back, the same pair every writing role in data-stack.ts carries.
+      attachAuditPartitionReadGuardrail(stripeWebhookRole, props.table);
       stripeWebhookRole.addToPrincipalPolicy(
         new PolicyStatement({
           sid: 'ReadStripeSecrets',

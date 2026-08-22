@@ -12,6 +12,7 @@ import type { Testimonial } from '@ndn/shared-types';
 import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
 
 import { verifyAdminToken } from './admin-auth.js';
+import { actorContext, requestOriginOf } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
@@ -101,8 +102,12 @@ export function createTestimonialModerationHandler(
         try {
           // TASK 1.3.2's admin-token bridge proves "an authorised
           // moderator," not *which* one — same one shared actor until
-          // Phase 2's Cognito RBAC, audited regardless (audit.ts).
-          const actor = 'admin-token';
+          // Phase 2's Cognito RBAC, audited regardless (audit.ts), with
+          // the role and request origin TASK 2.1.3 added.
+          const actor = actorContext(
+            { subjectId: 'admin-token', role: 'admin-token' },
+            requestOriginOf(event),
+          );
           const item = routeKey.endsWith('/publish')
             ? await deps.repository.publish(actor, id)
             : await deps.repository.reject(actor, id);

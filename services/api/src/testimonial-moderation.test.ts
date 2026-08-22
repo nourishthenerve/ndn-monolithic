@@ -1,7 +1,7 @@
 import type { Testimonial } from '@ndn/shared-types';
 import { describe, expect, it } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { CachedFlagReader, InMemoryFlagSource } from './flags.js';
 import {
@@ -13,6 +13,17 @@ import {
   TestimonialRepository,
   type SubmitTestimonialInput,
 } from './testimonial-repository.js';
+
+// TASK 2.1.3: the two actors these fixtures seed with. The handler under
+// test builds its own from the request (audit.ts's actorContext).
+const VISITOR = actorContext(
+  { subjectId: 'visitor-1', role: 'public' },
+  { requestId: 'req-submit-1', sourceIp: '198.51.100.7' },
+);
+const MODERATOR = actorContext(
+  { subjectId: 'admin-token', role: 'admin-token' },
+  { requestId: 'req-moderate-1', sourceIp: '203.0.113.4' },
+);
 
 const fixedClock: Clock = { now: () => new Date('2026-01-01T00:00:00.000Z') };
 const ADMIN_TOKEN = 'test-admin-token';
@@ -28,7 +39,11 @@ function fakeEvent(overrides: {
     pathParameters: overrides.pathParameters,
     queryStringParameters: overrides.queryStringParameters,
     headers: overrides.headers ?? { authorization: `Bearer ${ADMIN_TOKEN}` },
-    requestContext: { requestId: 'req-1' },
+    // TASK 2.1.3: `http.sourceIp` is part of every real API Gateway v2
+    // event and is what the audit row's `where` is derived from
+    // (audit.ts's requestOriginOf) — the fixture carries it because
+    // the real event always does.
+    requestContext: { requestId: 'req-1', http: { sourceIp: '198.51.100.7' } },
   } as never;
 }
 
@@ -70,9 +85,9 @@ describe('createTestimonialModerationHandler — GET /testimonials (public)', ()
         return new CachedFlagReader({ source, clock: fixedClock, ttlMs: 30_000 });
       })(),
     });
-    await repository.submit('visitor-1', buildInput({ id: 'published-1' }));
-    await repository.submit('visitor-1', buildInput({ id: 'pending-1' }));
-    await repository.publish('admin-token', 'published-1');
+    await repository.submit(VISITOR, buildInput({ id: 'published-1' }));
+    await repository.submit(VISITOR, buildInput({ id: 'pending-1' }));
+    await repository.publish(MODERATOR, 'published-1');
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
@@ -137,9 +152,9 @@ describe('createTestimonialModerationHandler — GET /testimonials?status=pendin
 
   it('returns only pending_review testimonials for a valid token', async () => {
     const { deps, repository } = buildDeps();
-    await repository.submit('visitor-1', buildInput({ id: 'published-1' }));
-    await repository.submit('visitor-1', buildInput({ id: 'pending-1' }));
-    await repository.publish('admin-token', 'published-1');
+    await repository.submit(VISITOR, buildInput({ id: 'published-1' }));
+    await repository.submit(VISITOR, buildInput({ id: 'pending-1' }));
+    await repository.publish(MODERATOR, 'published-1');
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
@@ -177,7 +192,7 @@ describe('createTestimonialModerationHandler — POST /testimonials/{id}/publish
 
   it('rejects a wrong token with 401 and publishes nothing', async () => {
     const { deps, repository } = buildDeps();
-    await repository.submit('visitor-1', buildInput());
+    await repository.submit(VISITOR, buildInput());
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
@@ -195,7 +210,7 @@ describe('createTestimonialModerationHandler — POST /testimonials/{id}/publish
 
   it('transitions status to published and never touches consent', async () => {
     const { deps, repository } = buildDeps();
-    const submitted = await repository.submit('visitor-1', buildInput());
+    const submitted = await repository.submit(VISITOR, buildInput());
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(
@@ -228,7 +243,7 @@ describe('createTestimonialModerationHandler — POST /testimonials/{id}/publish
 describe('createTestimonialModerationHandler — POST /testimonials/{id}/reject', () => {
   it('transitions status to rejected without deleting the row', async () => {
     const { deps, repository } = buildDeps();
-    await repository.submit('visitor-1', buildInput());
+    await repository.submit(VISITOR, buildInput());
     const handler = createTestimonialModerationHandler(deps);
 
     const result = await handler(

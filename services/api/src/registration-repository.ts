@@ -18,7 +18,7 @@
 // workshop id instead of a month.
 import type { Registration, RegistrationStatus } from '@ndn/shared-types';
 
-import type { AuditWriter } from './audit.js';
+import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 
@@ -116,17 +116,18 @@ export class RegistrationRepository {
   }
 
   /** Always creates as 'pending' — a registration only ever becomes 'confirmed' via the Stripe webhook. */
-  async create(actor: string, data: CreateRegistrationInput): Promise<Registration> {
+  async create(actor: ActorContext, data: CreateRegistrationInput): Promise<Registration> {
     const now = this.clock.now().toISOString();
     const item: Registration = { ...data, status: 'pending', created_at: now, updated_at: now };
     await this.store.create(item);
-    await this.audit.write({
-      at: now,
-      actor,
-      action: 'create',
-      entityType: 'Registration',
-      entityId: item.id,
-    });
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: 'create',
+        entityType: 'Registration',
+        entityId: item.id,
+      }),
+    );
     return item;
   }
 
@@ -142,7 +143,7 @@ export class RegistrationRepository {
    * idempotency gate is what normally prevents that from being reached
    * twice).
    */
-  async confirm(actor: string, workshopId: string, id: string): Promise<Registration> {
+  async confirm(actor: ActorContext, workshopId: string, id: string): Promise<Registration> {
     const existing = await this.requireExists(workshopId, id);
     if (existing.status !== 'pending') {
       return existing;
@@ -156,7 +157,7 @@ export class RegistrationRepository {
    * isn't 'pending' — an already-'confirmed' registration's slot was
    * already spent, not reclaimable by a late `checkout.session.expired`.
    */
-  async cancel(actor: string, workshopId: string, id: string): Promise<Registration> {
+  async cancel(actor: ActorContext, workshopId: string, id: string): Promise<Registration> {
     const existing = await this.requireExists(workshopId, id);
     if (existing.status !== 'pending') {
       return existing;
@@ -167,20 +168,21 @@ export class RegistrationRepository {
   }
 
   private async transitionStatus(
-    actor: string,
+    actor: ActorContext,
     existing: Registration,
     status: RegistrationStatus,
   ): Promise<Registration> {
     const now = this.clock.now().toISOString();
     const record: Registration = { ...existing, status, updated_at: now };
     await this.store.update(record);
-    await this.audit.write({
-      at: now,
-      actor,
-      action: status === 'confirmed' ? 'confirm' : 'cancel',
-      entityType: 'Registration',
-      entityId: record.id,
-    });
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: status === 'confirmed' ? 'confirm' : 'cancel',
+        entityType: 'Registration',
+        entityId: record.id,
+      }),
+    );
     return record;
   }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { CachedFlagReader, InMemoryFlagSource } from './flags.js';
 import {
@@ -14,13 +14,15 @@ import {
 } from './stripe-checkout-handler.js';
 import { InMemoryWorkshopStore, WorkshopRepository } from './workshop-repository.js';
 
+// TASK 2.1.3: the admin seeding the fixture workshop, as an `ActorContext`.
+const ADMIN_ACTOR = actorContext(
+  { subjectId: 'admin-token', role: 'admin-token' },
+  { requestId: 'req-seed', sourceIp: '198.51.100.1' },
+);
+
 const fixedClock: Clock = { now: () => new Date('2026-06-01T00:00:00.000Z') };
 
-function fakeEvent(overrides: {
-  workshopId?: string;
-  body?: unknown;
-  sourceIp?: string;
-}) {
+function fakeEvent(overrides: { workshopId?: string; body?: unknown; sourceIp?: string }) {
   return {
     routeKey: 'POST /workshops/{id}/checkout',
     pathParameters: overrides.workshopId ? { id: overrides.workshopId } : undefined,
@@ -63,7 +65,7 @@ function buildDeps(overrides: Partial<StripeCheckoutHttpDeps> = {}) {
 }
 
 async function seedPublishedWorkshop(workshops: WorkshopRepository) {
-  await workshops.create('admin-token', {
+  await workshops.create(ADMIN_ACTOR, {
     id: 'workshop-1',
     status: 'published',
     dateTimeUtc: '2026-07-01T10:00:00.000Z',

@@ -22,10 +22,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   attachDestructiveActionGuardrail,
-  BreakGlassRole,
   buildExampleRuntimePolicyDocument,
+  denyAuditPartitionReadStatements,
   denyBucketDeleteToPrincipalStatement,
   denyDestructiveActionsStatement,
+  AUDIT_PARTITION_KEY_PREFIX,
+  BreakGlassRole,
   DENIED_DESTRUCTIVE_ACTIONS,
 } from './guardrails.js';
 
@@ -198,6 +200,69 @@ describe('buildExampleRuntimePolicyDocument', () => {
     for (const action of DENIED_DESTRUCTIVE_ACTIONS) {
       expect(denyStatement?.Action).toContain(action);
       expect(allowStatement?.Action).not.toContain(action);
+    }
+  });
+});
+
+// TASK 2.1.3 step 4. The plan's sentence is "the writer's IAM grant is
+// dynamodb:PutItem only — no read"; on a single table, where the same role
+// legitimately reads its own entity's partitions, that property has to be
+// written as an explicit denial of one partition prefix rather than as an
+// absent grant.
+describe('denyAuditPartitionReadStatements', () => {
+  function buildTable() {
+    const stack = new Stack();
+    return new Table(stack, 'DataTable', {
+      partitionKey: { name: 'pk', type: AttributeType.STRING },
+      sortKey: { name: 'sk', type: AttributeType.STRING },
+    });
+  }
+
+  it('denies the three keyed read actions, on the table and on every index, only for AUDIT# keys', () => {
+    const [keyed] = denyAuditPartitionReadStatements(buildTable());
+    const statement = keyed?.toStatementJson() as {
+      Effect: string;
+      Action: string[];
+      Resource: unknown[];
+      Condition: unknown;
+    };
+
+    expect(statement.Effect).toBe('Deny');
+    expect(statement.Action).toEqual([
+      'dynamodb:GetItem',
+      'dynamodb:Query',
+      'dynamodb:BatchGetItem',
+    ]);
+    expect(statement.Resource).toHaveLength(2);
+    expect(statement.Condition).toEqual({
+      'ForAnyValue:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] },
+    });
+  });
+
+  it('denies the keyless reads unconditionally — a Scan carries no key for the condition to match', () => {
+    const [, keyless] = denyAuditPartitionReadStatements(buildTable());
+    const statement = keyless?.toStatementJson() as {
+      Effect: string;
+      Action: string[];
+      Condition?: unknown;
+    };
+
+    expect(statement.Effect).toBe('Deny');
+    expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
+    expect(statement.Condition).toBeUndefined();
+  });
+
+  it('leaves every non-audit partition readable — this is a prefix denial, not a read ban', () => {
+    const [keyed] = denyAuditPartitionReadStatements(buildTable());
+    const condition = (keyed?.toStatementJson() as { Condition: Record<string, unknown> })
+      .Condition;
+    const patterns = (condition['ForAnyValue:StringLike'] as { 'dynamodb:LeadingKeys': string[] })[
+      'dynamodb:LeadingKeys'
+    ];
+
+    expect(patterns).toEqual(['AUDIT#*']);
+    for (const prefix of ['CONTENT#', 'TESTIMONIAL#', 'WORKSHOP#', 'PAT#', 'STRIPE_EVENT#']) {
+      expect(patterns.some((pattern) => prefix.startsWith(pattern.replace('*', '')))).toBe(false);
     }
   });
 });

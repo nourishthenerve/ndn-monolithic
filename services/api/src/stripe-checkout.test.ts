@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
   InMemoryRegistrationStore,
@@ -13,6 +13,12 @@ import {
   type WorkshopCheckoutRequest,
 } from './stripe-checkout.js';
 import { InMemoryWorkshopStore, WorkshopRepository } from './workshop-repository.js';
+
+// TASK 2.1.3: the admin seeding the fixture workshop, as an `ActorContext`.
+const ADMIN_ACTOR = actorContext(
+  { subjectId: 'admin-token', role: 'admin-token' },
+  { requestId: 'req-seed', sourceIp: '198.51.100.1' },
+);
 
 const fixedClock: Clock = { now: () => new Date('2026-06-01T00:00:00.000Z') };
 
@@ -38,7 +44,7 @@ async function seedWorkshop(
     dateTimeUtc?: string;
   } = {},
 ) {
-  await workshops.create('admin-token', {
+  await workshops.create(ADMIN_ACTOR, {
     id: overrides.id ?? 'workshop-1',
     status: overrides.status ?? 'published',
     dateTimeUtc: overrides.dateTimeUtc ?? '2026-07-01T10:00:00.000Z',
@@ -52,7 +58,10 @@ const baseRequest: WorkshopCheckoutRequest = {
   workshopId: 'workshop-1',
   registrationId: 'registration-1',
   attendeeEmail: 'attendee@example.com',
-  principal: 'hashed-principal-1',
+  actor: actorContext(
+    { subjectId: 'hashed-principal-1', role: 'public' },
+    { requestId: 'req-checkout-1', sourceIp: '198.51.100.7' },
+  ),
 };
 
 function buildDeps(overrides: Partial<WorkshopCheckoutDeps> = {}): WorkshopCheckoutDeps & {
@@ -125,7 +134,7 @@ describe('createWorkshopCheckoutHandler — availability', () => {
   it('is unavailable for a cancelled workshop', async () => {
     const deps = buildDeps();
     await seedWorkshop(deps.workshops, { status: 'published' });
-    await deps.workshops.cancel('admin-token', 'workshop-1');
+    await deps.workshops.cancel(ADMIN_ACTOR, 'workshop-1');
     const checkout = createWorkshopCheckoutHandler(deps);
 
     await expect(checkout(baseRequest)).resolves.toEqual({ kind: 'unavailable' });
@@ -149,9 +158,9 @@ describe('createWorkshopCheckoutHandler — capacity', () => {
     await expect(checkout(baseRequest)).resolves.toMatchObject({ kind: 'created' });
     deps.createCheckoutSession.mockClear();
 
-    await expect(
-      checkout({ ...baseRequest, registrationId: 'registration-2' }),
-    ).resolves.toEqual({ kind: 'full' });
+    await expect(checkout({ ...baseRequest, registrationId: 'registration-2' })).resolves.toEqual({
+      kind: 'full',
+    });
     expect(deps.createCheckoutSession).not.toHaveBeenCalled();
   });
 

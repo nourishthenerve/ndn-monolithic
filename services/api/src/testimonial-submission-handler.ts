@@ -10,8 +10,9 @@ import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import type { APIGatewayProxyEventV2, APIGatewayProxyHandlerV2 } from 'aws-lambda';
 import { z } from 'zod';
 
-import { InMemoryAuditLog } from './audit.js';
+import { actorContext, hashSourceIp, requestOriginOf } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
+import { DynamoAuditLog } from './dynamo-audit-log.js';
 import { DynamoTestimonialStore } from './dynamo-store.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
@@ -63,12 +64,6 @@ function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
 
 function hashContactEmail(email: string): string {
   return createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
-}
-
-// The rate limiter's `principal` — SHA-256 of the caller's source IP, same
-// convention contact-form-handler.ts uses.
-function hashSourceIp(sourceIp: string): string {
-  return createHash('sha256').update(sourceIp).digest('hex');
 }
 
 const TESTIMONIAL_SUBMISSION_LOG_SAMPLE_RATE = 1;
@@ -148,6 +143,11 @@ export function createTestimonialSubmissionHttpHandler(
       },
       turnstileToken: parsed.data.turnstileToken,
       principal,
+      // TASK 2.1.3: the same hash, now carried as the audit trail's actor
+      // alongside the request it arrived on. `role: 'public'` is the
+      // honest answer for an unauthenticated visitor — see audit.ts's
+      // AuditActorRole for why the three non-`Role` members exist.
+      actor: actorContext({ subjectId: principal, role: 'public' }, requestOriginOf(event)),
     });
 
     switch (result.kind) {
@@ -210,10 +210,14 @@ const testimonialStore = new DynamoTestimonialStore({
   tableName: process.env.TESTIMONIAL_TABLE_NAME ?? '',
 });
 
-// This handler's audit writes have nowhere durable to land yet — same
-// documented gap content-authoring-handler.ts carries for its own
-// InMemoryAuditLog.
-const repository = new TestimonialRepository(testimonialStore, new InMemoryAuditLog(), systemClock);
+// TASK 2.1.3: the durable audit sink. `AUDIT_TABLE_NAME` is the same table
+// every store above writes to (infra/src/data-stack.ts sets all of them to
+// NdnDataStack's table name) — named separately because the audit
+// partition is the one this function's IAM grant is reasoned about
+// independently of.
+const auditLog = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
+
+const repository = new TestimonialRepository(testimonialStore, auditLog, systemClock);
 
 const verifyTurnstile: TurnstileVerifier = async (token) => {
   const secretKey = await getTurnstileSecret();
