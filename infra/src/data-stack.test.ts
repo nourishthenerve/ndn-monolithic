@@ -453,6 +453,8 @@ describe('DataStack — feature-flag reads', () => {
     'assignment-handler',
     // TASK 2.5.3: caseload.view.enabled, default off.
     'caseload-handler',
+    // TASK 3.1.1: patients.profile.enabled, default off.
+    'patient-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -560,13 +562,13 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // Every Lambda in this stack that goes through a repository: the seven
     // that existed before TASK 2.1.3, the audit reader itself, TASK 2.2.3's
     // two registration functions, TASK 2.4.1's clinician-admin function,
-    // TASK 2.5.1's assignment function, and TASK 2.5.3's caseload
-    // function (it never writes an audit row — `ClinicianRepository`'s
-    // read-only `findById` never reaches one — but its constructor still
-    // takes an `AuditWriter`, so the env var is present regardless). The
-    // authorizer is deliberately absent — it reads a status and writes
-    // nothing.
-    expect(withAuditTable).toHaveLength(13);
+    // TASK 2.5.1's assignment function, TASK 2.5.3's caseload function (it
+    // never writes an audit row — `ClinicianRepository`'s read-only
+    // `findById` never reaches one — but its constructor still takes an
+    // `AuditWriter`, so the env var is present regardless), and TASK
+    // 3.1.1's patient function. The authorizer is deliberately absent — it
+    // reads a status and writes nothing.
+    expect(withAuditTable).toHaveLength(14);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -614,10 +616,10 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
 
     // The seven pre-existing functions, TASK 2.2.2's authorizer, TASK
     // 2.2.3's two registration roles, TASK 2.4.1's clinician-admin role,
-    // TASK 2.5.1's assignment role, and TASK 2.5.3's caseload role; the
-    // audit reader is deliberately not among them, being the one role
-    // that is supposed to read that partition.
-    expect(denials).toHaveLength(13);
+    // TASK 2.5.1's assignment role, TASK 2.5.3's caseload role, and TASK
+    // 3.1.1's patient role; the audit reader is deliberately not among
+    // them, being the one role that is supposed to read that partition.
+    expect(denials).toHaveLength(14);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -634,7 +636,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(13);
+    expect(denials).toHaveLength(14);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -691,21 +693,24 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
+  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
     // The first seven took no `authorizer:` override at all, ahead of
     // ADMIN_TOKEN_ROUTE's own retirement — every route before them opted
     // out with `PUBLIC_ROUTE` or the now-deleted `ADMIN_TOKEN_ROUTE`
-    // (route-protection.ts). TASK 2.5.4 moves thirteen more onto this same
+    // (route-protection.ts). TASK 2.5.4 moved thirteen more onto this same
     // list: content authoring (4), workshop authoring (4), testimonial
     // moderation (3, `GET /testimonials/pending` new — `GET /testimonials`
     // itself stays public), and `GET /audit` — the fifth admin-token route
-    // route-protection.ts's own header named as easy to miss.
+    // route-protection.ts's own header named as easy to miss. TASK 3.1.1
+    // adds the last two: `GET`/`PATCH /patients/{id}`.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
         'GET /caseload',
+        'GET /patients/{id}',
         'GET /testimonials/pending',
         'PATCH /content/{id}',
+        'PATCH /patients/{id}',
         'PATCH /workshops/{id}',
         'POST /clinicians',
         'POST /clinicians/{id}/deactivate',

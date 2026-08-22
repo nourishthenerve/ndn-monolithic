@@ -155,7 +155,76 @@ describe('transitions', () => {
     // The structural half of "no path deletes a person". `Repository` has
     // no removal method to inherit and this class adds none.
     const methods = Object.getOwnPropertyNames(PatientRepository.prototype);
-    expect(methods.sort()).toEqual(['constructor', 'findById', 'register', 'transition']);
+    expect(methods.sort()).toEqual(['constructor', 'findById', 'register', 'transition', 'update']);
+  });
+});
+
+describe('update (TASK 3.1.1)', () => {
+  it('merges a personal{} patch into the existing sub-object, field by field', async () => {
+    const { patients } = build();
+    await patients.register(REGISTRATION, PATIENT_ACTOR);
+    const updated = await patients.update(SUB, PATIENT_ACTOR, { personal: { phone: '07700900000' } });
+
+    // The fields the patch never mentioned survive untouched.
+    expect(updated.personal).toEqual({
+      fullName: 'A Patient',
+      email: 'patient@example.com',
+      phone: '07700900000',
+      marketingOptIn: false,
+    });
+  });
+
+  it('merges a clinical{} patch the same way, independent of personal{}', async () => {
+    const { patients } = build();
+    await patients.register(REGISTRATION, PATIENT_ACTOR);
+    await patients.update(SUB, CLINICIAN_ACTOR, {
+      clinical: { referralSource: 'GP' },
+    });
+    const updated = await patients.update(SUB, CLINICIAN_ACTOR, {
+      clinical: { presentingCondition: 'stated' },
+    });
+
+    expect(updated.clinical).toEqual({ referralSource: 'GP', presentingCondition: 'stated' });
+  });
+
+  it('can patch both halves in one call without either clobbering the other', async () => {
+    const { patients } = build();
+    await patients.register(REGISTRATION, PATIENT_ACTOR);
+    const updated = await patients.update(SUB, CLINICIAN_ACTOR, {
+      personal: { phone: '07700900000' },
+      clinical: { referralSource: 'GP' },
+    });
+
+    expect(updated.personal.phone).toBe('07700900000');
+    expect(updated.clinical.referralSource).toBe('GP');
+  });
+
+  it('audits the update with the acting principal', async () => {
+    const { patients, audit } = build();
+    await patients.register(REGISTRATION, PATIENT_ACTOR);
+    await patients.update(SUB, CLINICIAN_ACTOR, { personal: { phone: '07700900000' } });
+
+    const last = audit.list().at(-1);
+    expect(last?.action).toBe('update');
+    expect(last?.actor).toBe('cli-1');
+    expect(last?.entityType).toBe('patient');
+  });
+
+  it('throws rather than creating a record for an unknown patient', async () => {
+    const { patients } = build();
+
+    await expect(
+      patients.update('nobody', CLINICIAN_ACTOR, { personal: { phone: '0' } }),
+    ).rejects.toBeInstanceOf(AppError);
+  });
+
+  it('leaves the row readable and its status untouched', async () => {
+    const { patients } = build();
+    await patients.register(REGISTRATION, PATIENT_ACTOR);
+    const updated = await patients.update(SUB, PATIENT_ACTOR, { personal: { phone: '1' } });
+
+    expect(updated.status).toBe('active');
+    expect(updated.account_status).toBe('pending');
   });
 });
 

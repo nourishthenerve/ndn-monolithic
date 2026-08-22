@@ -159,6 +159,9 @@ export class DataStack extends Stack {
     const caseloadLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/caseload-function`
       : '/ndn/caseload-function';
+    const patientLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/patient-function`
+      : '/ndn/patient-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1284,6 +1287,74 @@ export class DataStack extends Stack {
       path: '/caseload',
       methods: [HttpMethod.GET],
       integration: new HttpLambdaIntegration('CaseloadIntegration', caseloadFunction),
+    });
+
+    // TASK 3.1.1: the patient's own profile, read and updated for real.
+    // No `authorizer:` override, same reasoning as clinician-admin/
+    // assignment/caseload — `authz-matrix.ts`'s `'Patient profile'` row
+    // has stood implemented since TASK 2.1.1 with no handler to enforce
+    // it until this one.
+    const patientRole = new Role(this, 'PatientFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const patientFunction = new NodejsFunction(this, 'PatientFunction', {
+      entry: `${moduleDir}../../services/api/src/patient-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: patientRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'PatientFunctionLogGroup', patientLogGroupName),
+    });
+    grantFlagReads(this, patientRole);
+
+    // Precise `GetItem`/`PutItem` on `PAT#*` only — not
+    // `table.grantReadWriteData()`, whose write half also includes
+    // `DeleteItem`. `PatientRepository.update` reads-then-writes the same
+    // row (`repository.ts`'s own `requireActive` check), so both actions
+    // are needed on the identical key prefix.
+    patientRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWritePatientProfile',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // A separate statement, on `AUDIT#*` alone — `PatientRepository.update`
+    // writes an audit row through the same `DynamoAuditLog` every other
+    // writer in this stack uses; the guardrail directly below is what
+    // stops this grant from ever widening into a read of that partition.
+    patientRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(patientRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(patientRole, this.table);
+
+    const patientIntegration = new HttpLambdaIntegration('PatientIntegration', patientFunction);
+    httpApi.addRoutes({
+      path: '/patients/{id}',
+      methods: [HttpMethod.GET],
+      integration: patientIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}',
+      methods: [HttpMethod.PATCH],
+      integration: patientIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST
