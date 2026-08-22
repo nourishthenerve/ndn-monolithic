@@ -1,0 +1,63 @@
+---
+// TASK 3.5.2: the patient's own assigned-content list. Statically
+// generated and **empty**, same discipline account/caseload.astro states —
+// what makes this page private is not server rendering but that its
+// content is not in the HTML at all. The island below decides whether to
+// fetch anything, and renders nothing until the session resolves.
+//
+// Deliberately absent from routes.ts, same as account/caseload.astro and
+// account/patient.astro — TASK 1.1.3's a11y gate (tests/pr-env/
+// a11y-full.test.ts) scans every registered route unauthenticated, and an
+// authenticated-only page has no accessible content to find that way. See
+// docs/runbooks/content-assignment.md for what accessibility verification
+// this page actually has instead, and the same honestly-named gap
+// caseload-view.md's own TASK 2.5.3 section already names: this codebase
+// has no live-session pr-env testing mechanism yet.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { AssignedContent } from '../../../account/AssignedContent.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('assignedContent.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('assignedContent.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    signedOut={
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signIn', undefined, locale)} />
+      </p>
+    }
+  >
+    <AssignedContent
+      client:only="react"
+      locale={locale}
+      strings={{
+        loadingLabel: t('assignedContent.loading', undefined, locale),
+        forbiddenLabel: t('assignedContent.forbidden', undefined, locale),
+        errorLabel: t('assignedContent.error', undefined, locale),
+        emptyLabel: t('assignedContent.empty', undefined, locale),
+        readMoreLabel: t('assignedContent.readMore', undefined, locale),
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>
