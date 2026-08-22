@@ -11,10 +11,17 @@ import { describe, expect, it } from 'vitest';
 
 import { AuthStack } from './auth-stack.js';
 import {
+  CLINICIAN_USER_POOL_CLIENT_ID,
+  CLINICIAN_USER_POOL_ID,
+  CLINICIAN_USER_POOL_ISSUER,
   CLINICIAN_USER_POOL_NAME,
   COST_ALLOCATION_TAG_KEY,
   COST_ALLOCATION_TAG_VALUE,
+  PATIENT_USER_POOL_CLIENT_ID,
+  PATIENT_USER_POOL_ID,
+  PATIENT_USER_POOL_ISSUER,
   PATIENT_USER_POOL_NAME,
+  REGION,
   SITE_ORIGIN,
 } from './config.js';
 
@@ -286,5 +293,45 @@ describe('AuthStack — exported identifiers', () => {
     Template.fromStack(stack).hasResourceProperties('AWS::Cognito::UserPool', {
       UserPoolTags: { [COST_ALLOCATION_TAG_KEY]: COST_ALLOCATION_TAG_VALUE },
     });
+  });
+});
+
+// The four identifiers `NdnAuthStack` generated on its first deploy
+// (2026-08-22) and config.ts now carries. Nothing here synthesizes — these
+// assertions guard a hand-copied value, which is the only part of TASK
+// 2.2.1 a human typed rather than a machine emitted.
+//
+// The two issuer strings are the deploy's own CloudFormation output,
+// checked in the same spirit as the guardrail fixture: config.ts *derives*
+// its issuers from the pool ids, so a mistyped pool id fails here rather
+// than at 2.2.2's first token verification, where the symptom would be
+// every sign-in failing with a signature error.
+describe('the recorded pool identifiers', () => {
+  const DEPLOYED_ISSUERS = {
+    patient: 'https://cognito-idp.eu-west-2.amazonaws.com/eu-west-2_lMonWXA0b',
+    clinician: 'https://cognito-idp.eu-west-2.amazonaws.com/eu-west-2_1SFN2y0Jt',
+  };
+
+  it('derives issuers that match what the deploy actually reported', () => {
+    expect(PATIENT_USER_POOL_ISSUER).toBe(DEPLOYED_ISSUERS.patient);
+    expect(CLINICIAN_USER_POOL_ISSUER).toBe(DEPLOYED_ISSUERS.clinician);
+  });
+
+  it('holds two distinct pools and two distinct clients', () => {
+    // A copy-paste that pointed both roles at one directory would undo the
+    // entire reason there are two.
+    expect(PATIENT_USER_POOL_ID).not.toBe(CLINICIAN_USER_POOL_ID);
+    expect(PATIENT_USER_POOL_CLIENT_ID).not.toBe(CLINICIAN_USER_POOL_CLIENT_ID);
+  });
+
+  it('has pool ids in this region and client ids in Cognito\'s own shape', () => {
+    for (const id of [PATIENT_USER_POOL_ID, CLINICIAN_USER_POOL_ID]) {
+      expect(id).toMatch(new RegExp(`^${REGION}_[A-Za-z0-9]+$`));
+    }
+    // Cognito app client ids are 26 lowercase base-32 characters; a pool id
+    // pasted into a client slot fails this, and vice versa.
+    for (const id of [PATIENT_USER_POOL_CLIENT_ID, CLINICIAN_USER_POOL_CLIENT_ID]) {
+      expect(id).toMatch(/^[a-z0-9]{26}$/);
+    }
   });
 });
