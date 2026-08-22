@@ -138,18 +138,12 @@ export class DataStack extends Stack {
     // — the same write that already derives GSI1's projection derives
     // this one). KEYS_ONLY: caseload-repository.ts's own read follows up
     // with a GetItem per id, the same shape GSI1/GSI2's own reads take.
-    // PROD INCIDENT REMEDIATION (docs/runbooks/prod-deploy-gsi-catchup.md):
-    // temporarily withheld. DynamoDB's UpdateTable API permits only one GSI
-    // creation per call, and production fell behind by three (GSI1/GSI3/
-    // GSI4) at once because their deploys were never individually verified.
-    // Landing GSI1 alone in this deploy; GSI3 is restored in the very next
-    // one, unchanged from the block below.
-    // this.table.addGlobalSecondaryIndex({
-    //   indexName: GSI3_INDEX_NAME,
-    //   partitionKey: { name: 'gsi3pk', type: AttributeType.STRING },
-    //   sortKey: { name: 'gsi3sk', type: AttributeType.STRING },
-    //   projectionType: ProjectionType.KEYS_ONLY,
-    // });
+    this.table.addGlobalSecondaryIndex({
+      indexName: GSI3_INDEX_NAME,
+      partitionKey: { name: 'gsi3pk', type: AttributeType.STRING },
+      sortKey: { name: 'gsi3sk', type: AttributeType.STRING },
+      projectionType: ProjectionType.KEYS_ONLY,
+    });
 
     // TASK 3.4.3: appointment-window lookups for reminders, proved
     // against this shape in docs/adr/0002-database.md before this index
