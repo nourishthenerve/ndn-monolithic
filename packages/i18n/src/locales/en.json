@@ -168,5 +168,16 @@
   "notifications.clinicianCaseloadPatientRemoved.subject": "A patient has been removed from your caseload",
   "notifications.clinicianCaseloadPatientRemoved.emailBody": "A patient has been removed from your caseload.",
   "notifications.newMessage.subject": "You have a new message",
-  "notifications.newMessage.emailBody": "You have a new message. Sign in to read and reply."
+  "notifications.newMessage.emailBody": "You have a new message. Sign in to read and reply.",
+  "messageThread.heading": "Messages",
+  "messageThread.description": "Send and read messages with your assigned clinician.",
+  "messageThread.loading": "Loading your messages…",
+  "messageThread.forbidden": "You do not have access to this page.",
+  "messageThread.error": "Something went wrong loading your messages. Please try again.",
+  "messageThread.empty": "No messages yet.",
+  "messageThread.composePlaceholder": "Write a message…",
+  "messageThread.send": "Send",
+  "messageThread.sending": "Sending…",
+  "messageThread.sendError": "Your message could not be sent. Please try again.",
+  "messageThread.rateLimited": "You've sent a lot of messages recently. Please wait a little before sending another."
 }
