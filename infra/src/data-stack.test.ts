@@ -718,9 +718,11 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // /patients/{id}/care-plan`; TASK 3.2.2 added the `GET` half of both,
     // all four served by `ClinicalRecordFunction`; TASK 3.3.1 added `POST
     // /patients/{id}/assessments/{assessmentId}`; TASK 3.3.2 added its
-    // `GET` half, both served by `AssessmentFunction`; TASK 3.4.1 adds
+    // `GET` half, both served by `AssessmentFunction`; TASK 3.4.1 added
     // `POST`/`GET /patients/{id}/appointments` and `GET
-    // /clinicians/me/calendar`, served by a new `AppointmentFunction`.
+    // /clinicians/me/calendar`; TASK 3.4.2 adds `POST
+    // /patients/{id}/appointments/{apptId}/cancel`, all served by a new
+    // `AppointmentFunction`.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
@@ -743,6 +745,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /content/{id}/publish',
         'POST /content/{id}/unpublish',
         'POST /patients/{id}/appointments',
+        'POST /patients/{id}/appointments/{apptId}/cancel',
         'POST /patients/{id}/approve',
         'POST /patients/{id}/assessments/{assessmentId}',
         'POST /patients/{id}/care-plan',

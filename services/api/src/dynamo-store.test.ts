@@ -1243,4 +1243,61 @@ describe('DynamoAppointmentStore', () => {
     expect(result).toEqual([]);
     expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
   });
+
+  // TASK 3.4.2: "index gives candidates, the read confirms them" — the
+  // GSI1 Query still names the row (cancelling never touches
+  // gsi1pk/gsi1sk), so the exclusion has to happen after the follow-up
+  // GetItem, against the fetched item's own appointment_status.
+  it('listForClinicianCalendar() excludes a cancelled row even though it still surfaces from the GSI1 Query', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z', gsi1pk: 'CLI#cli-1', gsi1sk: 'APPT#2026-09-01T10:00:00.000Z' }],
+    });
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        ...buildAppointment({ appointment_status: 'cancelled' }),
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    const result = await store.listForClinicianCalendar(
+      'cli-1',
+      '2026-09-01T00:00:00.000Z',
+      '2026-09-02T00:00:00.000Z',
+    );
+    expect(result).toEqual([]);
+  });
+
+  it('cancel() issues an atomic UpdateItem on appointment_status alone, conditioned on the row existing', async () => {
+    ddbMock.on(UpdateCommand).resolves({
+      Attributes: {
+        ...buildAppointment({ appointment_status: 'cancelled' }),
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    const result = await store.cancel('pat-1', '2026-09-01T10:00:00.000Z', '2026-08-22T10:00:00.000Z');
+    expect(result.appointment_status).toBe('cancelled');
+    expect(result).not.toHaveProperty('pk');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Key: { pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
+      UpdateExpression: 'SET appointment_status = :cancelled, updated_at = :now',
+      ConditionExpression: 'attribute_exists(pk)',
+      ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': '2026-08-22T10:00:00.000Z' },
+      ReturnValues: 'ALL_NEW',
+    });
+  });
+
+  it('cancel() throws AppError(RECORD_NOT_FOUND) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(
+      store.cancel('pat-1', '2026-09-01T10:00:00.000Z', '2026-08-22T10:00:00.000Z'),
+    ).rejects.toThrow(AppError);
+  });
 });

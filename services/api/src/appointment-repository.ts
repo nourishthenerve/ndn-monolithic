@@ -26,12 +26,31 @@ export interface AppointmentStore {
   create(appointment: Appointment): Promise<void>;
   /** Main-table `Query` on `PAT#<id>`, `begins_with(sk, 'APPT#')` — chronological (sort-key order), never a `Scan`. */
   listForPatient(patientId: string): Promise<Appointment[]>;
-  /** GSI1 `Query`, `gsi1sk BETWEEN 'APPT#<from>' AND 'APPT#<to>'` — chronological, never a `Scan`. */
+  /**
+   * GSI1 `Query`, `gsi1sk BETWEEN 'APPT#<from>' AND 'APPT#<to>'` —
+   * chronological, never a `Scan`. TASK 3.4.2: a cancelled appointment is
+   * excluded here (a clinician's live calendar has no use for one) but
+   * remains in `listForPatient`'s own full history — "index gives
+   * candidates, the read confirms them," the same discipline
+   * `CaseloadRepository` already uses for its own stale-row case.
+   */
   listForClinicianCalendar(
     clinicianId: string,
     from: string,
     to: string,
   ): Promise<Appointment[]>;
+  /**
+   * TASK 3.4.2: an atomic `UpdateItem` — `appointment_status` alone, never
+   * `scheduledAt` (rescheduling is cancel-the-old, `POST` a new one, so
+   * the append-only property every entity in this table keeps holds here
+   * without a special case). `gsi1pk`/`gsi1sk` are untouched, so the row
+   * never needs re-deriving them — only the calendar *read*'s own filter
+   * (above) decides a cancelled row no longer matters there. Conditioned
+   * on the row existing (`attribute_exists(pk)` on the real
+   * implementation); throws `RECORD_NOT_FOUND` otherwise, never a silent
+   * no-op.
+   */
+  cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment>;
 }
 
 export interface AppointmentInput {
@@ -90,5 +109,30 @@ export class AppointmentRepository {
   ): Promise<Unprojected<Appointment>[]> {
     const items = await this.store.listForClinicianCalendar(clinicianId, from, to);
     return items.map(unprojected);
+  }
+
+  /**
+   * Only ever reaches this far when `can()` has already granted the
+   * `'Sub-clinician (assigned)'` column — the identical contract
+   * `schedule` keeps, and the identical column: `Appointments`'s own
+   * `Principal` cell is bare `R`, so the principal cancels nothing
+   * through this method either.
+   */
+  async cancel(
+    patientId: string,
+    scheduledAt: string,
+    actor: ActorContext,
+  ): Promise<Unprojected<Appointment>> {
+    const now = this.clock.now().toISOString();
+    const updated = await this.store.cancel(patientId, scheduledAt, now);
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: 'update',
+        entityType: APPOINTMENT_ENTITY_TYPE,
+        entityId: `${patientId}#${scheduledAt}`,
+      }),
+    );
+    return unprojected(updated);
   }
 }
