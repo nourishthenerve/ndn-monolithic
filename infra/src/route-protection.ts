@@ -56,6 +56,11 @@ export const ADMIN_TOKEN_ROUTE = new HttpNoneAuthorizer();
  * signature over the request body (`stripe-webhook.ts`), not a token —
  * putting it behind a bearer authorizer would break it, and Stripe has no
  * Cognito account.
+ *
+ * `POST /registrations` (TASK 2.2.3) is here by necessity: the caller has
+ * no account, because an account is what they are asking for. Turnstile
+ * and a per-IP rate limit are its gate, and its flag is default-off until
+ * TASK 2.5.1 can approve anyone.
  */
 export const PUBLIC_ROUTE_KEYS: readonly string[] = [
   'GET /content',
@@ -63,6 +68,7 @@ export const PUBLIC_ROUTE_KEYS: readonly string[] = [
   'GET /workshops',
   'POST /contact',
   'POST /stripe/webhook',
+  'POST /registrations',
   'POST /testimonials',
   'POST /workshops/{id}/checkout',
 ];

@@ -394,6 +394,9 @@ describe('DataStack — feature-flag reads', () => {
     // TASK 2.1.3: GET /audit is flag-gated too (audit.readApi.enabled,
     // default off — the read API is flagged, the writer deliberately is not).
     'audit-read-handler',
+    // TASK 2.2.3: auth.patientRegistration.enabled, default off until
+    // TASK 2.5.1 can approve anyone.
+    'registration-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -495,9 +498,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
           .Properties?.Environment?.Variables?.AUDIT_TABLE_NAME !== undefined,
     );
 
-    // Every Lambda in this stack: the seven that existed before this task
-    // plus the audit reader itself.
-    expect(withAuditTable).toHaveLength(8);
+    // Every Lambda in this stack that goes through a repository: the seven
+    // that existed before TASK 2.1.3, the audit reader itself, and TASK
+    // 2.2.3's two registration functions. The authorizer is deliberately
+    // absent — it reads a status and writes nothing.
+    expect(withAuditTable).toHaveLength(10);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -543,10 +548,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('denies every other role in the stack any read of the AUDIT# partition', () => {
     const denials = statementsWithSid('DenyAuditPartitionReads');
 
-    // The seven pre-existing functions plus TASK 2.2.2's authorizer; the
-    // audit reader is deliberately not among them, being the one role
-    // that is supposed to read that partition.
-    expect(denials).toHaveLength(8);
+    // The seven pre-existing functions, TASK 2.2.2's authorizer and TASK
+    // 2.2.3's two registration roles; the audit reader is deliberately not
+    // among them, being the one role that is supposed to read that
+    // partition.
+    expect(denials).toHaveLength(10);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -563,7 +569,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(8);
+    expect(denials).toHaveLength(10);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -685,5 +691,95 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
       CLINICIAN_USER_POOL_ID,
       CLINICIAN_USER_POOL_CLIENT_ID,
     });
+  });
+});
+
+// TASK 2.2.3: the front door — an unauthenticated endpoint that creates a
+// Cognito account, and a trigger that turns a confirmed one into a record.
+describe('DataStack — patient registration (TASK 2.2.3)', () => {
+  function statementsWithSid(sid: string): Record<string, unknown>[] {
+    return Object.values(synth().findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } })
+            .Properties.PolicyDocument.Statement,
+      )
+      .filter((statement) => statement.Sid === sid);
+  }
+
+  it('routes POST /registrations to a function with its own 14-day log group', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /registrations',
+      AuthorizationType: 'NONE',
+    });
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/registration-function',
+      RetentionInDays: 14,
+    });
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/post-confirmation-function',
+      RetentionInDays: 14,
+    });
+    expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/registration-function');
+    expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/post-confirmation-function');
+  });
+
+  it('gives the registration endpoint no cognito-idp permission at all', () => {
+    // SignUp is an unauthenticated Cognito operation — AWS's own reference
+    // says it "doesn't evaluate IAM policies". A grant here would be
+    // permission that does nothing while reading as admin reach into the
+    // directory.
+    expect(JSON.stringify(synth().findResources('AWS::IAM::Policy'))).not.toContain('cognito-idp:');
+  });
+
+  it('lets the registration endpoint write only the intake partition', () => {
+    const statements = statementsWithSid('WriteRegistrationIntake');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('dynamodb:PutItem');
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['REG#*'] },
+    });
+  });
+
+  it('scopes the trigger to the three partitions it touches, and no others', () => {
+    // The one function Cognito can invoke. A table-wide grant would let it
+    // reach every record in the estate.
+    const statements = statementsWithSid('WritePatientProfile');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual([
+      'dynamodb:GetItem',
+      'dynamodb:PutItem',
+      'dynamodb:UpdateItem',
+    ]);
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*', 'REG#*', 'AUDIT#*'] },
+    });
+  });
+
+  it('lets the trigger append audit rows but never read them back', () => {
+    // It writes through a repository, so 2.1.3's separation applies: the
+    // PutItem above is what lets it append, and the audit-partition denial
+    // is what stops it reading.
+    const policy = Object.values(synth().findResources('AWS::IAM::Policy')).find((candidate) =>
+      JSON.stringify(candidate.Properties?.PolicyDocument ?? {}).includes('WritePatientProfile'),
+    );
+    const statements = policy?.Properties?.PolicyDocument?.Statement as {
+      Sid?: string;
+      Effect: string;
+    }[];
+
+    expect(statements.some((statement) => statement.Sid === 'DenyAuditPartitionReads')).toBe(true);
+    expect(statements.some((statement) => statement.Sid === 'DenyKeylessTableReads')).toBe(true);
+  });
+
+  it('scopes the confirmation email to the verified identity and the configuration set', () => {
+    const statements = statementsWithSid('SendRegistrationEmail');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('ses:SendEmail');
+    expect(JSON.stringify(statements[0]?.Resource)).toContain('identity/nourishthenerve.com');
   });
 });

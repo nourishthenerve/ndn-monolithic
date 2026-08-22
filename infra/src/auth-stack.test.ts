@@ -24,6 +24,7 @@ import {
   REGION,
   SITE_ORIGIN,
 } from './config.js';
+import { DataStack } from './data-stack.js';
 
 // No Lambdas in this stack, so synth is cheap — memoized anyway for the
 // same reason its siblings are: a Template is only ever read.
@@ -59,6 +60,7 @@ interface UserPoolResource {
     Schema?: { Name: string; Required?: boolean; Mutable?: boolean }[];
     AccountRecoverySetting?: { RecoveryMechanisms?: unknown };
     UsernameAttributes?: string[];
+    LambdaConfig?: unknown;
   };
 }
 
@@ -333,5 +335,50 @@ describe('the recorded pool identifiers', () => {
     for (const id of [PATIENT_USER_POOL_CLIENT_ID, CLINICIAN_USER_POOL_CLIENT_ID]) {
       expect(id).toMatch(/^[a-z0-9]{26}$/);
     }
+  });
+});
+
+// TASK 2.2.3: the trigger that turns a confirmed Cognito account into a
+// `PAT#` record, attached to the patient pool and to nothing else.
+describe('AuthStack — the post-confirmation trigger (TASK 2.2.3)', () => {
+  const synthWithTrigger = (() => {
+    let template: Template | undefined;
+    return () =>
+      (template ??= (() => {
+        const app = new App();
+        const dataStack = new DataStack(app, 'TestDataStackForAuthStack', {
+          env: { account: '357601815388', region: 'eu-west-2' },
+        });
+        const stack = new AuthStack(app, 'TestAuthStackWithTrigger', {
+          env: { account: '357601815388', region: 'eu-west-2' },
+          postConfirmationFunction: dataStack.postConfirmationFunction,
+        });
+        return Template.fromStack(stack);
+      })());
+  })();
+
+  function poolWith(name: string): UserPoolResource['Properties'] {
+    const pools = Object.values(
+      synthWithTrigger().findResources('AWS::Cognito::UserPool'),
+    ) as UserPoolResource[];
+    const match = pools.find((pool) => pool.Properties.UserPoolName === name);
+    expect(match, `no user pool named ${name}`).toBeDefined();
+    return match!.Properties;
+  }
+
+  it('attaches PostConfirmation to the patient pool', () => {
+    expect(poolWith(PATIENT_USER_POOL_NAME).LambdaConfig).toEqual({
+      PostConfirmation: expect.anything(),
+    });
+  });
+
+  it('attaches no trigger to the clinician pool, which has no sign-up to confirm', () => {
+    // Self sign-up is disabled there at the directory level (2.2.1), so a
+    // PostConfirmation trigger would be dead code with a live IAM path.
+    expect(poolWith(CLINICIAN_USER_POOL_NAME).LambdaConfig).toBeUndefined();
+  });
+
+  it('still synthesizes with no trigger function, for a stack deployed on its own', () => {
+    expect(poolProperties(PATIENT_USER_POOL_NAME).LambdaConfig).toBeUndefined();
   });
 });
