@@ -11,6 +11,7 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type {
+  Appointment,
   AssignmentRequest,
   BaseRecord,
   Clinician,
@@ -26,6 +27,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
+  DynamoAppointmentStore,
   DynamoAssessmentStore,
   DynamoAssignmentStore,
   DynamoCaseloadStore,
@@ -1128,5 +1130,117 @@ describe('DynamoAssessmentStore', () => {
   it('get() returns undefined for a version that was never written', async () => {
     ddbMock.on(GetCommand).resolves({});
     await expect(store.get('pat-1#mobility-initial#v9')).resolves.toBeUndefined();
+  });
+});
+
+function buildAppointment(overrides: Partial<Appointment> = {}): Appointment {
+  return {
+    patientId: 'pat-1',
+    clinicianId: 'cli-1',
+    scheduledAt: '2026-09-01T10:00:00.000Z',
+    durationMinutes: 30,
+    appointment_status: 'scheduled',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    status: 'active',
+    ...overrides,
+  };
+}
+
+// TASK 3.4.1: `docs/adr/0002-database.md`'s own proof of this shape,
+// exercised for real for the first time — `create()`'s conditional
+// `PutCommand` and its derived `gsi1pk`/`gsi1sk`; `listForPatient()`'s
+// main-table `Query`; `listForClinicianCalendar()`'s GSI1 `Query` with a
+// `BETWEEN` bound, followed by the per-row `GetCommand` GSI1's `KEYS_ONLY`
+// projection requires — never a `Scan`, the same assertion shape TASK
+// 2.5.1/2.5.3's own GSI1/GSI3 store tests already use.
+describe('DynamoAppointmentStore', () => {
+  const store = new DynamoAppointmentStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('create() writes a conditional PutCommand keyed PAT#<patientId> / APPT#<scheduledAt>, with GSI1 derived from clinicianId/scheduledAt alone', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(buildAppointment());
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+        gsi1pk: 'CLI#cli-1',
+        gsi1sk: 'APPT#2026-09-01T10:00:00.000Z',
+        patientId: 'pat-1',
+        clinicianId: 'cli-1',
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() throws AppError(APPOINTMENT_ALREADY_EXISTS) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.create(buildAppointment())).rejects.toThrow(AppError);
+  });
+
+  it('listForPatient() issues a main-table Query, never a Scan, scoped to PAT#<id> with the APPT# prefix', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ ...buildAppointment(), pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' }],
+    });
+
+    const result = await store.listForPatient('pat-1');
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty('pk');
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :apptPrefix)',
+      ExpressionAttributeValues: { ':patientKey': 'PAT#pat-1', ':apptPrefix': 'APPT#' },
+    });
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.IndexName).toBeUndefined();
+  });
+
+  it('listForClinicianCalendar() issues a GSI1 Query with a BETWEEN bound, never a Scan, then one GetCommand per row', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z', gsi1pk: 'CLI#cli-1', gsi1sk: 'APPT#2026-09-01T10:00:00.000Z' }],
+    });
+    ddbMock.on(GetCommand).resolves({
+      Item: { ...buildAppointment(), pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
+    });
+
+    const result = await store.listForClinicianCalendar(
+      'cli-1',
+      '2026-09-01T00:00:00.000Z',
+      '2026-09-02T00:00:00.000Z',
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ patientId: 'pat-1', clinicianId: 'cli-1' });
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'gsi1pk = :clinicianKey AND gsi1sk BETWEEN :fromKey AND :toKey',
+      ExpressionAttributeValues: {
+        ':clinicianKey': 'CLI#cli-1',
+        ':fromKey': 'APPT#2026-09-01T00:00:00.000Z',
+        ':toKey': 'APPT#2026-09-02T00:00:00.000Z',
+      },
+    });
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
+    });
+  });
+
+  it('listForClinicianCalendar() returns an empty array, not an error, when nothing is in range', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const result = await store.listForClinicianCalendar(
+      'cli-1',
+      '2026-09-01T00:00:00.000Z',
+      '2026-09-02T00:00:00.000Z',
+    );
+    expect(result).toEqual([]);
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
   });
 });

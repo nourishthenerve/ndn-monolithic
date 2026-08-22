@@ -51,7 +51,10 @@ export type FlagName =
   | 'clinicalRecords.enabled'
   // TASK 3.3.1: assessment-form authoring (write) and, 3.3.2, the read
   // half over the same records. Default off.
-  | 'assessments.enabled';
+  | 'assessments.enabled'
+  // TASK 3.4.1: scheduling, and both the clinician-calendar and
+  // patient's-own-list reads over the same records. Default off.
+  | 'appointments.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

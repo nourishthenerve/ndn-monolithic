@@ -168,6 +168,9 @@ export class DataStack extends Stack {
     const assessmentLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/assessment-function`
       : '/ndn/assessment-function';
+    const appointmentLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/appointment-function`
+      : '/ndn/appointment-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1537,6 +1540,97 @@ export class DataStack extends Stack {
       path: '/patients/{id}/assessments/{assessmentId}',
       methods: [HttpMethod.GET],
       integration: assessmentIntegration,
+    });
+
+    // TASK 3.4.1: appointments, and GSI1's second half — the clinician
+    // calendar. `docs/adr/0002-database.md` proved this shape before
+    // either GSI1 or this entity existed: `gsi1pk = CLI#<clinicianId>`,
+    // `gsi1sk = APPT#<scheduledAt>`, on the identical partition TASK
+    // 2.5.1's own clinician→patients projection already uses — the two
+    // patterns never collide even sharing a partition, each query
+    // scoping its own `gsi1sk` prefix.
+    const appointmentRole = new Role(this, 'AppointmentFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const appointmentFunction = new NodejsFunction(this, 'AppointmentFunction', {
+      entry: `${moduleDir}../../services/api/src/appointment-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: appointmentRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'AppointmentFunctionLogGroup', appointmentLogGroupName),
+    });
+    grantFlagReads(this, appointmentRole);
+
+    // `GetItem` (the patient lookup), `PutItem` (a new `APPT#<scheduledAt>`
+    // row), and `Query` (`listForPatient`'s own main-table `begins_with`
+    // read) — all on the same `PAT#*` partition, the same
+    // partition-key-only granularity every other patient-scoped function
+    // in this stack already accepts.
+    appointmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWriteAndQueryPatientAppointments',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // A separate statement, GSI1's own index ARN — `dynamodb:Query` only
+    // (never `Scan`), the identical shape `patientRole`'s own
+    // `QueryOwnCaseloadIndex` statement already uses for the same index.
+    // `listForClinicianCalendar`'s per-row follow-up `GetItem` (GSI1 is
+    // `KEYS_ONLY`) reads the base table, already covered by the
+    // statement above.
+    appointmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryClinicianCalendarIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [`${this.table.tableArn}/index/${GSI1_INDEX_NAME}`],
+      }),
+    );
+    // A separate statement, on `AUDIT#*` alone — every appointment
+    // `AppointmentRepository.schedule` writes reaches the same
+    // `DynamoAuditLog` every other writer in this stack uses.
+    appointmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(appointmentRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(appointmentRole, this.table);
+
+    const appointmentIntegration = new HttpLambdaIntegration(
+      'AppointmentIntegration',
+      appointmentFunction,
+    );
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments',
+      methods: [HttpMethod.POST],
+      integration: appointmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments',
+      methods: [HttpMethod.GET],
+      integration: appointmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/clinicians/me/calendar',
+      methods: [HttpMethod.GET],
+      integration: appointmentIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

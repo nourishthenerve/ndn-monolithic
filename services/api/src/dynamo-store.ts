@@ -30,6 +30,7 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type {
+  Appointment,
   Assessment,
   AssignmentRequest,
   ClinicalRecord,
@@ -41,6 +42,7 @@ import type {
   Workshop,
 } from '@ndn/shared-types';
 
+import type { AppointmentStore } from './appointment-repository.js';
 import type { AssignmentStore } from './assignment-repository.js';
 import type { CaseloadStore } from './caseload-repository.js';
 import type { ClinicianStore } from './clinician-repository.js';
@@ -1135,5 +1137,121 @@ export class DynamoAssessmentStore implements KeyValueStore<Assessment> {
       }
       throw error;
     }
+  }
+}
+
+// TASK 3.4.1: `docs/adr/0002-database.md` proved this shape before either
+// GSI1 or this entity existed — `gsi1pk = CLI#<clinicianId>`, `gsi1sk =
+// APPT#<scheduledAt>`, on the identical partition TASK 2.5.1's own
+// `PAT#<patientId>` clinician→patients projection already uses. The two
+// patterns never collide even sharing a partition: each query scopes its
+// own `gsi1sk` prefix (`PAT#` vs `APPT#`), and a `BETWEEN 'APPT#<from>'
+// AND 'APPT#<to>'` bound can never stray into the `PAT#` range.
+//
+// The main-table sort key and GSI1's projected sort key are the identical
+// string (`APPT#<scheduledAt>`) — one function derives both, so they
+// cannot drift apart the way two independently-written literals could.
+const APPOINTMENT_SORT_KEY = (scheduledAt: string) => `APPT#${scheduledAt}`;
+const APPOINTMENT_SORT_KEY_PREFIX = 'APPT#';
+
+export interface DynamoAppointmentStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoAppointmentStore implements AppointmentStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoAppointmentStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async create(appointment: Appointment): Promise<void> {
+    const sk = APPOINTMENT_SORT_KEY(appointment.scheduledAt);
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: {
+            ...appointment,
+            pk: PATIENT_PK(appointment.patientId),
+            sk,
+            // Derived from `clinicianId`/`scheduledAt` alone — see this
+            // section's header — never a separate input a caller could
+            // pass out of step with the fields they're projected from.
+            gsi1pk: GSI1_CLINICIAN_PK(appointment.clinicianId),
+            gsi1sk: sk,
+          },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'APPOINTMENT_ALREADY_EXISTS',
+          `patient ${appointment.patientId} already has an appointment at ${appointment.scheduledAt}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async listForPatient(patientId: string): Promise<Appointment[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :apptPrefix)',
+        ExpressionAttributeValues: {
+          ':patientKey': PATIENT_PK(patientId),
+          ':apptPrefix': APPOINTMENT_SORT_KEY_PREFIX,
+        },
+      }),
+    );
+    return (result.Items ?? []).map((item) => withoutTableKeys<Appointment>(item));
+  }
+
+  /**
+   * GSI1 is `KEYS_ONLY` (`infra/src/data-stack.ts`) — the query below
+   * returns only key attributes, which *does* include the table's own
+   * `pk`/`sk` (DynamoDB always projects the base table's primary key into
+   * every secondary index, regardless of the index's own projection
+   * type), so each row names exactly the `GetItem` that fetches its full
+   * record. The same two-step shape `DynamoCaseloadStore.queryPage` +
+   * `getPatient` already uses for GSI3, for the identical reason.
+   */
+  async listForClinicianCalendar(
+    clinicianId: string,
+    from: string,
+    to: string,
+  ): Promise<Appointment[]> {
+    const queryResult = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: GSI1_INDEX_NAME,
+        KeyConditionExpression: 'gsi1pk = :clinicianKey AND gsi1sk BETWEEN :fromKey AND :toKey',
+        ExpressionAttributeValues: {
+          ':clinicianKey': GSI1_CLINICIAN_PK(clinicianId),
+          ':fromKey': APPOINTMENT_SORT_KEY(from),
+          ':toKey': APPOINTMENT_SORT_KEY(to),
+        },
+      }),
+    );
+    const appointments: Appointment[] = [];
+    for (const row of queryResult.Items ?? []) {
+      const pk = row.pk;
+      const sk = row.sk;
+      if (typeof pk !== 'string' || typeof sk !== 'string') {
+        continue;
+      }
+      const result = await this.client.send(
+        new GetCommand({ TableName: this.tableName, Key: { pk, sk } }),
+      );
+      if (result.Item) {
+        appointments.push(withoutTableKeys<Appointment>(result.Item));
+      }
+    }
+    return appointments;
   }
 }

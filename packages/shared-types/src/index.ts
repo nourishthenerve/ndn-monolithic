@@ -1,3 +1,4 @@
+export * from './appointment.js';
 export * from './assessment.js';
 export * from './assignment.js';
 export * from './clinical-record.js';

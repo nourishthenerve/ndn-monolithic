@@ -459,6 +459,8 @@ describe('DataStack — feature-flag reads', () => {
     'clinical-record-handler',
     // TASK 3.3.1: assessments.enabled, default off.
     'assessment-handler',
+    // TASK 3.4.1: appointments.enabled, default off.
+    'appointment-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -570,10 +572,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // never writes an audit row — `ClinicianRepository`'s read-only
     // `findById` never reaches one — but its constructor still takes an
     // `AuditWriter`, so the env var is present regardless), TASK 3.1.1's
-    // patient function, TASK 3.2.1's clinical-record function, and TASK
-    // 3.3.1's assessment function. The authorizer is deliberately absent
-    // — it reads a status and writes nothing.
-    expect(withAuditTable).toHaveLength(16);
+    // patient function, TASK 3.2.1's clinical-record function, TASK
+    // 3.3.1's assessment function, and TASK 3.4.1's appointment function.
+    // The authorizer is deliberately absent — it reads a status and
+    // writes nothing.
+    expect(withAuditTable).toHaveLength(17);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -622,11 +625,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // The seven pre-existing functions, TASK 2.2.2's authorizer, TASK
     // 2.2.3's two registration roles, TASK 2.4.1's clinician-admin role,
     // TASK 2.5.1's assignment role, TASK 2.5.3's caseload role, TASK
-    // 3.1.1's patient role, TASK 3.2.1's clinical-record role, and TASK
-    // 3.3.1's assessment role; the audit reader is deliberately not
-    // among them, being the one role that is supposed to read that
-    // partition.
-    expect(denials).toHaveLength(16);
+    // 3.1.1's patient role, TASK 3.2.1's clinical-record role, TASK
+    // 3.3.1's assessment role, and TASK 3.4.1's appointment role; the
+    // audit reader is deliberately not among them, being the one role
+    // that is supposed to read that partition.
+    expect(denials).toHaveLength(17);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -643,7 +646,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(16);
+    expect(denials).toHaveLength(17);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -700,7 +703,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1/3.1.2)/clinical-record (3.2.1/3.2.2)/assessment (3.3.1/3.3.2) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
+  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1/3.1.2)/clinical-record (3.2.1/3.2.2)/assessment (3.3.1/3.3.2)/appointment (3.4.1) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
     // The first seven took no `authorizer:` override at all, ahead of
     // ADMIN_TOKEN_ROUTE's own retirement — every route before them opted
     // out with `PUBLIC_ROUTE` or the now-deleted `ADMIN_TOKEN_ROUTE`
@@ -714,14 +717,18 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // added `POST /patients/{id}/diagnosis` and `POST
     // /patients/{id}/care-plan`; TASK 3.2.2 added the `GET` half of both,
     // all four served by `ClinicalRecordFunction`; TASK 3.3.1 added `POST
-    // /patients/{id}/assessments/{assessmentId}`; TASK 3.3.2 adds its
-    // `GET` half, both served by `AssessmentFunction`.
+    // /patients/{id}/assessments/{assessmentId}`; TASK 3.3.2 added its
+    // `GET` half, both served by `AssessmentFunction`; TASK 3.4.1 adds
+    // `POST`/`GET /patients/{id}/appointments` and `GET
+    // /clinicians/me/calendar`, served by a new `AppointmentFunction`.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
         'GET /caseload',
         'GET /caseload/mine',
+        'GET /clinicians/me/calendar',
         'GET /patients/{id}',
+        'GET /patients/{id}/appointments',
         'GET /patients/{id}/assessments/{assessmentId}',
         'GET /patients/{id}/care-plan',
         'GET /patients/{id}/diagnosis',
@@ -735,6 +742,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /content',
         'POST /content/{id}/publish',
         'POST /content/{id}/unpublish',
+        'POST /patients/{id}/appointments',
         'POST /patients/{id}/approve',
         'POST /patients/{id}/assessments/{assessmentId}',
         'POST /patients/{id}/care-plan',
