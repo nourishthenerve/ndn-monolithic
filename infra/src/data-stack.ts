@@ -1342,10 +1342,30 @@ export class DataStack extends Stack {
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] } },
       }),
     );
+    // TASK 3.1.2: the GSI1 `Query` grant TASK 2.5.1's own runbook deferred
+    // — "nothing this function's own routes call reaches
+    // listPatientIdsForClinician; that grant lands with whichever future
+    // task first calls it." This is that task. `dynamodb:Query` on the
+    // table *and* GSI1's own index ARN, not `grantReadData()` (which also
+    // carries `Scan`) — the identical shape `CaseloadFunction`'s own
+    // `QueryCaseloadIndex` statement already uses for GSI3.
+    patientRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryOwnCaseloadIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [this.table.tableArn, `${this.table.tableArn}/index/${GSI1_INDEX_NAME}`],
+      }),
+    );
     attachDestructiveActionGuardrail(patientRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(patientRole, this.table);
 
     const patientIntegration = new HttpLambdaIntegration('PatientIntegration', patientFunction);
+    httpApi.addRoutes({
+      path: '/caseload/mine',
+      methods: [HttpMethod.GET],
+      integration: patientIntegration,
+    });
     httpApi.addRoutes({
       path: '/patients/{id}',
       methods: [HttpMethod.GET],

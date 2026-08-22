@@ -45,6 +45,46 @@ Resolved the same way TASK 3.1.2 names its own route `/caseload/mine` rather tha
 - **A generic `Repository<T>` "patch-merges nested sub-objects" helper.** `PatientRepository.update`'s merge logic is specific to `Patient`'s two named sub-objects (`personal{}`/`clinical{}`); generalising it for every future entity that might want the same behaviour is premature — the next entity that needs it (TASK 3.2.x's diagnosis/care-plan `visible{}`/`private{}` split) has a different enough shape that abstracting now would be guessing at its interface.
 - **pr-env axe + keyboard verification against a live authenticated session.** The same honestly-named gap as every prior authenticated page in this codebase: no live-session pr-env testing mechanism exists yet. The page's accessibility is built from semantic HTML (real `<label for>`/`<input>` pairs, `role="status"`/`role="alert"` regions) and verified by construction, not claimed as more than that.
 
-## Cost
+## Cost (TASK 3.1.1)
 
 £0.00 net-new — one more 128 MB arm64 Lambda inside the always-free allowance; no new AWS resource of any kind.
+
+## TASK 3.1.2 — `GET /caseload/mine`
+
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.1.2](../plan/05-execution-plan.md) · **Requirements:** §5 (patient record) · **Depends on:** 3.1.1, 2.5.1
+
+### What this covers
+
+A sub-clinician's own caseload, read for real. TASK 2.5.1 built `listPatientIdsForClinician` (GSI1) and deferred its own `dynamodb:Query` IAM grant to "whichever future task first calls it" — this is that task. Lives in `patient.ts` rather than a new file: a small enough extension of the same `'Patient profile'` matrix row that a second file would only be a second place to remember.
+
+Deliberately *not* `GET /caseload` (2.5.3's own path, the principal's cross-caseload view over GSI3) and not a query parameter on it: a sub-clinician's own caseload and the principal's cross-caseload view are different queries against different indexes, and collapsing two differently-scoped reads onto one path is exactly the mistake TASK 2.5.4's own runbook found and reversed for `GET /testimonials`.
+
+### No new matrix row
+
+The resource passed to `can()` names the caller's *own* `clinicianId` as `assignedClinicianId` — the same "modelled as a resource assigned to themselves" trick `authz.ts`'s own comment documents for `'Own profile'`. A sub-clinician resolves to the already-granted `'Sub-clinician (assigned)'` column; the principal resolves to `'Principal'` regardless; a patient (no `clinicianId` to self-assign) resolves to `'Patient (other)'` and is denied — no special-cased "reject patients" branch needed. The GSI1 query itself, keyed on the caller's own `clinicianId` and never a caller-suppliable parameter, is what actually prevents seeing anyone else's caseload — the identical property `GET /caseload` (2.5.3) already has.
+
+A row can fall out of the caseload between the GSI1 read and the follow-up `GetItem` (reassigned, declined) — GSI1 is eventually consistent with the write that produced it, so a stale row is skipped rather than surfaced, the same property `caseload-repository.ts`'s own `listPage` already keeps for GSI3.
+
+### Deliberate scope reduction from this task's own spec
+
+Phase 3's own elaboration (written during TASK 2.5.4's follow-on) said this route should paginate "the same way 2.5.3's `CaseloadRepository` paginates." `listPatientIdsForClinician` (built at 2.5.1) has no cursor/limit support — a single unpaginated `Query`. Left unpaginated on purpose: one clinician's own caseload is inherently bounded in a way the cross-clinic admin view (GSI3, unbounded across every clinician) isn't, so building cursor/limit machinery now would be guessing at a shape no real caseload size has yet demanded. Revisit if a real caseload ever approaches DynamoDB's 1 MB `Query` response cap.
+
+### Response shape, and why plain `JSON.stringify`
+
+Returns `{ items: [{ patientId, fullName }] }` — a plain derived list squeezed out of a `projectFor` call, not a record `ResponseBody`/`serialiseResponse` (`projection.ts`) can carry: `ResponseValue` only accepts scalars and `Projected<T>`/`Projected<T>[]`, not an ad-hoc `{patientId, fullName}` shape. Uses plain `JSON.stringify` instead, matching `caseload.ts`'s own established precedent for the identical situation. The two `/patients/{id}` routes in this same file keep `serialiseResponse`, since a real `Projected<Patient>` flows through them unchanged.
+
+### What was built
+
+- **`services/api/src/patient.ts`** — `GET /caseload/mine`, handled before the `/patients/{id}` path-parameter resolution (this route has none). `PatientDeps` gained `listPatientIdsForClinician: (clinicianId: string) => Promise<string[]>`, injected as a port.
+- **`services/api/src/patient-handler.ts`** — wires `DynamoAssignmentStore.listPatientIdsForClinician` directly (not the full `AssignmentRepository`, which also needs a `ClinicianRepository` this route never uses).
+- **`infra/src/data-stack.ts`** — `patientRole` gained `QueryOwnCaseloadIndex`, a `dynamodb:Query` grant on the table and GSI1's own index ARN (not `grantReadData()`, which also carries `Scan`) — the same shape `CaseloadFunction`'s own `QueryCaseloadIndex` statement already uses for GSI3. New route `GET /caseload/mine`, reusing the existing `PatientIntegration`.
+
+### Verification
+
+- `patient.test.ts` — 7 new assertions: own caseload hydrated with `fullName`; never returns another clinician's patients even when a stale GSI1 row names them (the skip path); empty list for no caseload; 403 for a patient; a principal's own caseload resolves the same way; 401 with no principal; 404 when the flag is off. 43 tests total in the file, all passing.
+- `infra/data-stack.test.ts` — `CUSTOM` route-key list gained `GET /caseload/mine`. 189 infra tests passing.
+- `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green.
+
+### Cost (TASK 3.1.2)
+
+£0.00 net-new — one more route and one more IAM statement on the already-deployed `PatientFunction`; no new AWS resource of any kind.

@@ -702,11 +702,13 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // moderation (3, `GET /testimonials/pending` new — `GET /testimonials`
     // itself stays public), and `GET /audit` — the fifth admin-token route
     // route-protection.ts's own header named as easy to miss. TASK 3.1.1
-    // adds the last two: `GET`/`PATCH /patients/{id}`.
+    // added `GET`/`PATCH /patients/{id}`; TASK 3.1.2 adds `GET
+    // /caseload/mine`, served by the same `PatientFunction`.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
         'GET /caseload',
+        'GET /caseload/mine',
         'GET /patients/{id}',
         'GET /testimonials/pending',
         'PATCH /content/{id}',
