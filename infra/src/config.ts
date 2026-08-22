@@ -187,7 +187,30 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // flag. The same bounded-by-patient-count reasoning as
   // assessment-function above. Displacing nothing.
   '/ndn/appointment-function',
+  // TASK 3.4.3: a scheduled sweep, not a per-request function — volume is
+  // bounded by appointment count and a fixed rate(15 minutes) cadence,
+  // not traffic, the same reasoning every low-volume function above
+  // carries. Displacing nothing.
+  '/ndn/reminder-sweep-function',
 ];
+
+// TASK 3.4.3 (ADR-0008): the leased origination identity (a UK long code
+// or sender ID) `sms-provider.ts`'s own header names as "not a secret;
+// recorded as a config.ts constant once it exists." It does not exist
+// yet — provisioning a real one in AWS End User Messaging is a manual,
+// recurring-cost AWS console step (business verification, an ongoing
+// leasing fee), the same category of out-of-band action
+// `CERTIFICATE_ARN`'s own DNS validation and `TURNSTILE_SECRET_PARAMETER_NAME`'s
+// own account signup are — not something CDK can provision, and not
+// something this task does on its own authority. Left empty rather than
+// invented: `reminder-sweep-handler.ts` still deploys and every guard in
+// the SMS send chain (`sms.ts`) still runs correctly against an empty
+// identity — the provider call itself fails (`ProviderError`), and
+// `notifications.ts`'s own degrade-to-email path is exactly what R-01's
+// "never silently drop a reminder" already requires for that case. See
+// docs/runbooks/appointment-reminders.md for the provisioning step this
+// leaves as the site owner's own action.
+export const SMS_ORIGINATION_IDENTITY = '';
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret
 // key (D-14) — same out-of-band `aws ssm put-parameter --type SecureString`

@@ -100,6 +100,34 @@ class InMemoryAppointmentStore implements AppointmentStore {
     this.items[index] = updated;
     return updated;
   }
+
+  // Exercised by reminder-sweep.test.ts, not this file — appointment.ts's
+  // own handler has no route that reaches either method (the sweep is a
+  // separate, non-HTTP entry point). Present only to satisfy the
+  // `AppointmentStore` interface this fake implements.
+  async listReminderCandidates(windowStart: string, windowEnd: string): Promise<Appointment[]> {
+    return this.items.filter(
+      (item) =>
+        item.appointment_status === 'scheduled' &&
+        item.reminder_sent_at === undefined &&
+        item.scheduledAt >= windowStart &&
+        item.scheduledAt <= windowEnd,
+    );
+  }
+
+  async claimForReminder(
+    patientId: string,
+    scheduledAt: string,
+    now: string,
+  ): Promise<Appointment | undefined> {
+    const item = this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
+    if (!item || item.reminder_sent_at !== undefined) {
+      return undefined;
+    }
+    const updated: Appointment = { ...item, reminder_sent_at: now };
+    this.items[this.items.indexOf(item)] = updated;
+    return updated;
+  }
 }
 
 function fakeEvent(overrides: {

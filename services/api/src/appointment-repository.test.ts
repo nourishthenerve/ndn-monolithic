@@ -54,6 +54,32 @@ class InMemoryAppointmentStore implements AppointmentStore {
     this.items[index] = updated;
     return updated;
   }
+
+  async listReminderCandidates(windowStart: string, windowEnd: string): Promise<Appointment[]> {
+    return this.items
+      .filter(
+        (item) =>
+          item.appointment_status === 'scheduled' &&
+          item.reminder_sent_at === undefined &&
+          item.scheduledAt >= windowStart &&
+          item.scheduledAt <= windowEnd,
+      )
+      .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt));
+  }
+
+  async claimForReminder(
+    patientId: string,
+    scheduledAt: string,
+    now: string,
+  ): Promise<Appointment | undefined> {
+    const item = this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
+    if (!item || item.reminder_sent_at !== undefined) {
+      return undefined;
+    }
+    const updated: Appointment = { ...item, reminder_sent_at: now };
+    this.items[this.items.indexOf(item)] = updated;
+    return updated;
+  }
 }
 
 function build() {
@@ -222,5 +248,91 @@ describe('AppointmentRepository.cancel', () => {
     await expect(repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR)).rejects.toThrow(
       AppError,
     );
+  });
+});
+
+describe('AppointmentRepository.listReminderCandidates', () => {
+  it('returns a scheduled appointment whose scheduledAt falls inside the given window', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T09:55:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    const candidates = await repository.listReminderCandidates(
+      '2026-09-01T09:00:00.000Z',
+      '2026-09-01T10:15:00.000Z',
+    );
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.patientId).toBe('pat-1');
+  });
+
+  it('excludes an appointment outside the window', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T13:00:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    const candidates = await repository.listReminderCandidates(
+      '2026-09-01T09:00:00.000Z',
+      '2026-09-01T10:15:00.000Z',
+    );
+    expect(candidates).toHaveLength(0);
+  });
+
+  it('excludes an appointment already claimed for a reminder', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T09:55:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    await repository.claimForReminder('pat-1', '2026-09-01T09:55:00.000Z');
+    const candidates = await repository.listReminderCandidates(
+      '2026-09-01T09:00:00.000Z',
+      '2026-09-01T10:15:00.000Z',
+    );
+    expect(candidates).toHaveLength(0);
+  });
+
+  it('excludes a cancelled appointment', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T09:55:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    await repository.cancel('pat-1', '2026-09-01T09:55:00.000Z', ACTOR);
+    const candidates = await repository.listReminderCandidates(
+      '2026-09-01T09:00:00.000Z',
+      '2026-09-01T10:15:00.000Z',
+    );
+    expect(candidates).toHaveLength(0);
+  });
+});
+
+describe('AppointmentRepository.claimForReminder', () => {
+  it('sets reminder_sent_at and returns the claimed appointment', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T09:55:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    const claimed = await repository.claimForReminder('pat-1', '2026-09-01T09:55:00.000Z');
+    expect(claimed?.reminder_sent_at).toBeDefined();
+  });
+
+  it('returns undefined, not an error, when the appointment was already claimed — idempotent replay', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T09:55:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    await repository.claimForReminder('pat-1', '2026-09-01T09:55:00.000Z');
+    const secondClaim = await repository.claimForReminder('pat-1', '2026-09-01T09:55:00.000Z');
+    expect(secondClaim).toBeUndefined();
+  });
+
+  it('returns undefined for an appointment that was never scheduled', async () => {
+    const { repository } = build();
+    const claim = await repository.claimForReminder('pat-1', '2026-09-01T09:55:00.000Z');
+    expect(claim).toBeUndefined();
   });
 });
