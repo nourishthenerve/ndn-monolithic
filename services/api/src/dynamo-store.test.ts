@@ -15,6 +15,7 @@ import type {
   AssignmentRequest,
   BaseRecord,
   Clinician,
+  ContentAssignment,
   ContentItem,
   Patient as RealPatient,
   Registration,
@@ -33,6 +34,7 @@ import {
   DynamoCaseloadStore,
   DynamoClinicalRecordStore,
   DynamoClinicianStore,
+  DynamoContentAssignmentStore,
   DynamoContentStore,
   DynamoRegistrationStore,
   DynamoStore,
@@ -1441,5 +1443,75 @@ describe('DynamoAppointmentStore', () => {
       '2026-08-22T09:00:00.000Z',
     );
     expect(result).toBeUndefined();
+  });
+});
+
+function buildContentAssignment(overrides: Partial<ContentAssignment> = {}): ContentAssignment {
+  return {
+    patientId: 'pat-1',
+    contentId: 'content-1',
+    assignedAt: '2026-08-22T09:00:00.000Z',
+    created_at: '2026-08-22T09:00:00.000Z',
+    updated_at: '2026-08-22T09:00:00.000Z',
+    status: 'active',
+    ...overrides,
+  };
+}
+
+// TASK 3.5.1: `04-data-model-rbac.md`'s own minimal key shape, exercised
+// for real for the first time — `create()`'s conditional `PutCommand`;
+// `listForPatient()`'s main-table `Query`, `begins_with(sk, 'CONTENT#')` —
+// never a `Scan`, the same assertion shape `DynamoAppointmentStore`'s own
+// `listForPatient` test already uses.
+describe('DynamoContentAssignmentStore', () => {
+  const store = new DynamoContentAssignmentStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  it('create() writes a conditional PutCommand keyed PAT#<patientId> / CONTENT#<contentId>', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(buildContentAssignment());
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: {
+        pk: 'PAT#pat-1',
+        sk: 'CONTENT#content-1',
+        patientId: 'pat-1',
+        contentId: 'content-1',
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('create() throws AppError(RECORD_ALREADY_EXISTS) on a conditional check failure, not the raw SDK exception', async () => {
+    ddbMock
+      .on(PutCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+
+    await expect(store.create(buildContentAssignment())).rejects.toThrow(AppError);
+  });
+
+  it('listForPatient() issues a main-table Query, never a Scan, scoped to PAT#<id> with the CONTENT# prefix', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ ...buildContentAssignment(), pk: 'PAT#pat-1', sk: 'CONTENT#content-1' }],
+    });
+
+    const result = await store.listForPatient('pat-1');
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty('pk');
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :contentPrefix)',
+      ExpressionAttributeValues: { ':patientKey': 'PAT#pat-1', ':contentPrefix': 'CONTENT#' },
+    });
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.IndexName).toBeUndefined();
+  });
+
+  it('listForPatient() returns an empty array, not an error, when the patient has no assignments', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    const result = await store.listForPatient('pat-1');
+    expect(result).toEqual([]);
   });
 });

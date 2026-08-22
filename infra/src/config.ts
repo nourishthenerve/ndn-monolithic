@@ -192,6 +192,10 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // not traffic, the same reasoning every low-volume function above
   // carries. Displacing nothing.
   '/ndn/reminder-sweep-function',
+  // TASK 3.5.1: assigning content to a patient and reading the assigned
+  // list, behind a default-off flag. The same bounded-by-patient-count
+  // reasoning as appointment-function above. Displacing nothing.
+  '/ndn/content-assignment-function',
 ];
 
 // TASK 3.4.3 (ADR-0008): the leased origination identity (a UK long code
