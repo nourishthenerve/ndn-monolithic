@@ -62,6 +62,7 @@ import {
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
+const GSI1_INDEX_NAME = 'GSI1';
 const GSI2_INDEX_NAME = 'GSI2';
 
 
@@ -109,6 +110,23 @@ export class DataStack extends Stack {
       projectionType: ProjectionType.KEYS_ONLY,
     });
 
+    // TASK 2.5.1: clinician → patients, and (TASK 3.4.x, not built here)
+    // the clinician calendar — both proved against this one shape in
+    // docs/adr/0002-database.md before this GSI was added. Sparse: only a
+    // patient's PROFILE row carries gsi1pk/gsi1sk, and only while
+    // assigned_clinician_id is set (dynamo-store.ts's DynamoAssignmentStore).
+    // KEYS_ONLY, same reasoning GSI2 states — this task's own read
+    // (assignment-repository.ts's listPatientIdsForClinician) only ever
+    // needs the id off gsi1sk, and 3.4.x's future appointment rows would
+    // need their own real content read separately regardless of what this
+    // index projects.
+    this.table.addGlobalSecondaryIndex({
+      indexName: GSI1_INDEX_NAME,
+      partitionKey: { name: 'gsi1pk', type: AttributeType.STRING },
+      sortKey: { name: 'gsi1sk', type: AttributeType.STRING },
+      projectionType: ProjectionType.KEYS_ONLY,
+    });
+
     const logGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-read-function`
       : '/ndn/content-read-function';
@@ -124,6 +142,9 @@ export class DataStack extends Stack {
     const clinicianAdminLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/clinician-admin-function`
       : '/ndn/clinician-admin-function';
+    const assignmentLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/assignment-function`
+      : '/ndn/assignment-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -1096,6 +1117,108 @@ export class DataStack extends Stack {
       path: '/clinicians/{id}/reactivate',
       methods: [HttpMethod.POST],
       integration: clinicianAdminIntegration,
+    });
+
+    // TASK 2.5.1: approval and first assignment. No `authorizer:`
+    // override, same reasoning as ClinicianAdminFunction's own routes —
+    // only the principal ever passes `can()` on this row
+    // (authz-matrix.ts's 'Patient assignment'), so the real authorizer is
+    // exactly the gate this needs.
+    const assignmentRole = new Role(this, 'AssignmentFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const assignmentFunction = new NodejsFunction(this, 'AssignmentFunction', {
+      entry: `${moduleDir}../../services/api/src/assignment-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: assignmentRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        CLINICIAN_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        NOTIFICATION_TABLE_NAME: this.table.tableName,
+        ASSIGNMENT_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
+        SES_CONFIGURATION_SET_NAME,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'AssignmentFunctionLogGroup', assignmentLogGroupName),
+    });
+    grantFlagReads(this, assignmentRole);
+
+    // The patient's own `PROFILE` row and the `ASSIGNREQ#` rows it writes
+    // alongside it — both under the same `PAT#*` partition prefix
+    // (dynamo-store.ts's DynamoAssignmentStore).
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadWritePatientAssignment',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // Read-only: this function only ever calls `ClinicianRepository.findById`
+    // (validating the target of an approval) — it never creates,
+    // deactivates or reactivates a clinician, so it gets none of
+    // ClinicianAdminFunction's own write grant.
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianAccounts',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
+      }),
+    );
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditAndDeliveryRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
+          },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(assignmentRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(assignmentRole, this.table);
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'SendAssignmentDecisionEmail',
+        effect: Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'identity',
+            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
+          }),
+          Stack.of(this).formatArn({
+            service: 'ses',
+            resource: 'configuration-set',
+            resourceName: SES_CONFIGURATION_SET_NAME,
+          }),
+        ],
+      }),
+    );
+
+    const assignmentIntegration = new HttpLambdaIntegration('AssignmentIntegration', assignmentFunction);
+    httpApi.addRoutes({
+      path: '/patients/{id}/approve',
+      methods: [HttpMethod.POST],
+      integration: assignmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/decline',
+      methods: [HttpMethod.POST],
+      integration: assignmentIntegration,
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

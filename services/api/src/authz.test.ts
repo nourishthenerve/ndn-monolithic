@@ -18,6 +18,7 @@ const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string
   //                            | Patient (own)      | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Principal                 |
   'Own profile':              { 'Patient (own)': 'R U',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'R U' },
   'Patient profile':          { 'Patient (own)': 'R U (self)',     'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'R U' },
+  'Patient assignment':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
   'Diagnosis / care plan':    { 'Patient (own)': '**R**',          'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
   'Assessment — `visible{}`': { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'R' },
   'Assessment — `private{}`': { 'Patient (own)': '**—**',          'Patient (other)': '**—**', 'Sub-clinician (assigned)': 'C R U',        'Sub-clinician (unassigned)': '**—**', Principal: 'R' },
@@ -65,6 +66,7 @@ const ACTIONS: readonly Action[] = ['create', 'read', 'update'];
 const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   'Own profile': 'own-profile',
   'Patient profile': 'patient-profile',
+  'Patient assignment': 'patient-assignment',
   'Diagnosis / care plan': 'diagnosis',
   'Assessment — `visible{}`': 'assessment',
   'Assessment — `private{}`': 'assessment',

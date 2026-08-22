@@ -79,22 +79,23 @@ describe('registration', () => {
     expect(audit.list().filter((event) => event.action === 'create')).toHaveLength(1);
   });
 
-  it('does not overwrite an approved record when the trigger replays late', async () => {
+  it('does not overwrite a transitioned record when the trigger replays late', async () => {
     // The dangerous replay: Cognito retries after a clinician has already
-    // approved. A second `create` would reset the account to `pending`.
+    // acted on the record. A second `create` would reset the account to
+    // `pending`. (Approval itself moved to assignment-repository.ts at
+    // 2.5.1 — `suspend` stands in here for "any transition already
+    // applied", which is this test's actual point.)
     const { patients } = build();
     await patients.register(REGISTRATION, PATIENT_ACTOR);
-    await patients.transition(SUB, 'approve', CLINICIAN_ACTOR);
+    await patients.transition(SUB, 'suspend', CLINICIAN_ACTOR);
     const replayed = await patients.register(REGISTRATION, PATIENT_ACTOR);
 
-    expect(replayed.account_status).toBe('approved');
+    expect(replayed.account_status).toBe('suspended');
   });
 });
 
 describe('transitions', () => {
   const CASES: [PatientTransition, Patient['account_status'], string][] = [
-    ['approve', 'approved', 'update'],
-    ['decline', 'declined', 'reject'],
     ['suspend', 'suspended', 'update'],
   ];
 
@@ -117,7 +118,7 @@ describe('transitions', () => {
   it('records which clinician acted, not merely that someone did', async () => {
     const { patients, audit } = build();
     await patients.register(REGISTRATION, PATIENT_ACTOR);
-    await patients.transition(SUB, 'approve', CLINICIAN_ACTOR);
+    await patients.transition(SUB, 'suspend', CLINICIAN_ACTOR);
 
     expect(audit.list().at(-1)?.actor).toBe('cli-1');
     expect(audit.list().at(-1)?.actorRole).toBe('principal-clinician');
@@ -133,28 +134,19 @@ describe('transitions', () => {
     expect(found?.personal.fullName).toBe('A Patient');
   });
 
-  it('never touches record_status — a declined patient is not a deleted row', async () => {
+  it('never touches record_status — a suspended patient is not a deleted row', async () => {
     const { patients } = build();
     await patients.register(REGISTRATION, PATIENT_ACTOR);
-    const declined = await patients.transition(SUB, 'decline', CLINICIAN_ACTOR);
+    const suspended = await patients.transition(SUB, 'suspend', CLINICIAN_ACTOR);
 
-    expect(declined.account_status).toBe('declined');
-    expect(declined.status).toBe('active');
-  });
-
-  it('can move a declined patient back to approved — the record was never gone', async () => {
-    const { patients } = build();
-    await patients.register(REGISTRATION, PATIENT_ACTOR);
-    await patients.transition(SUB, 'decline', CLINICIAN_ACTOR);
-    const reapproved = await patients.transition(SUB, 'approve', CLINICIAN_ACTOR);
-
-    expect(reapproved.account_status).toBe('approved');
+    expect(suspended.account_status).toBe('suspended');
+    expect(suspended.status).toBe('active');
   });
 
   it('throws rather than creating a record for an unknown patient', async () => {
     const { patients } = build();
 
-    await expect(patients.transition('nobody', 'approve', CLINICIAN_ACTOR)).rejects.toBeInstanceOf(
+    await expect(patients.transition('nobody', 'suspend', CLINICIAN_ACTOR)).rejects.toBeInstanceOf(
       AppError,
     );
   });
@@ -171,7 +163,7 @@ describe('notificationRecipientFor', () => {
   it('projects the fields the Notifier needs off personal{}, in every account status', async () => {
     const { patients } = build();
     const registered = await patients.register(REGISTRATION, PATIENT_ACTOR);
-    const declined = await patients.transition(SUB, 'decline', CLINICIAN_ACTOR);
+    const suspended = await patients.transition(SUB, 'suspend', CLINICIAN_ACTOR);
 
     expect(notificationRecipientFor(registered)).toEqual({
       id: SUB,
@@ -179,9 +171,9 @@ describe('notificationRecipientFor', () => {
       phone: undefined,
       marketingOptIn: false,
     });
-    // A declined account's record is still fully readable (2.2.3's own
+    // A suspended account's record is still fully readable (2.2.3's own
     // rule) — the Notifier's own guards decide whether to send, not this.
-    expect(notificationRecipientFor(declined)).toEqual({
+    expect(notificationRecipientFor(suspended)).toEqual({
       id: SUB,
       email: 'patient@example.com',
       phone: undefined,

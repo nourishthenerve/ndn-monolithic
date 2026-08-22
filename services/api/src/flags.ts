@@ -35,7 +35,11 @@ export type FlagName =
   // off until a principal clinician exists to operate it — the same
   // "flag is not a convenience" reasoning auth.patientRegistration.enabled
   // documents.
-  | 'clinicians.administration.enabled';
+  | 'clinicians.administration.enabled'
+  // TASK 2.5.1: turned on together with auth.patientRegistration.enabled
+  // — registering into a system with no route out of `pending` strands
+  // people there, which is this flag's own DoD line.
+  | 'assignment.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

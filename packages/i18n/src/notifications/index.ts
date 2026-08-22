@@ -16,7 +16,9 @@ export type NotificationCategory = 'clinical' | 'marketing';
 export type NotificationTemplateId =
   | 'appointmentReminder1Hour'
   | 'marketingNewsletter'
-  | 'clinicianDeactivated';
+  | 'clinicianDeactivated'
+  | 'patientApproved'
+  | 'patientDeclined';
 
 export interface NotificationTemplateDef {
   readonly id: NotificationTemplateId;
@@ -56,6 +58,24 @@ export const NOTIFICATION_TEMPLATES: Readonly<Record<NotificationTemplateId, Not
     smsEligible: false,
     subjectKey: 'notifications.clinicianDeactivated.subject',
     emailBodyKey: 'notifications.clinicianDeactivated.emailBody',
+  },
+  // TASK 2.5.1: content-free by the task's own step 6 — no diagnosis, no
+  // referral, no clinician name. ses-registration.ts's own reasoning
+  // applies again: this address may not be a mailbox the patient alone
+  // reads.
+  patientApproved: {
+    id: 'patientApproved',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.patientApproved.subject',
+    emailBodyKey: 'notifications.patientApproved.emailBody',
+  },
+  patientDeclined: {
+    id: 'patientDeclined',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.patientDeclined.subject',
+    emailBodyKey: 'notifications.patientDeclined.emailBody',
   },
 };
 

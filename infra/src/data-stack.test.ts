@@ -51,10 +51,13 @@ describe('DataStack — table', () => {
     });
   });
 
-  it('creates only GSI2 (keyword -> content), KEYS_ONLY, nothing else', () => {
+  it('creates only GSI1 (clinician -> patients/calendar) and GSI2 (keyword -> content), both KEYS_ONLY, nothing else', () => {
     const template = synth();
     template.hasResourceProperties('AWS::DynamoDB::Table', {
-      GlobalSecondaryIndexes: [
+      // arrayWith matches patterns as an ordered subsequence, not a set —
+      // listed in synthesis order (GSI2's addGlobalSecondaryIndex call
+      // precedes GSI1's own in the stack's constructor).
+      GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({
           IndexName: 'GSI2',
           KeySchema: [
@@ -63,8 +66,21 @@ describe('DataStack — table', () => {
           ],
           Projection: { ProjectionType: 'KEYS_ONLY' },
         }),
-      ],
+        Match.objectLike({
+          IndexName: 'GSI1',
+          KeySchema: [
+            { AttributeName: 'gsi1pk', KeyType: 'HASH' },
+            { AttributeName: 'gsi1sk', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'KEYS_ONLY' },
+        }),
+      ]),
     });
+    const table = Object.values(template.findResources('AWS::DynamoDB::Table'))[0] as {
+      Properties: { GlobalSecondaryIndexes: unknown[] };
+    };
+    // arrayWith (above) proves both exist; this proves there is no third.
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(2);
   });
 });
 
@@ -399,6 +415,8 @@ describe('DataStack — feature-flag reads', () => {
     'registration-handler',
     // TASK 2.4.1: clinicians.administration.enabled, default off.
     'clinician-admin-handler',
+    // TASK 2.5.1: assignment.enabled, default off.
+    'assignment-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -502,10 +520,10 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
 
     // Every Lambda in this stack that goes through a repository: the seven
     // that existed before TASK 2.1.3, the audit reader itself, TASK 2.2.3's
-    // two registration functions, and TASK 2.4.1's clinician-admin
-    // function. The authorizer is deliberately absent — it reads a status
-    // and writes nothing.
-    expect(withAuditTable).toHaveLength(11);
+    // two registration functions, TASK 2.4.1's clinician-admin function,
+    // and TASK 2.5.1's assignment function. The authorizer is
+    // deliberately absent — it reads a status and writes nothing.
+    expect(withAuditTable).toHaveLength(12);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -552,10 +570,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     const denials = statementsWithSid('DenyAuditPartitionReads');
 
     // The seven pre-existing functions, TASK 2.2.2's authorizer, TASK
-    // 2.2.3's two registration roles, and TASK 2.4.1's clinician-admin
-    // role; the audit reader is deliberately not among them, being the one
-    // role that is supposed to read that partition.
-    expect(denials).toHaveLength(11);
+    // 2.2.3's two registration roles, TASK 2.4.1's clinician-admin role,
+    // and TASK 2.5.1's assignment role; the audit reader is deliberately
+    // not among them, being the one role that is supposed to read that
+    // partition.
+    expect(denials).toHaveLength(12);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -572,7 +591,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(11);
+    expect(denials).toHaveLength(12);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -629,13 +648,19 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts exactly the three clinician-admin routes (TASK 2.4.1) behind the real authorizer', () => {
+  it('puts exactly the clinician-admin (2.4.1) and assignment (2.5.1) routes behind the real authorizer', () => {
     // The first routes on this API to take no `authorizer:` override —
     // every route before them opted out with `PUBLIC_ROUTE` or
-    // `ADMIN_TOKEN_ROUTE` (route-protection.ts). When a fourth route joins
+    // `ADMIN_TOKEN_ROUTE` (route-protection.ts). When a sixth route joins
     // this list, that is a task landing, not a regression.
     expect(routeKeys('CUSTOM')).toEqual(
-      ['POST /clinicians', 'POST /clinicians/{id}/deactivate', 'POST /clinicians/{id}/reactivate'].sort(),
+      [
+        'POST /clinicians',
+        'POST /clinicians/{id}/deactivate',
+        'POST /clinicians/{id}/reactivate',
+        'POST /patients/{id}/approve',
+        'POST /patients/{id}/decline',
+      ].sort(),
     );
   });
 

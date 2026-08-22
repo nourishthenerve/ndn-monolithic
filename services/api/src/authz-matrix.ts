@@ -27,6 +27,7 @@ import type { Action, FieldSet } from '@ndn/shared-types';
 export type MatrixRow =
   | 'Own profile'
   | 'Patient profile'
+  | 'Patient assignment'
   | 'Diagnosis / care plan'
   | 'Assessment — `visible{}`'
   | 'Assessment — `private{}`'
@@ -67,6 +68,25 @@ export const RBAC_MATRIX: RbacMatrix = {
     'Sub-clinician (assigned)': ['read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
     Principal: ['read', 'update'],
+  },
+  // | Patient assignment | — | — | — | — | C R U |
+  // TASK 2.5.1: the doc was silent on this row — no cell governed
+  // approving/declining a patient's assignment. Settled here, explicitly,
+  // rather than left to fall out of "Patient profile"'s relationship
+  // logic: only the principal ever creates, reads or updates an
+  // assignment decision. A sub-clinician is denied even onto themselves —
+  // step 5's "only onto themselves, if the matrix allows it at all"
+  // resolves to "it does not": a sub-clinician cannot already be the
+  // resource's `assignedClinicianId` before the very decision that would
+  // make them so, and this row denies both `Sub-clinician` columns
+  // outright rather than leaving that resolved by accident of
+  // relationship-matching.
+  'Patient assignment': {
+    'Patient (own)': DENIED,
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': DENIED,
+    'Sub-clinician (unassigned)': DENIED,
+    Principal: ['create', 'read', 'update'],
   },
   // | Diagnosis / care plan | **R** | — | C R U | — | C R U |
   'Diagnosis / care plan': {
@@ -147,6 +167,7 @@ export const RBAC_MATRIX: RbacMatrix = {
 export const ENTITY_TYPE_ROWS = {
   'own-profile': 'Own profile',
   'patient-profile': 'Patient profile',
+  'patient-assignment': 'Patient assignment',
   diagnosis: 'Diagnosis / care plan',
   'care-plan': 'Diagnosis / care plan',
   appointment: 'Appointments',

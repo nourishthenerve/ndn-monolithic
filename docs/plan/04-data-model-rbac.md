@@ -23,6 +23,7 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 |---|---|---|---|---|---|
 | Own profile | R U | — | R U | — | R U |
 | Patient profile | R U (self) | — | R U | — | R U |
+| Patient assignment | — | — | — | — | C R U |
 | Diagnosis / care plan | **R** | — | C R U | — | C R U |
 | Assessment — `visible{}` | R | — | C R U | — | R |
 | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | R |

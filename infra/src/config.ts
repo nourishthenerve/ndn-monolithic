@@ -163,6 +163,10 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // nothing — smaller volume than every function already in the
   // monitored ten, and smaller than most already on this list.
   '/ndn/clinician-admin-function',
+  // TASK 2.5.1: one principal clinician approving or declining a patient
+  // at a time, behind a default-off flag. Displacing nothing — the same
+  // low-volume reasoning as the clinician-admin function just above.
+  '/ndn/assignment-function',
 ];
 
 // TASK 1.4.1: the SSM SecureString holding the Cloudflare Turnstile secret
