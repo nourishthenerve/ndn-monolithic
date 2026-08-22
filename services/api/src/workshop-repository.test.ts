@@ -17,7 +17,7 @@ import {
 // than a bare actor string — who, with what role, on which request, from
 // where. One fixture stands in for all four here.
 const ACTOR = actorContext(
-  { subjectId: 'admin-token', role: 'admin-token' },
+  { subjectId: 'principal-sub', role: 'principal-clinician' },
   { requestId: 'req-workshop-1', sourceIp: '198.51.100.7' },
 );
 
@@ -56,7 +56,7 @@ describe('WorkshopRepository.create', () => {
     expect(item.updated_at).toBe('2026-06-01T00:00:00.000Z');
     expect(audit.list()).toEqual([
       expect.objectContaining({
-        actor: 'admin-token',
+        actor: 'principal-sub',
         action: 'create',
         entityType: 'Workshop',
         entityId: 'workshop-1',
@@ -91,7 +91,7 @@ describe('WorkshopRepository.update', () => {
     expect(updated.posterKey).toBe('workshops/poster-1.jpg');
     expect(updated.created_at).toBe('2026-06-01T00:00:00.000Z');
     expect(audit.list()).toContainEqual(
-      expect.objectContaining({ actor: 'admin-token', action: 'update', entityId: 'workshop-1' }),
+      expect.objectContaining({ actor: 'principal-sub', action: 'update', entityId: 'workshop-1' }),
     );
   });
 
@@ -117,7 +117,7 @@ describe('WorkshopRepository.publish/cancel', () => {
 
     expect(published.status).toBe('published');
     expect(audit.list()).toContainEqual(
-      expect.objectContaining({ actor: 'admin-token', action: 'publish', entityId: 'workshop-1' }),
+      expect.objectContaining({ actor: 'principal-sub', action: 'publish', entityId: 'workshop-1' }),
     );
   });
 
@@ -135,7 +135,7 @@ describe('WorkshopRepository.publish/cancel', () => {
     expect(await repository.findById('workshop-1')).toMatchObject({ status: 'cancelled' });
     expect(await repository.findPublishedUpcoming()).toEqual([]);
     expect(audit.list()).toContainEqual(
-      expect.objectContaining({ actor: 'admin-token', action: 'cancel', entityId: 'workshop-1' }),
+      expect.objectContaining({ actor: 'principal-sub', action: 'cancel', entityId: 'workshop-1' }),
     );
   });
 

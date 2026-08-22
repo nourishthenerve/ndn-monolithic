@@ -32,5 +32,10 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 | Messages | C R (own thread) | — | R (own patients) | — | R |
 | Clinician accounts | — | — | — | — | C R U (deactivate only) |
 | Audit log | — | — | — | — | R |
+| Content item | — | — | C R U | C R U | C R U |
+| Testimonial moderation | — | — | C R U | C R U | C R U |
+| Workshop | — | — | C R U | C R U | C R U |
 
 **The clinician-private boundary is enforced at the repository layer** — a projection function strips `private{}` before data can reach any patient-facing serialiser. Not in the handler, not in the view: one chokepoint, 100% test coverage, negative test per endpoint forever (NFR-06).
+
+**TASK 2.5.4 adds the last three rows.** Content items, testimonial moderation and workshops are clinic-wide marketing/admin resources with no patient relationship to scope by — unlike every row above them, `Sub-clinician (assigned)` and `Sub-clinician (unassigned)` are identical cells here on purpose, because "assigned to a patient" has no meaning for a blog post. 2.5.4's own task text asks for "clinician-role authorisation" replacing the retired shared secret — read literally as *a* clinician, not *the* principal clinician specifically, which is also the least surprising reading given the old shared secret never distinguished between staff members either. `POST /workshops/media-upload-url` (media-upload.ts) reuses the Workshop row rather than getting its own — a presigned poster upload has no independent existence from the workshop it is for.

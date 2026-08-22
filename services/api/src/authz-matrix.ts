@@ -35,7 +35,10 @@ export type MatrixRow =
   | 'Content assignment'
   | 'Messages'
   | 'Clinician accounts'
-  | 'Audit log';
+  | 'Audit log'
+  | 'Content item'
+  | 'Testimonial moderation'
+  | 'Workshop';
 
 /** The doc's table columns, verbatim. */
 export type MatrixColumn =
@@ -152,6 +155,33 @@ export const RBAC_MATRIX: RbacMatrix = {
     'Sub-clinician (unassigned)': DENIED,
     Principal: ['read'],
   },
+  // TASK 2.5.4: the three rows the doc's own note explains — clinic-wide
+  // marketing/admin resources with no patient relationship to scope by,
+  // so both `Sub-clinician` columns carry the identical cell on purpose.
+  // | Content item | — | — | C R U | C R U | C R U |
+  'Content item': {
+    'Patient (own)': DENIED,
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': ['create', 'read', 'update'],
+    'Sub-clinician (unassigned)': ['create', 'read', 'update'],
+    Principal: ['create', 'read', 'update'],
+  },
+  // | Testimonial moderation | — | — | C R U | C R U | C R U |
+  'Testimonial moderation': {
+    'Patient (own)': DENIED,
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': ['create', 'read', 'update'],
+    'Sub-clinician (unassigned)': ['create', 'read', 'update'],
+    Principal: ['create', 'read', 'update'],
+  },
+  // | Workshop | — | — | C R U | C R U | C R U |
+  Workshop: {
+    'Patient (own)': DENIED,
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': ['create', 'read', 'update'],
+    'Sub-clinician (unassigned)': ['create', 'read', 'update'],
+    Principal: ['create', 'read', 'update'],
+  },
 };
 
 /**
@@ -175,6 +205,9 @@ export const ENTITY_TYPE_ROWS = {
   message: 'Messages',
   'clinician-account': 'Clinician accounts',
   audit: 'Audit log',
+  'content-item': 'Content item',
+  'testimonial-moderation': 'Testimonial moderation',
+  workshop: 'Workshop',
 } as const satisfies Readonly<Record<string, MatrixRow>>;
 
 export const ASSESSMENT_ENTITY_TYPE = 'assessment';

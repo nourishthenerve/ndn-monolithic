@@ -1,3 +1,4 @@
+import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Clock } from './clock.js';
@@ -5,14 +6,36 @@ import { CachedFlagReader, InMemoryFlagSource } from './flags.js';
 import { createMediaUploadHandler, WORKSHOP_MEDIA_PREFIX } from './media-upload.js';
 
 const fixedClock: Clock = { now: () => new Date('2026-06-01T00:00:00.000Z') };
-const ADMIN_TOKEN = 'test-admin-token';
 
-function fakeEvent(overrides: { headers?: Record<string, string>; body?: unknown }) {
+type LambdaAuthorizerEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<
+  Record<string, unknown> | undefined
+>;
+
+const PRINCIPAL_CONTEXT = {
+  subjectId: 'principal-sub',
+  role: 'principal-clinician',
+  accountStatus: 'active',
+  clinicianId: 'principal-sub',
+};
+
+const PATIENT_CONTEXT = {
+  subjectId: 'pat-1',
+  role: 'patient',
+  accountStatus: 'approved',
+  patientId: 'pat-1',
+};
+
+function fakeEvent(overrides: {
+  body?: unknown;
+  principal?: Record<string, unknown>;
+}): LambdaAuthorizerEvent {
   return {
-    headers: overrides.headers ?? { authorization: `Bearer ${ADMIN_TOKEN}` },
     body: overrides.body === undefined ? undefined : JSON.stringify(overrides.body),
-    requestContext: { requestId: 'req-1' },
-  } as never;
+    requestContext: {
+      requestId: 'req-1',
+      authorizer: { lambda: 'principal' in overrides ? overrides.principal : PRINCIPAL_CONTEXT },
+    },
+  } as unknown as LambdaAuthorizerEvent;
 }
 
 function buildDeps(flagValue = true) {
@@ -22,7 +45,6 @@ function buildDeps(flagValue = true) {
   const createPresignedPutUrl = vi.fn().mockResolvedValue('https://example-bucket.s3.amazonaws.com/signed');
   return {
     flags,
-    getAdminToken: async () => ADMIN_TOKEN,
     createPresignedPutUrl,
     clock: fixedClock,
     generateId: () => 'fixed-id',
@@ -32,12 +54,12 @@ function buildDeps(flagValue = true) {
 const validBody = { fileName: 'poster.jpg', contentType: 'image/jpeg' };
 
 describe('createMediaUploadHandler — flag gating', () => {
-  it('returns 404 when workshops.enabled is off, without checking the token or S3', async () => {
+  it('returns 404 when workshops.enabled is off, without checking the principal or S3', async () => {
     const deps = buildDeps(false);
     const handler = createMediaUploadHandler(deps);
 
     const result = await handler(
-      fakeEvent({ headers: {}, body: validBody }),
+      fakeEvent({ principal: undefined, body: validBody }),
       {} as never,
       undefined as never,
     );
@@ -46,13 +68,13 @@ describe('createMediaUploadHandler — flag gating', () => {
   });
 });
 
-describe('createMediaUploadHandler — admin token gate', () => {
-  it('rejects a missing Authorization header with 401 and never calls S3', async () => {
+describe('createMediaUploadHandler — authentication and authorisation', () => {
+  it('rejects a request with no verified principal, 401, and never calls S3', async () => {
     const deps = buildDeps();
     const handler = createMediaUploadHandler(deps);
 
     const result = await handler(
-      fakeEvent({ headers: {}, body: validBody }),
+      fakeEvent({ principal: undefined, body: validBody }),
       {} as never,
       undefined as never,
     );
@@ -60,16 +82,16 @@ describe('createMediaUploadHandler — admin token gate', () => {
     expect(deps.createPresignedPutUrl).not.toHaveBeenCalled();
   });
 
-  it('rejects a wrong token with 401', async () => {
+  it('rejects a patient with 403 and never calls S3', async () => {
     const deps = buildDeps();
     const handler = createMediaUploadHandler(deps);
 
     const result = await handler(
-      fakeEvent({ headers: { authorization: 'Bearer wrong-token' }, body: validBody }),
+      fakeEvent({ principal: PATIENT_CONTEXT, body: validBody }),
       {} as never,
       undefined as never,
     );
-    expect(result).toMatchObject({ statusCode: 401 });
+    expect(result).toMatchObject({ statusCode: 403 });
     expect(deps.createPresignedPutUrl).not.toHaveBeenCalled();
   });
 });
@@ -105,9 +127,9 @@ describe('createMediaUploadHandler — POST /workshops/media-upload-url', () => 
     );
     expect(result).toMatchObject({ statusCode: 201 });
     const parsed = JSON.parse((result as { body: string }).body) as { key: string };
-    // Every '/' in the admin-supplied file name is stripped — the key can
+    // Every '/' in the caller-supplied file name is stripped — the key can
     // only ever have the one '/' between the fixed prefix and the
-    // generated file name, never an admin-controlled path segment.
+    // generated file name, never a caller-controlled path segment.
     expect(parsed.key.split('/')).toHaveLength(2);
     expect(parsed.key.startsWith(WORKSHOP_MEDIA_PREFIX)).toBe(true);
   });

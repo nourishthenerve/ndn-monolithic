@@ -1,43 +1,46 @@
-// TASK 1.4.2 step 4: the moderation queue, plus the public read boundary —
-// both live on `GET /testimonials` because HttpApi can only route one path
-// to one Lambda integration, and the plan's own shape for this task
-// overloads that single path for two audiences: an unauthenticated visitor
-// (no `status` query param, or `status=published`) gets only published
-// testimonials; an admin passing `?status=pending_review` with a valid
-// bearer token gets the moderation queue. `POST /testimonials/{id}/publish`
-// and `.../reject` are always admin-token-gated. Same admin-token bridge
-// content-authoring.ts introduced (TASK 1.3.2) — reused as-is, not
-// reimplemented.
+// TASK 1.4.2 step 4: the moderation queue, plus the public read boundary.
+// `GET /testimonials` is unauthenticated and published-only — no flag gate
+// (nothing is ever published without an admin's explicit action behind
+// `testimonials.moderationQueue.enabled` below), same posture
+// content-read-handler.ts takes for its own public read.
+//
+// TASK 2.5.4: the moderation queue no longer overloads that same path.
+// The real Lambda authorizer (2.2.2) denies outright any request with no
+// bearer token — see authorizer.ts's own "there is no path through this
+// function that returns isAuthorized: true without a verified token"
+// invariant — so a route an anonymous visitor must reach cannot also sit
+// behind that authorizer. The queue moves to its own path,
+// `GET /testimonials/pending`, which does sit behind it; `GET /testimonials`
+// stays exactly as public as it always was. Recorded here because the
+// task's own "Interfaces: unchanged" line assumed the two could stay one
+// route — see docs/runbooks/testimonials.md for the fuller account.
 import type { Testimonial } from '@ndn/shared-types';
-import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
+import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
 
-import { verifyAdminToken } from './admin-auth.js';
-import { actorContext, requestOriginOf } from './audit.js';
+import { actorFromPrincipal, requestOriginOf } from './audit.js';
+import { can } from './authz.js';
 import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
+import { requirePrincipal } from './request-principal.js';
 import type { TestimonialRepository } from './testimonial-repository.js';
 
 const TESTIMONIAL_MODERATION_LOG_SAMPLE_RATE = 1;
 
+/** TASK 2.5.4: the matrix row every moderation action is governed by — `authz-matrix.ts`'s 'Testimonial moderation'. */
+const TESTIMONIAL_MODERATION_RESOURCE = { entityType: 'testimonial-moderation' } as const;
+
 export interface TestimonialModerationDeps {
   readonly repository: TestimonialRepository;
   readonly flags: FlagReader;
-  /** Resolves the current `ADMIN_API_TOKEN` (SSM SecureString, D-14) — same shared secret content-authoring-handler.ts resolves. */
-  readonly getAdminToken: () => Promise<string>;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
 }
 
-function requireAdmin(event: Parameters<APIGatewayProxyHandlerV2>[0], adminToken: string): boolean {
-  const authHeader = event.headers?.authorization ?? event.headers?.Authorization;
-  return verifyAdminToken(authHeader, adminToken);
-}
-
 export function createTestimonialModerationHandler(
   deps: TestimonialModerationDeps,
-): APIGatewayProxyHandlerV2 {
+): APIGatewayProxyHandlerV2WithLambdaAuthorizer<Record<string, unknown> | undefined> {
   const clock = deps.clock ?? systemClock;
   const logger =
     deps.logger ??
@@ -63,22 +66,23 @@ export function createTestimonialModerationHandler(
 
     switch (routeKey) {
       case 'GET /testimonials': {
-        if (event.queryStringParameters?.status !== 'pending_review') {
-          // The public boundary: no flag gate (unlike content.readApi.enabled)
-          // — nothing is ever published without an admin's explicit action
-          // behind testimonials.moderationQueue.enabled below, so this can't
-          // leak anything early.
-          const items: Testimonial[] = await deps.repository.findPublished();
-          return respond(200, { items });
-        }
+        // The public boundary, unconditionally — no flag, no principal.
+        const items: Testimonial[] = await deps.repository.findPublished();
+        return respond(200, { items });
+      }
 
-        // The moderation queue.
+      case 'GET /testimonials/pending': {
         if (!(await deps.flags.isEnabled('testimonials.moderationQueue.enabled'))) {
           return respond(404, { error: 'NOT_FOUND' });
         }
-        const adminToken = await deps.getAdminToken();
-        if (!requireAdmin(event, adminToken)) {
+        let principal;
+        try {
+          principal = requirePrincipal(event);
+        } catch {
           return respond(401, { error: 'UNAUTHORIZED' });
+        }
+        if (!can(principal, 'read', TESTIMONIAL_MODERATION_RESOURCE).allowed) {
+          return respond(403, { error: 'FORBIDDEN' });
         }
         const items: Testimonial[] = await deps.repository.findPendingReview();
         return respond(200, { items });
@@ -89,25 +93,25 @@ export function createTestimonialModerationHandler(
         if (!(await deps.flags.isEnabled('testimonials.moderationQueue.enabled'))) {
           return respond(404, { error: 'NOT_FOUND' });
         }
-        // Checked before any repository call — a rejected token must
-        // mutate nothing, not even a read.
-        const adminToken = await deps.getAdminToken();
-        if (!requireAdmin(event, adminToken)) {
+        // Checked before any repository call — a rejected/absent
+        // principal must mutate nothing, not even a read.
+        let principal;
+        try {
+          principal = requirePrincipal(event);
+        } catch {
           return respond(401, { error: 'UNAUTHORIZED' });
+        }
+        if (!can(principal, 'update', TESTIMONIAL_MODERATION_RESOURCE).allowed) {
+          return respond(403, { error: 'FORBIDDEN' });
         }
         const id = event.pathParameters?.id;
         if (!id) {
           return respond(400, { error: 'ID_REQUIRED' });
         }
         try {
-          // TASK 1.3.2's admin-token bridge proves "an authorised
-          // moderator," not *which* one — same one shared actor until
-          // Phase 2's Cognito RBAC, audited regardless (audit.ts), with
-          // the role and request origin TASK 2.1.3 added.
-          const actor = actorContext(
-            { subjectId: 'admin-token', role: 'admin-token' },
-            requestOriginOf(event),
-          );
+          // The audit trail (audit.ts) names *which* clinician moderated,
+          // replacing TASK 1.3.2's one shared `admin-token` actor.
+          const actor = actorFromPrincipal(principal, requestOriginOf(event));
           const item = routeKey.endsWith('/publish')
             ? await deps.repository.publish(actor, id)
             : await deps.repository.reject(actor, id);

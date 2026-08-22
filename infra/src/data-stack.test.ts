@@ -186,29 +186,34 @@ describe('DataStack — content read function', () => {
 });
 
 describe('DataStack — content authoring function', () => {
-  it('is wired to the table name and admin token parameter name via environment', () => {
+  it('is wired to the table name via environment, with no admin secret', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {
       Environment: {
         Variables: Match.objectLike({
           CONTENT_TABLE_NAME: Match.anyValue(),
-          ADMIN_TOKEN_PARAMETER_NAME: '/ndn/admin-api-token',
         }),
       },
     });
   });
 
-  it('routes all four authoring endpoints to the same function', () => {
+  it('routes all four authoring endpoints to the same function, behind the real authorizer', () => {
     const template = synth();
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'POST /content' });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /content',
+      AuthorizationType: 'CUSTOM',
+    });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'PATCH /content/{id}',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /content/{id}/publish',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /content/{id}/unpublish',
+      AuthorizationType: 'CUSTOM',
     });
   });
 
@@ -235,7 +240,6 @@ describe('DataStack — content authoring function', () => {
 
     expect(allowActions).toContain('dynamodb:PutItem');
     expect(allowActions).toContain('dynamodb:TransactWriteItems');
-    expect(allowActions).toContain('ssm:GetParameter');
     expect(allowActions).not.toContain('dynamodb:DeleteItem');
 
     const denyStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
@@ -245,28 +249,10 @@ describe('DataStack — content authoring function', () => {
       Sid: 'DenyDestructivePrimitives',
       Action: expect.arrayContaining(['dynamodb:DeleteItem']),
     });
-  });
 
-  it('scopes the SSM read to exactly the admin token parameter, not every parameter', () => {
-    const template = synth();
-    const policies = template.findResources('AWS::IAM::Policy');
-    const authoringPolicy = Object.values(policies).find((policy) =>
-      JSON.stringify((policy as { Properties: unknown }).Properties).includes('ReadAdminApiToken'),
-    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
-    const ssmStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
-      (statement) => statement.Sid === 'ReadAdminApiToken',
-    );
-
-    expect(ssmStatement?.Action).toBe('ssm:GetParameter');
-    // A CloudFormation intrinsic (Fn::Join with the account/region
-    // pseudo-parameters), not a literal string — resolved at deploy time
-    // to arn:aws:ssm:<region>:<account>:parameter/ndn/admin-api-token.
-    // Serialising it is the simplest way to prove the parameter *name*
-    // segment is baked in literally, rather than a wildcard covering every
-    // parameter in the account.
-    const resourceJson = JSON.stringify(ssmStatement?.Resource);
-    expect(resourceJson).toContain('parameter/ndn/admin-api-token');
-    expect(resourceJson).not.toContain('parameter/*');
+    // TASK 2.5.4: no admin-token SSM read anywhere on this role any more.
+    const sids = authoringPolicy.Properties.PolicyDocument.Statement.map((s) => s.Sid);
+    expect(sids).not.toContain('ReadAdminApiToken');
   });
 });
 
@@ -299,17 +285,23 @@ describe('DataStack — workshop read function (TASK 1.5.1)', () => {
 });
 
 describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
-  it('routes all four authoring endpoints to the same function', () => {
+  it('routes all four authoring endpoints to the same function, behind the real authorizer', () => {
     const template = synth();
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'POST /workshops' });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /workshops',
+      AuthorizationType: 'CUSTOM',
+    });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'PATCH /workshops/{id}',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /workshops/{id}/publish',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /workshops/{id}/cancel',
+      AuthorizationType: 'CUSTOM',
     });
   });
 
@@ -328,7 +320,6 @@ describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
 
     expect(allowActions).toContain('dynamodb:PutItem');
     expect(allowActions).toContain('dynamodb:TransactWriteItems');
-    expect(allowActions).toContain('ssm:GetParameter');
     expect(allowActions).not.toContain('dynamodb:DeleteItem');
 
     const denyStatement = authoringPolicy.Properties.PolicyDocument.Statement.find(
@@ -338,6 +329,10 @@ describe('DataStack — workshop authoring function (TASK 1.5.1)', () => {
       Sid: 'DenyDestructivePrimitives',
       Action: expect.arrayContaining(['dynamodb:DeleteItem']),
     });
+
+    // TASK 2.5.4: no admin-token SSM read anywhere on this role any more.
+    const sids = authoringPolicy.Properties.PolicyDocument.Statement.map((s) => s.Sid);
+    expect(sids).not.toContain('ReadAdminApiToken');
   });
 
   it('has an explicit 14-day-retention log group', () => {
@@ -543,9 +538,12 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     return policyStatements().filter((statement) => statement.Sid === sid);
   }
 
-  it('routes GET /audit to a function with its own 14-day-retention log group', () => {
+  it('routes GET /audit to a function with its own 14-day-retention log group, behind the real authorizer', () => {
     const template = synth();
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'GET /audit' });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'GET /audit',
+      AuthorizationType: 'CUSTOM',
+    });
     template.hasResourceProperties('AWS::Logs::LogGroup', {
       LogGroupName: '/ndn/audit-read-function',
       RetentionInDays: 14,
@@ -693,20 +691,36 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts exactly the clinician-admin (2.4.1), assignment (2.5.1/2.5.2) and caseload (2.5.3) routes behind the real authorizer', () => {
-    // The first routes on this API to take no `authorizer:` override —
-    // every route before them opted out with `PUBLIC_ROUTE` or
-    // `ADMIN_TOKEN_ROUTE` (route-protection.ts). When an eighth route
-    // joins this list, that is a task landing, not a regression.
+  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
+    // The first seven took no `authorizer:` override at all, ahead of
+    // ADMIN_TOKEN_ROUTE's own retirement — every route before them opted
+    // out with `PUBLIC_ROUTE` or the now-deleted `ADMIN_TOKEN_ROUTE`
+    // (route-protection.ts). TASK 2.5.4 moves thirteen more onto this same
+    // list: content authoring (4), workshop authoring (4), testimonial
+    // moderation (3, `GET /testimonials/pending` new — `GET /testimonials`
+    // itself stays public), and `GET /audit` — the fifth admin-token route
+    // route-protection.ts's own header named as easy to miss.
     expect(routeKeys('CUSTOM')).toEqual(
       [
+        'GET /audit',
         'GET /caseload',
+        'GET /testimonials/pending',
+        'PATCH /content/{id}',
+        'PATCH /workshops/{id}',
         'POST /clinicians',
         'POST /clinicians/{id}/deactivate',
         'POST /clinicians/{id}/reactivate',
+        'POST /content',
+        'POST /content/{id}/publish',
+        'POST /content/{id}/unpublish',
         'POST /patients/{id}/approve',
         'POST /patients/{id}/decline',
         'POST /patients/{id}/reassign',
+        'POST /testimonials/{id}/publish',
+        'POST /testimonials/{id}/reject',
+        'POST /workshops',
+        'POST /workshops/{id}/cancel',
+        'POST /workshops/{id}/publish',
       ].sort(),
     );
   });

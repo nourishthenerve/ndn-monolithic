@@ -1,4 +1,5 @@
 import type { ContentItem } from '@ndn/shared-types';
+import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import { describe, expect, it } from 'vitest';
 
 import { InMemoryAuditLog, actorContext } from './audit.js';
@@ -9,32 +10,59 @@ import { CachedFlagReader, InMemoryFlagSource } from './flags.js';
 
 // TASK 2.1.3: the seeding actor for fixtures these tests set up directly
 // through the repository. The handler under test builds its own
-// `ActorContext` from the request (audit.ts's actorContext).
+// `ActorContext` from the request's principal (audit.ts's actorFromPrincipal).
 const SEED_ACTOR = actorContext(
-  { subjectId: 'seed', role: 'admin-token' },
+  { subjectId: 'seed', role: 'principal-clinician' },
   { requestId: 'req-seed', sourceIp: '198.51.100.1' },
 );
 
 const fixedClock: Clock = { now: () => new Date('2026-01-01T00:00:00.000Z') };
-const ADMIN_TOKEN = 'test-admin-token';
+
+type LambdaAuthorizerEvent = APIGatewayProxyEventV2WithLambdaAuthorizer<
+  Record<string, unknown> | undefined
+>;
+
+const PRINCIPAL_CONTEXT = {
+  subjectId: 'principal-sub',
+  role: 'principal-clinician',
+  accountStatus: 'active',
+  clinicianId: 'principal-sub',
+};
+
+const SUB_CLINICIAN_CONTEXT = {
+  subjectId: 'sub-sub',
+  role: 'sub-clinician',
+  accountStatus: 'active',
+  clinicianId: 'sub-sub',
+};
+
+const PATIENT_CONTEXT = {
+  subjectId: 'pat-1',
+  role: 'patient',
+  accountStatus: 'approved',
+  patientId: 'pat-1',
+};
 
 function fakeEvent(overrides: {
   routeKey: string;
   pathParameters?: Record<string, string>;
-  headers?: Record<string, string>;
   body?: unknown;
-}) {
+  principal?: Record<string, unknown>;
+}): LambdaAuthorizerEvent {
   return {
     routeKey: overrides.routeKey,
     pathParameters: overrides.pathParameters,
-    headers: overrides.headers ?? { authorization: `Bearer ${ADMIN_TOKEN}` },
     body: overrides.body === undefined ? undefined : JSON.stringify(overrides.body),
     // TASK 2.1.3: `http.sourceIp` is part of every real API Gateway v2
     // event and is what the audit row's `where` is derived from
     // (audit.ts's requestOriginOf) — the fixture carries it because
     // the real event always does.
-    requestContext: { requestId: 'req-1', http: { sourceIp: '198.51.100.7' } },
-  } as never;
+    requestContext: {
+      requestId: 'req-1',
+      http: { sourceIp: '198.51.100.7' },
+      authorizer: { lambda: 'principal' in overrides ? overrides.principal : PRINCIPAL_CONTEXT },
+    },
+  } as unknown as LambdaAuthorizerEvent;
 }
 
 function buildDeps(overrides: Partial<ContentAuthoringDeps> = {}) {
@@ -47,7 +75,6 @@ function buildDeps(overrides: Partial<ContentAuthoringDeps> = {}) {
   const deps: ContentAuthoringDeps = {
     repository,
     flags,
-    getAdminToken: async () => ADMIN_TOKEN,
     clock: fixedClock,
     ...overrides,
   };
@@ -63,7 +90,7 @@ const validBody = {
 };
 
 describe('createContentAuthoringHandler — flag gating', () => {
-  it('returns 404 when content.authoring.enabled is off, without checking the token', async () => {
+  it('returns 404 when content.authoring.enabled is off, without checking the principal', async () => {
     const { deps } = buildDeps();
     const source = new InMemoryFlagSource();
     source.set('content.authoring.enabled', false);
@@ -71,7 +98,7 @@ describe('createContentAuthoringHandler — flag gating', () => {
     const handler = createContentAuthoringHandler({ ...deps, flags });
 
     const result = await handler(
-      fakeEvent({ routeKey: 'POST /content', headers: {}, body: validBody }),
+      fakeEvent({ routeKey: 'POST /content', principal: undefined, body: validBody }),
       {} as never,
       undefined as never,
     );
@@ -79,13 +106,13 @@ describe('createContentAuthoringHandler — flag gating', () => {
   });
 });
 
-describe('createContentAuthoringHandler — admin token gate', () => {
-  it('rejects a missing Authorization header with 401 and creates nothing', async () => {
+describe('createContentAuthoringHandler — authentication and authorisation', () => {
+  it('rejects a request with no verified principal, 401, and creates nothing', async () => {
     const { deps, repository } = buildDeps();
     const handler = createContentAuthoringHandler(deps);
 
     const result = await handler(
-      fakeEvent({ routeKey: 'POST /content', headers: {}, body: validBody }),
+      fakeEvent({ routeKey: 'POST /content', principal: undefined, body: validBody }),
       {} as never,
       undefined as never,
     );
@@ -93,24 +120,32 @@ describe('createContentAuthoringHandler — admin token gate', () => {
     expect(await repository.findById('content-1')).toBeUndefined();
   });
 
-  it('rejects a wrong token with 401 and creates nothing', async () => {
+  it('rejects a patient with 403 and creates nothing', async () => {
     const { deps, repository } = buildDeps();
     const handler = createContentAuthoringHandler(deps);
 
     const result = await handler(
-      fakeEvent({
-        routeKey: 'POST /content',
-        headers: { authorization: 'Bearer wrong-token' },
-        body: validBody,
-      }),
+      fakeEvent({ routeKey: 'POST /content', principal: PATIENT_CONTEXT, body: validBody }),
       {} as never,
       undefined as never,
     );
-    expect(result).toMatchObject({ statusCode: 401 });
+    expect(result).toMatchObject({ statusCode: 403 });
     expect(await repository.findById('content-1')).toBeUndefined();
   });
 
-  it('accepts the correct token', async () => {
+  it('accepts a sub-clinician — the matrix grants either clinician role', async () => {
+    const { deps } = buildDeps();
+    const handler = createContentAuthoringHandler(deps);
+
+    const result = await handler(
+      fakeEvent({ routeKey: 'POST /content', principal: SUB_CLINICIAN_CONTEXT, body: validBody }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 201 });
+  });
+
+  it('accepts the principal clinician', async () => {
     const { deps } = buildDeps();
     const handler = createContentAuthoringHandler(deps);
 
@@ -205,6 +240,24 @@ describe('createContentAuthoringHandler — PATCH /content/{id}', () => {
     expect(result).toMatchObject({ statusCode: 200 });
     const parsed = JSON.parse((result as { body: string }).body) as { item: ContentItem };
     expect(parsed.item.translations.en.title).toBe('New');
+  });
+
+  it('rejects a patient before touching the repository', async () => {
+    const { deps, repository } = buildDeps();
+    await repository.create(SEED_ACTOR, validBody as never);
+    const handler = createContentAuthoringHandler(deps);
+
+    const result = await handler(
+      fakeEvent({
+        routeKey: 'PATCH /content/{id}',
+        principal: PATIENT_CONTEXT,
+        pathParameters: { id: 'content-1' },
+        body: { keywords: ['diet'] },
+      }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 403 });
   });
 
   it('returns 404 for an id that does not exist', async () => {

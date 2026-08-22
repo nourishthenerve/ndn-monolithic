@@ -18,7 +18,7 @@ The first working contact form this platform has ever had — the legacy site's 
 
 ## Required manual steps before this is usable for real in `ndn-prod`
 
-**[Owner action] 1. Create the Turnstile secret SSM parameter**, out-of-band — same convention `ADMIN_API_TOKEN` documents (`content-authoring.md`):
+**[Owner action] 1. Create the Turnstile secret SSM parameter**, out-of-band — same convention every SSM SecureString in this repo follows (`infra/src/config.ts`'s `CERTIFICATE_ARN`, and previously `content-authoring.md`'s now-retired `ADMIN_API_TOKEN`, TASK 2.5.4):
 
 ```sh
 aws ssm put-parameter \
