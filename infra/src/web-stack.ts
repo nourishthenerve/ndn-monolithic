@@ -34,7 +34,7 @@ import {
 } from 'aws-cdk-lib/aws-codedeploy';
 import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { Alias, Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { Alias, Architecture, Runtime, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
@@ -63,6 +63,11 @@ import {
   attachDestructiveActionGuardrail,
 } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
+import {
+  ADMIN_TOKEN_ROUTE,
+  createRequestAuthorizer,
+  PUBLIC_ROUTE,
+} from './route-protection.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -97,6 +102,19 @@ export interface WebStackProps extends StackProps {
    * non-functional.
    */
   readonly table?: ITable;
+  /**
+   * TASK 2.2.2: `NdnDataStack`'s authorizer function (data-stack.ts),
+   * passed in so this API's protected routes go through the same
+   * verification as that one's — one function, two authorizer constructs,
+   * because an API Gateway authorizer belongs to exactly one API.
+   *
+   * Optional for the same reason `table` is: no `DataStack` is deployed
+   * alongside an ephemeral per-PR stack. When absent this API simply has
+   * no default authorizer — which is safe today only because every route
+   * on it is explicitly `PUBLIC_ROUTE` or `ADMIN_TOKEN_ROUTE`, and
+   * web-stack.test.ts asserts exactly that.
+   */
+  readonly authorizerFunction?: IFunction;
 }
 
 export class WebStack extends Stack {
@@ -173,10 +191,18 @@ export class WebStack extends Stack {
       version: healthFunction.currentVersion,
     });
 
-    const httpApi = new HttpApi(this, 'HttpApi');
+    // TASK 2.2.2: same "protected unless it says otherwise" default as
+    // data-stack.ts's API. `undefined` on an ephemeral per-PR stack, which
+    // has no DataStack to take the function from — see WebStackProps.
+    const authorizer = props.authorizerFunction
+      ? createRequestAuthorizer(props.authorizerFunction)
+      : undefined;
+
+    const httpApi = new HttpApi(this, 'HttpApi', { defaultAuthorizer: authorizer });
     httpApi.addRoutes({
       path: '/health',
       methods: [HttpMethod.GET],
+      authorizer: PUBLIC_ROUTE,
       integration: new HttpLambdaIntegration('HealthIntegration', healthAlias),
     });
 
@@ -292,6 +318,7 @@ export class WebStack extends Stack {
     httpApi.addRoutes({
       path: '/contact',
       methods: [HttpMethod.POST],
+      authorizer: PUBLIC_ROUTE,
       integration: new HttpLambdaIntegration('ContactFormIntegration', contactFormFunction),
     });
 
@@ -368,6 +395,7 @@ export class WebStack extends Stack {
     httpApi.addRoutes({
       path: '/workshops/media-upload-url',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: new HttpLambdaIntegration('MediaUploadIntegration', mediaUploadFunction),
     });
 
@@ -482,6 +510,7 @@ export class WebStack extends Stack {
       httpApi.addRoutes({
         path: '/stripe/webhook',
         methods: [HttpMethod.POST],
+        authorizer: PUBLIC_ROUTE,
         integration: new HttpLambdaIntegration('StripeWebhookIntegration', stripeWebhookFunction),
       });
     }

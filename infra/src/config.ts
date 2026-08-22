@@ -103,7 +103,15 @@ export const MONITORED_LOG_GROUP_NAMES = [
   // last free slot.
   '/ndn/content-read-function',
   '/ndn/workshop-read-function',
-  '/ndn/media-upload-function',
+  // TASK 2.2.2 takes the last slot, **displacing `/ndn/media-upload-function`**
+  // to the unmonitored list below. The swap is recorded here, as this
+  // file's own instruction above requires, and the reasoning is a
+  // comparison rather than a preference: the authorizer sits on the path
+  // of every authenticated request in the system, and media upload is an
+  // admin-gated action a clinician performs when publishing a workshop
+  // image. If either one is going to run away, it is not the one a human
+  // triggers by hand.
+  '/ndn/authorizer-function',
 ];
 
 // The other side of that ceiling, kept explicit so the gap is a recorded
@@ -127,10 +135,15 @@ export const MONITORED_LOG_GROUP_NAMES = [
 // principal clinician reading a day of audit rows, behind a default-off
 // flag, is the smallest log volume any function in this estate can
 // produce — smaller than the two authoring handlers already here.
+//
+// TASK 2.2.2 moves `/ndn/media-upload-function` here — see the note on the
+// last entry of the monitored list. It keeps its 14-day retention and its
+// bytes still expire; they are simply no longer summed into the alarm.
 export const UNMONITORED_LOG_GROUP_NAMES = [
   '/ndn/content-authoring-function',
   '/ndn/workshop-authoring-function',
   '/ndn/audit-read-function',
+  '/ndn/media-upload-function',
   '/ndn/site-deployment',
 ];
 

@@ -7,8 +7,17 @@ import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
-import { FLAG_PARAMETER_NAME_PREFIX } from './config.js';
+import {
+  CLINICIAN_USER_POOL_CLIENT_ID,
+  CLINICIAN_USER_POOL_ID,
+  FLAG_PARAMETER_NAME_PREFIX,
+  MONITORED_LOG_GROUP_NAMES,
+  PATIENT_USER_POOL_CLIENT_ID,
+  PATIENT_USER_POOL_ID,
+  UNMONITORED_LOG_GROUP_NAMES,
+} from './config.js';
 import { DataStack } from './data-stack.js';
+import { UNAUTHENTICATED_ROUTE_KEYS } from './route-protection.js';
 
 // Synthesized once and shared across this file's ~24 assertions, for the
 // same reason web-stack.test.ts memoizes its own: each call re-bundles all
@@ -534,9 +543,10 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('denies every other role in the stack any read of the AUDIT# partition', () => {
     const denials = statementsWithSid('DenyAuditPartitionReads');
 
-    // The seven pre-existing functions; the audit reader is deliberately
-    // not among them.
-    expect(denials).toHaveLength(7);
+    // The seven pre-existing functions plus TASK 2.2.2's authorizer; the
+    // audit reader is deliberately not among them, being the one role
+    // that is supposed to read that partition.
+    expect(denials).toHaveLength(8);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -553,10 +563,127 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(7);
+    expect(denials).toHaveLength(8);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
     }
+  });
+});
+
+// TASK 2.2.2: "a test enumerates the routes so a new unprotected one fails
+// the build." Both HTTP APIs set `defaultAuthorizer`, so the *default* is
+// already protected — this is the second lock: a route that opts out must
+// also be named in route-protection.ts, and a route named there must
+// actually exist. Neither list can drift from the other silently.
+describe('DataStack — route protection (TASK 2.2.2)', () => {
+  function statementsWithSid(sid: string): Record<string, unknown>[] {
+    return Object.values(synth().findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } })
+            .Properties.PolicyDocument.Statement,
+      )
+      .filter((statement) => statement.Sid === sid);
+  }
+
+  function routeKeys(authorizationType: string): string[] {
+    return Object.values(synth().findResources('AWS::ApiGatewayV2::Route'))
+      .filter((route) => (route.Properties?.AuthorizationType ?? 'NONE') === authorizationType)
+      .map((route) => String(route.Properties?.RouteKey))
+      .sort();
+  }
+
+  // CDK materialises an `AWS::ApiGatewayV2::Authorizer` when a *route*
+  // binds it, not when `defaultAuthorizer` is set — a route that opts out
+  // with `HttpNoneAuthorizer` overrides the default, and today every route
+  // does. So the authorizer function deploys and the API-Gateway-side
+  // resource appears with the first protected route (TASK 2.2.3's
+  // registration endpoints).
+  //
+  // Asserted rather than left implicit, because "the authorizer is
+  // configured" and "the authorizer exists in the deployed API" are
+  // different claims and only the first one is true today.
+  it('has no API Gateway authorizer resource yet, because no route binds it yet', () => {
+    synth().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 0);
+  });
+
+  it('leaves exactly the routes route-protection.ts names outside the authorizer', () => {
+    const declared = UNAUTHENTICATED_ROUTE_KEYS.filter((key) =>
+      routeKeys('NONE').includes(key),
+    ).sort();
+
+    // Equality both ways: an undeclared opt-out fails, and so does a
+    // declared key for a route this stack no longer has.
+    expect(routeKeys('NONE')).toEqual(declared);
+  });
+
+  it('has no route on this API behind the authorizer yet, and says so out loud', () => {
+    // Today's honest state. TASK 2.2.3's registration routes are the first
+    // entries here; when this assertion starts failing, that is the task
+    // landing, not a regression.
+    expect(routeKeys('CUSTOM')).toEqual([]);
+  });
+
+  it('grants the authorizer one keyed read, scoped to the two profile partitions', () => {
+    const statements = statementsWithSid('ReadPrincipalProfiles');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('dynamodb:GetItem');
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*', 'CLI#*'] },
+    });
+  });
+
+  it('gives the authorizer no write, no query and no scan', () => {
+    // Scoped to the authorizer's *own* policy document — every other role
+    // in this stack legitimately writes. Found by the statement only it
+    // has, so the test cannot drift onto the wrong role after a rename.
+    const authorizerPolicy = Object.values(synth().findResources('AWS::IAM::Policy')).find(
+      (policy) =>
+        JSON.stringify(policy.Properties?.PolicyDocument ?? {}).includes('ReadPrincipalProfiles'),
+    );
+    const statements = authorizerPolicy?.Properties?.PolicyDocument?.Statement as {
+      Effect: string;
+      Action: unknown;
+    }[];
+    const allowed = statements
+      .filter((statement) => statement.Effect === 'Allow')
+      .flatMap((statement) =>
+        Array.isArray(statement.Action) ? statement.Action : [statement.Action],
+      );
+
+    // Exactly one data-plane action. The authorizer is on the path of every
+    // authenticated request in the estate; anything else here would be the
+    // widest-blast-radius grant in the repository.
+    expect(allowed.filter((action) => String(action).startsWith('dynamodb:'))).toEqual([
+      'dynamodb:GetItem',
+    ]);
+  });
+
+  it('writes the authorizer decision log to its own monitored group', () => {
+    synth().hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ndn/authorizer-function',
+      RetentionInDays: 14,
+    });
+    expect(MONITORED_LOG_GROUP_NAMES).toContain('/ndn/authorizer-function');
+    expect(MONITORED_LOG_GROUP_NAMES).not.toContain('/ndn/media-upload-function');
+    expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/media-upload-function');
+    // The ten-slot ceiling budget-stack.ts's alarm cannot exceed.
+    expect(MONITORED_LOG_GROUP_NAMES).toHaveLength(10);
+  });
+
+  it('passes both pools and both clients to the authorizer, and no secret', () => {
+    const functions = Object.values(synth().findResources('AWS::Lambda::Function'));
+    const authorizer = functions.find((fn) =>
+      JSON.stringify(fn.Properties?.Environment ?? {}).includes('PATIENT_USER_POOL_ID'),
+    );
+
+    expect(authorizer?.Properties?.Environment?.Variables).toMatchObject({
+      PATIENT_USER_POOL_ID,
+      PATIENT_USER_POOL_CLIENT_ID,
+      CLINICIAN_USER_POOL_ID,
+      CLINICIAN_USER_POOL_CLIENT_ID,
+    });
   });
 });

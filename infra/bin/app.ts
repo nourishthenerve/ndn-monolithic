@@ -62,6 +62,10 @@ if (prNumber) {
     env: { account: ACCOUNT_ID, region: REGION },
     deployVersion: process.env.GITHUB_SHA ?? 'local',
     table: dataStack.table,
+    // TASK 2.2.2: one authorizer function, both APIs. Same one-directional
+    // cross-stack reference `table` above already establishes — nothing
+    // flows back from WebStack to DataStack.
+    authorizerFunction: dataStack.authorizerFunction,
   });
 
   new BudgetStack(app, 'NdnBudgetStack', {

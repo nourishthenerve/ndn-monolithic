@@ -20,6 +20,7 @@ import {
   WWW_DOMAIN_NAME,
 } from './config.js';
 import { DataStack } from './data-stack.js';
+import { UNAUTHENTICATED_ROUTE_KEYS } from './route-protection.js';
 import { WebStack } from './web-stack.js';
 
 // Synthesis, not assertion, is what this suite spends its time on: every
@@ -1177,5 +1178,48 @@ describe('WebStack — SES bounce/complaint events', () => {
       expect(resources).toContain('identity/nourishthenerve.com');
       expect(resources).toContain(`configuration-set/${SES_CONFIGURATION_SET_NAME}`);
     }
+  });
+});
+
+// TASK 2.2.2: the other half of "a test enumerates the routes so a new
+// unprotected one fails the build" — data-stack.test.ts covers that API,
+// this one covers the site's.
+describe('WebStack — route protection (TASK 2.2.2)', () => {
+  function routeKeys(template: Template, authorizationType: string): string[] {
+    return Object.values(template.findResources('AWS::ApiGatewayV2::Route'))
+      .filter((route) => (route.Properties?.AuthorizationType ?? 'NONE') === authorizationType)
+      .map((route) => String(route.Properties?.RouteKey))
+      .sort();
+  }
+
+  it('leaves exactly the routes route-protection.ts names outside the authorizer', () => {
+    const template = synthWithTable();
+    const open = routeKeys(template, 'NONE');
+
+    expect(open).toEqual(UNAUTHENTICATED_ROUTE_KEYS.filter((key) => open.includes(key)).sort());
+    // The site API's four, named so a diff shows which one moved.
+    expect(open).toEqual([
+      'GET /health',
+      'POST /contact',
+      'POST /stripe/webhook',
+      'POST /workshops/media-upload-url',
+    ]);
+  });
+
+  it('has no route behind the authorizer yet, and no authorizer resource to bind', () => {
+    // Same lazy-binding note as data-stack.test.ts: CDK creates the
+    // authorizer resource when a route uses it. TASK 2.2.3 is where both
+    // of these assertions change.
+    expect(routeKeys(synthWithTable(), 'CUSTOM')).toEqual([]);
+    synthWithTable().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 0);
+  });
+
+  it('stands up without an authorizer function at all, for the ephemeral PR stack', () => {
+    // 0.6.3's per-PR stack has no DataStack and therefore no authorizer
+    // function. That is only safe because every route on this API opts
+    // out explicitly; if one ever relied on the default, this stack would
+    // deploy it wide open.
+    expect(routeKeys(synth(), 'CUSTOM')).toEqual([]);
+    expect(routeKeys(synth(), 'NONE')).toEqual(['GET /health', 'POST /contact', 'POST /workshops/media-upload-url']);
   });
 });
