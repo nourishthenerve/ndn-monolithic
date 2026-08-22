@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { actorContext, InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
-import { PatientRepository, type PatientTransition } from './patient-repository.js';
+import { notificationRecipientFor, PatientRepository, type PatientTransition } from './patient-repository.js';
 import { InMemoryStore } from './store.js';
 
 const SUB = 'a1b2c3d4-5678-90ab-cdef-000000000001';
@@ -164,5 +164,28 @@ describe('transitions', () => {
     // no removal method to inherit and this class adds none.
     const methods = Object.getOwnPropertyNames(PatientRepository.prototype);
     expect(methods.sort()).toEqual(['constructor', 'findById', 'register', 'transition']);
+  });
+});
+
+describe('notificationRecipientFor', () => {
+  it('projects the fields the Notifier needs off personal{}, in every account status', async () => {
+    const { patients } = build();
+    const registered = await patients.register(REGISTRATION, PATIENT_ACTOR);
+    const declined = await patients.transition(SUB, 'decline', CLINICIAN_ACTOR);
+
+    expect(notificationRecipientFor(registered)).toEqual({
+      id: SUB,
+      email: 'patient@example.com',
+      phone: undefined,
+      marketingOptIn: false,
+    });
+    // A declined account's record is still fully readable (2.2.3's own
+    // rule) — the Notifier's own guards decide whether to send, not this.
+    expect(notificationRecipientFor(declined)).toEqual({
+      id: SUB,
+      email: 'patient@example.com',
+      phone: undefined,
+      marketingOptIn: false,
+    });
   });
 });

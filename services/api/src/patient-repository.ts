@@ -13,6 +13,7 @@ import type { Patient, PatientClinical, PatientPersonal } from '@ndn/shared-type
 import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
+import type { NotificationRecipient } from './notifications.js';
 import type { Unprojected } from './projection.js';
 import { Repository } from './repository.js';
 import type { KeyValueStore } from './store.js';
@@ -137,4 +138,21 @@ export class PatientRepository {
   findById(id: string): Promise<Unprojected<Patient> | undefined> {
     return this.repository.findById(id);
   }
+}
+
+/**
+ * TASK 2.3.1: what `Notifier.send` (notifications.ts) needs off a patient
+ * record. `personal{}` already carries all of it — email, phone,
+ * `marketingOptIn` — so this is a projection, not a new preference to
+ * maintain; "channel preferences … marketing consent is already there."
+ * A declined or suspended patient still resolves here: whether anything is
+ * actually sent is the Notifier's own guards' decision, not this mapping's.
+ */
+export function notificationRecipientFor(patient: Unprojected<Patient>): NotificationRecipient {
+  return {
+    id: patient.id,
+    email: patient.personal.email,
+    phone: patient.personal.phone,
+    marketingOptIn: patient.personal.marketingOptIn,
+  };
 }
