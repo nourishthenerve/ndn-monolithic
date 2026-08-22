@@ -46,7 +46,7 @@ expected: all four (`GSI1`..`GSI4`) `ACTIVE`. `aws cloudformation describe-stack
 
 ## Resolution
 
-Open. Step 1 (this PR) adds GSI1. Updated here as steps 2 and 3 land.
+**Step 1 deployed and verified, 2026-08-22 21:54 UTC.** PR #88 merged; `NdnDataStack` reached `UPDATE_COMPLETE`; `aws dynamodb describe-table` confirms GSI1 `ACTIVE` alongside GSI2. Step 2 (this PR) restores GSI3, GSI4 still withheld. Updated again once step 3 lands.
 
 ## Prevention
 
