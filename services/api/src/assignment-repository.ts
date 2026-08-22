@@ -17,6 +17,13 @@
 // exactly as written. "A declined patient can be re-approved" is this
 // property in one sentence — re-approving appends a new row, it does not
 // resurrect or rewrite the old one.
+//
+// TASK 2.5.2 adds `reassign` — the same append-only shape again: a new
+// `ASSIGNREQ#` row per reassignment, `assigned_clinician_id` (and GSI1's
+// projection, derived from it) moved atomically in the same write. See
+// `reassign`'s own doc for why this needs no second, stale GSI1 row and
+// no read-side filter — a deliberate, reasoned departure from that half
+// of the task's own step 3.
 import type { AssignmentRequest, Patient } from '@ndn/shared-types';
 
 import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
@@ -39,6 +46,11 @@ export const ASSIGNMENT_ENTITY_TYPE = 'patient-assignment';
 export interface AssignmentDecision {
   readonly request: AssignmentRequest;
   readonly patient: Unprojected<Patient>;
+}
+
+/** What `reassign` returns — `AssignmentDecision` plus the clinician who is losing the patient, so a caller can notify them without a second read. */
+export interface ReassignmentDecision extends AssignmentDecision {
+  readonly previousClinicianId: string;
 }
 
 export interface AssignmentStore {
@@ -149,6 +161,74 @@ export class AssignmentRepository {
 
     await this.writeAndAudit(request, updatedPatient, actor, 'reject');
     return { request, patient: unprojected(updatedPatient) };
+  }
+
+  /**
+   * TASK 2.5.2. Only for an already-`approved` patient — `approve` is the
+   * *first* assignment, this is every one after it. **There is no
+   * "unassign":** the only shapes this method accepts are "move to this
+   * other, active clinician", never "clear the field" — step 6's own DoD.
+   *
+   * **A single `TransactWriteItems`, exactly like `approve`/`decline` —
+   * not a second projection row left stale beside a filter.** The task's
+   * own step 3 describes GSI1 gaining a *new* projection row while "the
+   * old row is left in place and filtered by the current
+   * assigned_clinician_id on read" — the shape `ContentStore`'s keyword
+   * rows use, where a *set*-valued relationship (many keywords) can only
+   * grow without `DeleteItem`. A patient's clinician is not set-valued —
+   * it is exactly one fact at a time — so `gsi1pk`/`gsi1sk` living as
+   * plain attributes on the patient's own `PROFILE` row (the same design
+   * `approve` already established) can be overwritten in the same Put
+   * that already changes `assigned_clinician_id`, with no second row and
+   * nothing to filter: a stale entry cannot exist to begin with, which is
+   * a stronger guarantee than "existing, but always filtered out
+   * correctly" — one less place a future read could forget the filter.
+   * `AssignmentStore.writeDecision`'s own contract (this file's header)
+   * already says GSI1's projection is derived from
+   * `patient.assigned_clinician_id` alone; this method changes nothing
+   * about that contract, it is simply the second caller of it.
+   */
+  async reassign(
+    patientId: string,
+    assignedClinicianId: string,
+    actor: ActorContext,
+  ): Promise<ReassignmentDecision> {
+    const patient = await this.requirePatient(patientId);
+    if (patient.account_status !== 'approved' || !patient.assigned_clinician_id) {
+      throw new AppError(
+        'NOT_ASSIGNED',
+        `patient ${patientId} is not currently assigned — use approve, not reassignment`,
+      );
+    }
+    const previousClinicianId = patient.assigned_clinician_id;
+
+    const clinician = await this.clinicians.findById(assignedClinicianId);
+    if (!clinician || clinician.account_status !== 'active') {
+      throw new AppError(
+        'CLINICIAN_NOT_AVAILABLE',
+        `clinician ${assignedClinicianId} does not exist or is not active`,
+      );
+    }
+
+    const now = this.clock.now().toISOString();
+    const request: AssignmentRequest = {
+      patientId,
+      requestedAt: now,
+      decidedBy: actor.subjectId,
+      decidedAt: now,
+      assignedClinicianId,
+      status: 'approved',
+      created_at: now,
+      updated_at: now,
+    };
+    const updatedPatient: Patient = {
+      ...patient,
+      assigned_clinician_id: assignedClinicianId,
+      updated_at: now,
+    };
+
+    await this.writeAndAudit(request, updatedPatient, actor, 'update');
+    return { request, patient: unprojected(updatedPatient), previousClinicianId };
   }
 
   /** GSI1's own read, one hop removed from the DynamoDB shape — see AssignmentStore's own doc. */

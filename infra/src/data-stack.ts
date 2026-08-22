@@ -1143,6 +1143,10 @@ export class DataStack extends Stack {
         NOTIFICATION_TABLE_NAME: this.table.tableName,
         ASSIGNMENT_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
         SES_CONFIGURATION_SET_NAME,
+        // TASK 2.5.2: resolves a clinician's email for the reassignment
+        // notice (AdminGetUser) — see this file's own comment on the
+        // AssignmentFunctionRole IAM grant below.
+        CLINICIAN_USER_POOL_ID,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'AssignmentFunctionLogGroup', assignmentLogGroupName),
@@ -1189,6 +1193,17 @@ export class DataStack extends Stack {
     );
     attachDestructiveActionGuardrail(assignmentRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(assignmentRole, this.table);
+    // TASK 2.5.2: `AdminGetUser` only, on the same clinician pool ARN
+    // ClinicianAdminFunction's own grant uses — resolving an email to
+    // notify, never a create/disable/enable action.
+    assignmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianEmailForReassignmentNotice',
+        effect: Effect.ALLOW,
+        actions: ['cognito-idp:AdminGetUser'],
+        resources: [clinicianUserPoolArn],
+      }),
+    );
     assignmentRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'SendAssignmentDecisionEmail',
@@ -1217,6 +1232,11 @@ export class DataStack extends Stack {
     });
     httpApi.addRoutes({
       path: '/patients/{id}/decline',
+      methods: [HttpMethod.POST],
+      integration: assignmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/reassign',
       methods: [HttpMethod.POST],
       integration: assignmentIntegration,
     });

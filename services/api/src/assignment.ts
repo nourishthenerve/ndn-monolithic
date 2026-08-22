@@ -1,7 +1,8 @@
 // TASK 2.5.1: `POST /patients/{id}/approve`, `POST /patients/{id}/decline`
 // — SDK-free and unit-testable, the same split every other endpoint uses
 // (assignment-handler.ts wires the real DynamoDB-backed store, the real
-// Notifier and the real Lambda authorizer's principal).
+// Notifier and the real Lambda authorizer's principal). TASK 2.5.2 adds
+// `POST /patients/{id}/reassign`, same body shape, same route family.
 //
 // Only the `Principal` column ever passes `can()` on `'Patient assignment'`
 // (authz-matrix.ts) — a sub-clinician is denied even onto themselves (see
@@ -30,13 +31,24 @@ import { requirePrincipal } from './request-principal.js';
 const ASSIGNMENT_FLAG = 'assignment.enabled';
 const ASSIGNMENT_RESOURCE = { entityType: 'patient-assignment' } as const;
 
-const approveBodySchema = z.object({ assignedClinicianId: z.string().min(1) });
+// Shared by /approve and /reassign — both name the clinician the patient
+// is being assigned to, and nothing else. There is deliberately no way to
+// submit a request with this field absent or empty: step 6's "there is no
+// unassign" is enforced by this schema having no shape that omits it, not
+// by a runtime check.
+const assignedClinicianBodySchema = z.object({ assignedClinicianId: z.string().min(1) });
+
+/** Resolves a clinician's email for a notification — TASK 2.5.2's reassignment notice to both clinicians. Undefined if it can't be resolved; the caller degrades to "don't send", never to a thrown error. */
+export interface AdminGetClinicianEmailPort {
+  getEmail(clinicianId: string): Promise<string | undefined>;
+}
 
 export interface AssignmentDeps {
   readonly repository: AssignmentRepository;
   readonly flags: FlagReader;
   /** Content-free — step 6. Best-effort: a notification failing to send never fails the decision it describes. */
   readonly notifier: Notifier;
+  readonly getClinicianEmail: AdminGetClinicianEmailPort;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
   readonly log?: (line: Record<string, unknown>) => void;
@@ -111,7 +123,7 @@ export function createAssignmentHandler(
     try {
       switch (routeKey) {
         case 'POST /patients/{id}/approve': {
-          const parsed = approveBodySchema.safeParse(parseJsonBody(event));
+          const parsed = assignedClinicianBodySchema.safeParse(parseJsonBody(event));
           if (!parsed.success) {
             return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
           }
@@ -128,6 +140,33 @@ export function createAssignmentHandler(
           await notifyBestEffort(deps, log, decision.patient, 'patientDeclined');
           return respond(200, { item: decision.request });
         }
+        case 'POST /patients/{id}/reassign': {
+          const parsed = assignedClinicianBodySchema.safeParse(parseJsonBody(event));
+          if (!parsed.success) {
+            return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
+          }
+          const decision = await deps.repository.reassign(
+            id,
+            parsed.data.assignedClinicianId,
+            actor,
+          );
+          await notifyBestEffort(deps, log, decision.patient, 'patientReassigned');
+          await notifyClinicianBestEffort(
+            deps,
+            log,
+            decision.patient.id,
+            parsed.data.assignedClinicianId,
+            'clinicianCaseloadPatientAdded',
+          );
+          await notifyClinicianBestEffort(
+            deps,
+            log,
+            decision.patient.id,
+            decision.previousClinicianId,
+            'clinicianCaseloadPatientRemoved',
+          );
+          return respond(200, { item: decision.request });
+        }
         default:
           return respond(404, { error: 'NOT_FOUND' });
       }
@@ -135,7 +174,12 @@ export function createAssignmentHandler(
       if (error instanceof AppError && error.code === 'RECORD_NOT_FOUND') {
         return respond(404, { error: error.code });
       }
-      if (error instanceof AppError && (error.code === 'ALREADY_ASSIGNED' || error.code === 'CLINICIAN_NOT_AVAILABLE')) {
+      if (
+        error instanceof AppError &&
+        (error.code === 'ALREADY_ASSIGNED' ||
+          error.code === 'CLINICIAN_NOT_AVAILABLE' ||
+          error.code === 'NOT_ASSIGNED')
+      ) {
         return respond(409, { error: error.code });
       }
       throw error;
@@ -153,11 +197,37 @@ async function notifyBestEffort(
   deps: AssignmentDeps,
   log: (line: Record<string, unknown>) => void,
   patient: Unprojected<Patient>,
-  template: 'patientApproved' | 'patientDeclined',
+  template: 'patientApproved' | 'patientDeclined' | 'patientReassigned',
 ): Promise<void> {
   try {
     await deps.notifier.send(notificationRecipientFor(patient), template, {});
   } catch {
     log({ event: 'assignment-decision-notification-failed', patientId: patient.id, template });
+  }
+}
+
+/**
+ * Step 5's other half: reassignment notifies both clinicians, not only the
+ * patient. Resolving an email is itself best-effort (`getClinicianEmail`
+ * returns `undefined` rather than throwing when it can't) — a clinician
+ * whose email can't be resolved just doesn't get a notice, the same
+ * "content-free, never fails the decision" posture `notifyBestEffort`
+ * keeps for the patient half.
+ */
+async function notifyClinicianBestEffort(
+  deps: AssignmentDeps,
+  log: (line: Record<string, unknown>) => void,
+  patientId: string,
+  clinicianId: string,
+  template: 'clinicianCaseloadPatientAdded' | 'clinicianCaseloadPatientRemoved',
+): Promise<void> {
+  try {
+    const email = await deps.getClinicianEmail.getEmail(clinicianId);
+    if (!email) {
+      return;
+    }
+    await deps.notifier.send({ id: clinicianId, email }, template, {});
+  } catch {
+    log({ event: 'assignment-decision-clinician-notification-failed', patientId, clinicianId, template });
   }
 }

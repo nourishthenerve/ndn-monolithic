@@ -18,7 +18,10 @@ export type NotificationTemplateId =
   | 'marketingNewsletter'
   | 'clinicianDeactivated'
   | 'patientApproved'
-  | 'patientDeclined';
+  | 'patientDeclined'
+  | 'patientReassigned'
+  | 'clinicianCaseloadPatientAdded'
+  | 'clinicianCaseloadPatientRemoved';
 
 export interface NotificationTemplateDef {
   readonly id: NotificationTemplateId;
@@ -76,6 +79,30 @@ export const NOTIFICATION_TEMPLATES: Readonly<Record<NotificationTemplateId, Not
     smsEligible: false,
     subjectKey: 'notifications.patientDeclined.subject',
     emailBodyKey: 'notifications.patientDeclined.emailBody',
+  },
+  // TASK 2.5.2: content-free the same way — no outgoing/incoming
+  // clinician's name in the patient's own copy either. Sent to the
+  // patient; the two clinician-facing templates below are separate.
+  patientReassigned: {
+    id: 'patientReassigned',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.patientReassigned.subject',
+    emailBodyKey: 'notifications.patientReassigned.emailBody',
+  },
+  clinicianCaseloadPatientAdded: {
+    id: 'clinicianCaseloadPatientAdded',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.clinicianCaseloadPatientAdded.subject',
+    emailBodyKey: 'notifications.clinicianCaseloadPatientAdded.emailBody',
+  },
+  clinicianCaseloadPatientRemoved: {
+    id: 'clinicianCaseloadPatientRemoved',
+    category: 'clinical',
+    smsEligible: false,
+    subjectKey: 'notifications.clinicianCaseloadPatientRemoved.subject',
+    emailBodyKey: 'notifications.clinicianCaseloadPatientRemoved.emailBody',
   },
 };
 

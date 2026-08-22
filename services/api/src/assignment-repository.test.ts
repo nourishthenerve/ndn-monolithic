@@ -203,6 +203,104 @@ describe('GSI1 — clinician to patients', () => {
   });
 });
 
+describe('reassign', () => {
+  async function buildWithTwoClinicians() {
+    const built = await build();
+    await built.clinicians.create('cli-2', { displayName: 'Second Clinician', role: 'sub' }, PRINCIPAL_ACTOR);
+    return built;
+  }
+
+  it('moves assigned_clinician_id to the new clinician, in one call', async () => {
+    const { patientStore, assignments } = await buildWithTwoClinicians();
+    await patientStore.put('pat-1', buildPatient());
+    await assignments.approve('pat-1', 'cli-1', PRINCIPAL_ACTOR);
+
+    const { request, previousClinicianId } = await assignments.reassign('pat-1', 'cli-2', PRINCIPAL_ACTOR);
+
+    expect(previousClinicianId).toBe('cli-1');
+    expect(request).toMatchObject({ status: 'approved', assignedClinicianId: 'cli-2' });
+    expect((await patientStore.get('pat-1'))?.assigned_clinician_id).toBe('cli-2');
+  });
+
+  it('GSI1, filtered by current assignment, returns the patient under the new clinician only', async () => {
+    const { patientStore, assignments } = await buildWithTwoClinicians();
+    await patientStore.put('pat-1', buildPatient());
+    await assignments.approve('pat-1', 'cli-1', PRINCIPAL_ACTOR);
+    await assignments.reassign('pat-1', 'cli-2', PRINCIPAL_ACTOR);
+
+    // The previous clinician's own GSI1 query returns nothing for this
+    // patient — no stale row to filter (this file's own `reassign` doc:
+    // gsi1pk/gsi1sk are overwritten in place, not left behind).
+    expect(await assignments.listPatientIdsForClinician('cli-1')).toEqual([]);
+    expect(await assignments.listPatientIdsForClinician('cli-2')).toEqual(['pat-1']);
+  });
+
+  it('the previous clinician loses access — can() reads the current assigned_clinician_id', async () => {
+    const { patientStore, assignments } = await buildWithTwoClinicians();
+    await patientStore.put('pat-1', buildPatient());
+    await assignments.approve('pat-1', 'cli-1', PRINCIPAL_ACTOR);
+    await assignments.reassign('pat-1', 'cli-2', PRINCIPAL_ACTOR);
+
+    const patient = await patientStore.get('pat-1');
+    // authz.ts's own resolveColumn compares this field against the
+    // caller's clinicianId — cli-1 can no longer resolve to "assigned"
+    // for this patient the moment this field changed.
+    expect(patient?.assigned_clinician_id).not.toBe('cli-1');
+    expect(patient?.assigned_clinician_id).toBe('cli-2');
+  });
+
+  it('reconstructs the full history correctly across three consecutive assignments', async () => {
+    const { patientStore, clinicians, assignmentStore, assignments } = await buildWithTwoClinicians();
+    await clinicians.create('cli-3', { displayName: 'Third Clinician', role: 'sub' }, PRINCIPAL_ACTOR);
+    await patientStore.put('pat-1', buildPatient());
+
+    await assignments.approve('pat-1', 'cli-1', PRINCIPAL_ACTOR);
+    await assignments.reassign('pat-1', 'cli-2', PRINCIPAL_ACTOR);
+    await assignments.reassign('pat-1', 'cli-3', PRINCIPAL_ACTOR);
+
+    const history = assignmentStore.history();
+    expect(history).toHaveLength(3);
+    expect(history.map((r) => r.assignedClinicianId)).toEqual(['cli-1', 'cli-2', 'cli-3']);
+    // Every prior row is exactly as written — reassignment never edits one.
+    expect(history[0]).toMatchObject({ status: 'approved', assignedClinicianId: 'cli-1' });
+    expect(history[1]).toMatchObject({ status: 'approved', assignedClinicianId: 'cli-2' });
+  });
+
+  it('rejects reassigning a patient that was never approved', async () => {
+    const { patientStore, assignments } = await buildWithTwoClinicians();
+    await patientStore.put('pat-1', buildPatient());
+
+    await expect(assignments.reassign('pat-1', 'cli-2', PRINCIPAL_ACTOR)).rejects.toMatchObject({
+      code: 'NOT_ASSIGNED',
+    });
+  });
+
+  it('rejects reassigning to a clinician that does not exist or is not active', async () => {
+    const { patientStore, clinicians, assignments } = await buildWithTwoClinicians();
+    await patientStore.put('pat-1', buildPatient());
+    await assignments.approve('pat-1', 'cli-1', PRINCIPAL_ACTOR);
+    await clinicians.deactivate('cli-2', PRINCIPAL_ACTOR);
+
+    await expect(assignments.reassign('pat-1', 'cli-2', PRINCIPAL_ACTOR)).rejects.toMatchObject({
+      code: 'CLINICIAN_NOT_AVAILABLE',
+    });
+    await expect(assignments.reassign('pat-1', 'nobody', PRINCIPAL_ACTOR)).rejects.toMatchObject({
+      code: 'CLINICIAN_NOT_AVAILABLE',
+    });
+  });
+
+  it('writes one audit row per reassignment', async () => {
+    const { patientStore, assignments, audit } = await buildWithTwoClinicians();
+    await patientStore.put('pat-1', buildPatient());
+    await assignments.approve('pat-1', 'cli-1', PRINCIPAL_ACTOR);
+    await assignments.reassign('pat-1', 'cli-2', PRINCIPAL_ACTOR);
+
+    const events = audit.list();
+    expect(events).toHaveLength(2);
+    expect(events[1]).toMatchObject({ action: 'update', entityType: 'patient-assignment', entityId: 'pat-1' });
+  });
+});
+
 describe('no delete', () => {
   it('exposes no method that removes a request or a patient', () => {
     const methods = Object.getOwnPropertyNames(AssignmentRepository.prototype);
@@ -213,6 +311,7 @@ describe('no delete', () => {
       'constructor',
       'decline',
       'listPatientIdsForClinician',
+      'reassign',
       'requirePatient',
       'writeAndAudit',
     ]);

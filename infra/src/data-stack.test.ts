@@ -648,11 +648,11 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts exactly the clinician-admin (2.4.1) and assignment (2.5.1) routes behind the real authorizer', () => {
+  it('puts exactly the clinician-admin (2.4.1) and assignment (2.5.1/2.5.2) routes behind the real authorizer', () => {
     // The first routes on this API to take no `authorizer:` override —
     // every route before them opted out with `PUBLIC_ROUTE` or
-    // `ADMIN_TOKEN_ROUTE` (route-protection.ts). When a sixth route joins
-    // this list, that is a task landing, not a regression.
+    // `ADMIN_TOKEN_ROUTE` (route-protection.ts). When a seventh route
+    // joins this list, that is a task landing, not a regression.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'POST /clinicians',
@@ -660,6 +660,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /clinicians/{id}/reactivate',
         'POST /patients/{id}/approve',
         'POST /patients/{id}/decline',
+        'POST /patients/{id}/reassign',
       ].sort(),
     );
   });

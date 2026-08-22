@@ -117,5 +117,11 @@
   "notifications.patientApproved.subject": "Your account has been approved",
   "notifications.patientApproved.emailBody": "Your account has been approved. Sign in to see your care plan and appointments.\n\nNourish the Nerve",
   "notifications.patientDeclined.subject": "An update on your registration",
-  "notifications.patientDeclined.emailBody": "Thank you for registering. After review, we are unable to proceed with your registration at this time.\n\nIf you have questions, please contact us.\n\nNourish the Nerve"
+  "notifications.patientDeclined.emailBody": "Thank you for registering. After review, we are unable to proceed with your registration at this time.\n\nIf you have questions, please contact us.\n\nNourish the Nerve",
+  "notifications.patientReassigned.subject": "An update to your care team",
+  "notifications.patientReassigned.emailBody": "You have been assigned to a new clinician. Sign in to see your care plan and appointments.\n\nNourish the Nerve",
+  "notifications.clinicianCaseloadPatientAdded.subject": "A patient has been added to your caseload",
+  "notifications.clinicianCaseloadPatientAdded.emailBody": "A patient has been added to your caseload. Sign in to view your caseload for details.",
+  "notifications.clinicianCaseloadPatientRemoved.subject": "A patient has been removed from your caseload",
+  "notifications.clinicianCaseloadPatientRemoved.emailBody": "A patient has been removed from your caseload."
 }

@@ -2,7 +2,16 @@
 // (infra/src/data-stack.ts). Same split every other endpoint uses —
 // assignment.ts is SDK-free and unit-testable, this file is the only
 // place that wires the real DynamoDB-backed stores and the real Notifier.
+//
+// TASK 2.5.2 adds one Cognito call — `AdminGetUser` against the clinician
+// pool, to resolve an email for the reassignment notice to both
+// clinicians. Read-only, and the only Cognito grant this function needs;
+// it never creates, disables or enables a clinician user (that's
+// clinician-admin-handler.ts's job).
+import { AdminGetUserCommand, CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
+
 import { AssignmentRepository } from './assignment-repository.js';
+import type { AdminGetClinicianEmailPort } from './assignment.js';
 import { createAssignmentHandler } from './assignment.js';
 import { ClinicianRepository } from './clinician-repository.js';
 import { systemClock } from './clock.js';
@@ -55,4 +64,16 @@ const notifier = createNotifier({
   clock: systemClock,
 });
 
-export const handler = createAssignmentHandler({ repository, flags, notifier });
+const cognitoClient = new CognitoIdentityProviderClient({});
+const clinicianUserPoolId = process.env.CLINICIAN_USER_POOL_ID ?? '';
+
+const getClinicianEmail: AdminGetClinicianEmailPort = {
+  async getEmail(clinicianId) {
+    const response = await cognitoClient.send(
+      new AdminGetUserCommand({ UserPoolId: clinicianUserPoolId, Username: clinicianId }),
+    );
+    return response.UserAttributes?.find((attribute) => attribute.Name === 'email')?.Value;
+  },
+};
+
+export const handler = createAssignmentHandler({ repository, flags, notifier, getClinicianEmail });

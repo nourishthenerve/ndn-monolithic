@@ -108,9 +108,11 @@ async function build(overrides: { flagEnabled?: boolean } = {}) {
     clock,
   });
 
-  const handler = createAssignmentHandler({ repository, flags, notifier, clock });
+  const getClinicianEmail = { getEmail: vi.fn(async () => 'clinician@example.com') };
 
-  return { handler, patientStore, repository, sendEmail, deliveryLog };
+  const handler = createAssignmentHandler({ repository, flags, notifier, getClinicianEmail, clock });
+
+  return { handler, patientStore, clinicians, repository, sendEmail, getClinicianEmail, deliveryLog };
 }
 
 async function invoke(handler: Awaited<ReturnType<typeof build>>['handler'], event: LambdaAuthorizerEvent) {
@@ -294,5 +296,113 @@ describe('POST /patients/{id}/decline', () => {
       }),
     );
     expect(response.statusCode).toBe(403);
+  });
+});
+
+describe('POST /patients/{id}/reassign', () => {
+  async function buildApproved() {
+    const built = await build();
+    await built.clinicians.create('cli-2', { displayName: 'Second Clinician', role: 'sub' }, {
+      subjectId: 'principal-sub',
+      role: 'principal-clinician',
+      requestId: 'r',
+      sourceIpHash: 'h',
+    });
+    await invoke(
+      built.handler,
+      eventFor('POST /patients/{id}/approve', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+        body: { assignedClinicianId: 'cli-1' },
+      }),
+    );
+    return built;
+  }
+
+  it('reassigns and returns 200 with the new assignment', async () => {
+    const { handler, patientStore } = await buildApproved();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/reassign', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+        body: { assignedClinicianId: 'cli-2' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect((await patientStore.get('pat-1'))?.assigned_clinician_id).toBe('cli-2');
+  });
+
+  it('notifies the patient and both clinicians', async () => {
+    const { handler, sendEmail } = await buildApproved();
+    (sendEmail as ReturnType<typeof vi.fn>).mockClear();
+
+    await invoke(
+      handler,
+      eventFor('POST /patients/{id}/reassign', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+        body: { assignedClinicianId: 'cli-2' },
+      }),
+    );
+
+    // Patient, new clinician, previous clinician — three sends.
+    expect(sendEmail).toHaveBeenCalledTimes(3);
+  });
+
+  it('is 403 for a sub-clinician caller', async () => {
+    const { handler } = await buildApproved();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/reassign', {
+        principal: SUB_CLINICIAN_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+        body: { assignedClinicianId: 'cli-2' },
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 409 for a patient that was never approved', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/reassign', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+        body: { assignedClinicianId: 'cli-1' },
+      }),
+    );
+    expect(response.statusCode).toBe(409);
+  });
+
+  it('is 400 for a body with no assignedClinicianId — there is no request shape that unassigns', async () => {
+    const { handler } = await buildApproved();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/reassign', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+        body: {},
+      }),
+    );
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('still returns 200 when a clinician notification cannot be resolved — best-effort only', async () => {
+    const { handler, getClinicianEmail } = await buildApproved();
+    (getClinicianEmail.getEmail as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/reassign', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+        body: { assignedClinicianId: 'cli-2' },
+      }),
+    );
+    expect(response.statusCode).toBe(200);
   });
 });
