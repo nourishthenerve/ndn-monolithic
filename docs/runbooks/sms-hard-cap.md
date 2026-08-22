@@ -2,6 +2,10 @@
 
 **Date:** 2026-08-10 · **Task:** [05-execution-plan.md § TASK 0.5.3](../plan/05-execution-plan.md) · **Requirements:** C-02, C-11, NFR-09 · **Risks:** [R-01, R-02](../plan/02-risk-register.md) · **Depends on:** 0.5.1
 
+## Amendment, TASK 2.3.2 (2026-08-22) — the provider is wired
+
+Everything below is this task's own record and is left as it was written — as of 2026-08-10, `sms.ts` truly called no provider. That sentence stopped being true at **TASK 2.3.2**: `createSmsSender` now calls a real `SmsProvider` (AWS End User Messaging SMS, ADR-0008) once every guard below has passed. Nothing in this runbook's guard order, thresholds or verification changed — see [`sms-provider.md`](sms-provider.md) for what 2.3.2 added.
+
 ## What this covers
 
 R-02's five named mitigations for SMS pumping fraud — "+44-only destination allow-list, per-principal rate limit, hard block at cap, anomalous-velocity alarm, SMS only behind authentication" — and R-01's "never silently drop a reminder" — land now, before any SMS provider is chosen (ADR 0008: provider selection is M2.2) or any SMS can physically be sent. The cap therefore can never be breached even once: there is nothing yet that calls a provider.
