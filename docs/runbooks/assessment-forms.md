@@ -47,12 +47,48 @@ Per the task's own step 4: writing is one action on one record. A `private{}` va
 - `infra/data-stack.test.ts` — the new route asserts `AuthorizationType: 'CUSTOM'`; the flag-reading/audit-table function counts and the `CUSTOM` route-key list all updated for the new function; the audit-partition/keyless-read guardrail counts updated (15 → 16).
 - `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green.
 
-## What was deliberately not built here
+## What was deliberately not built here (as of TASK 3.3.1)
 
-- **`GET /patients/{id}/assessments/{assessmentId}`.** TASK 3.3.2's own scope — the read half, where the two-row split is actually exercised (`can()` called twice, once per `fieldSet`), plus the account-page history.
+- **`GET /patients/{id}/assessments/{assessmentId}`.** TASK 3.3.2's own scope — the read half, where the two-row split is actually exercised (`can()` called twice, once per `fieldSet`), plus the account-page history. Built below.
 - **A literal type-level compile error for a `can()` call with no `fieldSet`.** The task's own Tests line names one, but `Resource.fieldSet` (`principal.ts`) is genuinely optional at the type level — there is no narrower type this file could construct that would make omitting it a compile error, only `authz.ts`'s own runtime `'missing-field-set'` denial (already covered by `authz.test.ts`). This file's own guarantee is simpler and true by inspection: the one place it builds a `Resource` for this entity type hardcodes `fieldSet: 'visible'`, so there is only one call site to read, not a type constraint to verify.
 - **Gap/sequence validation on the client-supplied version number**, and **pagination** — the same accepted, documented limits `clinical-record.md`'s own TASK 3.2.1 section already names for diagnosis/care-plan, unchanged here.
 
-## Cost
+## Cost (TASK 3.3.1)
 
 £0.00 net-new — one more 128 MB arm64 Lambda inside the always-free allowance; `ASSESS#<id>#v<n>` rows are a few hundred bytes each, inside the existing DynamoDB line.
+
+## TASK 3.3.2 — Reading an assessment: visible to the patient, both halves to a clinician
+
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.3.2](../plan/05-execution-plan.md) · **Requirements:** §5, FR-DP-05, R-09 · **Depends on:** 3.3.1, 3.2.2
+
+### What this covers
+
+The read side of 3.3.1, and the task R-09's own register entry and `09-self-audit.md`'s red-team both point at most directly — the two-row matrix split exists specifically so this read can be proven, not merely typed. TASK 3.2.2 already proved `projectFor` running in the allow direction once, against a single-row entity (diagnosis/care-plan); this proves the mechanism against the two-row shape the matrix actually reserves for the case a leak would matter most.
+
+### A deliberately different code shape from `clinical-record.ts`'s own read handler
+
+TASK 3.2.2's `GET /patients/{id}/diagnosis` fetches the full record and lets `projectFor` strip `private{}` after the fact — correct, and already proven at 100% branch coverage on `projection.ts`. This task's own step 1 asks for something stricter for the entity R-09 names as the highest-consequence one: "the response never carries a private key because the value was never fetched into the response path, not merely stripped from it after."
+
+`assessment.ts`'s `GET` branch reflects this literally. It asks `can()` twice — once per `fieldSet`, never once with a fabricated "give me everything" resource:
+
+1. `can(principal, 'read', { ...resource, fieldSet: 'visible' })` — the gate. Denied → `403` before any version is even listed.
+2. `can(principal, 'read', { ...resource, fieldSet: 'private' })` — decides *which object literal to build* for every version, before `projectFor` ever runs. A patient (or anyone denied the private row) gets `{ version, visible }` — an object that never had a `private` key to strip. A clinician role granted both gets `{ version, visible, private }`.
+
+Every object literal still passes through `projectFor` before `respond()`, for two reasons: it satisfies the `Projected<T>` type brand `ResponseValue` requires (the "forgot to project" compile-error discipline this codebase holds everywhere), and for the visible-only shape it is a provable no-op — there is nothing left for `stripPrivate` to find. The mechanism doesn't rely on that no-op for safety (the shape decision already happened), but keeping every response on the same `projectFor` path means there is exactly one place in this codebase where "did this go through the chokepoint" could ever be asked, never a silent per-route exception.
+
+### What was built
+
+- **`services/api/src/assessment.ts`** — `GET /patients/{id}/assessments/{assessmentId}`, described above. `VersionedRepository.listVersions` (added at TASK 3.2.2) serves this the same way it serves diagnosis/care-plan — one method, a second real caller.
+- **`services/api/src/assessment-handler.ts`** — unchanged in substance; the same wiring TASK 3.3.1 built already serves the new route.
+- **`infra/src/data-stack.ts`** — one new `GET` route on the existing `AssessmentFunction`/`AssessmentIntegration`, no new AWS resource.
+
+### Verification
+
+- `assessment.test.ts` — 9 new assertions, including **the R-09 test, named as such** (the exact test `02-risk-register.md`'s own register entry and `authz.test.ts`'s own test name both call out): a patient's response to a version carrying a clinician impression contains no `"private"` substring and no impression text anywhere in the *raw serialised* response body, not merely the pre-serialisation object — asserted with `expect(response.body).not.toContain(...)`, not a parsed-object check, because a leak through `JSON.stringify` on the wrong value is exactly the class of bug an upstream chokepoint cannot catch if the test only inspects the object. Newest-first ordering with the private half intact for an assigned sub-clinician and the principal; an empty array (not `404`) for a form with no history yet; `403`, never a `200` with a partial body, for a patient reading another patient's assessment by a guessed id; `403` for an unassigned sub-clinician; `401`/`404` (flag off); `404` for the principal against a nonexistent patient id — reachable here, unlike `POST`, because the principal *does* hold unconditional `read` on both assessment rows.
+- `infra/data-stack.test.ts` — the new route asserts `AuthorizationType: 'CUSTOM'`; the `CUSTOM` route-key list updated.
+- `pnpm -r lint && pnpm -r typecheck && pnpm -r test` — all green.
+
+### What was deliberately not built here
+
+- **The account-page assessment history.** The task's own Files line names `apps/web/src/pages/[locale]/account/patient.astro`, but extending it honestly requires knowing *which* `assessmentId`(s) a given patient has — and no task through 3.3.2 builds a "list my assessment forms" endpoint or catalogue for the frontend to discover that from. `PatientProfile.tsx`/`ClinicalRecordTimeline.tsx` (TASK 3.1.1/3.2.2) both had an unambiguous `/patients/me` or `/patients/me/{kind}` target to fetch; this route has no equivalent without a known `assessmentId` in hand. Building a component that takes an `assessmentId` prop with nothing in `patient.astro` to supply one would be speculative, untestable-by-construction UI — worse than not building it. Left as an honestly-named gap rather than forced into the Files line's letter at the expense of its own intent; closed whenever a form-catalogue task exists to drive it.
+- **pr-env axe + keyboard verification.** Moot without the page extension above — the same honestly-named gap as every prior authenticated page in this codebase, restated once its actual UI exists.

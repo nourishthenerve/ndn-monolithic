@@ -700,7 +700,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1/3.1.2)/clinical-record (3.2.1/3.2.2)/assessment (3.3.1) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
+  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1/3.1.2)/clinical-record (3.2.1/3.2.2)/assessment (3.3.1/3.3.2) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
     // The first seven took no `authorizer:` override at all, ahead of
     // ADMIN_TOKEN_ROUTE's own retirement — every route before them opted
     // out with `PUBLIC_ROUTE` or the now-deleted `ADMIN_TOKEN_ROUTE`
@@ -713,15 +713,16 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // /caseload/mine`, served by the same `PatientFunction`; TASK 3.2.1
     // added `POST /patients/{id}/diagnosis` and `POST
     // /patients/{id}/care-plan`; TASK 3.2.2 added the `GET` half of both,
-    // all four served by `ClinicalRecordFunction`; TASK 3.3.1 adds `POST
-    // /patients/{id}/assessments/{assessmentId}`, served by a new
-    // `AssessmentFunction`.
+    // all four served by `ClinicalRecordFunction`; TASK 3.3.1 added `POST
+    // /patients/{id}/assessments/{assessmentId}`; TASK 3.3.2 adds its
+    // `GET` half, both served by `AssessmentFunction`.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
         'GET /caseload',
         'GET /caseload/mine',
         'GET /patients/{id}',
+        'GET /patients/{id}/assessments/{assessmentId}',
         'GET /patients/{id}/care-plan',
         'GET /patients/{id}/diagnosis',
         'GET /testimonials/pending',

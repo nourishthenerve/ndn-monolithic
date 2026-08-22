@@ -359,3 +359,159 @@ describe('POST /patients/{id}/assessments/{assessmentId}', () => {
     expect(response.statusCode).toBe(403);
   });
 });
+
+const GET_ROUTE_KEY = 'GET /patients/{id}/assessments/{assessmentId}';
+
+describe('GET /patients/{id}/assessments/{assessmentId}', () => {
+  async function seedTwoVersions(handler: ReturnType<typeof createAssessmentHandler>) {
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: ROUTE_KEY,
+        pathParameters: PATH_PARAMS,
+        body: {
+          version: 1,
+          visible: { formType: 'mobility', responses: { painScore: 4 } },
+          private: { clinicianImpression: 'query non-organic presentation' },
+        },
+      }),
+    );
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: ROUTE_KEY,
+        pathParameters: PATH_PARAMS,
+        body: {
+          version: 2,
+          visible: { formType: 'mobility', responses: { painScore: 2 } },
+          private: { clinicianImpression: 'improving steadily' },
+        },
+      }),
+    );
+  }
+
+  it(
+    // The R-09 test, named as such: docs/plan/02-risk-register.md's own
+    // register entry and authz.test.ts's own test name both point here.
+    'a patient reading a version that carries a clinician impression finds no "private" key and no impression text anywhere in the raw serialised response',
+    async () => {
+      const { handler } = await build();
+      await seedTwoVersions(handler);
+
+      const response = await invoke(
+        handler,
+        fakeEvent({
+          routeKey: GET_ROUTE_KEY,
+          pathParameters: PATH_PARAMS,
+          principal: OWNING_PATIENT_CONTEXT,
+        }),
+      );
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain('private');
+      expect(response.body).not.toContain('query non-organic presentation');
+      expect(response.body).not.toContain('improving steadily');
+      const body = JSON.parse(response.body) as {
+        items: { version: number; visible: { responses: Record<string, unknown> } }[];
+      };
+      expect(body.items.map((item) => item.version)).toEqual([2, 1]);
+    },
+  );
+
+  it('returns every version newest first, with the private half intact, for an assigned sub-clinician', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE_KEY, pathParameters: PATH_PARAMS }),
+    );
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as {
+      items: { version: number; private?: { clinicianImpression: string } }[];
+    };
+    expect(body.items.map((item) => item.version)).toEqual([2, 1]);
+    expect(body.items[0]?.private?.clinicianImpression).toBe('improving steadily');
+    expect(body.items[1]?.private?.clinicianImpression).toBe('query non-organic presentation');
+  });
+
+  it('returns every version with the private half intact for the principal', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE_KEY, pathParameters: PATH_PARAMS, principal: PRINCIPAL_CONTEXT }),
+    );
+    const body = JSON.parse(response.body) as {
+      items: { private?: { clinicianImpression: string } }[];
+    };
+    expect(body.items.every((item) => item.private !== undefined)).toBe(true);
+  });
+
+  it('returns an empty array, not a 404, when the named form has no history yet', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE_KEY, pathParameters: PATH_PARAMS, principal: OWNING_PATIENT_CONTEXT }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ items: [] });
+  });
+
+  it("is 403, never a 200 with a partial body, for a patient reading another patient's assessment by a guessed id", async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: GET_ROUTE_KEY,
+        pathParameters: PATH_PARAMS,
+        principal: { ...OWNING_PATIENT_CONTEXT, subjectId: 'pat-2', patientId: 'pat-2' },
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 403 for an unassigned sub-clinician', async () => {
+    const { handler } = await build();
+    await seedTwoVersions(handler);
+
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE_KEY, pathParameters: PATH_PARAMS, principal: UNASSIGNED_SUB_CONTEXT }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 401 with no verified principal', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE_KEY, pathParameters: PATH_PARAMS, principal: undefined }),
+    );
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('is 404 when the flag is off', async () => {
+    const { handler } = await build({ flagEnabled: false });
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE_KEY, pathParameters: PATH_PARAMS }),
+    );
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('is 404 for the principal against a patient id that does not exist — reachable here, unlike POST, because the principal does hold unconditional read', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: GET_ROUTE_KEY,
+        pathParameters: { id: 'nobody', assessmentId: 'mobility-initial' },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(404);
+  });
+});

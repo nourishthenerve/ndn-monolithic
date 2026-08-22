@@ -1531,6 +1531,13 @@ export class DataStack extends Stack {
       methods: [HttpMethod.POST],
       integration: assessmentIntegration,
     });
+    // TASK 3.3.2: the read half, same integration — one Lambda already
+    // serves both verbs on this path.
+    httpApi.addRoutes({
+      path: '/patients/{id}/assessments/{assessmentId}',
+      methods: [HttpMethod.GET],
+      integration: assessmentIntegration,
+    });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST
     // /workshops/media-upload-url) lives in web-stack.ts instead, right

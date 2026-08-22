@@ -20,6 +20,23 @@
 // No `PATCH`: a correction is a new version, not an edit to an existing
 // one, the identical append-only reasoning `clinical-record.ts` already
 // states for diagnosis/care-plan.
+//
+// TASK 3.3.2: `GET /patients/{id}/assessments/{assessmentId}` — every
+// version, newest first. This is where the two-row split actually
+// matters, and it is built deliberately unlike `clinical-record.ts`'s own
+// read handler: rather than fetching the full record and letting
+// `projectFor` strip `private{}` after the fact, this handler decides
+// *which shape to build* before ever touching `version.private` — a
+// patient's (or anyone denied the private row's) response is built from
+// an object literal that never had a `private` key to begin with, not
+// one that had it and lost it. `can()` is asked twice, once per
+// `fieldSet`, exactly as 3.3.1's own header states for the write side:
+// never once with a fabricated "give me everything" resource. Every
+// object still passes through `projectFor` before `respond()` — for the
+// visible-only shape this is a provable no-op (there is no `private` key
+// present to strip), so it costs nothing and keeps the "every response
+// goes through `projectFor`" discipline this codebase holds everywhere
+// else, rather than carving out a silent exception for this one route.
 import type { Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
@@ -115,7 +132,9 @@ export function createAssessmentHandler(
       return respond(401, { error: 'UNAUTHORIZED' });
     }
 
-    if (routeKey !== 'POST /patients/{id}/assessments/{assessmentId}') {
+    const isGet = routeKey === 'GET /patients/{id}/assessments/{assessmentId}';
+    const isPost = routeKey === 'POST /patients/{id}/assessments/{assessmentId}';
+    if (!isGet && !isPost) {
       return respond(404, { error: 'NOT_FOUND' });
     }
 
@@ -135,6 +154,38 @@ export function createAssessmentHandler(
       assignedClinicianId: patient?.assigned_clinician_id,
       fieldSet: 'visible',
     } as const;
+
+    if (isGet) {
+      if (!can(principal, 'read', resource).allowed) {
+        return respond(403, { error: 'FORBIDDEN' });
+      }
+      if (!patient) {
+        return respond(404, { error: 'RECORD_NOT_FOUND' });
+      }
+      // A second, independent `can()` call against the private row — not
+      // a fabricated "give me everything" resource, and not inferred
+      // from the visible-row decision above, which says nothing about
+      // the private row at all.
+      const mayReadPrivate = can(principal, 'read', {
+        ...resource,
+        fieldSet: 'private',
+      }).allowed;
+
+      const versions = await deps.assessments.listVersions(patientId, assessmentId);
+      const items = versions
+        .slice()
+        .reverse()
+        .map((version) =>
+          mayReadPrivate
+            ? projectFor(
+                principal,
+                { version: version.version, visible: version.visible, private: version.private },
+                resource,
+              )
+            : projectFor(principal, { version: version.version, visible: version.visible }, resource),
+        );
+      return respond(200, { items });
+    }
 
     if (!can(principal, 'create', resource).allowed) {
       return respond(403, { error: 'FORBIDDEN' });
