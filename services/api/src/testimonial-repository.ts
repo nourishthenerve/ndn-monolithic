@@ -25,7 +25,7 @@
 // behaviours live together in testimonial-moderation.ts instead.
 import type { Testimonial } from '@ndn/shared-types';
 
-import type { AuditWriter } from './audit.js';
+import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 
@@ -95,7 +95,7 @@ export class TestimonialRepository {
   ) {}
 
   /** Always creates as 'pending_review' — a testimonial only ever becomes visible via an admin's explicit publish. */
-  async submit(actor: string, data: SubmitTestimonialInput): Promise<Testimonial> {
+  async submit(actor: ActorContext, data: SubmitTestimonialInput): Promise<Testimonial> {
     const now = this.clock.now().toISOString();
     const item: Testimonial = {
       ...data,
@@ -105,13 +105,14 @@ export class TestimonialRepository {
       updated_at: now,
     };
     await this.store.create(item);
-    await this.audit.write({
-      at: now,
-      actor,
-      action: 'create',
-      entityType: 'Testimonial',
-      entityId: item.id,
-    });
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: 'create',
+        entityType: 'Testimonial',
+        entityId: item.id,
+      }),
+    );
     return item;
   }
 
@@ -130,7 +131,7 @@ export class TestimonialRepository {
   }
 
   /** Transitions `status` to 'published'. Never removes the row. */
-  async publish(actor: string, id: string): Promise<Testimonial> {
+  async publish(actor: ActorContext, id: string): Promise<Testimonial> {
     return this.transitionStatus(actor, id, 'published', 'publish');
   }
 
@@ -139,7 +140,7 @@ export class TestimonialRepository {
    * rejected testimonial stays `findById`-able and admin-visible, and is
    * never public.
    */
-  async reject(actor: string, id: string): Promise<Testimonial> {
+  async reject(actor: ActorContext, id: string): Promise<Testimonial> {
     return this.transitionStatus(actor, id, 'rejected', 'reject');
   }
 
@@ -150,7 +151,7 @@ export class TestimonialRepository {
   }
 
   private async transitionStatus(
-    actor: string,
+    actor: ActorContext,
     id: string,
     status: Testimonial['status'],
     action: 'publish' | 'reject',
@@ -159,7 +160,9 @@ export class TestimonialRepository {
     const now = this.clock.now().toISOString();
     const record: Testimonial = { ...existing, status, updated_at: now };
     await this.store.update(record);
-    await this.audit.write({ at: now, actor, action, entityType: 'Testimonial', entityId: id });
+    await this.audit.write(
+      auditEventFor(actor, { at: now, action, entityType: 'Testimonial', entityId: id }),
+    );
     return record;
   }
 

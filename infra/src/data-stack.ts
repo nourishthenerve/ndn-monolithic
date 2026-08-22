@@ -41,7 +41,10 @@ import {
   TURNSTILE_SECRET_PARAMETER_NAME,
 } from './config.js';
 import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
-import { attachDestructiveActionGuardrail } from './guardrails.js';
+import {
+  attachAuditPartitionReadGuardrail,
+  attachDestructiveActionGuardrail,
+} from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
@@ -100,6 +103,7 @@ export class DataStack extends Stack {
       role: contentReadRole,
       environment: {
         CONTENT_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'ContentReadFunctionLogGroup', logGroupName),
@@ -114,6 +118,10 @@ export class DataStack extends Stack {
     // TASK 0.3.2's guardrail, first real exercise against a deployed table
     // and a deployed runtime role.
     attachDestructiveActionGuardrail(contentReadRole, { buckets: [], tables: [this.table] });
+    // TASK 2.1.3 step 4: this role reads the table, and on a single-table
+    // design that reach includes `AUDIT#<date>` unless it is denied
+    // explicitly. Every role below carries the same pair.
+    attachAuditPartitionReadGuardrail(contentReadRole, this.table);
 
     // TASK 1.3.2: the write side. A separate function/role from
     // ContentReadFunction — the read path stays exactly "read the table,
@@ -137,6 +145,7 @@ export class DataStack extends Stack {
       role: contentAuthoringRole,
       environment: {
         CONTENT_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
         ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
@@ -164,10 +173,17 @@ export class DataStack extends Stack {
       }),
     );
 
+    // TASK 2.1.3: the same `dynamodb:PutItem` above is what appends this
+    // function's audit rows — the audit partition lives in this table like
+    // every other entity, so no second grant is needed. What *is* needed
+    // is the matching read denial, attached below: a writer must not be
+    // able to read the log it appends to.
+    //
     // TASK 0.3.2's guardrail against this role too — defence in depth even
     // though the identity policy above never grants DeleteItem in the
     // first place (see the comment on the write grant just above).
     attachDestructiveActionGuardrail(contentAuthoringRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(contentAuthoringRole, this.table);
 
     contentAuthoringRole.addToPrincipalPolicy(
       new PolicyStatement({
@@ -259,6 +275,7 @@ export class DataStack extends Stack {
         role: testimonialSubmissionRole,
         environment: {
           TESTIMONIAL_TABLE_NAME: this.table.tableName,
+          AUDIT_TABLE_NAME: this.table.tableName,
           TURNSTILE_SECRET_PARAMETER_NAME,
           ...FLAG_ENVIRONMENT,
         },
@@ -288,6 +305,7 @@ export class DataStack extends Stack {
       buckets: [],
       tables: [this.table],
     });
+    attachAuditPartitionReadGuardrail(testimonialSubmissionRole, this.table);
     testimonialSubmissionRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'ReadTurnstileSecret',
@@ -333,6 +351,7 @@ export class DataStack extends Stack {
         role: testimonialModerationRole,
         environment: {
           TESTIMONIAL_TABLE_NAME: this.table.tableName,
+          AUDIT_TABLE_NAME: this.table.tableName,
           ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
           ...FLAG_ENVIRONMENT,
         },
@@ -359,6 +378,7 @@ export class DataStack extends Stack {
       buckets: [],
       tables: [this.table],
     });
+    attachAuditPartitionReadGuardrail(testimonialModerationRole, this.table);
     testimonialModerationRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'ReadAdminApiToken',
@@ -418,6 +438,7 @@ export class DataStack extends Stack {
       role: workshopReadRole,
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'WorkshopReadFunctionLogGroup', workshopReadLogGroupName),
@@ -426,6 +447,7 @@ export class DataStack extends Stack {
 
     this.table.grantReadData(workshopReadRole);
     attachDestructiveActionGuardrail(workshopReadRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(workshopReadRole, this.table);
 
     httpApi.addRoutes({
       path: '/workshops',
@@ -451,6 +473,7 @@ export class DataStack extends Stack {
       role: workshopAuthoringRole,
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
         ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
@@ -477,6 +500,7 @@ export class DataStack extends Stack {
       }),
     );
     attachDestructiveActionGuardrail(workshopAuthoringRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(workshopAuthoringRole, this.table);
     workshopAuthoringRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'ReadAdminApiToken',
@@ -546,6 +570,7 @@ export class DataStack extends Stack {
       role: workshopCheckoutRole,
       environment: {
         WORKSHOP_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
         STRIPE_SECRET_KEY_PARAMETER_NAME,
         SITE_ORIGIN,
         ...FLAG_ENVIRONMENT,
@@ -571,6 +596,7 @@ export class DataStack extends Stack {
       }),
     );
     attachDestructiveActionGuardrail(workshopCheckoutRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(workshopCheckoutRole, this.table);
     workshopCheckoutRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'ReadStripeSecretKey',
@@ -593,6 +619,78 @@ export class DataStack extends Stack {
         'WorkshopCheckoutIntegration',
         workshopCheckoutFunction,
       ),
+    });
+
+    // TASK 2.1.3 step 7: `GET /audit?date=`, the principal clinician's read
+    // of the append-only log. Its own function and its own role, holding
+    // `dynamodb:Query` and nothing else — the mirror image of every role
+    // above, which may append audit rows and may not read them.
+    //
+    // Log group `/ndn/audit-read-function` goes in
+    // UNMONITORED_LOG_GROUP_NAMES (config.ts): the alarm's ten metric
+    // slots are full, and a principal-only endpoint behind a
+    // default-off flag is the lowest-volume group in the estate.
+    const auditReadLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/audit-read-function`
+      : '/ndn/audit-read-function';
+
+    const auditReadRole = new Role(this, 'AuditReadFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const auditReadFunction = new NodejsFunction(this, 'AuditReadFunction', {
+      entry: `${moduleDir}../../services/api/src/audit-read-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: auditReadRole,
+      environment: {
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ADMIN_TOKEN_PARAMETER_NAME: ADMIN_API_TOKEN_PARAMETER_NAME,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'AuditReadFunctionLogGroup', auditReadLogGroupName),
+    });
+    grantFlagReads(this, auditReadRole);
+
+    // `dynamodb:Query` alone — not table.grantReadData(), whose action list
+    // also includes GetItem/Scan/BatchGetItem/DescribeTable. One day of
+    // audit rows is one Query on one partition (dynamo-audit-log.ts), and
+    // this role has no reason to reach the table any other way. No
+    // PutItem, no UpdateItem: the reader cannot amend what it reads, which
+    // is the other half of TASK 2.1.3 step 3's append-only property.
+    auditReadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadAuditLog',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [this.table.tableArn],
+      }),
+    );
+    // Deliberately *not* attachAuditPartitionReadGuardrail — this is the
+    // one role that is supposed to read that partition.
+    attachDestructiveActionGuardrail(auditReadRole, { buckets: [], tables: [this.table] });
+    auditReadRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadAdminApiToken',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: ADMIN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+
+    httpApi.addRoutes({
+      path: '/audit',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration('AuditReadIntegration', auditReadFunction),
     });
 
     // TASK 1.5.1 step 3's presigned-upload endpoint (POST

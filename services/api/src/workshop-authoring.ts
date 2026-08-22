@@ -12,6 +12,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyHandlerV2 } from 'aws-lambd
 import { z } from 'zod';
 
 import { verifyAdminToken } from './admin-auth.js';
+import { actorContext, requestOriginOf } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
@@ -38,10 +39,9 @@ const detailsSchema = z
   .refine((details) => Object.keys(details).length > 0, {
     message: 'details must include at least one locale',
   })
-  .refine(
-    (details) => Object.keys(details).every((locale) => SUPPORTED_LOCALES.has(locale)),
-    { message: 'details keys must be a supported locale' },
-  );
+  .refine((details) => Object.keys(details).every((locale) => SUPPORTED_LOCALES.has(locale)), {
+    message: 'details keys must be a supported locale',
+  });
 
 // dateTimeUtc is validated as "parses to a real instant", not with a strict
 // ISO-8601 format validator — the store always writes/reads
@@ -142,8 +142,13 @@ export function createWorkshopAuthoringHandler(
 
     // TASK 1.5.1: the bearer token proves "an authorised editor," not
     // *which* one — same shared actor content-authoring.ts uses until
-    // Phase 2's Cognito RBAC. Every mutation is still audited (audit.ts).
-    const actor = 'admin-token';
+    // Phase 2's Cognito RBAC. Every mutation is still audited (audit.ts),
+    // and since TASK 2.1.3 that audit row carries the role and the request
+    // origin too — see content-authoring.ts's own note.
+    const actor = actorContext(
+      { subjectId: 'admin-token', role: 'admin-token' },
+      requestOriginOf(event),
+    );
 
     try {
       switch (routeKey) {

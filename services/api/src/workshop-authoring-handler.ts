@@ -5,42 +5,18 @@
 // wires the real DynamoDB-backed store together. Reuses the same SSM
 // parameter content-authoring-handler.ts/testimonial-moderation-handler.ts
 // already read — no second admin credential.
-import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
-
-import { InMemoryAuditLog } from './audit.js';
+import { createAdminTokenResolver } from './admin-token.js';
 import { systemClock } from './clock.js';
+import { DynamoAuditLog } from './dynamo-audit-log.js';
 import { DynamoWorkshopStore } from './dynamo-store.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
 import { createWorkshopAuthoringHandler } from './workshop-authoring.js';
 import { WorkshopRepository } from './workshop-repository.js';
 
-// Mirrors infra/src/config.ts's ADMIN_API_TOKEN_PARAMETER_NAME — see
-// content-authoring-handler.ts's own comment for why this is only a
-// local-dev/test fallback.
-const ADMIN_TOKEN_PARAMETER_NAME = process.env.ADMIN_TOKEN_PARAMETER_NAME ?? '/ndn/admin-api-token';
-
-const ssmClient = new SSMClient({});
-
-// Same cold-start caching convention as content-authoring-handler.ts's
-// cachedTokenPromise.
-let cachedTokenPromise: Promise<string> | undefined;
-
-function getAdminToken(): Promise<string> {
-  cachedTokenPromise ??= ssmClient
-    .send(new GetParameterCommand({ Name: ADMIN_TOKEN_PARAMETER_NAME, WithDecryption: true }))
-    .then((result) => {
-      const value = result.Parameter?.Value;
-      if (!value) {
-        throw new Error(`SSM parameter ${ADMIN_TOKEN_PARAMETER_NAME} has no value`);
-      }
-      return value;
-    })
-    .catch((error: unknown) => {
-      cachedTokenPromise = undefined;
-      throw error;
-    });
-  return cachedTokenPromise;
-}
+// TASK 2.1.3: the cold-start-cached SSM read that used to sit here, in
+// three copies across this repo, now lives in admin-token.ts. Same
+// behaviour, one implementation.
+const getAdminToken = createAdminTokenResolver();
 
 // TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
 // ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.
@@ -50,9 +26,13 @@ const workshopStore = new DynamoWorkshopStore({
   tableName: process.env.WORKSHOP_TABLE_NAME ?? '',
 });
 
-// This handler's audit writes have nowhere durable to land yet — same
-// documented gap content-authoring-handler.ts carries for its own
-// InMemoryAuditLog.
-const repository = new WorkshopRepository(workshopStore, new InMemoryAuditLog(), systemClock);
+// TASK 2.1.3: the durable audit sink. `AUDIT_TABLE_NAME` is the same table
+// every store above writes to (infra/src/data-stack.ts sets all of them to
+// NdnDataStack's table name) — named separately because the audit
+// partition is the one this function's IAM grant is reasoned about
+// independently of.
+const auditLog = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
+
+const repository = new WorkshopRepository(workshopStore, auditLog, systemClock);
 
 export const handler = createWorkshopAuthoringHandler({ repository, flags, getAdminToken });

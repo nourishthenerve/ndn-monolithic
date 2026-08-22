@@ -1,7 +1,7 @@
 import type { Testimonial } from '@ndn/shared-types';
 import { describe, expect, it } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 import {
@@ -9,6 +9,18 @@ import {
   TestimonialRepository,
   type SubmitTestimonialInput,
 } from './testimonial-repository.js';
+
+// TASK 2.1.3: two `ActorContext`s (audit.ts) rather than two actor
+// strings — a visitor submitting, and the moderator deciding. Their roles
+// are what a reviewer reads a day's audit rows by.
+const VISITOR = actorContext(
+  { subjectId: 'visitor-1', role: 'public' },
+  { requestId: 'req-submit-1', sourceIp: '198.51.100.7' },
+);
+const MODERATOR = actorContext(
+  { subjectId: 'admin-token', role: 'admin-token' },
+  { requestId: 'req-moderate-1', sourceIp: '203.0.113.4' },
+);
 
 const fixedClock: Clock = { now: () => new Date('2026-01-01T00:00:00.000Z') };
 
@@ -32,7 +44,7 @@ function buildRepository() {
 describe('TestimonialRepository.submit', () => {
   it('creates as pending_review, stamps consentedAt, and writes an audit entry', async () => {
     const { repository, audit } = buildRepository();
-    const item = await repository.submit('visitor-1', buildInput());
+    const item = await repository.submit(VISITOR, buildInput());
 
     expect(item.status).toBe('pending_review');
     expect(item.consent.consentedAt).toBe('2026-01-01T00:00:00.000Z');
@@ -49,8 +61,8 @@ describe('TestimonialRepository.submit', () => {
 
   it('throws when a testimonial with the same id already exists', async () => {
     const { repository } = buildRepository();
-    await repository.submit('visitor-1', buildInput());
-    await expect(repository.submit('visitor-1', buildInput())).rejects.toThrow(AppError);
+    await repository.submit(VISITOR, buildInput());
+    await expect(repository.submit(VISITOR, buildInput())).rejects.toThrow(AppError);
   });
 
   it('has no method that removes a testimonial', () => {
@@ -63,9 +75,9 @@ describe('TestimonialRepository.submit', () => {
 describe('TestimonialRepository.publish/reject', () => {
   it('publish transitions status to published and audits the transition, never touching consent', async () => {
     const { repository, audit } = buildRepository();
-    const submitted = await repository.submit('visitor-1', buildInput());
+    const submitted = await repository.submit(VISITOR, buildInput());
 
-    const published = await repository.publish('admin-token', 'testimonial-1');
+    const published = await repository.publish(MODERATOR, 'testimonial-1');
 
     expect(published.status).toBe('published');
     expect(published.consent).toEqual(submitted.consent);
@@ -80,9 +92,9 @@ describe('TestimonialRepository.publish/reject', () => {
 
   it('reject transitions status to rejected, never removing the row', async () => {
     const { repository, audit } = buildRepository();
-    await repository.submit('visitor-1', buildInput());
+    await repository.submit(VISITOR, buildInput());
 
-    const rejected = await repository.reject('admin-token', 'testimonial-1');
+    const rejected = await repository.reject(MODERATOR, 'testimonial-1');
 
     expect(rejected.status).toBe('rejected');
     expect(await repository.findById('testimonial-1')).toMatchObject({ status: 'rejected' });
@@ -98,18 +110,18 @@ describe('TestimonialRepository.publish/reject', () => {
 
   it('throws AppError publishing an id that does not exist', async () => {
     const { repository } = buildRepository();
-    await expect(repository.publish('admin-token', 'missing')).rejects.toThrow(AppError);
+    await expect(repository.publish(MODERATOR, 'missing')).rejects.toThrow(AppError);
   });
 });
 
 describe('TestimonialRepository.findPublished/findPendingReview', () => {
   it('findPublished excludes pending_review and rejected testimonials', async () => {
     const { repository } = buildRepository();
-    await repository.submit('visitor-1', buildInput({ id: 'published-1' }));
-    await repository.submit('visitor-1', buildInput({ id: 'pending-1' }));
-    await repository.submit('visitor-1', buildInput({ id: 'rejected-1' }));
-    await repository.publish('admin-token', 'published-1');
-    await repository.reject('admin-token', 'rejected-1');
+    await repository.submit(VISITOR, buildInput({ id: 'published-1' }));
+    await repository.submit(VISITOR, buildInput({ id: 'pending-1' }));
+    await repository.submit(VISITOR, buildInput({ id: 'rejected-1' }));
+    await repository.publish(MODERATOR, 'published-1');
+    await repository.reject(MODERATOR, 'rejected-1');
 
     const found = await repository.findPublished();
     expect(found.map((item) => item.id)).toEqual(['published-1']);
@@ -117,9 +129,9 @@ describe('TestimonialRepository.findPublished/findPendingReview', () => {
 
   it('findPendingReview only returns testimonials awaiting a decision', async () => {
     const { repository } = buildRepository();
-    await repository.submit('visitor-1', buildInput({ id: 'published-1' }));
-    await repository.submit('visitor-1', buildInput({ id: 'pending-1' }));
-    await repository.publish('admin-token', 'published-1');
+    await repository.submit(VISITOR, buildInput({ id: 'published-1' }));
+    await repository.submit(VISITOR, buildInput({ id: 'pending-1' }));
+    await repository.publish(MODERATOR, 'published-1');
 
     const found = await repository.findPendingReview();
     expect(found.map((item) => item.id)).toEqual(['pending-1']);
@@ -127,8 +139,8 @@ describe('TestimonialRepository.findPublished/findPendingReview', () => {
 
   it('a published testimonial never resurfaces in findPendingReview once transitioned', async () => {
     const { repository } = buildRepository();
-    await repository.submit('visitor-1', buildInput({ id: 'testimonial-1' }));
-    await repository.publish('admin-token', 'testimonial-1');
+    await repository.submit(VISITOR, buildInput({ id: 'testimonial-1' }));
+    await repository.publish(MODERATOR, 'testimonial-1');
 
     expect(await repository.findPendingReview()).toEqual([]);
   });

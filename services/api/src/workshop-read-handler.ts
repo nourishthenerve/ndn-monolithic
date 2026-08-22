@@ -2,8 +2,8 @@
 // (infra/src/data-stack.ts) — same split as content-read-handler.ts: that
 // file is SDK-free and unit-testable, this one is the only place that
 // wires the real DynamoDB-backed store together.
-import { InMemoryAuditLog } from './audit.js';
 import { systemClock } from './clock.js';
+import { DynamoAuditLog } from './dynamo-audit-log.js';
 import { DynamoWorkshopStore } from './dynamo-store.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
 import { createWorkshopReadHandler, WorkshopRepository } from './workshop-repository.js';
@@ -16,10 +16,14 @@ const workshopStore = new DynamoWorkshopStore({
   tableName: process.env.WORKSHOP_TABLE_NAME ?? '',
 });
 
-// This handler never calls WorkshopRepository.create() (it's read-only —
-// see workshop-repository.ts's createWorkshopReadHandler), so the audit
-// writer below is never exercised; InMemoryAuditLog is enough to satisfy
-// WorkshopRepository's constructor without standing up a real audit sink.
-const repository = new WorkshopRepository(workshopStore, new InMemoryAuditLog(), systemClock);
+// TASK 2.1.3: read-only handler — it never calls a repository method that
+// writes, so this writer is never exercised. It is the real
+// `DynamoAuditLog` rather than an in-memory stand-in anyway: this
+// function's role holds no `dynamodb:PutItem` (infra/src/data-stack.ts),
+// so if a write path ever did appear here it would fail loudly at IAM
+// instead of appending to an array nobody reads.
+const auditLog = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
+
+const repository = new WorkshopRepository(workshopStore, auditLog, systemClock);
 
 export const handler = createWorkshopReadHandler({ repository, flags });

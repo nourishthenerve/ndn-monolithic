@@ -112,7 +112,7 @@ export const MONITORED_LOG_GROUP_NAMES = [
 // synthesizes, so a new createLogGroup() call fails the build until someone
 // puts it in one list or the other.
 //
-// These three are the lowest-volume groups in the estate — site-deployment
+// These four are the lowest-volume groups in the estate — site-deployment
 // writes ~4 KB per deploy, and the two authoring handlers only when a
 // clinician publishes — so they are what a 10-slot budget leaves out.
 // (Admin-gated is not itself the criterion: testimonial-moderation keeps
@@ -120,9 +120,17 @@ export const MONITORED_LOG_GROUP_NAMES = [
 // expire on the same 14-day retention; they are simply not summed into the
 // alarm, which therefore under-reports total ingestion slightly rather
 // than missing a plausible runaway.
+//
+// TASK 2.1.3 adds `/ndn/audit-read-function` here rather than displacing
+// anything from the monitored ten, and the required "which list, and what
+// does it displace" answer is: this list, displacing nothing. One
+// principal clinician reading a day of audit rows, behind a default-off
+// flag, is the smallest log volume any function in this estate can
+// produce — smaller than the two authoring handlers already here.
 export const UNMONITORED_LOG_GROUP_NAMES = [
   '/ndn/content-authoring-function',
   '/ndn/workshop-authoring-function',
+  '/ndn/audit-read-function',
   '/ndn/site-deployment',
 ];
 

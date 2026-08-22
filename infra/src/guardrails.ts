@@ -98,6 +98,62 @@ export function attachDestructiveActionGuardrail(role: IRole, resources: Protect
   }
 }
 
+/** Mirrors services/api/src/dynamo-audit-log.ts's `AUDIT#` partition prefix. */
+export const AUDIT_PARTITION_KEY_PREFIX = 'AUDIT#';
+
+/**
+ * TASK 2.1.3 step 4: "the writer's IAM grant is `dynamodb:PutItem` only —
+ * no read, no update — so a compromised writer cannot read the log it
+ * appends to."
+ *
+ * On a single-table design that sentence needs a second half. Every
+ * writing function already holds `grantReadData` on the same table for its
+ * own entity's partitions (content, testimonials, workshops,
+ * registrations), and a table-wide read grant reaches `AUDIT#<date>` as
+ * surely as it reaches `CONTENT#<id>`. So the property is expressed the
+ * only way a shared table allows: an explicit Deny on reads *whose
+ * partition key starts with* `AUDIT#`, which outranks every Allow on the
+ * role, plus an unconditional Deny on the two read shapes that carry no
+ * partition key for the condition to match against.
+ *
+ * `dynamodb:LeadingKeys` is evaluated against the partition key values in
+ * the request, so the conditioned statement covers GetItem/Query/
+ * BatchGetItem (on the table and on every index). A Scan names no key at
+ * all — the condition would simply not match and the Deny would not apply
+ * — hence the second statement. Nothing in this repo scans or uses
+ * PartiQL, so denying both costs nothing and closes the bypass.
+ *
+ * Not attached to the audit *reader* role, which is the one role that is
+ * supposed to read this partition and holds no write permission at all.
+ */
+export function denyAuditPartitionReadStatements(table: ITable): PolicyStatement[] {
+  const resources = [table.tableArn, `${table.tableArn}/index/*`];
+  return [
+    new PolicyStatement({
+      sid: 'DenyAuditPartitionReads',
+      effect: Effect.DENY,
+      actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:BatchGetItem'],
+      resources,
+      conditions: {
+        'ForAnyValue:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] },
+      },
+    }),
+    new PolicyStatement({
+      sid: 'DenyKeylessTableReads',
+      effect: Effect.DENY,
+      actions: ['dynamodb:Scan', 'dynamodb:PartiQLSelect'],
+      resources,
+    }),
+  ];
+}
+
+/** Attaches {@link denyAuditPartitionReadStatements} to a role that writes audit rows but must never read them. */
+export function attachAuditPartitionReadGuardrail(role: IRole, table: ITable): void {
+  for (const statement of denyAuditPartitionReadStatements(table)) {
+    role.addToPrincipalPolicy(statement);
+  }
+}
+
 // Illustrative-only ARNs: no runtime role, bucket, or table is deployed yet
 // (TASK 0.4.1 is the first task that deploys real ones). These exist so the
 // guard's real-world behaviour can be proven against AWS's actual IAM

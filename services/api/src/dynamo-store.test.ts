@@ -10,11 +10,17 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { BaseRecord, ContentItem, Registration, Testimonial, Workshop } from '@ndn/shared-types';
+import type {
+  BaseRecord,
+  ContentItem,
+  Registration,
+  Testimonial,
+  Workshop,
+} from '@ndn/shared-types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
   DynamoContentStore,
@@ -28,6 +34,14 @@ import {
 } from './dynamo-store.js';
 import { AppError } from './errors.js';
 import { Repository } from './repository.js';
+
+// TASK 2.1.3: repository writes take an `ActorContext` (audit.ts) rather
+// than a bare actor string — who, with what role, on which request, from
+// where. One fixture stands in for all four here.
+const ACTOR = actorContext(
+  { subjectId: 'editor-1', role: 'admin-token' },
+  { requestId: 'req-store-1', sourceIp: '198.51.100.7' },
+);
 
 const ddbMock = mockClient(DynamoDBDocumentClient);
 
@@ -92,7 +106,7 @@ describe('Repository backed by DynamoStore', () => {
 
     ddbMock.on(GetCommand).resolves({});
     ddbMock.on(PutCommand).resolves({});
-    await repository.create('1', 'clinician-1', { name: 'Ada' });
+    await repository.create('1', ACTOR, { name: 'Ada' });
 
     expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
       Item: { pk: 'PAT#1', sk: 'META', name: 'Ada', status: 'active' },
@@ -485,7 +499,11 @@ describe('DynamoRegistrationStore', () => {
 
   it('get() reads by WORKSHOP#<id>/REGISTRATION#<id> and strips pk/sk', async () => {
     ddbMock.on(GetCommand).resolves({
-      Item: { pk: 'WORKSHOP#workshop-1', sk: 'REGISTRATION#registration-1', ...buildRegistration() },
+      Item: {
+        pk: 'WORKSHOP#workshop-1',
+        sk: 'REGISTRATION#registration-1',
+        ...buildRegistration(),
+      },
     });
 
     const result = await store.get('workshop-1', 'registration-1');

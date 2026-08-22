@@ -12,8 +12,9 @@ import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import type { APIGatewayProxyEventV2, APIGatewayProxyHandlerV2 } from 'aws-lambda';
 import Stripe from 'stripe';
 
-import { InMemoryAuditLog } from './audit.js';
+import { requestOriginOf } from './audit.js';
 import { systemClock } from './clock.js';
+import { DynamoAuditLog } from './dynamo-audit-log.js';
 import {
   DynamoRegistrationStore,
   DynamoWebhookEventStore,
@@ -64,7 +65,10 @@ export function createStripeWebhookHttpHandler(
     const rawBody = extractRawBody(event);
     const signatureHeader = extractSignatureHeader(event);
 
-    const result = await webhook(rawBody, signatureHeader);
+    // TASK 2.1.3: the request id and source address behind this delivery,
+    // for the audit rows confirm/cancel write. Stripe's own delivery IP is
+    // the "where" here, hashed like every other (audit.ts's hashSourceIp).
+    const result = await webhook(rawBody, signatureHeader, requestOriginOf(event));
     return {
       statusCode: result.statusCode,
       headers: { 'content-type': 'application/json' },
@@ -153,13 +157,18 @@ const registrationStore = new DynamoRegistrationStore({ tableName });
 const capacityStore = new DynamoWorkshopCapacityStore({ tableName });
 const eventStore = new DynamoWebhookEventStore({ tableName });
 
-// This handler's audit writes have nowhere durable to land yet — same
-// documented gap every other *-handler.ts in this repo carries.
-const workshops = new WorkshopRepository(workshopStore, new InMemoryAuditLog(), systemClock);
+// TASK 2.1.3: the durable audit sink. `AUDIT_TABLE_NAME` is the same table
+// every store above writes to (infra/src/data-stack.ts sets all of them to
+// NdnDataStack's table name) — named separately because the audit
+// partition is the one this function's IAM grant is reasoned about
+// independently of.
+const auditLog = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
+
+const workshops = new WorkshopRepository(workshopStore, auditLog, systemClock);
 const registrations = new RegistrationRepository(
   registrationStore,
   capacityStore,
-  new InMemoryAuditLog(),
+  auditLog,
   systemClock,
 );
 

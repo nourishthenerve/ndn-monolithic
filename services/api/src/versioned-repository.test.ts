@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 import { InMemoryStore } from './store.js';
 import { VersionedRepository, type VersionedRecord } from './versioned-repository.js';
+
+// TASK 2.1.3: repository writes take an `ActorContext` (audit.ts) rather
+// than a bare actor string — who, with what role, on which request, from
+// where. One fixture stands in for all four here.
+const ACTOR = actorContext(
+  { subjectId: 'clinician-1', role: 'sub-clinician' },
+  { requestId: 'req-version-1', sourceIp: '198.51.100.7' },
+);
 
 interface CarePlan extends VersionedRecord {
   summary: string;
@@ -30,10 +38,10 @@ function buildRepository() {
 describe('VersionedRepository.createVersion', () => {
   it('version N+1 never mutates version N', async () => {
     const { repository } = buildRepository();
-    const v1 = await repository.createVersion('pat-1', 1, 'clinician-1', {
+    const v1 = await repository.createVersion('pat-1', 1, ACTOR, {
       summary: 'Initial plan',
     });
-    const v2 = await repository.createVersion('pat-1', 2, 'clinician-1', {
+    const v2 = await repository.createVersion('pat-1', 2, ACTOR, {
       summary: 'Revised plan',
     });
 
@@ -48,10 +56,10 @@ describe('VersionedRepository.createVersion', () => {
 
   it('throws rather than in-place-overwriting an existing version', async () => {
     const { repository } = buildRepository();
-    await repository.createVersion('pat-1', 1, 'clinician-1', { summary: 'Initial plan' });
+    await repository.createVersion('pat-1', 1, ACTOR, { summary: 'Initial plan' });
 
     await expect(
-      repository.createVersion('pat-1', 1, 'clinician-1', { summary: 'Sneaky overwrite' }),
+      repository.createVersion('pat-1', 1, ACTOR, { summary: 'Sneaky overwrite' }),
     ).rejects.toThrow(AppError);
 
     const stillOriginal = await repository.getVersion('pat-1', 1);
@@ -60,8 +68,8 @@ describe('VersionedRepository.createVersion', () => {
 
   it('writes an audit entry for every version created', async () => {
     const { repository, audit } = buildRepository();
-    await repository.createVersion('pat-1', 1, 'clinician-1', { summary: 'Initial plan' });
-    await repository.createVersion('pat-1', 2, 'clinician-1', { summary: 'Revised plan' });
+    await repository.createVersion('pat-1', 1, ACTOR, { summary: 'Initial plan' });
+    await repository.createVersion('pat-1', 2, ACTOR, { summary: 'Revised plan' });
 
     expect(audit.list()).toEqual([
       expect.objectContaining({ action: 'create', entityId: 'pat-1#v1' }),

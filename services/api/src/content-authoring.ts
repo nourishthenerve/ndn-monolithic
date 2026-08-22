@@ -15,6 +15,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyHandlerV2 } from 'aws-lambd
 import { z } from 'zod';
 
 import { verifyAdminToken } from './admin-auth.js';
+import { actorContext, requestOriginOf } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
 import type {
   ContentRepository,
@@ -140,7 +141,14 @@ export function createContentAuthoringHandler(
     // is what replaces this; see admin-auth.ts's own comment). The audit
     // trail (audit.ts) still records every mutation, just against this one
     // shared actor until then.
-    const actor = 'admin-token';
+    //
+    // TASK 2.1.3: that actor is now an `ActorContext` — the same "which
+    // one is unknown" claim, plus the role it acted with and the request
+    // it arrived on, because an audit row owes a `where` (audit.ts).
+    const actor = actorContext(
+      { subjectId: 'admin-token', role: 'admin-token' },
+      requestOriginOf(event),
+    );
 
     try {
       switch (routeKey) {

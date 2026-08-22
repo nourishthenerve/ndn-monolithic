@@ -8,6 +8,7 @@
 // and maps TestimonialSubmissionResult to a status code.
 import type { Testimonial } from '@ndn/shared-types';
 
+import type { ActorContext } from './audit.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { SubmitTestimonialInput, TestimonialRepository } from './testimonial-repository.js';
 import type { TurnstileVerifier } from './turnstile.js';
@@ -28,12 +29,19 @@ export interface TestimonialSubmissionRequest {
   /**
    * A hashed identity for rate limiting — testimonial-submission-handler.ts
    * hashes the caller's source IP (SHA-256), same as contact-form-handler.ts;
-   * this file never receives, stores, or logs the raw address. Also used as
-   * the audit trail's `actor` (00-conventions.md: "log identifiers only" —
-   * there is no user identity yet, same gap admin-auth.ts documents for
-   * authoring).
+   * this file never receives, stores, or logs the raw address.
    */
   readonly principal: string;
+  /**
+   * The audit trail's actor (TASK 2.1.3). Its `subjectId` is the same hash
+   * as `principal` above, because an unauthenticated visitor's origin *is*
+   * the only identifier they have — and its role is `'public'` rather than
+   * a clinical one, so a reviewer reading a day's rows can tell a
+   * visitor's submission from a moderator's decision at a glance. There is
+   * still no user identity here; the same gap admin-auth.ts documents for
+   * authoring, closed by TASK 2.2.x.
+   */
+  readonly actor: ActorContext;
 }
 
 export interface TestimonialSubmissionDeps {
@@ -64,7 +72,7 @@ export function createTestimonialSubmissionHandler(
     // Gate 3: write. Always lands as 'pending_review' (TestimonialRepository.submit)
     // — a submission is never immediately public, so a spammer who clears
     // both gates still needs a human moderator's publish before anything shows.
-    const testimonial = await deps.repository.submit(req.principal, req.data);
+    const testimonial = await deps.repository.submit(req.actor, req.data);
     return { kind: 'submitted', testimonial };
   };
 }

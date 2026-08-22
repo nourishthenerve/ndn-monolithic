@@ -20,7 +20,7 @@
 import type { ContentItem } from '@ndn/shared-types';
 import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
 
-import type { AuditWriter } from './audit.js';
+import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
@@ -113,7 +113,7 @@ export class ContentRepository {
     private readonly clock: Clock,
   ) {}
 
-  async create(actor: string, data: CreateContentInput): Promise<ContentItem> {
+  async create(actor: ActorContext, data: CreateContentInput): Promise<ContentItem> {
     const now = this.clock.now().toISOString();
     const item: ContentItem = {
       ...data,
@@ -122,13 +122,14 @@ export class ContentRepository {
       updated_at: now,
     };
     await this.store.create(item);
-    await this.audit.write({
-      at: now,
-      actor,
-      action: 'create',
-      entityType: 'Content',
-      entityId: item.id,
-    });
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: 'create',
+        entityType: 'Content',
+        entityId: item.id,
+      }),
+    );
     return item;
   }
 
@@ -149,7 +150,7 @@ export class ContentRepository {
    * hidden, see publish/unpublish below). Throws AppError('RECORD_NOT_FOUND')
    * if `id` doesn't exist.
    */
-  async update(actor: string, id: string, patch: UpdateContentInput): Promise<ContentItem> {
+  async update(actor: ActorContext, id: string, patch: UpdateContentInput): Promise<ContentItem> {
     const existing = await this.requireExists(id);
     const now = this.clock.now().toISOString();
     const record: ContentItem = {
@@ -163,18 +164,19 @@ export class ContentRepository {
       updated_at: now,
     };
     await this.store.update(record);
-    await this.audit.write({
-      at: now,
-      actor,
-      action: 'update',
-      entityType: 'Content',
-      entityId: id,
-    });
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: 'update',
+        entityType: 'Content',
+        entityId: id,
+      }),
+    );
     return record;
   }
 
   /** Transitions `status` to 'published'. Never removes the row — see store.update's own comment. */
-  async publish(actor: string, id: string): Promise<ContentItem> {
+  async publish(actor: ActorContext, id: string): Promise<ContentItem> {
     return this.transitionStatus(actor, id, 'published', 'publish');
   }
 
@@ -184,12 +186,12 @@ export class ContentRepository {
    * `findById`-able (by id) and admin-visible throughout, even though
    * `findPublishedByKeyword` immediately excludes it.
    */
-  async unpublish(actor: string, id: string): Promise<ContentItem> {
+  async unpublish(actor: ActorContext, id: string): Promise<ContentItem> {
     return this.transitionStatus(actor, id, 'unpublished', 'unpublish');
   }
 
   private async transitionStatus(
-    actor: string,
+    actor: ActorContext,
     id: string,
     status: ContentItem['status'],
     action: 'publish' | 'unpublish',
@@ -198,7 +200,9 @@ export class ContentRepository {
     const now = this.clock.now().toISOString();
     const record: ContentItem = { ...existing, status, updated_at: now };
     await this.store.update(record);
-    await this.audit.write({ at: now, actor, action, entityType: 'Content', entityId: id });
+    await this.audit.write(
+      auditEventFor(actor, { at: now, action, entityType: 'Content', entityId: id }),
+    );
     return record;
   }
 

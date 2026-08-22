@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { InMemoryRateLimiter } from './rate-limiter.js';
 import {
@@ -32,6 +32,12 @@ const baseRequest: TestimonialSubmissionRequest = {
   data: buildInput(),
   turnstileToken: 'a-real-token',
   principal: 'hashed-principal-1',
+  // TASK 2.1.3: the same hash the rate limiter keys on, carried as the
+  // audit actor — a visitor's origin is the only identifier they have.
+  actor: actorContext(
+    { subjectId: 'hashed-principal-1', role: 'public' },
+    { requestId: 'req-submit-1', sourceIp: '198.51.100.7' },
+  ),
 };
 
 function buildDeps(

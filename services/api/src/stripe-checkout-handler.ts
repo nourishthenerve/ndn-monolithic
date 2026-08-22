@@ -5,15 +5,16 @@
 // unit-testable with injected deps; everything below this file's own HTTP
 // handler export is the once-per-cold-start AWS/Stripe wiring (SSM secret,
 // real `stripe` client) that only this file touches.
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import type { APIGatewayProxyEventV2, APIGatewayProxyHandlerV2 } from 'aws-lambda';
 import Stripe from 'stripe';
 import { z } from 'zod';
 
-import { InMemoryAuditLog } from './audit.js';
+import { actorContext, hashSourceIp, requestOriginOf } from './audit.js';
 import { systemClock, type Clock } from './clock.js';
+import { DynamoAuditLog } from './dynamo-audit-log.js';
 import {
   DynamoRegistrationStore,
   DynamoWorkshopCapacityStore,
@@ -59,13 +60,6 @@ function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
   } catch {
     return undefined;
   }
-}
-
-// The audit trail's `actor` — SHA-256 of the caller's source IP, same
-// convention contact-form-handler.ts/testimonial-submission-handler.ts use.
-// Never the raw address itself, never logged.
-function hashSourceIp(sourceIp: string): string {
-  return createHash('sha256').update(sourceIp).digest('hex');
 }
 
 const STRIPE_CHECKOUT_LOG_SAMPLE_RATE = 1;
@@ -129,12 +123,17 @@ export function createStripeCheckoutHttpHandler(
       return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
     }
 
-    const principal = hashSourceIp(event.requestContext.http.sourceIp);
     const result: WorkshopCheckoutResult = await checkout({
       workshopId,
       registrationId: generateId(),
       attendeeEmail: parsed.data.attendeeEmail,
-      principal,
+      // TASK 2.1.3: the same SHA-256 of the source address this handler
+      // has always used as the audit actor, now carried with the role it
+      // acted with and the request it arrived on (audit.ts).
+      actor: actorContext(
+        { subjectId: hashSourceIp(event.requestContext.http.sourceIp), role: 'public' },
+        requestOriginOf(event),
+      ),
     });
 
     switch (result.kind) {
@@ -212,13 +211,18 @@ const capacityStore = new DynamoWorkshopCapacityStore({
   tableName: process.env.WORKSHOP_TABLE_NAME ?? '',
 });
 
-// This handler's audit writes have nowhere durable to land yet — same
-// documented gap every other *-authoring-handler.ts in this repo carries.
-const workshops = new WorkshopRepository(workshopStore, new InMemoryAuditLog(), systemClock);
+// TASK 2.1.3: the durable audit sink. `AUDIT_TABLE_NAME` is the same table
+// every store above writes to (infra/src/data-stack.ts sets all of them to
+// NdnDataStack's table name) — named separately because the audit
+// partition is the one this function's IAM grant is reasoned about
+// independently of.
+const auditLog = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
+
+const workshops = new WorkshopRepository(workshopStore, auditLog, systemClock);
 const registrations = new RegistrationRepository(
   registrationStore,
   capacityStore,
-  new InMemoryAuditLog(),
+  auditLog,
   systemClock,
 );
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import {
   InMemoryRegistrationStore,
@@ -14,6 +14,23 @@ import {
   type WebhookDeps,
 } from './stripe-webhook.js';
 import { InMemoryWorkshopStore, WorkshopRepository } from './workshop-repository.js';
+
+// TASK 2.1.3: the webhook handler now takes the request origin it was
+// delivered on, so the audit rows its confirm/cancel writes carry a where.
+const ORIGIN = { requestId: 'req-webhook-1', sourceIp: '203.0.113.9' };
+
+// TASK 2.1.3: the admin seeding the fixture workshop, as an `ActorContext`.
+const ADMIN_ACTOR = actorContext(
+  { subjectId: 'admin-token', role: 'admin-token' },
+  { requestId: 'req-seed', sourceIp: '198.51.100.1' },
+);
+
+// TASK 2.1.3: the visitor buying the place. `'public'` — no identity
+// beyond the hash of where the request came from.
+const BUYER_ACTOR = actorContext(
+  { subjectId: 'hashed-principal', role: 'public' },
+  { requestId: 'req-checkout-1', sourceIp: '198.51.100.7' },
+);
 
 const fixedClock: Clock = { now: () => new Date('2026-06-01T00:00:00.000Z') };
 
@@ -34,7 +51,7 @@ async function seedWorkshopAndRegistration(
   workshops: WorkshopRepository,
   registrations: RegistrationRepository,
 ) {
-  await workshops.create('admin-token', {
+  await workshops.create(ADMIN_ACTOR, {
     id: 'workshop-1',
     status: 'published',
     dateTimeUtc: '2026-07-01T10:00:00.000Z',
@@ -43,7 +60,7 @@ async function seedWorkshopAndRegistration(
     details: { en: { title: 'Balance & Falls Prevention', description: 'A hands-on workshop.' } },
   });
   await registrations.reserveCapacity('workshop-1', 10);
-  await registrations.create('hashed-principal', {
+  await registrations.create(BUYER_ACTOR, {
     id: 'registration-1',
     workshopId: 'workshop-1',
     attendeeEmail: 'attendee@example.com',
@@ -104,7 +121,7 @@ describe('createStripeWebhookHandler — signature verification', () => {
     await seedWorkshopAndRegistration(deps.workshops, deps.registrations);
     const webhook = createStripeWebhookHandler(deps);
 
-    const result = await webhook('raw-body', 'bad-signature');
+    const result = await webhook('raw-body', 'bad-signature', ORIGIN);
 
     expect(result).toEqual({ statusCode: 400 });
     expect(deps.sendConfirmationEmail).not.toHaveBeenCalled();
@@ -121,8 +138,8 @@ describe('createStripeWebhookHandler — idempotency', () => {
     await seedWorkshopAndRegistration(deps.workshops, deps.registrations);
     const webhook = createStripeWebhookHandler(deps);
 
-    const first = await webhook('raw-body', 'sig');
-    const second = await webhook('raw-body', 'sig');
+    const first = await webhook('raw-body', 'sig', ORIGIN);
+    const second = await webhook('raw-body', 'sig', ORIGIN);
 
     expect(first).toEqual({ statusCode: 200 });
     expect(second).toEqual({ statusCode: 200 });
@@ -140,7 +157,7 @@ describe('createStripeWebhookHandler — checkout.session.completed', () => {
     await seedWorkshopAndRegistration(deps.workshops, deps.registrations);
     const webhook = createStripeWebhookHandler(deps);
 
-    const result = await webhook('raw-body', 'sig');
+    const result = await webhook('raw-body', 'sig', ORIGIN);
 
     expect(result).toEqual({ statusCode: 200 });
     expect(deps.sendConfirmationEmail).toHaveBeenCalledWith({
@@ -158,7 +175,7 @@ describe('createStripeWebhookHandler — checkout.session.completed', () => {
     await seedWorkshopAndRegistration(deps.workshops, deps.registrations);
     const webhook = createStripeWebhookHandler(deps);
 
-    await expect(webhook('raw-body', 'sig')).rejects.toThrow();
+    await expect(webhook('raw-body', 'sig', ORIGIN)).rejects.toThrow();
   });
 
   it('is a 200 no-op when client_reference_id is missing entirely', async () => {
@@ -169,7 +186,7 @@ describe('createStripeWebhookHandler — checkout.session.completed', () => {
     await seedWorkshopAndRegistration(deps.workshops, deps.registrations);
     const webhook = createStripeWebhookHandler(deps);
 
-    const result = await webhook('raw-body', 'sig');
+    const result = await webhook('raw-body', 'sig', ORIGIN);
     expect(result).toEqual({ statusCode: 200 });
     expect(deps.sendConfirmationEmail).not.toHaveBeenCalled();
   });
@@ -184,7 +201,7 @@ describe('createStripeWebhookHandler — checkout.session.completed', () => {
     await seedWorkshopAndRegistration(deps.workshops, deps.registrations);
     const webhook = createStripeWebhookHandler(deps);
 
-    const result = await webhook('raw-body', 'sig');
+    const result = await webhook('raw-body', 'sig', ORIGIN);
     expect(result).toEqual({ statusCode: 200 });
     expect(deps.sendConfirmationEmail).not.toHaveBeenCalled();
     expect(await deps.registrations.findById('workshop-1', 'registration-1')).toMatchObject({
@@ -200,7 +217,7 @@ describe('createStripeWebhookHandler — checkout.session.expired', () => {
     await seedWorkshopAndRegistration(deps.workshops, deps.registrations);
     const webhook = createStripeWebhookHandler(deps);
 
-    const result = await webhook('raw-body', 'sig');
+    const result = await webhook('raw-body', 'sig', ORIGIN);
 
     expect(result).toEqual({ statusCode: 200 });
     expect(await deps.registrations.findById('workshop-1', 'registration-1')).toMatchObject({

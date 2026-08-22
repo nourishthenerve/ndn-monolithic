@@ -1,7 +1,7 @@
 import type { Workshop } from '@ndn/shared-types';
 import { describe, expect, it } from 'vitest';
 
-import { InMemoryAuditLog } from './audit.js';
+import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
 import { CachedFlagReader, InMemoryFlagSource } from './flags.js';
 import {
@@ -9,6 +9,14 @@ import {
   type WorkshopAuthoringDeps,
 } from './workshop-authoring.js';
 import { InMemoryWorkshopStore, WorkshopRepository } from './workshop-repository.js';
+
+// TASK 2.1.3: the seeding actor for fixtures these tests set up directly
+// through the repository. The handler under test builds its own
+// `ActorContext` from the request (audit.ts's actorContext).
+const SEED_ACTOR = actorContext(
+  { subjectId: 'seed', role: 'admin-token' },
+  { requestId: 'req-seed', sourceIp: '198.51.100.1' },
+);
 
 const fixedClock: Clock = { now: () => new Date('2026-06-01T00:00:00.000Z') };
 const ADMIN_TOKEN = 'test-admin-token';
@@ -24,7 +32,11 @@ function fakeEvent(overrides: {
     pathParameters: overrides.pathParameters,
     headers: overrides.headers ?? { authorization: `Bearer ${ADMIN_TOKEN}` },
     body: overrides.body === undefined ? undefined : JSON.stringify(overrides.body),
-    requestContext: { requestId: 'req-1' },
+    // TASK 2.1.3: `http.sourceIp` is part of every real API Gateway v2
+    // event and is what the audit row's `where` is derived from
+    // (audit.ts's requestOriginOf) — the fixture carries it because
+    // the real event always does.
+    requestContext: { requestId: 'req-1', http: { sourceIp: '198.51.100.7' } },
   } as never;
 }
 
@@ -203,7 +215,7 @@ describe('createWorkshopAuthoringHandler — POST /workshops', () => {
 describe('createWorkshopAuthoringHandler — PATCH /workshops/{id}', () => {
   it('updates capacity/posterKey and returns 200', async () => {
     const { deps, repository } = buildDeps();
-    await repository.create('seed', validBody as never);
+    await repository.create(SEED_ACTOR, validBody as never);
     const handler = createWorkshopAuthoringHandler(deps);
 
     const result = await handler(
@@ -239,11 +251,15 @@ describe('createWorkshopAuthoringHandler — PATCH /workshops/{id}', () => {
 
   it('rejects an empty patch body with 400', async () => {
     const { deps, repository } = buildDeps();
-    await repository.create('seed', validBody as never);
+    await repository.create(SEED_ACTOR, validBody as never);
     const handler = createWorkshopAuthoringHandler(deps);
 
     const result = await handler(
-      fakeEvent({ routeKey: 'PATCH /workshops/{id}', pathParameters: { id: 'workshop-1' }, body: {} }),
+      fakeEvent({
+        routeKey: 'PATCH /workshops/{id}',
+        pathParameters: { id: 'workshop-1' },
+        body: {},
+      }),
       {} as never,
       undefined as never,
     );
@@ -254,7 +270,7 @@ describe('createWorkshopAuthoringHandler — PATCH /workshops/{id}', () => {
 describe('createWorkshopAuthoringHandler — publish/cancel', () => {
   it('publish transitions status to published', async () => {
     const { deps, repository } = buildDeps();
-    await repository.create('seed', { ...validBody, status: 'draft' } as never);
+    await repository.create(SEED_ACTOR, { ...validBody, status: 'draft' } as never);
     const handler = createWorkshopAuthoringHandler(deps);
 
     const result = await handler(
@@ -268,7 +284,7 @@ describe('createWorkshopAuthoringHandler — publish/cancel', () => {
 
   it('cancel transitions status to cancelled without deleting the row', async () => {
     const { deps, repository } = buildDeps();
-    await repository.create('seed', { ...validBody, status: 'published' } as never);
+    await repository.create(SEED_ACTOR, { ...validBody, status: 'published' } as never);
     const handler = createWorkshopAuthoringHandler(deps);
 
     const result = await handler(

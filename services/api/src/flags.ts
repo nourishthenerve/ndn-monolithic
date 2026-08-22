@@ -19,7 +19,11 @@ export type FlagName =
   | 'testimonials.submission.enabled'
   | 'testimonials.moderationQueue.enabled'
   | 'workshops.enabled'
-  | 'payments.stripeCheckout.enabled';
+  | 'payments.stripeCheckout.enabled'
+  // TASK 2.1.3: gates the principal clinician's `GET /audit?date=` only.
+  // There is deliberately no flag for the audit *writer*: a log that can
+  // be switched off is not an audit log.
+  | 'audit.readApi.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */
