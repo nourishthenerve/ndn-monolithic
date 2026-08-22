@@ -29,13 +29,17 @@ import { CorsHttpMethod, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AttributeType, BillingMode, ProjectionType, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { Architecture, Runtime, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 
 import {
   ADMIN_API_TOKEN_PARAMETER_NAME,
+  CLINICIAN_USER_POOL_CLIENT_ID,
+  CLINICIAN_USER_POOL_ID,
   DOMAIN_NAME,
+  PATIENT_USER_POOL_CLIENT_ID,
+  PATIENT_USER_POOL_ID,
   SITE_ORIGIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
@@ -46,10 +50,16 @@ import {
   attachDestructiveActionGuardrail,
 } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
+import {
+  ADMIN_TOKEN_ROUTE,
+  createRequestAuthorizer,
+  PUBLIC_ROUTE,
+} from './route-protection.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
 const GSI2_INDEX_NAME = 'GSI2';
+
 
 export interface DataStackProps extends StackProps {
   /** TASK 0.6.3-style label for a future ephemeral stack's log group names. Unused today — no ephemeral DataStack is deployed yet (bin/app.ts). */
@@ -58,6 +68,12 @@ export interface DataStackProps extends StackProps {
 
 export class DataStack extends Stack {
   public readonly table: Table;
+  /**
+   * TASK 2.2.2: handed to `WebStack` (bin/app.ts) so both HTTP APIs put
+   * the same function in front of their protected routes. Two authorizer
+   * constructs, one implementation.
+   */
+  public readonly authorizerFunction: IFunction;
 
   constructor(scope: Construct, id: string, props: DataStackProps = {}) {
     super(scope, id, props);
@@ -84,6 +100,9 @@ export class DataStack extends Stack {
     const logGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-read-function`
       : '/ndn/content-read-function';
+    const authorizerLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/authorizer-function`
+      : '/ndn/authorizer-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -200,6 +219,66 @@ export class DataStack extends Stack {
       }),
     );
 
+    // TASK 2.2.2: the Lambda authorizer, and the single most
+    // security-sensitive function in this repository — everything
+    // downstream trusts the `Principal` it produces.
+    //
+    // It lives in this stack because the account-status lookup it performs
+    // is a GetItem on this table, and it is handed to `WebStack` as a prop
+    // (bin/app.ts) so both HTTP APIs share one function rather than
+    // deploying two copies of the same decision. One authorizer *construct*
+    // per API is unavoidable — an API Gateway authorizer belongs to exactly
+    // one API — but one function is not.
+    const authorizerRole = new Role(this, 'AuthorizerFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    this.authorizerFunction = new NodejsFunction(this, 'AuthorizerFunction', {
+      entry: `${moduleDir}../../services/api/src/authorizer-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      // Longer than the 5-second read functions: a cold invocation may
+      // have to fetch a pool's JWKS over HTTPS before it can verify
+      // anything. Still far below API Gateway's own 29-second ceiling.
+      timeout: Duration.seconds(10),
+      role: authorizerRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        PATIENT_USER_POOL_ID,
+        PATIENT_USER_POOL_CLIENT_ID,
+        CLINICIAN_USER_POOL_ID,
+        CLINICIAN_USER_POOL_CLIENT_ID,
+      },
+      logGroup: createLogGroup(this, 'AuthorizerFunctionLogGroup', authorizerLogGroupName),
+    });
+
+    // `dynamodb:GetItem`, on two partition prefixes, and nothing else.
+    // Not `grantReadData()`, whose action list also carries Query, Scan
+    // and BatchGetItem: this function performs exactly one keyed read of
+    // one profile row, and a condition on `LeadingKeys` is what keeps a
+    // future change from quietly widening that into a table-wide read on
+    // the request path of every authenticated call.
+    authorizerRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPrincipalProfiles',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*', 'CLI#*'] },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(authorizerRole, { buckets: [], tables: [this.table] });
+    // It never writes an audit row (an authorizer decision is not a
+    // repository write), so the audit partition is closed to it like every
+    // other non-reader role.
+    attachAuditPartitionReadGuardrail(authorizerRole, this.table);
+
+    const authorizer = createRequestAuthorizer(this.authorizerFunction);
+
     const httpApi = new HttpApi(this, 'ContentHttpApi', {
       // TASK 1.4.2: testimonial submission is a live browser fetch (unlike
       // content, which apps/web only ever calls at `astro build` time —
@@ -214,10 +293,19 @@ export class DataStack extends Stack {
         allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
         allowHeaders: ['content-type'],
       },
+      // TASK 2.2.2: **protected unless it says otherwise.** Every route on
+      // this API takes the Lambda authorizer unless it explicitly passes
+      // `HttpNoneAuthorizer`, so a route added without thinking about
+      // authentication is closed rather than open. Each opt-out below
+      // states why it is one, and data-stack.test.ts asserts the set of
+      // opt-outs equals `UNAUTHENTICATED_ROUTE_KEYS` in config.ts — so
+      // adding one is a two-file, deliberate act.
+      defaultAuthorizer: authorizer,
     });
     httpApi.addRoutes({
       path: '/content',
       methods: [HttpMethod.GET],
+      authorizer: PUBLIC_ROUTE,
       integration: new HttpLambdaIntegration('ContentReadIntegration', contentReadFunction),
     });
 
@@ -228,21 +316,25 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/content',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}',
       methods: [HttpMethod.PATCH],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}/publish',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/content/{id}/unpublish',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: contentAuthoringIntegration,
     });
 
@@ -324,6 +416,7 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/testimonials',
       methods: [HttpMethod.POST],
+      authorizer: PUBLIC_ROUTE,
       integration: new HttpLambdaIntegration(
         'TestimonialSubmissionIntegration',
         testimonialSubmissionFunction,
@@ -401,16 +494,19 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/testimonials',
       methods: [HttpMethod.GET],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: testimonialModerationIntegration,
     });
     httpApi.addRoutes({
       path: '/testimonials/{id}/publish',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: testimonialModerationIntegration,
     });
     httpApi.addRoutes({
       path: '/testimonials/{id}/reject',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: testimonialModerationIntegration,
     });
 
@@ -452,6 +548,7 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/workshops',
       methods: [HttpMethod.GET],
+      authorizer: PUBLIC_ROUTE,
       integration: new HttpLambdaIntegration('WorkshopReadIntegration', workshopReadFunction),
     });
 
@@ -523,21 +620,25 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/workshops',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}',
       methods: [HttpMethod.PATCH],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}/publish',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
     httpApi.addRoutes({
       path: '/workshops/{id}/cancel',
       methods: [HttpMethod.POST],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: workshopAuthoringIntegration,
     });
 
@@ -615,6 +716,7 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/workshops/{id}/checkout',
       methods: [HttpMethod.POST],
+      authorizer: PUBLIC_ROUTE,
       integration: new HttpLambdaIntegration(
         'WorkshopCheckoutIntegration',
         workshopCheckoutFunction,
@@ -690,6 +792,7 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/audit',
       methods: [HttpMethod.GET],
+      authorizer: ADMIN_TOKEN_ROUTE,
       integration: new HttpLambdaIntegration('AuditReadIntegration', auditReadFunction),
     });
 

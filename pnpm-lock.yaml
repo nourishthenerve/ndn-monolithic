@@ -213,6 +213,9 @@ importers:
       '@ndn/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      aws-jwt-verify:
+        specifier: ^5.2.1
+        version: 5.2.1
       stripe:
         specifier: ^22.5.0
         version: 22.5.0(@types/node@22.20.1)
@@ -1909,6 +1912,10 @@ packages:
     resolution: {integrity: sha512-g1jcMfWlyYtGamFJ/kPBOCuchl3NfwTF2UwOLTIDN0nJbGm84EAO+c8DlYnaemM8UmKFkdoq4BGdmiNL5nHWwA==}
     engines: {node: '>= 18.0.0'}
     hasBin: true
+
+  aws-jwt-verify@5.2.1:
+    resolution: {integrity: sha512-J+buA4M+qvQDk58WXFBLkDodkEX3DDL1ac5XFQPW3opxAsaLXYu5hYnlSHsaBRDBUXBAn695kE/cw/mdyJKwJg==}
+    engines: {node: '>=18.0.0'}
 
   aws-sdk-client-mock@4.1.0:
     resolution: {integrity: sha512-h/tOYTkXEsAcV3//6C1/7U4ifSpKyJvb6auveAepqqNJl6TdZaPFEtKjBQNf8UxQdDP850knB2i/whq4zlsxJw==}
@@ -6307,6 +6314,8 @@ snapshots:
       constructs: 10.8.1
 
   aws-cdk@2.1135.1: {}
+
+  aws-jwt-verify@5.2.1: {}
 
   aws-sdk-client-mock@4.1.0:
     dependencies:

@@ -23,6 +23,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1109.0",
     "@ndn/i18n": "workspace:*",
     "@ndn/shared-types": "workspace:*",
+    "aws-jwt-verify": "^5.2.1",
     "stripe": "^22.5.0",
     "zod": "^4.4.3"
   }
