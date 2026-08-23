@@ -51,17 +51,13 @@ describe('DataStack — table', () => {
     });
   });
 
-  // PROD INCIDENT REMEDIATION (docs/runbooks/prod-deploy-gsi-catchup.md):
-  // this assertion temporarily covers GSI1/GSI2/GSI3 — GSI4 is withheld in
-  // infra/src/data-stack.ts pending its own catch-up deploy. Restored to
-  // all four once the incident is closed.
-  it('creates only GSI1 (clinician -> patients/calendar), GSI2 (keyword -> content) and GSI3 (cross-caseload), all KEYS_ONLY, nothing else', () => {
+  it('creates only GSI1 (clinician -> patients/calendar), GSI2 (keyword -> content), GSI3 (cross-caseload) and GSI4 (reminder window), all KEYS_ONLY, nothing else', () => {
     const template = synth();
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       // arrayWith matches patterns as an ordered subsequence, not a set —
       // listed in synthesis order (GSI2's addGlobalSecondaryIndex call
-      // precedes GSI1's, which precedes GSI3's, in the stack's
-      // constructor).
+      // precedes GSI1's, which precedes GSI3's, which precedes GSI4's,
+      // in the stack's constructor).
       GlobalSecondaryIndexes: Match.arrayWith([
         Match.objectLike({
           IndexName: 'GSI2',
@@ -87,13 +83,21 @@ describe('DataStack — table', () => {
           ],
           Projection: { ProjectionType: 'KEYS_ONLY' },
         }),
+        Match.objectLike({
+          IndexName: 'GSI4',
+          KeySchema: [
+            { AttributeName: 'gsi4pk', KeyType: 'HASH' },
+            { AttributeName: 'gsi4sk', KeyType: 'RANGE' },
+          ],
+          Projection: { ProjectionType: 'KEYS_ONLY' },
+        }),
       ]),
     });
     const table = Object.values(template.findResources('AWS::DynamoDB::Table'))[0] as {
       Properties: { GlobalSecondaryIndexes: unknown[] };
     };
-    // arrayWith (above) proves all three exist; this proves there is no fourth.
-    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(3);
+    // arrayWith (above) proves all four exist; this proves there is no fifth.
+    expect(table.Properties.GlobalSecondaryIndexes).toHaveLength(4);
   });
 });
 
