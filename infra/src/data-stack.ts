@@ -160,15 +160,12 @@ export class DataStack extends Stack {
     // the same reasoning GSI1/GSI3 both state — the sweep's own read
     // follows up with one GetItem per candidate regardless of what this
     // index projects.
-    // PROD INCIDENT REMEDIATION (docs/runbooks/prod-deploy-gsi-catchup.md):
-    // temporarily withheld, same reasoning as GSI3 above — restored two
-    // deploys from now, after GSI3 has landed on its own.
-    // this.table.addGlobalSecondaryIndex({
-    //   indexName: GSI4_INDEX_NAME,
-    //   partitionKey: { name: 'gsi4pk', type: AttributeType.STRING },
-    //   sortKey: { name: 'gsi4sk', type: AttributeType.STRING },
-    //   projectionType: ProjectionType.KEYS_ONLY,
-    // });
+    this.table.addGlobalSecondaryIndex({
+      indexName: GSI4_INDEX_NAME,
+      partitionKey: { name: 'gsi4pk', type: AttributeType.STRING },
+      sortKey: { name: 'gsi4sk', type: AttributeType.STRING },
+      projectionType: ProjectionType.KEYS_ONLY,
+    });
 
     const logGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-read-function`
