@@ -1,6 +1,6 @@
 # Runbook: production deploy GSI catch-up
 
-**Status:** in progress, opened 2026-08-22 · **Found during:** Gate G3 review (production-health check) · **Severity:** blocks all future deploys to `main`; zero live user impact.
+**Status:** resolved 2026-08-23 · **Found during:** Gate G3 review (production-health check) · **Severity:** blocks all future deploys to `main`; zero live user impact.
 
 ## What happened
 
@@ -46,7 +46,21 @@ expected: all four (`GSI1`..`GSI4`) `ACTIVE`. `aws cloudformation describe-stack
 
 ## Resolution
 
-**Step 2 deployed and verified, 2026-08-22 22:33 UTC.** PR #89 merged; `NdnDataStack` reached `UPDATE_COMPLETE`; `aws dynamodb describe-table` confirms GSI1, GSI2 and GSI3 all `ACTIVE`. Step 3 (this PR) restores GSI4, matching `main`'s intended state. Updated again once step 3 deploys and is verified.
+**Step 2 deployed and verified, 2026-08-22 22:33 UTC.** PR #89 merged; `NdnDataStack` reached `UPDATE_COMPLETE`; `aws dynamodb describe-table` confirms GSI1, GSI2 and GSI3 all `ACTIVE`.
+
+**Step 3 deployed and verified, 2026-08-23 09:25 UTC.** PR #90 merged at 09:11; the production `deploy` job (`CI` run [`32630296219`](https://github.com/nourishthenerve/ndn-monolithic/actions/runs/32630296219)) completed successfully; `NdnDataStack` reached `UPDATE_COMPLETE` at 09:16. GSI4 then spent ~9 minutes in `CREATING` while DynamoDB backfilled it from the table's existing items, and reached `ACTIVE` at 09:25 — confirmed directly:
+
+```text
+$ aws dynamodb describe-table --profile ndn-prod --region eu-west-2 \
+  --table-name NdnDataStack-DataTable447BC44E-1PR4JFNRBCAB9 \
+  --query "Table.GlobalSecondaryIndexes[].{Name:IndexName,Status:IndexStatus}"
+GSI1  ACTIVE
+GSI2  ACTIVE
+GSI3  ACTIVE
+GSI4  ACTIVE
+```
+
+Table state now matches `main`'s intended state exactly (§"Fix" table above), and `data-stack.ts`'s GSI3/GSI4 `addGlobalSecondaryIndex` calls are no longer commented out anywhere in the tree. **Incident closed.** The next unrelated deploy to `main` (the one carrying this file's own edit) is the live proof that the one-GSI-per-update wall is gone — it needs no GSI change of its own and should complete without hitting `InvalidRequest`.
 
 ## Prevention
 
