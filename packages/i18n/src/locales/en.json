@@ -200,5 +200,13 @@
   "videoCall.joinDenied.notYourAppointment": "This appointment is not yours to join.",
   "videoCall.joinDenied.notAvailable": "Video calls are not available right now.",
   "videoCall.localVideoLabel": "Your camera",
-  "videoCall.remoteVideoLabel": "The other participant's camera"
+  "videoCall.remoteVideoLabel": "The other participant's camera",
+  "deviceCheck.requesting": "Requesting camera and microphone access…",
+  "deviceCheck.denied": "Camera and microphone access was denied. Please allow access in your browser settings and reload this page.",
+  "deviceCheck.unavailable": "No camera or microphone was found on this device.",
+  "deviceCheck.error": "Something went wrong setting up your camera and microphone. Please try again.",
+  "deviceCheck.previewLabel": "Your camera preview",
+  "deviceCheck.cameraLabel": "Camera",
+  "deviceCheck.microphoneLabel": "Microphone",
+  "deviceCheck.continue": "Continue"
 }
