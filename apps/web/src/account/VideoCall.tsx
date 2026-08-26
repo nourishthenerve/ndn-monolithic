@@ -27,6 +27,13 @@
 // segment). Read once, client-side, from `window.location.search` —
 // consistent with every prior account page in this phase resolving
 // everything at runtime rather than from anything baked into the HTML.
+//
+// TASK 4.3.2: `getUserMedia` no longer happens in here. `DeviceCheck.tsx`
+// owns the only permission-requesting call in this codebase and renders
+// until its own caller confirms a device state; this component's join
+// sequence (resolving role, opening the signalling connection, sending
+// `join`) does not start until `DeviceCheck`'s `onReady` fires — the
+// literal "before either party joins" this task is named for.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -34,6 +41,7 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl, signallingWebSocketUrl } from '../site-config.js';
 
+import { DeviceCheck, type DeviceCheckStrings } from './DeviceCheck.js';
 import type { JoinDenialReason, RelayMessage, SignallingConnection } from './webrtc-signalling-client.js';
 import { connectSignalling } from './webrtc-signalling-client.js';
 
@@ -77,13 +85,18 @@ function defaultGetAppointmentId(): string | undefined {
 }
 
 type Stage =
-  | { readonly kind: 'resolving' }
+  | { readonly kind: 'checking' }
   | { readonly kind: 'forbidden' }
   | { readonly kind: 'missing-appointment' }
   | { readonly kind: 'join-denied'; readonly reason: JoinDenialReason }
   | { readonly kind: 'waiting-for-peer' }
   | { readonly kind: 'call'; readonly connectionState: CallConnectionState }
   | { readonly kind: 'error' };
+
+interface Session {
+  readonly appointmentId: string;
+  readonly accessToken: string;
+}
 
 export interface VideoCallStrings {
   readonly loadingLabel: string;
@@ -98,6 +111,7 @@ export interface VideoCallStrings {
   readonly joinDeniedLabels: Readonly<Record<JoinDenialReason, string>>;
   readonly localVideoLabel: string;
   readonly remoteVideoLabel: string;
+  readonly deviceCheck: DeviceCheckStrings;
 }
 
 export interface VideoCallProps {
@@ -117,14 +131,52 @@ export function VideoCall({
   onConnectionStateChange,
   getAppointmentId = defaultGetAppointmentId,
 }: VideoCallProps): ReactNode {
-  const [stage, setStage] = useState<Stage>({ kind: 'resolving' });
+  const [stage, setStage] = useState<Stage>({ kind: 'checking' });
+  const [session, setSession] = useState<Session | undefined>();
+  const [deviceStream, setDeviceStream] = useState<MediaStream | undefined>();
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
 
+  // Whether this page has enough to even attempt a call — a real
+  // appointment id, a real session — resolved independently of, and
+  // ahead of, any camera/microphone permission prompt.
   useEffect(() => {
     let live = true;
+    (async () => {
+      const appointmentId = getAppointmentId();
+      if (!appointmentId) {
+        if (live) setStage({ kind: 'missing-appointment' });
+        return;
+      }
+      const accessToken = await client.authorization();
+      if (!live) return;
+      if (!accessToken) {
+        setStage({ kind: 'forbidden' });
+        return;
+      }
+      setSession({ appointmentId, accessToken });
+    })();
+    return () => {
+      live = false;
+    };
+  }, [client, getAppointmentId]);
+
+  useEffect(() => {
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = deviceStream ?? null;
+    }
+  }, [deviceStream]);
+
+  // The actual join sequence — gated on both a resolved session and a
+  // device state `DeviceCheck` has handed off. Neither existing before
+  // this effect runs is this task's own "before either party joins".
+  useEffect(() => {
+    if (!session || !deviceStream) return;
+    const { appointmentId, accessToken } = session;
+    const stream = deviceStream;
+
+    let live = true;
     let pc: RTCPeerConnection | undefined;
-    let localStream: MediaStream | undefined;
     let connection: SignallingConnection | undefined;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let retriesLeft = PEER_RETRY_ATTEMPTS;
@@ -156,7 +208,7 @@ export function VideoCall({
       }
     };
 
-    const sendOffer = async (appointmentId: string): Promise<void> => {
+    const sendOffer = async (): Promise<void> => {
       if (!pc) return;
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -185,17 +237,28 @@ export function VideoCall({
       }
     }
 
-    async function start(): Promise<void> {
-      const appointmentId = getAppointmentId();
-      if (!appointmentId) {
-        setStageIfLive({ kind: 'missing-appointment' });
-        return;
+    function buildPeerConnection(): RTCPeerConnection {
+      const created = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      for (const track of stream.getTracks()) {
+        created.addTrack(track, stream);
       }
-      const accessToken = await client.authorization();
-      if (!accessToken) {
-        setStageIfLive({ kind: 'forbidden' });
-        return;
-      }
+      created.ontrack = (event) => {
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = event.streams[0] ?? null;
+        }
+      };
+      created.onicecandidate = (event) => {
+        if (event.candidate) {
+          connection?.send({ type: 'ice-candidate', appointmentId, payload: event.candidate.toJSON() });
+        }
+      };
+      created.onconnectionstatechange = () => {
+        setStageIfLive({ kind: 'call', connectionState: toCallConnectionState(created.connectionState) });
+      };
+      return created;
+    }
+
+    async function run(): Promise<void> {
       let role: CallRole;
       try {
         role = await resolveRole(accessToken);
@@ -211,46 +274,11 @@ export function VideoCall({
         appointmentId,
         handlers: {
           onJoined: () => {
-            void (async () => {
-              try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-              } catch {
-                setStageIfLive({ kind: 'error' });
-                return;
-              }
-              if (!live) return;
-              if (localVideoRef.current) {
-                localVideoRef.current.srcObject = localStream;
-              }
-
-              pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-              for (const track of localStream.getTracks()) {
-                pc.addTrack(track, localStream);
-              }
-              pc.ontrack = (event) => {
-                if (remoteVideoRef.current) {
-                  remoteVideoRef.current.srcObject = event.streams[0] ?? null;
-                }
-              };
-              pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                  connection?.send({
-                    type: 'ice-candidate',
-                    appointmentId,
-                    payload: event.candidate.toJSON(),
-                  });
-                }
-              };
-              pc.onconnectionstatechange = () => {
-                if (!pc) return;
-                setStageIfLive({ kind: 'call', connectionState: toCallConnectionState(pc.connectionState) });
-              };
-
-              setStageIfLive({ kind: 'call', connectionState: 'connecting' });
-              if (role === 'patient') {
-                await sendOffer(appointmentId);
-              }
-            })();
+            pc = buildPeerConnection();
+            setStageIfLive({ kind: 'call', connectionState: 'connecting' });
+            if (role === 'patient') {
+              void sendOffer();
+            }
           },
           onJoinDenied: (reason) => setStageIfLive({ kind: 'join-denied', reason }),
           onPeerUnavailable: () => {
@@ -263,7 +291,7 @@ export function VideoCall({
             }
             retriesLeft -= 1;
             setStageIfLive({ kind: 'waiting-for-peer' });
-            retryTimer = setTimeout(() => void sendOffer(appointmentId), PEER_RETRY_INTERVAL_MS);
+            retryTimer = setTimeout(() => void sendOffer(), PEER_RETRY_INTERVAL_MS);
           },
           onRelayMessage: (message) => void handleRelayMessage(message),
           onClose: () => setStageIfLive({ kind: 'call', connectionState: 'disconnected' }),
@@ -271,33 +299,36 @@ export function VideoCall({
       });
     }
 
-    void start();
+    void run();
 
     return () => {
       live = false;
       clearTimeout(retryTimer);
       connection?.close();
       pc?.close();
-      localStream?.getTracks().forEach((track) => track.stop());
+      // This effect's own `stream` (`DeviceCheck`'s handed-off grant) is
+      // this effect's to release — the same "the caller who attaches a
+      // stream is the caller who releases it" boundary `DeviceCheck.tsx`
+      // itself already keeps for the stream it never hands off.
+      stream.getTracks().forEach((track) => track.stop());
     };
-    // `strings`/`onConnectionStateChange` are read via closures the effect
-    // captures fresh on every call, not values this effect should ever
-    // re-run for — re-running would reopen the signalling connection and
-    // re-request camera/microphone permission mid-call.
-  }, [client, getAppointmentId]);
+  }, [session, deviceStream, onConnectionStateChange]);
 
-  if (stage.kind === 'resolving') {
+  if (stage.kind === 'forbidden') {
+    return <p role="alert">{strings.forbiddenLabel}</p>;
+  }
+  if (stage.kind === 'missing-appointment') {
+    return <p role="alert">{strings.missingAppointmentLabel}</p>;
+  }
+  if (!session) {
     return (
       <p role="status" aria-live="polite">
         {strings.loadingLabel}
       </p>
     );
   }
-  if (stage.kind === 'forbidden') {
-    return <p role="alert">{strings.forbiddenLabel}</p>;
-  }
-  if (stage.kind === 'missing-appointment') {
-    return <p role="alert">{strings.missingAppointmentLabel}</p>;
+  if (!deviceStream) {
+    return <DeviceCheck strings={strings.deviceCheck} onReady={setDeviceStream} />;
   }
   if (stage.kind === 'join-denied') {
     return <p role="alert">{strings.joinDeniedLabels[stage.reason]}</p>;
@@ -309,13 +340,15 @@ export function VideoCall({
   const statusLabel =
     stage.kind === 'waiting-for-peer'
       ? strings.waitingForPeerLabel
-      : stage.connectionState === 'connected'
-        ? strings.connectedLabel
-        : stage.connectionState === 'failed'
-          ? strings.failedLabel
-          : stage.connectionState === 'disconnected'
-            ? strings.disconnectedLabel
-            : strings.connectingLabel;
+      : stage.kind === 'call'
+        ? stage.connectionState === 'connected'
+          ? strings.connectedLabel
+          : stage.connectionState === 'failed'
+            ? strings.failedLabel
+            : stage.connectionState === 'disconnected'
+              ? strings.disconnectedLabel
+              : strings.connectingLabel
+        : strings.connectingLabel;
 
   return (
     <section aria-labelledby="video-call-status-heading">
