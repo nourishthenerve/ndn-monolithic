@@ -32,11 +32,24 @@ packages:
 #     does. Pinned past the patched version; v8->v11 keeps the same named
 #     CJS/ESM exports lhci relies on, verified by re-running the full
 #     install and test suite after the bump.
+#   Found at TASK 4.2.1: adding @aws-sdk/client-apigatewaymanagementapi
+#     (even pinned to the same 3.1109.0 release train as every other
+#     @aws-sdk/client-* package here) pulled a second copy of
+#     @smithy/types (4.17.2 alongside the rest of the tree's 4.17.0) —
+#     not a vulnerability, a structural-typing break: two installed
+#     copies of the same interface are nominally different types to
+#     TypeScript, so DynamoDBDocumentClient/PutCommand/etc. stopped
+#     type-checking against each other across every file that constructs
+#     one. Pinned to the version already used everywhere else so pnpm
+#     converges on one copy; @smithy/types has no runtime code (interfaces
+#     only), so this is safe to force regardless of which package asked
+#     for the newer one.
 overrides:
   nanoid: '^3.3.18'
   tmp: '^0.2.7'
   '@puppeteer/browsers': '^3.2.1'
   uuid: '^11.1.1'
+  '@smithy/types': '4.17.0'
 allowBuilds:
   esbuild: true
   unrs-resolver: true

@@ -44,6 +44,23 @@ export interface ConnectionRepository {
    */
   markDisconnected(connectionId: string): Promise<void>;
   findById(connectionId: string): Promise<Connection | undefined>;
+  /**
+   * TASK 4.2.1: writes `CALL#<appointmentId>` / `CONN#<connectionId>` — a
+   * second, thin row on the same table, only ever written by an
+   * authorised, in-window join (`ws-join.ts`). `ttl` is passed in rather
+   * than recomputed: "the same ttl 4.1.1's row carries" (the task's own
+   * Steps §3) — a call row should never outlive the connection row it
+   * points at, not gain a fresh 12h window of its own at join time.
+   */
+  recordCallJoin(input: RecordCallJoinInput): Promise<void>;
+}
+
+export interface RecordCallJoinInput {
+  readonly appointmentId: string;
+  readonly connectionId: string;
+  readonly principalId: string;
+  readonly role: Role;
+  readonly ttl: number;
 }
 
 export interface DynamoConnectionRepositoryOptions {
@@ -111,5 +128,21 @@ export class DynamoConnectionRepository implements ConnectionRepository {
       new GetCommand({ TableName: this.tableName, Key: keyFor(connectionId) }),
     );
     return result.Item as Connection | undefined;
+  }
+
+  async recordCallJoin(input: RecordCallJoinInput): Promise<void> {
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: {
+          pk: `CALL#${input.appointmentId}`,
+          sk: `CONN#${input.connectionId}`,
+          connectionId: input.connectionId,
+          principalId: input.principalId,
+          role: input.role,
+          ttl: input.ttl,
+        },
+      }),
+    );
   }
 }

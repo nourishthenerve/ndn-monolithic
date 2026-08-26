@@ -1243,6 +1243,17 @@ export class DynamoAppointmentStore implements AppointmentStore {
     return (result.Items ?? []).map((item) => withoutTableKeys<Appointment>(item));
   }
 
+  /** TASK 4.2.1: one `GetItem` on the appointment's own key — see `AppointmentStore.get`'s own doc. */
+  async get(patientId: string, scheduledAt: string): Promise<Appointment | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: PATIENT_PK(patientId), sk: APPOINTMENT_SORT_KEY(scheduledAt) },
+      }),
+    );
+    return result.Item ? withoutTableKeys<Appointment>(result.Item) : undefined;
+  }
+
   /**
    * GSI1 is `KEYS_ONLY` (`infra/src/data-stack.ts`) — the query below
    * returns only key attributes, which *does* include the table's own

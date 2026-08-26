@@ -56,6 +56,18 @@ export const AUDIT_ACTIONS = [
   'reject',
   'cancel',
   'confirm',
+  // TASK 4.2.1: the first *read-shaped* actions this union carries. A
+  // call join is closer to "did this consultation happen" than to an
+  // ordinary read — private-field-boundary.md's own "reads are not
+  // recorded" note holds everywhere else; this is the one deliberate,
+  // narrow exception to it, stated here rather than left as a silent
+  // contradiction. Both the allow and the deny outcome are recorded —
+  // 'join' is the only entry in this list whose own name is not itself
+  // the state transition performed on a record (nothing about the
+  // connection or appointment row changes on a denial), because "an
+  // attempt was made and refused" is the fact worth keeping.
+  'join',
+  'join-denied',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

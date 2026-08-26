@@ -20,8 +20,13 @@ export type Role = 'patient' | 'sub-clinician' | 'principal-clinician';
  * same discipline Repository (services/api/src/repository.ts) gets from
  * having no method that removes a row. Do NOT add one — C-03 and
  * 00-conventions.md's prohibition are not policy this layer may decide.
+ *
+ * `'join-call'` (TASK 4.2.1): a stricter claim than `'read'` on the same
+ * `Appointments` row — granted only to the two parties actually on the
+ * call (`Patient (own)`, `Sub-clinician (assigned)`), never to `Principal`
+ * even though the principal clinician can `read` every appointment.
  */
-export type Action = 'create' | 'read' | 'update';
+export type Action = 'create' | 'read' | 'update' | 'join-call';
 
 /**
  * Both lifecycles in one union: a patient is `pending` → `approved` |

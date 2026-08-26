@@ -44,6 +44,10 @@ class InMemoryAppointmentStore implements AppointmentStore {
       .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt));
   }
 
+  async get(patientId: string, scheduledAt: string): Promise<Appointment | undefined> {
+    return this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
+  }
+
   async cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment> {
     const item = this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
     if (!item) {
@@ -114,6 +118,38 @@ describe('AppointmentRepository.schedule', () => {
         entityId: 'pat-1#2026-09-01T10:00:00.000Z',
       }),
     ]);
+  });
+});
+
+describe('AppointmentRepository.get', () => {
+  it('returns the one appointment named by patientId + scheduledAt', async () => {
+    const { repository } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+
+    const found = await repository.get('pat-1', '2026-09-01T10:00:00.000Z');
+    expect(found?.patientId).toBe('pat-1');
+    expect(found?.clinicianId).toBe('cli-1');
+  });
+
+  it('returns undefined for an appointment that was never scheduled', async () => {
+    const { repository } = build();
+    expect(await repository.get('pat-1', '2026-09-01T10:00:00.000Z')).toBeUndefined();
+  });
+
+  it('writes no audit entry — the caller\'s own join attempt is what gets audited, not this read', async () => {
+    const { repository, audit } = build();
+    await repository.schedule(
+      { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
+      ACTOR,
+    );
+    const before = audit.list().length; // schedule() itself already wrote one entry
+
+    await repository.get('pat-1', '2026-09-01T10:00:00.000Z');
+
+    expect(audit.list().length).toBe(before);
   });
 });
 

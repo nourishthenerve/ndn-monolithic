@@ -1211,6 +1211,27 @@ describe('DynamoAppointmentStore', () => {
     await expect(store.create(buildAppointment())).rejects.toThrow(AppError);
   });
 
+  it('get() issues one GetItem keyed PAT#<patientId> / APPT#<scheduledAt>', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { ...buildAppointment(), pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' } });
+
+    const found = await store.get('pat-1', '2026-09-01T10:00:00.000Z');
+
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Key: { pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
+    });
+    expect(found?.patientId).toBe('pat-1');
+    expect(found).not.toHaveProperty('pk');
+    expect(found).not.toHaveProperty('sk');
+  });
+
+  it('get() returns undefined for a row that does not exist, never a Query or a Scan', async () => {
+    ddbMock.on(GetCommand).resolves({});
+
+    expect(await store.get('pat-1', '2026-09-01T10:00:00.000Z')).toBeUndefined();
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0);
+  });
+
   it('listForPatient() issues a main-table Query, never a Scan, scoped to PAT#<id> with the APPT# prefix', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [{ ...buildAppointment(), pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' }],

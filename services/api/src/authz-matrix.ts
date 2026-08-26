@@ -115,11 +115,16 @@ export const RBAC_MATRIX: RbacMatrix = {
     'Sub-clinician (unassigned)': DENIED,
     Principal: ['read'],
   },
-  // | Appointments | R | — | C R U | — | R |
+  // TASK 4.2.1: `J` (join-call) added to the two parties actually on the
+  // call — `Patient (own)` and `Sub-clinician (assigned)` — never to
+  // `Principal`, who keeps plain `R`. See 04-data-model-rbac.md's own
+  // note on this row for why that's narrower than "wherever read
+  // applies."
+  // | Appointments | R J | — | C R U J | — | R |
   Appointments: {
-    'Patient (own)': ['read'],
+    'Patient (own)': ['read', 'join-call'],
     'Patient (other)': DENIED,
-    'Sub-clinician (assigned)': ['create', 'read', 'update'],
+    'Sub-clinician (assigned)': ['create', 'read', 'update', 'join-call'],
     'Sub-clinician (unassigned)': DENIED,
     Principal: ['read'],
   },

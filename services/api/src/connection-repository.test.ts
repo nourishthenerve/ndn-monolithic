@@ -148,3 +148,55 @@ describe('findById', () => {
     });
   });
 });
+
+describe('recordCallJoin (TASK 4.2.1)', () => {
+  it('writes one row at CALL#<appointmentId> / CONN#<connectionId>', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await repository().recordCallJoin({
+      appointmentId: 'pat-1#2026-09-01T10:00:00.000Z',
+      connectionId: 'conn-1',
+      principalId: 'sub-1',
+      role: 'patient',
+      ttl: 1_798_000_000,
+    });
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: TABLE_NAME,
+      Item: {
+        pk: 'CALL#pat-1#2026-09-01T10:00:00.000Z',
+        sk: 'CONN#conn-1',
+        connectionId: 'conn-1',
+        principalId: 'sub-1',
+        role: 'patient',
+        ttl: 1_798_000_000,
+      },
+    });
+  });
+
+  it('carries the ttl handed in, never recomputing its own', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await repository().recordCallJoin({
+      appointmentId: 'pat-1#2026-09-01T10:00:00.000Z',
+      connectionId: 'conn-1',
+      principalId: 'sub-1',
+      role: 'sub-clinician',
+      ttl: 42,
+    });
+
+    const item = ddbMock.commandCalls(PutCommand)[0]?.args[0].input.Item as { ttl: number };
+    expect(item.ttl).toBe(42);
+  });
+
+  it('is one PutItem, never a TransactWriteItems', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await repository().recordCallJoin({
+      appointmentId: 'pat-1#2026-09-01T10:00:00.000Z',
+      connectionId: 'conn-1',
+      principalId: 'sub-1',
+      role: 'patient',
+      ttl: 1,
+    });
+
+    expect(ddbMock.calls()).toHaveLength(1);
+  });
+});

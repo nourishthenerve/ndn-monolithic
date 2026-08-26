@@ -22,7 +22,7 @@ const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string
   'Diagnosis / care plan':    { 'Patient (own)': '**R**',          'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
   'Assessment — `visible{}`': { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'R' },
   'Assessment — `private{}`': { 'Patient (own)': '**—**',          'Patient (other)': '**—**', 'Sub-clinician (assigned)': 'C R U',        'Sub-clinician (unassigned)': '**—**', Principal: 'R' },
-  Appointments:               { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'R' },
+  Appointments:               { 'Patient (own)': 'R J',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U J',          'Sub-clinician (unassigned)': '—',   Principal: 'R' },
   'Content assignment':       { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'R' },
   Messages:                   { 'Patient (own)': 'C R (own thread)', 'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R (own patients)', 'Sub-clinician (unassigned)': '—', Principal: 'R' },
   'Clinician accounts':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'C R U (deactivate only)' },
@@ -32,7 +32,13 @@ const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string
   Workshop:                   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Principal: 'C R U' },
 };
 
-const CELL_LETTERS: Record<string, Action> = { C: 'create', R: 'read', U: 'update' };
+const CELL_LETTERS: Record<string, Action> = {
+  C: 'create',
+  R: 'read',
+  U: 'update',
+  // TASK 4.2.1: join-call, only ever set on the Appointments row.
+  J: 'join-call',
+};
 
 /**
  * Reads the doc's own cell notation. Markdown emphasis and the in-cell
@@ -64,7 +70,7 @@ const COLUMNS: readonly MatrixColumn[] = [
   'Sub-clinician (unassigned)',
   'Principal',
 ];
-const ACTIONS: readonly Action[] = ['create', 'read', 'update'];
+const ACTIONS: readonly Action[] = ['create', 'read', 'update', 'join-call'];
 
 const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   'Own profile': 'own-profile',
@@ -155,7 +161,7 @@ describe('RBAC_MATRIX transcribes docs/plan/04-data-model-rbac.md', () => {
     }
   });
 
-  it('grants nothing outside create/read/update in any cell', () => {
+  it('grants nothing outside create/read/update/join-call in any cell', () => {
     for (const row of ROWS) {
       for (const column of COLUMNS) {
         for (const action of RBAC_MATRIX[row][column]) {
