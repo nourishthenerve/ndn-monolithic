@@ -476,6 +476,10 @@ describe('DataStack — feature-flag reads', () => {
     'content-assignment-handler',
     // TASK 3.6.1: messaging.enabled, default off.
     'message-handler',
+    // TASK 4.1.1: video.signalling.enabled, default off — read by the
+    // $connect authorizer itself, not a downstream route (there is none
+    // to gate on a WebSocket).
+    'ws-authorizer-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -648,10 +652,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // 3.1.1's patient role, TASK 3.2.1's clinical-record role, TASK
     // 3.3.1's assessment role, TASK 3.4.1's appointment role, TASK
     // 3.4.3's reminder-sweep role, TASK 3.5.1's content-assignment role,
-    // and TASK 3.6.1's message role; the audit reader is deliberately not
-    // among them, being the one role that is supposed to read that
-    // partition.
-    expect(denials).toHaveLength(20);
+    // TASK 3.6.1's message role, and TASK 4.1.1's four WebSocket roles
+    // (ws-authorizer/ws-connect/ws-disconnect/ws-default); the audit
+    // reader is deliberately not among them, being the one role that is
+    // supposed to read that partition.
+    expect(denials).toHaveLength(24);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -668,7 +673,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(20);
+    expect(denials).toHaveLength(24);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -692,8 +697,18 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
       .filter((statement) => statement.Sid === sid);
   }
 
+  // TASK 4.1.1 scopes this to the HTTP API's own routes: `SignallingWebSocketApi`
+  // (data-stack.ts) is a second `AWS::ApiGatewayV2::Route`-emitting resource
+  // now, but route-protection.ts's `UNAUTHENTICATED_ROUTE_KEYS` is an
+  // HTTP-API-only concept — a WebSocket route's authorization is
+  // ws-authorizer.ts's own, entirely separate mechanism (only `$connect`
+  // takes an authorizer at all; `$disconnect`/`$default` never do, by
+  // WebSocket API design, not by a route-protection.ts opt-out), tested in
+  // ws-authorizer.test.ts and the WebSocket-specific assertions below, not
+  // this describe block.
   function routeKeys(authorizationType: string): string[] {
     return Object.values(synth().findResources('AWS::ApiGatewayV2::Route'))
+      .filter((route) => JSON.stringify(route.Properties?.ApiId ?? '').includes('ContentHttpApi'))
       .filter((route) => (route.Properties?.AuthorizationType ?? 'NONE') === authorizationType)
       .map((route) => String(route.Properties?.RouteKey))
       .sort();
@@ -711,8 +726,13 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
   // configured" and "the authorizer exists in the deployed API" were
   // different claims for every task through 2.3.2, and are the same claim
   // starting here.
-  it('has exactly one API Gateway authorizer resource, once TASK 2.4.1 binds the first route to it', () => {
-    synth().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
+  it('has exactly one HTTP API Gateway authorizer resource, once TASK 2.4.1 binds the first route to it', () => {
+    // TASK 4.1.1 adds a second `AWS::ApiGatewayV2::Authorizer` —
+    // `WebSocketRequestAuthorizer`, on the entirely separate WebSocket API
+    // (ws-authorizer.ts). Two authorizer *resources* is correct: an API
+    // Gateway authorizer belongs to exactly one API, and this stack now
+    // has two APIs, each still with exactly one.
+    synth().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 2);
   });
 
   it('leaves exactly the routes route-protection.ts names outside the authorizer', () => {
@@ -793,11 +813,16 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
   it('grants the authorizer one keyed read, scoped to the two profile partitions', () => {
     const statements = statementsWithSid('ReadPrincipalProfiles');
 
-    expect(statements).toHaveLength(1);
-    expect(statements[0]?.Action).toEqual('dynamodb:GetItem');
-    expect(statements[0]?.Condition).toEqual({
-      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*', 'CLI#*'] },
-    });
+    // TASK 4.1.1's WsAuthorizerFunction carries the identical statement,
+    // for the identical reason — one keyed read of one profile row, on
+    // its own separate role. Both, not one, are asserted below.
+    expect(statements).toHaveLength(2);
+    for (const statement of statements) {
+      expect(statement.Action).toEqual('dynamodb:GetItem');
+      expect(statement.Condition).toEqual({
+        'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*', 'CLI#*'] },
+      });
+    }
   });
 
   it('gives the authorizer no write, no query and no scan', () => {
@@ -1129,5 +1154,100 @@ describe('DataStack — message function (TASK 3.6.1)', () => {
 
     expect(statements.some((statement) => statement.Sid === 'DenyAuditPartitionReads')).toBe(true);
     expect(statements.some((statement) => statement.Sid === 'DenyKeylessTableReads')).toBe(true);
+  });
+});
+
+describe('DataStack — WebSocket signalling (TASK 4.1.1)', () => {
+  function statementsWithSid(sid: string): Record<string, unknown>[] {
+    return Object.values(synth().findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } })
+            .Properties.PolicyDocument.Statement,
+      )
+      .filter((statement) => statement.Sid === sid);
+  }
+
+  it('enables the table TTL attribute, named ttl', () => {
+    synth().hasResourceProperties('AWS::DynamoDB::Table', {
+      TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+    });
+  });
+
+  it('is a real WEBSOCKET protocol API, a second resource from ContentHttpApi', () => {
+    synth().hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      ProtocolType: 'WEBSOCKET',
+      RouteSelectionExpression: '$request.body.action',
+    });
+  });
+
+  it('wires $connect, $disconnect and $default routes, each to its own function', () => {
+    const template = synth();
+    for (const routeKey of ['$connect', '$disconnect', '$default']) {
+      template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: routeKey });
+    }
+  });
+
+  it('reads the token from the connect URL querystring, never a header', () => {
+    synth().hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
+      AuthorizerType: 'REQUEST',
+      IdentitySource: ['route.request.querystring.token'],
+    });
+  });
+
+  it('deploys the stage with no AccessLogSettings — the token rides in the connect URL', () => {
+    const template = synth();
+    const stages = Object.values(template.findResources('AWS::ApiGatewayV2::Stage'));
+    const wsStage = stages.find((stage) =>
+      JSON.stringify(
+        (stage as { Properties?: { ApiId?: unknown } }).Properties?.ApiId ?? '',
+      ).includes('SignallingWebSocketApi'),
+    );
+
+    expect(wsStage).toBeDefined();
+    const properties = (wsStage as { Properties?: Record<string, unknown> }).Properties;
+    expect(properties?.AccessLogSettings).toBeUndefined();
+    expect(properties?.AutoDeploy).toBe(true);
+  });
+
+  it('grants WsConnectFunction PutItem only, scoped to CONN#*', () => {
+    const statements = statementsWithSid('WriteConnectionRow');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('dynamodb:PutItem');
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] },
+    });
+  });
+
+  it('grants WsDisconnectFunction UpdateItem only, scoped to CONN#* — never PutItem or DeleteItem', () => {
+    const statements = statementsWithSid('UpdateConnectionRow');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('dynamodb:UpdateItem');
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] },
+    });
+  });
+
+  it('gives WsAuthorizerFunction the flag-reading environment (video.signalling.enabled)', () => {
+    const statements = statementsWithSid('ReadFeatureFlags');
+    // TASK 4.1.1 adds one more flag-reading role to the count the
+    // "feature-flag reads" describe block above already asserts in full —
+    // this just confirms the mechanism reached this role too.
+    expect(statements.length).toBeGreaterThan(0);
+  });
+
+  it('grants WsAuthorizerFunction the same PAT#*/CLI#* profile read as the HTTP authorizer, nothing wider', () => {
+    const statements = statementsWithSid('ReadPrincipalProfiles');
+
+    expect(statements).toHaveLength(2);
+    for (const statement of statements) {
+      expect(statement.Action).toEqual('dynamodb:GetItem');
+    }
+  });
+
+  it('outputs the WebSocket signalling URL', () => {
+    synth().hasOutput('SignallingWebSocketUrl', {});
   });
 });

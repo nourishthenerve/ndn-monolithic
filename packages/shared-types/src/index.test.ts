@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { Connection } from './connection.js';
 import type { ContentItem } from './content.js';
 import type { Testimonial } from './testimonial.js';
 import type { BaseRecord, RecordStatus } from './types.js';
@@ -42,5 +43,19 @@ describe('shared-types', () => {
       updated_at: '2026-01-01T00:00:00.000Z',
     };
     expect(testimonial.status).toBe('pending_review');
+  });
+
+  it('Connection overrides BaseRecord.status with connected|disconnected, never "deleted"', () => {
+    const connection: Connection = {
+      connectionId: 'abc123=',
+      principalId: 'sub-1',
+      role: 'patient',
+      status: 'connected',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      ttl: 1_767_225_600,
+    };
+    expect(connection.status).toBe('connected');
+    expect(connection.disconnectedAt).toBeUndefined();
   });
 });

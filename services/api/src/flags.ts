@@ -69,7 +69,14 @@ export type FlagName =
   // flag state, the identical "one flag for both halves" reasoning
   // clinicalRecords.enabled/assessments.enabled already establish.
   // Default off.
-  | 'messaging.enabled';
+  | 'messaging.enabled'
+  // TASK 4.1.1: gates the WebSocket $connect authorizer, not a route —
+  // there is no handler downstream to 404 once a socket is open, so this
+  // is the one flag in this codebase the authorizer itself reads rather
+  // than the business logic behind it. Off means every connect attempt is
+  // denied before any connection row is written (the flag's own Rollback
+  // line). Default off.
+  | 'video.signalling.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

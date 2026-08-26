@@ -35,9 +35,22 @@ describe('audit wiring', () => {
     expect(importers).toEqual([]);
   });
 
+  // TASK 4.1.1: connection-repository.ts is deliberately the one
+  // repository in this codebase with no `AuditWriter` dependency at all —
+  // its own header states why (operational metadata, not an `AuditAction`
+  // the audit log needs to know about, the same distinction TASK 2.1.3's
+  // own header draws between what gets audited and what does not). A
+  // handler wiring it can never "hand it the durable writer" because
+  // there is no writer parameter to hand — exempting the two call sites
+  // by name, not by weakening the check, keeps this test able to catch
+  // the next entity that silently drops audit wiring by omission rather
+  // than by this one, recorded decision.
+  const CONNECTION_REPOSITORY_HANDLERS = ['ws-connect-handler.ts', 'ws-disconnect-handler.ts'];
+
   it('every handler that constructs a repository hands it the durable writer', () => {
     const offenders = productionSources()
       .filter(({ name }) => name.endsWith('-handler.ts'))
+      .filter(({ name }) => !CONNECTION_REPOSITORY_HANDLERS.includes(name))
       .filter(({ source }) => /new \w*Repository\(/.test(source))
       .filter(({ source }) => !source.includes('new DynamoAuditLog('))
       .map(({ name }) => name);
@@ -48,6 +61,7 @@ describe('audit wiring', () => {
   it('finds the handlers it is meant to be checking (the filter above is not vacuous)', () => {
     const checked = productionSources()
       .filter(({ name }) => name.endsWith('-handler.ts'))
+      .filter(({ name }) => !CONNECTION_REPOSITORY_HANDLERS.includes(name))
       .filter(({ source }) => /new \w*Repository\(/.test(source))
       .map(({ name }) => name);
 

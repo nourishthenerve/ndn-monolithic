@@ -28,8 +28,17 @@
 import { fileURLToPath } from 'node:url';
 
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
-import { CorsHttpMethod, HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
-import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import {
+  CorsHttpMethod,
+  HttpApi,
+  HttpMethod,
+  WebSocketApi,
+  WebSocketStage,
+} from 'aws-cdk-lib/aws-apigatewayv2';
+import {
+  HttpLambdaIntegration,
+  WebSocketLambdaIntegration,
+} from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AttributeType, BillingMode, ProjectionType, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
@@ -61,6 +70,7 @@ import {
 } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 import { createRequestAuthorizer, PUBLIC_ROUTE } from './route-protection.js';
+import { createWebSocketConnectAuthorizer } from './ws-authorizer.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -101,6 +111,14 @@ export class DataStack extends Stack {
       billingMode: BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN,
+      // TASK 4.1.1: enabled for the first time here, for the connection
+      // table's own `ttl` attribute (connection-repository.ts) — sparse,
+      // the same way GSI1-4's own projections are: only a `CONN#<id>` row
+      // ever carries it, so no other entity's row is affected by turning
+      // this on. An additive, in-place update (TimeToLiveSpecification is
+      // mutable, confirmed against CloudFormation's own resource
+      // reference), not a table replacement.
+      timeToLiveAttribute: 'ttl',
     });
 
     // Sparse on purpose: only keyword-projection rows (content-repository.ts
@@ -209,6 +227,18 @@ export class DataStack extends Stack {
     const messageLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/message-function`
       : '/ndn/message-function';
+    const wsAuthorizerLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/ws-authorizer-function`
+      : '/ndn/ws-authorizer-function';
+    const wsConnectLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/ws-connect-function`
+      : '/ndn/ws-connect-function';
+    const wsDisconnectLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/ws-disconnect-function`
+      : '/ndn/ws-disconnect-function';
+    const wsDefaultLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/ws-default-function`
+      : '/ndn/ws-default-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -2017,7 +2047,174 @@ export class DataStack extends Stack {
     // WebStack) — confirmed by attempting exactly that shape here first.
     // Co-locating the function with the bucket avoids the cycle entirely.
 
+    // TASK 4.1.1: the WebSocket signalling channel — ADR-0007's "API
+    // Gateway WebSocket + DynamoDB connection table," first exercised
+    // here. A second, separate API Gateway resource from `httpApi` above:
+    // a WebSocket API is its own resource type (`AWS::ApiGatewayV2::Api`
+    // with `ProtocolType: WEBSOCKET`), not a route on an HTTP API.
+    //
+    // Four functions, not the two the task's own text names — see
+    // config.ts's `UNMONITORED_LOG_GROUP_NAMES` comment for why
+    // `WsAuthorizerFunction` and `WsDefaultFunction` both exist.
+    const wsAuthorizerRole = new Role(this, 'WsAuthorizerFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const wsAuthorizerFunction = new NodejsFunction(this, 'WsAuthorizerFunction', {
+      entry: `${moduleDir}../../services/api/src/ws-authorizer-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      // Same reasoning AuthorizerFunction's own timeout comment states: a
+      // cold invocation may fetch a pool's JWKS over HTTPS first.
+      timeout: Duration.seconds(10),
+      role: wsAuthorizerRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        PATIENT_USER_POOL_ID,
+        PATIENT_USER_POOL_CLIENT_ID,
+        CLINICIAN_USER_POOL_ID,
+        CLINICIAN_USER_POOL_CLIENT_ID,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'WsAuthorizerFunctionLogGroup', wsAuthorizerLogGroupName),
+    });
+    grantFlagReads(this, wsAuthorizerRole);
+
+    // The identical `PAT#*`/`CLI#*` GetItem-only grant AuthorizerFunction's
+    // own `ReadPrincipalProfiles` statement carries, for the identical
+    // reason — one keyed read of one profile row, nothing broader.
+    wsAuthorizerRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPrincipalProfiles',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*', 'CLI#*'] },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(wsAuthorizerRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(wsAuthorizerRole, this.table);
+
+    const wsConnectRole = new Role(this, 'WsConnectFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const wsConnectFunction = new NodejsFunction(this, 'WsConnectFunction', {
+      entry: `${moduleDir}../../services/api/src/ws-connect-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      role: wsConnectRole,
+      environment: { CONNECTION_TABLE_NAME: this.table.tableName },
+      logGroup: createLogGroup(this, 'WsConnectFunctionLogGroup', wsConnectLogGroupName),
+    });
+    // `PutItem` only, and only on `CONN#*` — this function never reads or
+    // updates anything, including its own row.
+    wsConnectRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteConnectionRow',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(wsConnectRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(wsConnectRole, this.table);
+
+    const wsDisconnectRole = new Role(this, 'WsDisconnectFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const wsDisconnectFunction = new NodejsFunction(this, 'WsDisconnectFunction', {
+      entry: `${moduleDir}../../services/api/src/ws-disconnect-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      role: wsDisconnectRole,
+      environment: { CONNECTION_TABLE_NAME: this.table.tableName },
+      logGroup: createLogGroup(this, 'WsDisconnectFunctionLogGroup', wsDisconnectLogGroupName),
+    });
+    // `UpdateItem` only, and only on `CONN#*` — never `PutItem` (this
+    // function creates nothing) and never `DeleteItem` (00-conventions.md's
+    // prohibition; TTL is the only cleanup mechanism, connection-repository.ts's
+    // own header states this explicitly).
+    wsDisconnectRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'UpdateConnectionRow',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:UpdateItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(wsDisconnectRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(wsDisconnectRole, this.table);
+
+    const wsDefaultRole = new Role(this, 'WsDefaultFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const wsDefaultFunction = new NodejsFunction(this, 'WsDefaultFunction', {
+      entry: `${moduleDir}../../services/api/src/ws-default-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      role: wsDefaultRole,
+      logGroup: createLogGroup(this, 'WsDefaultFunctionLogGroup', wsDefaultLogGroupName),
+    });
+    // No baseline Allow at all — this function reads and writes nothing.
+    // The guardrail is attached anyway, for the same reason every other
+    // role in this stack carries it regardless of what it's already
+    // denied by omission: defence in depth costs nothing here.
+    attachDestructiveActionGuardrail(wsDefaultRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(wsDefaultRole, this.table);
+
+    const webSocketAuthorizer = createWebSocketConnectAuthorizer(wsAuthorizerFunction);
+
+    const signallingWebSocketApi = new WebSocketApi(this, 'SignallingWebSocketApi', {
+      connectRouteOptions: {
+        integration: new WebSocketLambdaIntegration('WsConnectIntegration', wsConnectFunction),
+        authorizer: webSocketAuthorizer,
+      },
+      disconnectRouteOptions: {
+        integration: new WebSocketLambdaIntegration(
+          'WsDisconnectIntegration',
+          wsDisconnectFunction,
+        ),
+      },
+      // Stubbed only enough to deploy cleanly — message relay is TASK
+      // 4.2.2's job, not this one (ws-default-handler.ts's own header).
+      defaultRouteOptions: {
+        integration: new WebSocketLambdaIntegration('WsDefaultIntegration', wsDefaultFunction),
+      },
+    });
+
+    const signallingWebSocketStage = new WebSocketStage(this, 'SignallingWebSocketStage', {
+      webSocketApi: signallingWebSocketApi,
+      stageName: '$default',
+      autoDeploy: true,
+      // Deliberately no `accessLogSettings` — the Cognito ID token rides
+      // in the connect URL's own querystring (this task's own header), and
+      // the "never log PII" discipline 00-conventions.md states generally
+      // extends to not letting API Gateway's own access log capture a
+      // connect URL that carries one. data-stack.test.ts asserts this
+      // stage's synthesized template carries no `AccessLogSettings`, so
+      // the omission is enforced rather than merely intended.
+    });
+
     new CfnOutput(this, 'TableName', { value: this.table.tableName });
     new CfnOutput(this, 'ContentHttpApiUrl', { value: httpApi.apiEndpoint });
+    new CfnOutput(this, 'SignallingWebSocketUrl', { value: signallingWebSocketStage.url });
   }
 }

@@ -13,6 +13,7 @@
 | Content item | `CONTENT#<id>` / `META` | Blog/audio/video/text/image, per-language |
 | Assignment of content | `PAT#<id>` / `CONTENT#<id>` | |
 | Message | `PAT#<id>` / `MSG#<ts>` | Patient↔clinician, rate-limited |
+| WS connection | `CONN#<connectionId>` / `PROFILE` | Operational metadata only — no `private{}`, no RBAC row (not reached via `can()`), native TTL is the only cleanup |
 | Audit event | `AUDIT#<date>` / `<ts>#<id>` | **Append-only**, who/what/when/where |
 
 GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR-PP-10) · **GSI3** admin cross-caseload views (FR-DP-02) · **GSI4** appointment-window lookups for reminders.

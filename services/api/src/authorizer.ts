@@ -49,7 +49,11 @@ export type DenyReason =
   | 'no-bearer-token'
   | 'token-not-verified'
   | 'no-directory-record'
-  | 'lookup-failed';
+  | 'lookup-failed'
+  // TASK 4.1.1: the WebSocket authorizer's own reason — no route exists
+  // to read a flag downstream of a connect, so ws-authorizer.ts checks it
+  // here instead of at a handler. Never produced by the HTTP authorizer.
+  | 'flag-disabled';
 
 /** Identifiers only. Never a token, never a claim body, never an email address. */
 export interface AuthorizerDecisionLog {
@@ -91,7 +95,13 @@ function roleFor(pool: TokenPool, groups: readonly string[]): Role {
   return groups.includes(PRINCIPAL_CLINICIAN_GROUP) ? 'principal-clinician' : 'sub-clinician';
 }
 
-function principalContext(principal: Principal): Record<string, string> {
+/**
+ * Flat strings only, exported for ws-authorizer.ts's identical need — a
+ * WebSocket authorizer's `context` map reaches its own $connect handler the
+ * same way this one reaches an HTTP handler (`event.requestContext.authorizer`),
+ * and both are built from the same `Principal`.
+ */
+export function principalContext(principal: Principal): Record<string, string> {
   // Flat strings only. API Gateway will carry richer JSON, but every value
   // arrives at the handler as data that has to be re-validated anyway
   // (request-principal.ts), and a flat shape is one that cannot smuggle a
@@ -111,6 +121,81 @@ export interface AuthorizerEvent {
   readonly routeKey?: string;
 }
 
+/** What {@link resolvePrincipal} produces on success — the `Principal` plus which pool minted its token, since callers log the pool alongside the role. */
+export interface PrincipalResolution {
+  readonly principal: Principal;
+  readonly pool: TokenPool;
+}
+
+/**
+ * The verify → look-up → role-resolve pipeline, shared by the HTTP
+ * authorizer below and ws-authorizer.ts's WebSocket-shaped twin (TASK
+ * 4.1.1) — everything both have in common: a bearer token in, a `Principal`
+ * or a logged denial out. What differs between the two callers is only the
+ * event shape a token is read from and the response shape a decision is
+ * wrapped in, neither of which this function knows about.
+ *
+ * `deny` is a callback rather than a return value so each caller can shape
+ * its own refusal (the HTTP authorizer's `{isAuthorized: false}`, the
+ * WebSocket authorizer's IAM policy) without this function taking a stance
+ * on either.
+ */
+export async function resolvePrincipal(
+  deps: Pick<AuthorizerDeps, 'verifier' | 'directory'>,
+  token: string | undefined,
+  deny: (reason: DenyReason, extra?: Partial<AuthorizerDecisionLog>) => void,
+): Promise<PrincipalResolution | undefined> {
+  if (!token) {
+    deny('no-bearer-token');
+    return undefined;
+  }
+
+  const verified = await deps.verifier.verify(token);
+  if (!verified) {
+    // Deliberately no subjectId: an unverified token's `sub` is a string
+    // the caller chose, and logging it would put attacker-controlled
+    // data in the audit trail dressed as an identity.
+    deny('token-not-verified');
+    return undefined;
+  }
+
+  const role = roleFor(verified.pool, verified.groups);
+
+  let entry: DirectoryEntry | undefined;
+  try {
+    entry = await deps.directory.lookup(verified.pool, verified.subjectId);
+  } catch {
+    // The single most important line in this file. A table that will not
+    // answer is not permission to proceed — an internal failure is a
+    // denial, and the caller gets a 403 rather than an allow with an
+    // unresolved account status.
+    deny('lookup-failed', { subjectId: verified.subjectId, pool: verified.pool, role });
+    return undefined;
+  }
+
+  if (!entry) {
+    deny('no-directory-record', { subjectId: verified.subjectId, pool: verified.pool, role });
+    return undefined;
+  }
+
+  const principal: Principal =
+    role === 'patient'
+      ? {
+          subjectId: verified.subjectId,
+          role,
+          accountStatus: entry.accountStatus,
+          patientId: entry.recordId,
+        }
+      : {
+          subjectId: verified.subjectId,
+          role,
+          accountStatus: entry.accountStatus,
+          clinicianId: entry.recordId,
+        };
+
+  return { principal, pool: verified.pool };
+}
+
 export function createAuthorizer(
   deps: AuthorizerDeps,
 ): (event: AuthorizerEvent) => Promise<AuthorizerResult> {
@@ -126,57 +211,14 @@ export function createAuthorizer(
 
     const deny = (reason: DenyReason, extra: Partial<AuthorizerDecisionLog> = {}) => {
       log({ route, allowed: false, reason, ...extra });
-      return DENY;
     };
 
     const token = extractBearerToken(header);
-    if (!token) {
-      return deny('no-bearer-token');
+    const resolution = await resolvePrincipal(deps, token, deny);
+    if (!resolution) {
+      return DENY;
     }
-
-    const verified = await deps.verifier.verify(token);
-    if (!verified) {
-      // Deliberately no subjectId: an unverified token's `sub` is a string
-      // the caller chose, and logging it would put attacker-controlled
-      // data in the audit trail dressed as an identity.
-      return deny('token-not-verified');
-    }
-
-    const role = roleFor(verified.pool, verified.groups);
-
-    let entry: DirectoryEntry | undefined;
-    try {
-      entry = await deps.directory.lookup(verified.pool, verified.subjectId);
-    } catch {
-      // The single most important line in this file. A table that will not
-      // answer is not permission to proceed — an internal failure is a
-      // denial, and the caller gets a 403 rather than an allow with an
-      // unresolved account status.
-      return deny('lookup-failed', { subjectId: verified.subjectId, pool: verified.pool, role });
-    }
-
-    if (!entry) {
-      return deny('no-directory-record', {
-        subjectId: verified.subjectId,
-        pool: verified.pool,
-        role,
-      });
-    }
-
-    const principal: Principal =
-      role === 'patient'
-        ? {
-            subjectId: verified.subjectId,
-            role,
-            accountStatus: entry.accountStatus,
-            patientId: entry.recordId,
-          }
-        : {
-            subjectId: verified.subjectId,
-            role,
-            accountStatus: entry.accountStatus,
-            clinicianId: entry.recordId,
-          };
+    const { principal } = resolution;
 
     // Note what is *not* decided here: whether the status permits the
     // action. `can()` (authz.ts) owns that, and it gates a non-operative
@@ -188,7 +230,7 @@ export function createAuthorizer(
       route,
       allowed: true,
       subjectId: principal.subjectId,
-      pool: verified.pool,
+      pool: resolution.pool,
       role: principal.role,
     });
     return { isAuthorized: true, context: principalContext(principal) };

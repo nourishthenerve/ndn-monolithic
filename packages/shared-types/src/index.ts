@@ -3,6 +3,7 @@ export * from './assessment.js';
 export * from './assignment.js';
 export * from './clinical-record.js';
 export * from './clinician.js';
+export * from './connection.js';
 export * from './content-assignment.js';
 export * from './content.js';
 export * from './message.js';
