@@ -2171,9 +2171,11 @@ export class DataStack extends Stack {
       memorySize: 128,
       // Longer than the other WS functions' 5 seconds: TASK 4.2.1's join
       // handling does a directory lookup, an appointment read and a
-      // PostToConnection round trip in the same invocation, the same
-      // "cold-start JWKS fetch" reasoning the authorizer's own 10-second
-      // timeout states, applied here to a different chain of I/O.
+      // PostToConnection round trip in the same invocation (TASK 4.2.2's
+      // relay handling is a shorter chain — one Query, one PostToConnection
+      // — but shares this function and its timeout), the same "cold-start
+      // JWKS fetch" reasoning the authorizer's own 10-second timeout
+      // states, applied here to a different chain of I/O.
       timeout: Duration.seconds(10),
       role: wsDefaultRole,
       environment: {
@@ -2225,6 +2227,35 @@ export class DataStack extends Stack {
             'dynamodb:LeadingKeys': ['CALL#*', `${AUDIT_PARTITION_KEY_PREFIX}*`],
           },
         },
+      }),
+    );
+    // TASK 4.2.2: `Query` (never `GetItem`) on `CALL#*` — `ws-relay.ts`'s
+    // own lookup reads the whole partition (at most two items) to decide
+    // who the sender is and who the other party is, the same
+    // `findCallParticipants` shape `connection-repository.ts` exposes.
+    wsDefaultRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryCallParticipants',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CALL#*'] } },
+      }),
+    );
+    // TASK 4.2.2: `UpdateItem` on `CONN#*` — the identical soft-mark
+    // `WsDisconnectFunction`'s own `UpdateConnectionRow` statement grants,
+    // needed here for the one case this function can discover a stale
+    // connection itself: `PostToConnection` returning `GoneException`
+    // mid-relay. Never `DeleteItem`, never `PutItem` — this function
+    // creates no connection row, only ever marks one already written by
+    // `WsConnectFunction`.
+    wsDefaultRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'MarkStaleConnectionRow',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:UpdateItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] } },
       }),
     );
     attachDestructiveActionGuardrail(wsDefaultRole, { buckets: [], tables: [this.table] });

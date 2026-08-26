@@ -1,25 +1,32 @@
-// TASK 4.1.1 step 1, made real at TASK 4.2.1: `$default` is where every
-// application-level WebSocket message this codebase sends actually
-// arrives — `routeSelectionExpression` is `$request.body.action`
-// (infra/src/data-stack.ts's default, unchanged), and no message this
-// codebase ever sends carries an `action` field (every one uses `type`
-// instead, this task's own interface line and TASK 4.2.2's both), so
-// nothing ever matches a named route. This file is the dispatcher, not a
-// stub any more: it validates the message shape and hands a `'join'`
-// message to `ws-join-handler.ts`. TASK 4.2.2 adds the
-// `offer`/`answer`/`ice-candidate`/`leave` branch alongside this one.
+// TASK 4.1.1 step 1, made real at TASK 4.2.1, extended at TASK 4.2.2:
+// `$default` is where every application-level WebSocket message this
+// codebase sends actually arrives — `routeSelectionExpression` is
+// `$request.body.action` (infra/src/data-stack.ts's default, unchanged),
+// and no message this codebase ever sends carries an `action` field
+// (every one uses `type` instead), so nothing ever matches a named route.
+// This file is the dispatcher: it validates the message shape and hands a
+// `'join'` message to `ws-join-handler.ts`, or an
+// `offer`/`answer`/`ice-candidate`/`leave` message to
+// `ws-relay-handler.ts`.
 import type { APIGatewayProxyResultV2, APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
 
 import { handleJoinRequest, type JoinRequestEvent } from './ws-join-handler.js';
+import { handleRelayMessage, type RelayRequestEvent } from './ws-relay-handler.js';
 
 const JoinMessageSchema = z.object({
   type: z.literal('join'),
   appointmentId: z.string().min(1),
 });
 
+const RelayMessageSchema = z.object({
+  type: z.enum(['offer', 'answer', 'ice-candidate', 'leave']),
+  appointmentId: z.string().min(1),
+  payload: z.unknown(),
+});
+
 export const handler = async (
-  event: APIGatewayProxyWebsocketEventV2 & JoinRequestEvent,
+  event: APIGatewayProxyWebsocketEventV2 & JoinRequestEvent & RelayRequestEvent,
 ): Promise<APIGatewayProxyResultV2> => {
   let body: unknown;
   try {
@@ -38,9 +45,14 @@ export const handler = async (
     return { statusCode: 200 };
   }
 
-  // Not a recognised message shape yet — TASK 4.2.2 adds the relay
-  // branch here. Accepted and ignored, never a close: a client sending a
-  // shape this deploy doesn't understand yet is not a protocol violation
-  // worth tearing the connection down for.
+  const relay = RelayMessageSchema.safeParse(body);
+  if (relay.success) {
+    await handleRelayMessage(event, relay.data);
+    return { statusCode: 200 };
+  }
+
+  // Not a recognised message shape. Accepted and ignored, never a close:
+  // a client sending a shape this deploy doesn't understand is not a
+  // protocol violation worth tearing the connection down for.
   return { statusCode: 200 };
 };

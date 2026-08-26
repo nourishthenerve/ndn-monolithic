@@ -1256,4 +1256,24 @@ describe('DataStack — WebSocket signalling (TASK 4.1.1)', () => {
   it('outputs the WebSocket signalling URL', () => {
     synth().hasOutput('SignallingWebSocketUrl', {});
   });
+
+  it('grants WsDefaultFunction Query only, scoped to CALL#* (TASK 4.2.2)', () => {
+    const statements = statementsWithSid('QueryCallParticipants');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('dynamodb:Query');
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CALL#*'] },
+    });
+  });
+
+  it('grants WsDefaultFunction UpdateItem only, scoped to CONN#* — for soft-marking a stale relay target (TASK 4.2.2)', () => {
+    const statements = statementsWithSid('MarkStaleConnectionRow');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('dynamodb:UpdateItem');
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] },
+    });
+  });
 });
