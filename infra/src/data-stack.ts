@@ -2169,14 +2169,64 @@ export class DataStack extends Stack {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       memorySize: 128,
-      timeout: Duration.seconds(5),
+      // Longer than the other WS functions' 5 seconds: TASK 4.2.1's join
+      // handling does a directory lookup, an appointment read and a
+      // PostToConnection round trip in the same invocation, the same
+      // "cold-start JWKS fetch" reasoning the authorizer's own 10-second
+      // timeout states, applied here to a different chain of I/O.
+      timeout: Duration.seconds(10),
       role: wsDefaultRole,
+      environment: {
+        // TASK 4.2.1: no separate env var for the connection table — it's
+        // the same table under every name every other function already
+        // uses for it (PRINCIPAL_TABLE_NAME here, matching appointment-
+        // handler.ts's own convention; ws-connect-handler.ts/ws-disconnect-
+        // handler.ts call the identical value CONNECTION_TABLE_NAME, so
+        // both are set to keep every wired repository reading the name
+        // its own file already expects).
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        CONNECTION_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
       logGroup: createLogGroup(this, 'WsDefaultFunctionLogGroup', wsDefaultLogGroupName),
     });
-    // No baseline Allow at all — this function reads and writes nothing.
-    // The guardrail is attached anyway, for the same reason every other
-    // role in this stack carries it regardless of what it's already
-    // denied by omission: defence in depth costs nothing here.
+    grantFlagReads(this, wsDefaultRole);
+    // One `GetItem` statement, three leading-key prefixes: `CONN#*`
+    // (ws-join-handler.ts's own connection lookup), `PAT#*`/`CLI#*` (the
+    // principal-directory lookup, and — the same prefix, no second grant
+    // needed — an appointment row, which lives at `PAT#<patientId>`
+    // regardless of who is asking). The identical multi-prefix-in-one-
+    // statement shape `messageRole`'s own `WriteAuditAndDeliveryRows`
+    // statement already uses above.
+    wsDefaultRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadConnectionPrincipalAndAppointmentRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*', 'PAT#*', 'CLI#*'] },
+        },
+      }),
+    );
+    // `PutItem` only, on `CALL#*` (the call-participant row, TASK 4.2.1
+    // step 3) and `AUDIT#*` (the join/join-denied audit event) — never
+    // `UpdateItem`, since this function never modifies a row it did not
+    // just create.
+    wsDefaultRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteCallParticipantAndAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': ['CALL#*', `${AUDIT_PARTITION_KEY_PREFIX}*`],
+          },
+        },
+      }),
+    );
     attachDestructiveActionGuardrail(wsDefaultRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(wsDefaultRole, this.table);
 
@@ -2193,8 +2243,10 @@ export class DataStack extends Stack {
           wsDisconnectFunction,
         ),
       },
-      // Stubbed only enough to deploy cleanly — message relay is TASK
-      // 4.2.2's job, not this one (ws-default-handler.ts's own header).
+      // TASK 4.1.1 stubbed this only enough to deploy cleanly; TASK 4.2.1
+      // makes it real (the join message dispatcher) — message relay is
+      // still TASK 4.2.2's own job, not this one (ws-default-handler.ts's
+      // own header).
       defaultRouteOptions: {
         integration: new WebSocketLambdaIntegration('WsDefaultIntegration', wsDefaultFunction),
       },
@@ -2212,6 +2264,14 @@ export class DataStack extends Stack {
       // stage's synthesized template carries no `AccessLogSettings`, so
       // the omission is enforced rather than merely intended.
     });
+
+    // TASK 4.2.1: `WsDefaultFunction` is the only function in this stack
+    // that ever answers a caller back over their own already-open
+    // socket (`ws-join-handler.ts`'s `PostToConnectionCommand`) — the
+    // one IAM action no other role here has ever needed.
+    // `grantManagementApiAccess` is `WebSocketStage`'s own helper for
+    // exactly this grant, scoped to this one stage's connections.
+    signallingWebSocketStage.grantManagementApiAccess(wsDefaultRole);
 
     new CfnOutput(this, 'TableName', { value: this.table.tableName });
     new CfnOutput(this, 'ContentHttpApiUrl', { value: httpApi.apiEndpoint });

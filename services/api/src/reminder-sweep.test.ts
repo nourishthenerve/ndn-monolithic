@@ -25,6 +25,10 @@ class InMemoryAppointmentStore implements AppointmentStore {
     this.items.push(appointment);
   }
 
+  async get(patientId: string, scheduledAt: string): Promise<Appointment | undefined> {
+    return this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
+  }
+
   async listForPatient(patientId: string): Promise<Appointment[]> {
     return this.items.filter((item) => item.patientId === patientId);
   }

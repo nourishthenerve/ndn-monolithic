@@ -480,6 +480,9 @@ describe('DataStack — feature-flag reads', () => {
     // $connect authorizer itself, not a downstream route (there is none
     // to gate on a WebSocket).
     'ws-authorizer-handler',
+    // TASK 4.2.1: video.callAuthz.enabled, default off — read inside
+    // ws-join.ts, wired through the $default dispatcher.
+    'ws-default-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -596,11 +599,14 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // TASK 3.4.3's reminder-sweep function (the identical "wired to
     // satisfy the constructor, never actually reached" reasoning as
     // caseload-function — this task's own runbook names it directly),
-    // TASK 3.5.1's content-assignment function, and TASK 3.6.1's message
-    // function.
-    // The authorizer is deliberately absent — it reads a status and
-    // writes nothing.
-    expect(withAuditTable).toHaveLength(20);
+    // TASK 3.5.1's content-assignment function, TASK 3.6.1's message
+    // function, and TASK 4.2.1's WsDefaultFunction (the join handler,
+    // wired to the same `DynamoAuditLog` `AppointmentRepository`'s
+    // constructor needs regardless of whether `.get()` itself ever
+    // writes through it).
+    // The two authorizers are deliberately absent — both read a status
+    // and write nothing.
+    expect(withAuditTable).toHaveLength(21);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {

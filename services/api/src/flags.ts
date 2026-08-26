@@ -76,7 +76,13 @@ export type FlagName =
   // than the business logic behind it. Off means every connect attempt is
   // denied before any connection row is written (the flag's own Rollback
   // line). Default off.
-  | 'video.signalling.enabled';
+  | 'video.signalling.enabled'
+  // TASK 4.2.1: independent of video.signalling.enabled — the same "two
+  // capabilities, two flags" reasoning TASK 3.4.3 gave scheduling versus
+  // reminding. A socket that connects but can never join a call is a
+  // safe intermediate state to ship; this flag is what turns the call
+  // join itself on. Default off.
+  | 'video.callAuthz.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */

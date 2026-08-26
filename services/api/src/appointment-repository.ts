@@ -27,6 +27,14 @@ export interface AppointmentStore {
   /** Main-table `Query` on `PAT#<id>`, `begins_with(sk, 'APPT#')` — chronological (sort-key order), never a `Scan`. */
   listForPatient(patientId: string): Promise<Appointment[]>;
   /**
+   * TASK 4.2.1: one `GetItem` on the appointment's own key — the WebSocket
+   * join flow (`ws-join.ts`) is handed only an `appointmentId`
+   * (`<patientId>#<scheduledAt>`, this entity's own opaque-looking id, per
+   * this file's header note that it has no natural single one) and needs
+   * exactly the one row it names, not a list to search.
+   */
+  get(patientId: string, scheduledAt: string): Promise<Appointment | undefined>;
+  /**
    * GSI1 `Query`, `gsi1sk BETWEEN 'APPT#<from>' AND 'APPT#<to>'` —
    * chronological, never a `Scan`. TASK 3.4.2: a cancelled appointment is
    * excluded here (a clinician's live calendar has no use for one) but
@@ -126,6 +134,20 @@ export class AppointmentRepository {
   async listForPatient(patientId: string): Promise<Unprojected<Appointment>[]> {
     const items = await this.store.listForPatient(patientId);
     return items.map(unprojected);
+  }
+
+  /**
+   * No `can()`/`ActorContext` gate, and no audit write — unlike every
+   * write method here. `ws-join.ts` is this method's only caller: it
+   * needs the record *before* it can decide whether `can()` grants
+   * `'join-call'`, so gating inside this method would be backwards, and
+   * the join attempt's own audit event (`ws-join.ts`, TASK 4.2.1) already
+   * covers "who tried to reach this appointment," which is what would
+   * otherwise be recorded here.
+   */
+  async get(patientId: string, scheduledAt: string): Promise<Unprojected<Appointment> | undefined> {
+    const item = await this.store.get(patientId, scheduledAt);
+    return item ? unprojected(item) : undefined;
   }
 
   async listForClinicianCalendar(
