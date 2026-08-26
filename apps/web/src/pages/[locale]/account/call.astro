@@ -1,0 +1,96 @@
+---
+// TASK 4.3.1: the account-shell surface for the peer connection —
+// statically generated and **empty**, same discipline every other
+// authenticated account page in this codebase states: what makes this
+// page private is not server rendering but that its content does not
+// exist in the HTML at all. The island below decides whether to build
+// anything, and renders nothing until the session resolves.
+//
+// **Not `[appointmentId].astro`, on purpose.** ADR-0017's static-output
+// build (`astro.config.mjs`) writes one fixed set of files to `dist/`,
+// served by `web-stack.ts`'s CloudFront distribution straight off S3 —
+// there is no SPA-style fallback behavior in that distribution (a missing
+// object 403/404s to `404.html`, `web-stack.ts`'s own `notFoundErrorResponses`),
+// and no build step this codebase runs is triggered by scheduling an
+// appointment. A literal per-appointment path segment could therefore
+// only ever serve the one id baked in at the last `astro build` — every
+// other real, dynamically-scheduled appointment would 404. `[slug].astro`
+// works for `blog`/`workshops` only because `getStaticPaths` there fetches
+// every id that exists *at build time* (published content); an
+// appointment id has no such build-time enumeration, and DynamoDB is
+// deliberately never queried from `astro build` for anything patient-
+// identifying regardless. `?appointmentId=` on this one static page is
+// this task's actual, working equivalent — read once, client-side, by
+// `VideoCall.tsx`, the same "resolve everything at runtime, bake in
+// nothing" posture `messages.astro`'s own `/patients/me/messages` `me`
+// resolution already established for a different unknown. 4.5.1's own
+// join button is what will link here with the real query string.
+//
+// Deliberately absent from routes.ts, same as every other authenticated
+// account page — TASK 1.1.3's a11y gate (tests/pr-env/a11y-full.test.ts)
+// scans every registered route unauthenticated, and an authenticated-only
+// page has no accessible content to find that way. See
+// docs/runbooks/video-calls.md for what accessibility verification this
+// page actually has instead, and the same honestly-named gap every prior
+// page in this phase names: this codebase has no live-session pr-env
+// testing mechanism yet.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { VideoCall } from '../../../account/VideoCall.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('videoCall.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('videoCall.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    signedOut={
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signIn', undefined, locale)} />
+      </p>
+    }
+  >
+    <VideoCall
+      client:only="react"
+      strings={{
+        loadingLabel: t('videoCall.loading', undefined, locale),
+        forbiddenLabel: t('videoCall.forbidden', undefined, locale),
+        missingAppointmentLabel: t('videoCall.missingAppointment', undefined, locale),
+        errorLabel: t('videoCall.error', undefined, locale),
+        waitingForPeerLabel: t('videoCall.waitingForPeer', undefined, locale),
+        connectingLabel: t('videoCall.connecting', undefined, locale),
+        connectedLabel: t('videoCall.connected', undefined, locale),
+        disconnectedLabel: t('videoCall.disconnected', undefined, locale),
+        failedLabel: t('videoCall.failed', undefined, locale),
+        joinDeniedLabels: {
+          'too-early': t('videoCall.joinDenied.tooEarly', undefined, locale),
+          'too-late': t('videoCall.joinDenied.tooLate', undefined, locale),
+          cancelled: t('videoCall.joinDenied.cancelled', undefined, locale),
+          'not-your-appointment': t('videoCall.joinDenied.notYourAppointment', undefined, locale),
+          'not-available': t('videoCall.joinDenied.notAvailable', undefined, locale),
+        },
+        localVideoLabel: t('videoCall.localVideoLabel', undefined, locale),
+        remoteVideoLabel: t('videoCall.remoteVideoLabel', undefined, locale),
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>

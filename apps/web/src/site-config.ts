@@ -26,6 +26,14 @@ export const siteUrl = 'https://nourishthenerve.com';
 // calls it directly at `astro build` time, not from the browser.
 export const contentApiUrl = 'https://m4ptz0to5m.execute-api.eu-west-2.amazonaws.com';
 
+// TASK 4.3.1: NdnDataStack's SignallingWebSocketUrl output (infra/src/data-stack.ts,
+// TASK 4.1.1) — the same "fixed execute-api.amazonaws.com URL, hardcoded
+// rather than looked up at build time" convention `contentApiUrl` above
+// documents, applied to the one `wss://` origin this site calls. Called
+// from the browser, not at build time — a signalling connection has no
+// meaning until a signed-in caller opens one.
+export const signallingWebSocketUrl = 'wss://93im3xehxh.execute-api.eu-west-2.amazonaws.com/$default';
+
 // TASK 1.3.2: every blog post is implicitly tagged with this keyword at
 // creation (services/api/src/content-repository.ts's withContentTypeKeyword)
 // — reusing GSI2's existing keyword -> content projection to list every
