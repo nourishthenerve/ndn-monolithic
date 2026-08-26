@@ -49,6 +49,8 @@ import type { Construct } from 'constructs';
 
 import {
   CLINICIAN_USER_POOL_CLIENT_ID,
+  CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME,
+  CLOUDFLARE_TURN_KEY_ID,
   CONTACT_FORM_FROM_EMAIL,
   CLINICIAN_USER_POOL_ID,
   DOMAIN_NAME,
@@ -239,6 +241,9 @@ export class DataStack extends Stack {
     const wsDefaultLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/ws-default-function`
       : '/ndn/ws-default-function';
+    const turnCredentialsLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/turn-credentials-function`
+      : '/ndn/turn-credentials-function';
 
     // Explicit Role (rather than the NodejsFunction default) so the
     // guardrail below has a concrete construct to attach to, and so this
@@ -2303,6 +2308,90 @@ export class DataStack extends Stack {
     // `grantManagementApiAccess` is `WebSocketStage`'s own helper for
     // exactly this grant, scoped to this one stage's connections.
     signallingWebSocketStage.grantManagementApiAccess(wsDefaultRole);
+
+    // TASK 4.4.1: TURN credential issuance, wired into TASK 4.3.3's
+    // fallback as a second retry tier — the second half of D-12's own
+    // "P2P first, Cloudflare TURN fallback" order. A real HTTP route
+    // (`ContentHttpApi`, not the WebSocket API — a caller already knows
+    // its own `appointmentId` at this point and gains nothing from
+    // travelling over the signalling socket for one request/response).
+    const turnCredentialsRole = new Role(this, 'TurnCredentialsFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const turnCredentialsFunction = new NodejsFunction(this, 'TurnCredentialsFunction', {
+      entry: `${moduleDir}../../services/api/src/turn-credentials-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: turnCredentialsRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
+        CLOUDFLARE_TURN_KEY_ID,
+        CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(this, 'TurnCredentialsFunctionLogGroup', turnCredentialsLogGroupName),
+    });
+    grantFlagReads(this, turnCredentialsRole);
+
+    // `GetItem` on `PAT#*` — the appointment lookup `can()`'s own
+    // `'join-call'` decision needs, the identical prefix `appointmentRole`'s
+    // own read statement already uses for the same record.
+    turnCredentialsRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadPatientAppointmentRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // `Query` (never `GetItem`) on `CALL#*` — the identical
+    // `findCallParticipants` shape `wsDefaultRole`'s own
+    // `QueryCallParticipants` statement already grants, needed here to
+    // confirm the caller's own row is still live before minting a
+    // credential against it. A distinct sid (`data-stack.test.ts`'s own
+    // TASK 4.2.2 test finds `wsDefaultRole`'s statement by this exact
+    // name, and a second role reusing it would break that lookup).
+    turnCredentialsRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryCallParticipantsForTurnCredentials',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CALL#*'] } },
+      }),
+    );
+    // The matching Cloudflare TURN API token — same `ssm:GetParameter`,
+    // single-parameter-ARN shape `contactFormRole`'s own
+    // `ReadTurnstileSecret` statement (web-stack.ts) already uses for a
+    // different Cloudflare secret.
+    turnCredentialsRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadCloudflareTurnApiToken',
+        effect: Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          Stack.of(this).formatArn({
+            service: 'ssm',
+            resource: 'parameter',
+            resourceName: CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME.replace(/^\//, ''),
+          }),
+        ],
+      }),
+    );
+    attachDestructiveActionGuardrail(turnCredentialsRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(turnCredentialsRole, this.table);
+
+    httpApi.addRoutes({
+      path: '/calls/{appointmentId}/turn-credentials',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('TurnCredentialsIntegration', turnCredentialsFunction),
+    });
 
     new CfnOutput(this, 'TableName', { value: this.table.tableName });
     new CfnOutput(this, 'ContentHttpApiUrl', { value: httpApi.apiEndpoint });

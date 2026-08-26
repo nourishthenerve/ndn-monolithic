@@ -81,6 +81,8 @@ export interface CallParticipant {
   readonly connectionId: string;
   readonly principalId: string;
   readonly role: Role;
+  /** TASK 4.4.1: already stored by `recordCallJoin` (epoch seconds), only exposed on the type from this task on — `turn-credentials.ts` is its first reader, checking a caller's own row is still unexpired before minting a credential against it. */
+  readonly ttl: number;
 }
 
 export interface DynamoConnectionRepositoryOptions {

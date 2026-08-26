@@ -1,10 +1,14 @@
 // TASK 4.3.3: the first half of D-12's own "P2P first, Cloudflare TURN
 // fallback" order — what a call does when STUN-only ICE fails, before
-// TURN exists to try. TASK 4.4.1 is what later extends this state
-// machine with a second (TURN) retry tier ahead of the terminal state
-// below; it cannot be built into this file today, since a task may only
-// depend on a lower-numbered one (`09-self-audit.md`'s own ordering
-// check) and 4.4.1 does not exist yet.
+// TURN exists to try.
+//
+// TASK 4.4.1 is the second half, and needed no change to this file's own
+// logic: `onRetry` was always `() => void`, a fire-and-forget hook this
+// state machine never awaits, so `VideoCall.tsx`'s own `retryConnection`
+// (now: ask for a TURN credential, then rebuild the peer connection) fits
+// the exact same contract this file already had. TURN changes what
+// happens *inside* one retry attempt, never whether or when a retry
+// happens — that decision stays entirely this file's own.
 //
 // SDK-free by construction — no `RTCPeerConnection`, no DOM — the same
 // "business logic in one file, wiring in another" split every prior task
