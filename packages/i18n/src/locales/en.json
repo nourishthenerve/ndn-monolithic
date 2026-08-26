@@ -192,6 +192,7 @@
   "videoCall.waitingForPeer": "Waiting for the other participant to join…",
   "videoCall.connecting": "Connecting…",
   "videoCall.connected": "Connected.",
+  "videoCall.reconnecting": "Connection lost. Reconnecting…",
   "videoCall.disconnected": "The call has ended.",
   "videoCall.failed": "This call could not connect. Please check your network and try again.",
   "videoCall.joinDenied.tooEarly": "It's not yet time for this appointment. You can join up to 10 minutes early.",

@@ -34,6 +34,19 @@
 // sequence (resolving role, opening the signalling connection, sending
 // `join`) does not start until `DeviceCheck`'s `onReady` fires — the
 // literal "before either party joins" this task is named for.
+//
+// TASK 4.3.3: `RTCPeerConnection.connectionState` no longer drives the
+// rendered stage directly — every transition is fed to
+// `call-state-machine.ts` instead, which decides whether it is nothing
+// (a raw "connecting"), the happy path ("connected", resetting the retry
+// budget), a single automatic renegotiation ("reconnecting", held behind
+// a grace period for a bare "disconnected" so a momentary blip is never
+// mistaken for a real failure), or the terminal "call-failed" once that
+// one retry has also failed. A signalling-socket close (`onClose`) is
+// deliberately kept separate from this — the peer connection can still
+// be happily `connected` over an already-negotiated P2P path with no
+// further use for the socket, so it gets its own `'ended'` stage rather
+// than being folded into the same ICE-failure state machine.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -41,12 +54,14 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl, signallingWebSocketUrl } from '../site-config.js';
 
+import type { CallConnectionState, CallLifecycleState } from './call-state-machine.js';
+import { createCallStateMachine } from './call-state-machine.js';
 import { DeviceCheck, type DeviceCheckStrings } from './DeviceCheck.js';
 import type { JoinDenialReason, RelayMessage, SignallingConnection } from './webrtc-signalling-client.js';
 import { connectSignalling } from './webrtc-signalling-client.js';
 
 // Cloudflare's own free, unlimited STUN service — no TURN entry until
-// TASK 4.4.1 wires one into TASK 4.3.3's fallback path.
+// TASK 4.4.1 wires one into TASK 4.3.3's own fallback state machine.
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 
 // A patient who joins moments before their clinician is the ordinary
@@ -59,9 +74,6 @@ const PEER_RETRY_INTERVAL_MS = 2000;
 const PEER_RETRY_ATTEMPTS = 15;
 
 type CallRole = 'patient' | 'clinician';
-
-/** `connecting`/`connected`/`disconnected`/`failed` — this task's own typed status. TASK 4.3.3's `call-state-machine.ts` is its first real reader; this task only defines and exposes it. */
-export type CallConnectionState = 'connecting' | 'connected' | 'disconnected' | 'failed';
 
 function toCallConnectionState(state: RTCPeerConnectionState): CallConnectionState {
   if (state === 'connected') return 'connected';
@@ -90,7 +102,9 @@ type Stage =
   | { readonly kind: 'missing-appointment' }
   | { readonly kind: 'join-denied'; readonly reason: JoinDenialReason }
   | { readonly kind: 'waiting-for-peer' }
-  | { readonly kind: 'call'; readonly connectionState: CallConnectionState }
+  | { readonly kind: 'call'; readonly lifecycle: CallLifecycleState }
+  /** The signalling socket itself closed — see this file's own header for why this is not folded into `call-state-machine.ts`. */
+  | { readonly kind: 'ended' }
   | { readonly kind: 'error' };
 
 interface Session {
@@ -106,6 +120,7 @@ export interface VideoCallStrings {
   readonly waitingForPeerLabel: string;
   readonly connectingLabel: string;
   readonly connectedLabel: string;
+  readonly reconnectingLabel: string;
   readonly disconnectedLabel: string;
   readonly failedLabel: string;
   readonly joinDeniedLabels: Readonly<Record<JoinDenialReason, string>>;
@@ -117,8 +132,8 @@ export interface VideoCallStrings {
 export interface VideoCallProps {
   readonly strings: VideoCallStrings;
   readonly client?: SessionClient;
-  /** TASK 4.3.3's own seam — this task's first caller is this component itself, rendering `strings` by state. */
-  readonly onConnectionStateChange?: (state: CallConnectionState) => void;
+  /** TASK 4.5.1's own seam — the join-button state machine's first real reader of what TASK 4.3.3 now produces. */
+  readonly onLifecycleChange?: (state: CallLifecycleState) => void;
   /** Injectable for tests; defaults to `window.location.search`. */
   readonly getAppointmentId?: () => string | undefined;
 }
@@ -128,7 +143,7 @@ const defaultClient = createSessionClient();
 export function VideoCall({
   strings,
   client = defaultClient,
-  onConnectionStateChange,
+  onLifecycleChange,
   getAppointmentId = defaultGetAppointmentId,
 }: VideoCallProps): ReactNode {
   const [stage, setStage] = useState<Stage>({ kind: 'checking' });
@@ -182,10 +197,14 @@ export function VideoCall({
     let retriesLeft = PEER_RETRY_ATTEMPTS;
     let remoteDescriptionSet = false;
     let pendingCandidates: RTCIceCandidateInit[] = [];
+    // Set once, inside `run()`, before `connectSignalling` is ever
+    // constructed — every closure below that reads it (`onJoined`,
+    // `onPeerUnavailable`, `retryConnection`) only ever runs after that.
+    let role: CallRole | undefined;
 
     const setStageIfLive = (next: Stage): void => {
       if (live) setStage(next);
-      if (live && next.kind === 'call') onConnectionStateChange?.(next.connectionState);
+      if (live && next.kind === 'call') onLifecycleChange?.(next.lifecycle);
     };
 
     // WebRTC's own well-known trickle-ICE pitfall: a candidate can arrive
@@ -253,20 +272,39 @@ export function VideoCall({
         }
       };
       created.onconnectionstatechange = () => {
-        setStageIfLive({ kind: 'call', connectionState: toCallConnectionState(created.connectionState) });
+        stateMachine.handleConnectionState(toCallConnectionState(created.connectionState));
       };
       return created;
     }
 
+    // TASK 4.3.3's own retry: a fresh `RTCPeerConnection` (never the
+    // failed one, renegotiated) over the same already-joined call — the
+    // relay and the `CALL#` row this effect never touches again.
+    function retryConnection(): void {
+      pc?.close();
+      remoteDescriptionSet = false;
+      pendingCandidates = [];
+      pc = buildPeerConnection();
+      if (role === 'patient') {
+        void sendOffer();
+      }
+    }
+
+    const stateMachine = createCallStateMachine({
+      onRetry: retryConnection,
+      onStateChange: (lifecycle) => setStageIfLive({ kind: 'call', lifecycle }),
+    });
+
     async function run(): Promise<void> {
-      let role: CallRole;
+      let resolvedRole: CallRole;
       try {
-        role = await resolveRole(accessToken);
+        resolvedRole = await resolveRole(accessToken);
       } catch {
         setStageIfLive({ kind: 'error' });
         return;
       }
       if (!live) return;
+      role = resolvedRole;
 
       connection = connectSignalling({
         url: signallingWebSocketUrl,
@@ -275,7 +313,7 @@ export function VideoCall({
         handlers: {
           onJoined: () => {
             pc = buildPeerConnection();
-            setStageIfLive({ kind: 'call', connectionState: 'connecting' });
+            setStageIfLive({ kind: 'call', lifecycle: { kind: 'connecting' } });
             if (role === 'patient') {
               void sendOffer();
             }
@@ -286,7 +324,7 @@ export function VideoCall({
             // answerer sends nothing until it has received an offer.
             if (role !== 'patient') return;
             if (retriesLeft <= 0) {
-              setStageIfLive({ kind: 'call', connectionState: 'failed' });
+              setStageIfLive({ kind: 'call', lifecycle: { kind: 'call-failed' } });
               return;
             }
             retriesLeft -= 1;
@@ -294,7 +332,10 @@ export function VideoCall({
             retryTimer = setTimeout(() => void sendOffer(), PEER_RETRY_INTERVAL_MS);
           },
           onRelayMessage: (message) => void handleRelayMessage(message),
-          onClose: () => setStageIfLive({ kind: 'call', connectionState: 'disconnected' }),
+          // The signalling socket closing is not an ICE failure — see
+          // this file's own header for why it gets its own stage rather
+          // than a `call-state-machine.ts` transition.
+          onClose: () => setStageIfLive({ kind: 'ended' }),
         },
       });
     }
@@ -304,6 +345,7 @@ export function VideoCall({
     return () => {
       live = false;
       clearTimeout(retryTimer);
+      stateMachine.dispose();
       connection?.close();
       pc?.close();
       // This effect's own `stream` (`DeviceCheck`'s handed-off grant) is
@@ -312,7 +354,7 @@ export function VideoCall({
       // itself already keeps for the stream it never hands off.
       stream.getTracks().forEach((track) => track.stop());
     };
-  }, [session, deviceStream, onConnectionStateChange]);
+  }, [session, deviceStream, onLifecycleChange]);
 
   if (stage.kind === 'forbidden') {
     return <p role="alert">{strings.forbiddenLabel}</p>;
@@ -336,19 +378,27 @@ export function VideoCall({
   if (stage.kind === 'error') {
     return <p role="alert">{strings.errorLabel}</p>;
   }
+  if (stage.kind === 'ended') {
+    return (
+      <p role="status" aria-live="polite">
+        {strings.disconnectedLabel}
+      </p>
+    );
+  }
+  // The terminal state this task's own DoD names explicitly: styled as a
+  // real alert, never a blank screen or an unstyled error.
+  if (stage.kind === 'call' && stage.lifecycle.kind === 'call-failed') {
+    return <p role="alert">{strings.failedLabel}</p>;
+  }
 
   const statusLabel =
     stage.kind === 'waiting-for-peer'
       ? strings.waitingForPeerLabel
-      : stage.kind === 'call'
-        ? stage.connectionState === 'connected'
-          ? strings.connectedLabel
-          : stage.connectionState === 'failed'
-            ? strings.failedLabel
-            : stage.connectionState === 'disconnected'
-              ? strings.disconnectedLabel
-              : strings.connectingLabel
-        : strings.connectingLabel;
+      : stage.kind === 'call' && stage.lifecycle.kind === 'connected'
+        ? strings.connectedLabel
+        : stage.kind === 'call' && stage.lifecycle.kind === 'reconnecting'
+          ? strings.reconnectingLabel
+          : strings.connectingLabel;
 
   return (
     <section aria-labelledby="video-call-status-heading">
