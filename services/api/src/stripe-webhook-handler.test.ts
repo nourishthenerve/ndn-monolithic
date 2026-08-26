@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
+import type { Notifier } from './notifications.js';
 import {
   InMemoryRegistrationStore,
   InMemoryWorkshopCapacityStore,
@@ -63,16 +64,16 @@ function buildDeps(overrides: Partial<StripeWebhookHttpDeps> = {}) {
     fixedClock,
   );
   const verifySignature = vi.fn();
-  const sendConfirmationEmail = vi.fn().mockResolvedValue(undefined);
+  const notifier: Notifier = { send: vi.fn().mockResolvedValue(undefined) };
   const deps: StripeWebhookHttpDeps = {
     verifySignature,
     eventStore: new InMemoryWebhookEventStore(),
     workshops,
     registrations,
-    sendConfirmationEmail,
+    notifier,
     ...overrides,
   };
-  return { deps, verifySignature, sendConfirmationEmail, workshops, registrations };
+  return { deps, verifySignature, notifier, workshops, registrations };
 }
 
 describe('createStripeWebhookHttpHandler — signature verification wiring', () => {
@@ -126,7 +127,7 @@ describe('createStripeWebhookHttpHandler — signature verification wiring', () 
 
 describe('createStripeWebhookHttpHandler — happy path', () => {
   it('returns 200 and confirms the registration for a valid checkout.session.completed event', async () => {
-    const { deps, workshops, registrations, sendConfirmationEmail } = buildDeps();
+    const { deps, workshops, registrations, notifier } = buildDeps();
     await workshops.create(ADMIN_ACTOR, {
       id: 'workshop-1',
       status: 'published',
@@ -164,7 +165,7 @@ describe('createStripeWebhookHttpHandler — happy path', () => {
     );
 
     expect(result).toMatchObject({ statusCode: 200 });
-    expect(sendConfirmationEmail).toHaveBeenCalledTimes(1);
+    expect(notifier.send).toHaveBeenCalledTimes(1);
     expect(await registrations.findById('workshop-1', 'registration-1')).toMatchObject({
       status: 'confirmed',
     });

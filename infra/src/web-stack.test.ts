@@ -630,6 +630,7 @@ describe('WebStack — Stripe webhook Lambda (TASK 1.5.2)', () => {
       Environment: {
         Variables: Match.objectLike({
           WORKSHOP_TABLE_NAME: Match.anyValue(),
+          NOTIFICATION_TABLE_NAME: Match.anyValue(),
           STRIPE_WEBHOOK_SECRET_PARAMETER_NAME: '/ndn/stripe-webhook-secret',
           STRIPE_SECRET_KEY_PARAMETER_NAME: '/ndn/stripe-secret-key',
         }),
@@ -654,6 +655,7 @@ describe('WebStack — Stripe webhook Lambda (TASK 1.5.2)', () => {
     expect(allowActions).toContain('dynamodb:UpdateItem');
     expect(allowActions).toContain('ssm:GetParameter');
     expect(allowActions).toContain('ses:SendEmail');
+    expect(allowActions).toContain('sms-voice:SendTextMessage');
     expect(allowActions).not.toContain('dynamodb:DeleteItem');
 
     const denyStatement = webhookPolicy.Properties.PolicyDocument.Statement.find(
@@ -678,6 +680,20 @@ describe('WebStack — Stripe webhook Lambda (TASK 1.5.2)', () => {
     );
     expect(sesStatement?.Action).toBe('ses:SendEmail');
     expect(JSON.stringify(sesStatement?.Resource)).toContain('identity/nourishthenerve.com');
+  });
+
+  it('grants sms-voice:SendTextMessage for the Notifier SMS attempt (TASK workshop-confirmation-sms)', () => {
+    const template = synthWithTable();
+    const policies = template.findResources('AWS::IAM::Policy');
+    const webhookPolicy = Object.values(policies).find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'SendRegistrationConfirmationSms',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const smsStatement = webhookPolicy.Properties.PolicyDocument.Statement.find(
+      (statement) => statement.Sid === 'SendRegistrationConfirmationSms',
+    );
+    expect(smsStatement?.Action).toBe('sms-voice:SendTextMessage');
   });
 
   it('scopes the SSM read to exactly the two Stripe secret parameters, not every parameter', () => {
@@ -1060,7 +1076,9 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
 });
 
 // TASK 1.6.2: this stack's flag-reading functions (contact-form-handler,
-// media-upload-handler, and TASK 2.2.4's auth-token function).
+// media-upload-handler, TASK 2.2.4's auth-token function, and (TASK
+// workshop-confirmation-sms) the Stripe webhook function — its Notifier's
+// SMS guard chain reads feature flags the same way reminder-sweep's does).
 // data-stack.test.ts carries the fuller assertions for the rest and for
 // the prefix's scoping; these prove the wiring reached this stack too,
 // rather than only the one it was written against.
@@ -1077,10 +1095,10 @@ describe('WebStack — feature-flag reads', () => {
           .Properties?.Environment?.Variables?.FLAG_PARAMETER_NAME_PREFIX ===
         FLAG_PARAMETER_NAME_PREFIX,
     );
-    // contact-form, media-upload, and TASK 2.2.4's auth-token function —
-    // whose flag is `auth.webSignIn.enabled`, the outermost gate on all
-    // four `/auth/*` routes.
-    expect(withPrefix).toHaveLength(3);
+    // contact-form, media-upload, TASK 2.2.4's auth-token function (whose
+    // flag is `auth.webSignIn.enabled`, the outermost gate on all four
+    // `/auth/*` routes), and the Stripe webhook function.
+    expect(withPrefix).toHaveLength(4);
 
     const grants = Object.values(template.findResources('AWS::IAM::Policy'))
       .flatMap(
@@ -1093,7 +1111,7 @@ describe('WebStack — feature-flag reads', () => {
       )
       .filter((s) => s.Sid === 'ReadFeatureFlags');
 
-    expect(grants).toHaveLength(3);
+    expect(grants).toHaveLength(4);
     for (const grant of grants) {
       expect(grant.Action).toBe('ssm:GetParameter');
       expect(JSON.stringify(grant.Resource)).toContain('parameter/ndn/flags/*');

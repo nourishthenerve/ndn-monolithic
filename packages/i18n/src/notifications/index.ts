@@ -15,6 +15,7 @@ export type NotificationCategory = 'clinical' | 'marketing';
 
 export type NotificationTemplateId =
   | 'appointmentReminder1Hour'
+  | 'workshopRegistrationConfirmation'
   | 'marketingNewsletter'
   | 'clinicianDeactivated'
   | 'patientApproved'
@@ -48,6 +49,22 @@ export const NOTIFICATION_TEMPLATES: Readonly<Record<NotificationTemplateId, Not
     subjectKey: 'notifications.appointmentReminder1Hour.subject',
     emailBodyKey: 'notifications.appointmentReminder1Hour.emailBody',
     smsBodyKey: 'notifications.appointmentReminder1Hour.smsBody',
+  },
+  // TASK: workshop-confirmation-sms — the second smsEligible template (see
+  // this file's own smsEligible comment above: a second one means re-doing
+  // R-01's arithmetic in the PR, not just flipping the flag — see
+  // docs/plan/02-risk-register.md's updated R-01 row). Optional-phone,
+  // degrade-to-email exactly like appointmentReminder1Hour: an attendee who
+  // didn't give a UK mobile number, or whose SMS attempt is unavailable for
+  // any reason, gets the email version instead — never a blocked checkout,
+  // never a silently dropped confirmation.
+  workshopRegistrationConfirmation: {
+    id: 'workshopRegistrationConfirmation',
+    category: 'clinical',
+    smsEligible: true,
+    subjectKey: 'notifications.workshopRegistrationConfirmation.subject',
+    emailBodyKey: 'notifications.workshopRegistrationConfirmation.emailBody',
+    smsBodyKey: 'notifications.workshopRegistrationConfirmation.smsBody',
   },
   marketingNewsletter: {
     id: 'marketingNewsletter',

@@ -2,11 +2,7 @@ import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  createSesContactEmailSender,
-  createSesGenericEmailSender,
-  createSesRegistrationEmailSender,
-} from './ses.js';
+import { createSesContactEmailSender, createSesGenericEmailSender } from './ses.js';
 
 const sesMock = mockClient(SESv2Client);
 
@@ -33,35 +29,6 @@ describe('createSesContactEmailSender', () => {
       ReplyToAddresses: ['ada@example.com'],
       Content: { Simple: { Body: { Text: { Data: 'Hello there' } } } },
     });
-  });
-});
-
-describe('createSesRegistrationEmailSender', () => {
-  it('sends exactly one SendEmailCommand to the attendee, no ReplyTo', async () => {
-    sesMock.on(SendEmailCommand).resolves({ MessageId: 'msg-1' });
-    const sendEmail = createSesRegistrationEmailSender({
-      fromAddress: 'noreply@nourishthenerve.com',
-      client: sesMock as unknown as SESv2Client,
-    });
-
-    await sendEmail({
-      to: 'attendee@example.com',
-      workshopTitle: 'Balance & Falls Prevention',
-      dateTimeUtc: '2026-09-01T10:00:00.000Z',
-    });
-
-    const calls = sesMock.commandCalls(SendEmailCommand);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.args[0].input).toMatchObject({
-      FromEmailAddress: 'noreply@nourishthenerve.com',
-      Destination: { ToAddresses: ['attendee@example.com'] },
-      Content: {
-        Simple: {
-          Subject: { Data: "You're registered: Balance & Falls Prevention" },
-        },
-      },
-    });
-    expect(calls[0]?.args[0].input.ReplyToAddresses).toBeUndefined();
   });
 });
 
@@ -117,9 +84,9 @@ describe('configuration set attribution', () => {
     });
   });
 
-  it('attaches the configuration set to the registration confirmation', async () => {
+  it('attaches the configuration set to the generic sender', async () => {
     sesMock.on(SendEmailCommand).resolves({ MessageId: 'msg-2' });
-    const sendEmail = createSesRegistrationEmailSender({
+    const sendEmail = createSesGenericEmailSender({
       fromAddress: 'noreply@nourishthenerve.com',
       configurationSetName: 'ndn-email',
       client: sesMock as unknown as SESv2Client,
@@ -127,8 +94,8 @@ describe('configuration set attribution', () => {
 
     await sendEmail({
       to: 'attendee@example.com',
-      workshopTitle: 'Neuro-rehab basics',
-      dateTimeUtc: '2026-09-01T10:00:00Z',
+      subject: "You're registered: Neuro-rehab basics",
+      body: 'Your registration for "Neuro-rehab basics" is confirmed.',
     });
 
     expect(sesMock.commandCalls(SendEmailCommand)[0]?.args[0].input).toMatchObject({

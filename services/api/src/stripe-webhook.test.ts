@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { InMemoryAuditLog, actorContext } from './audit.js';
 import type { Clock } from './clock.js';
+import type { Notifier } from './notifications.js';
 import {
   InMemoryRegistrationStore,
   InMemoryWorkshopCapacityStore,
@@ -50,6 +51,7 @@ function buildRegistrations() {
 async function seedWorkshopAndRegistration(
   workshops: WorkshopRepository,
   registrations: RegistrationRepository,
+  attendeePhone?: string,
 ) {
   await workshops.create(ADMIN_ACTOR, {
     id: 'workshop-1',
@@ -64,6 +66,7 @@ async function seedWorkshopAndRegistration(
     id: 'registration-1',
     workshopId: 'workshop-1',
     attendeeEmail: 'attendee@example.com',
+    attendeePhone,
     stripeCheckoutSessionId: 'cs_test_1',
   });
 }
@@ -91,22 +94,23 @@ function checkoutEvent(
 function buildDeps(overrides: Partial<WebhookDeps> = {}): WebhookDeps & {
   workshops: WorkshopRepository;
   registrations: RegistrationRepository;
-  sendConfirmationEmail: ReturnType<typeof vi.fn>;
+  notifier: { send: ReturnType<typeof vi.fn> };
   verifySignature: ReturnType<typeof vi.fn>;
 } {
   const workshops = buildWorkshops();
   const registrations = buildRegistrations();
+  const notifier: Notifier = { send: vi.fn().mockResolvedValue(undefined) };
   return {
     verifySignature: vi.fn(),
     eventStore: new InMemoryWebhookEventStore(),
     workshops,
     registrations,
-    sendConfirmationEmail: vi.fn().mockResolvedValue(undefined),
+    notifier,
     ...overrides,
   } as WebhookDeps & {
     workshops: WorkshopRepository;
     registrations: RegistrationRepository;
-    sendConfirmationEmail: ReturnType<typeof vi.fn>;
+    notifier: { send: ReturnType<typeof vi.fn> };
     verifySignature: ReturnType<typeof vi.fn>;
   };
 }
@@ -124,7 +128,7 @@ describe('createStripeWebhookHandler — signature verification', () => {
     const result = await webhook('raw-body', 'bad-signature', ORIGIN);
 
     expect(result).toEqual({ statusCode: 400 });
-    expect(deps.sendConfirmationEmail).not.toHaveBeenCalled();
+    expect(deps.notifier.send).not.toHaveBeenCalled();
     expect(await deps.registrations.findById('workshop-1', 'registration-1')).toMatchObject({
       status: 'pending',
     });
@@ -143,7 +147,7 @@ describe('createStripeWebhookHandler — idempotency', () => {
 
     expect(first).toEqual({ statusCode: 200 });
     expect(second).toEqual({ statusCode: 200 });
-    expect(deps.sendConfirmationEmail).toHaveBeenCalledTimes(1);
+    expect(deps.notifier.send).toHaveBeenCalledTimes(1);
     expect(await deps.registrations.findById('workshop-1', 'registration-1')).toMatchObject({
       status: 'confirmed',
     });
@@ -151,7 +155,7 @@ describe('createStripeWebhookHandler — idempotency', () => {
 });
 
 describe('createStripeWebhookHandler — checkout.session.completed', () => {
-  it('confirms the registration and sends exactly one confirmation email with the workshop title/date', async () => {
+  it('confirms the registration and sends exactly one confirmation notification with the workshop title/date, no phone given', async () => {
     const event = checkoutEvent('evt_1', 'checkout.session.completed');
     const deps = buildDeps({ verifySignature: vi.fn().mockReturnValue(event) });
     await seedWorkshopAndRegistration(deps.workshops, deps.registrations);
@@ -160,11 +164,26 @@ describe('createStripeWebhookHandler — checkout.session.completed', () => {
     const result = await webhook('raw-body', 'sig', ORIGIN);
 
     expect(result).toEqual({ statusCode: 200 });
-    expect(deps.sendConfirmationEmail).toHaveBeenCalledWith({
-      to: 'attendee@example.com',
-      workshopTitle: 'Balance & Falls Prevention',
-      dateTimeUtc: '2026-07-01T10:00:00.000Z',
-    });
+    expect(deps.notifier.send).toHaveBeenCalledWith(
+      { id: 'registration-1', email: 'attendee@example.com', phone: undefined },
+      'workshopRegistrationConfirmation',
+      { workshopTitle: 'Balance & Falls Prevention', dateTimeUtc: '2026-07-01T10:00:00.000Z' },
+    );
+  });
+
+  it('passes the attendee phone through to the Notifier when one was given at checkout', async () => {
+    const event = checkoutEvent('evt_1', 'checkout.session.completed');
+    const deps = buildDeps({ verifySignature: vi.fn().mockReturnValue(event) });
+    await seedWorkshopAndRegistration(deps.workshops, deps.registrations, '+447700900123');
+    const webhook = createStripeWebhookHandler(deps);
+
+    await webhook('raw-body', 'sig', ORIGIN);
+
+    expect(deps.notifier.send).toHaveBeenCalledWith(
+      { id: 'registration-1', email: 'attendee@example.com', phone: '+447700900123' },
+      'workshopRegistrationConfirmation',
+      { workshopTitle: 'Balance & Falls Prevention', dateTimeUtc: '2026-07-01T10:00:00.000Z' },
+    );
   });
 
   it('is a 200 no-op (no mutation, no email) when the metadata/client_reference_id do not identify a known registration', async () => {
@@ -188,7 +207,7 @@ describe('createStripeWebhookHandler — checkout.session.completed', () => {
 
     const result = await webhook('raw-body', 'sig', ORIGIN);
     expect(result).toEqual({ statusCode: 200 });
-    expect(deps.sendConfirmationEmail).not.toHaveBeenCalled();
+    expect(deps.notifier.send).not.toHaveBeenCalled();
   });
 
   it('ignores an unrecognised event type: 200, no mutation', async () => {
@@ -203,7 +222,7 @@ describe('createStripeWebhookHandler — checkout.session.completed', () => {
 
     const result = await webhook('raw-body', 'sig', ORIGIN);
     expect(result).toEqual({ statusCode: 200 });
-    expect(deps.sendConfirmationEmail).not.toHaveBeenCalled();
+    expect(deps.notifier.send).not.toHaveBeenCalled();
     expect(await deps.registrations.findById('workshop-1', 'registration-1')).toMatchObject({
       status: 'pending',
     });
@@ -225,6 +244,6 @@ describe('createStripeWebhookHandler — checkout.session.expired', () => {
     });
     // Capacity actually released (workshop was seeded at exactly capacity 10).
     await expect(deps.registrations.reserveCapacity('workshop-1', 10)).resolves.toBe(true);
-    expect(deps.sendConfirmationEmail).not.toHaveBeenCalled();
+    expect(deps.notifier.send).not.toHaveBeenCalled();
   });
 });

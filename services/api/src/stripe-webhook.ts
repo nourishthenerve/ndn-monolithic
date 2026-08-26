@@ -12,8 +12,8 @@
 // resolves the real Stripe secrets, and maps `{ statusCode }` back into a
 // Lambda proxy response.
 import { actorContext, type ActorContext, type RequestOrigin } from './audit.js';
+import type { Notifier } from './notifications.js';
 import type { RegistrationRepository } from './registration-repository.js';
-import type { RegistrationEmailSender } from './ses.js';
 import type { WorkshopRepository } from './workshop-repository.js';
 
 /**
@@ -88,7 +88,14 @@ export interface WebhookDeps {
   readonly eventStore: WebhookEventStore;
   readonly workshops: WorkshopRepository;
   readonly registrations: RegistrationRepository;
-  readonly sendConfirmationEmail: RegistrationEmailSender;
+  /**
+   * Confirmation delivery, via the same SMS-first/email-fallback Notifier
+   * (notifications.ts) appointment reminders use — TASK
+   * workshop-confirmation-sms's own migration off the direct SES send this
+   * used to be (docs/runbooks/notifications.md named that migration as
+   * deliberately deferred, separate work; this is that work).
+   */
+  readonly notifier: Notifier;
 }
 
 export function createStripeWebhookHandler(
@@ -144,11 +151,20 @@ export function createStripeWebhookHandler(
         const workshopTitle = workshop
           ? (Object.values(workshop.details)[0]?.title ?? workshop.id)
           : workshopId;
-        await deps.sendConfirmationEmail({
-          to: registration.attendeeEmail,
-          workshopTitle,
-          dateTimeUtc: workshop?.dateTimeUtc ?? '',
-        });
+        // `registration.id` is the recipient id carried into the delivery
+        // record — there's no Cognito sub for an unauthenticated
+        // purchaser, and the registration's own id is already the stable
+        // identifier used elsewhere for this flow (Stripe
+        // client_reference_id, this table's own sort key).
+        await deps.notifier.send(
+          {
+            id: registration.id,
+            email: registration.attendeeEmail,
+            phone: registration.attendeePhone,
+          },
+          'workshopRegistrationConfirmation',
+          { workshopTitle, dateTimeUtc: workshop?.dateTimeUtc ?? '' },
+        );
       }
     } else {
       await deps.registrations.cancel(actor, workshopId, registrationId);

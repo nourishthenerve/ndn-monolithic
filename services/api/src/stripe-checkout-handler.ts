@@ -46,6 +46,16 @@ const SITE_ORIGIN = process.env.SITE_ORIGIN ?? 'https://nourishthenerve.com';
 
 const checkoutBodySchema = z.object({
   attendeeEmail: z.email().max(320),
+  // Loosely bounded on purpose — sms-allow-list.ts's normalizeUkE164 is the
+  // real gate, at send time (stripe-webhook.ts), against whatever format the
+  // attendee typed (+447..., 447..., 07..., with spaces/dashes/parens).
+  // Duplicating that validation here would just be a second source of
+  // truth. An empty/whitespace-only value is treated as "no phone given".
+  attendeePhone: z
+    .string()
+    .max(32)
+    .optional()
+    .transform((value) => (value?.trim() ? value.trim() : undefined)),
 });
 
 function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
@@ -127,6 +137,7 @@ export function createStripeCheckoutHttpHandler(
       workshopId,
       registrationId: generateId(),
       attendeeEmail: parsed.data.attendeeEmail,
+      attendeePhone: parsed.data.attendeePhone,
       // TASK 2.1.3: the same SHA-256 of the source address this handler
       // has always used as the audit actor, now carried with the role it
       // acted with and the request it arrived on (audit.ts).
