@@ -201,6 +201,20 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // above — one conversation per patient, not open traffic. Displacing
   // nothing.
   '/ndn/message-function',
+  // TASK 4.1.1: four functions, not the two the task's own text names
+  // (`ws-connect-function`, `ws-disconnect-function`) — `WebSocketLambdaAuthorizer`
+  // cannot share `AuthorizerFunction`'s deployed Lambda (see
+  // infra/src/ws-authorizer.ts's header: the two response shapes cannot
+  // share one function), so this task also deploys `WsAuthorizerFunction`,
+  // and `$default` needs a route to deploy at all, so `WsDefaultFunction`
+  // too. All four behind a default-off flag, and all four bounded by
+  // "one connect/disconnect per call, on top of appointments the estate
+  // already schedules a handful of at a time" — smaller volume than any
+  // function already on this list. Displacing nothing.
+  '/ndn/ws-authorizer-function',
+  '/ndn/ws-connect-function',
+  '/ndn/ws-disconnect-function',
+  '/ndn/ws-default-function',
 ];
 
 // TASK 3.4.3 (ADR-0008): the leased origination identity (a UK long code
