@@ -25,10 +25,18 @@ packages:
 #     runs a full Lighthouse collection — the v2->v3 API change is in
 #     browser *downloading*, which this never does (it launches the
 #     system Chrome via CHROME_PATH).
+#   Found at Gate G3 review: uuid <11.1.1 (GHSA-w5hq-g745-h8pq, moderate)
+#     via @lhci/cli's own direct dependency (0.15.1, latest — no newer
+#     release fixes this upstream). Missing bounds check applies only when
+#     a caller passes its own output buffer to v3/v5/v6; @lhci/cli never
+#     does. Pinned past the patched version; v8->v11 keeps the same named
+#     CJS/ESM exports lhci relies on, verified by re-running the full
+#     install and test suite after the bump.
 overrides:
   nanoid: '^3.3.18'
   tmp: '^0.2.7'
   '@puppeteer/browsers': '^3.2.1'
+  uuid: '^11.1.1'
 allowBuilds:
   esbuild: true
   unrs-resolver: true
