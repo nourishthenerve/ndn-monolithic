@@ -89,7 +89,7 @@ export class InMemoryWorkshopCapacityStore implements WorkshopCapacityStore {
 
 export type CreateRegistrationInput = Pick<
   Registration,
-  'id' | 'workshopId' | 'attendeeEmail' | 'stripeCheckoutSessionId'
+  'id' | 'workshopId' | 'attendeeEmail' | 'attendeePhone' | 'stripeCheckoutSessionId'
 >;
 
 export class RegistrationRepository {
@@ -115,10 +115,27 @@ export class RegistrationRepository {
     await this.capacity.release(workshopId);
   }
 
-  /** Always creates as 'pending' — a registration only ever becomes 'confirmed' via the Stripe webhook. */
+  /**
+   * Always creates as 'pending' — a registration only ever becomes
+   * 'confirmed' via the Stripe webhook. `attendeePhone` is kept sparse
+   * (the key omitted, not set to `undefined`) when not given: DynamoStore's
+   * document client isn't configured with `removeUndefinedValues`, so an
+   * explicit `undefined` attribute would throw on the real PutCommand — the
+   * same "omit entirely, not falsy" discipline dynamo-store.ts's
+   * DynamoAppointmentStore.create already applies to gsi4pk/gsi4sk.
+   */
   async create(actor: ActorContext, data: CreateRegistrationInput): Promise<Registration> {
     const now = this.clock.now().toISOString();
-    const item: Registration = { ...data, status: 'pending', created_at: now, updated_at: now };
+    const item: Registration = {
+      id: data.id,
+      workshopId: data.workshopId,
+      attendeeEmail: data.attendeeEmail,
+      stripeCheckoutSessionId: data.stripeCheckoutSessionId,
+      ...(data.attendeePhone ? { attendeePhone: data.attendeePhone } : {}),
+      status: 'pending',
+      created_at: now,
+      updated_at: now,
+    };
     await this.store.create(item);
     await this.audit.write(
       auditEventFor(actor, {

@@ -15,14 +15,26 @@ import Stripe from 'stripe';
 import { requestOriginOf } from './audit.js';
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
+import { DynamoDeliveryLog } from './dynamo-notification-log.js';
+import { DynamoSpendCounterStore } from './dynamo-sms-spend-cap.js';
 import {
   DynamoRegistrationStore,
   DynamoWebhookEventStore,
   DynamoWorkshopCapacityStore,
   DynamoWorkshopStore,
 } from './dynamo-store.js';
+import { createNotifier, type Notifier } from './notifications.js';
 import { RegistrationRepository } from './registration-repository.js';
-import { createSesRegistrationEmailSender, type RegistrationEmailSender } from './ses.js';
+import { createSesGenericEmailSender } from './ses.js';
+import { GenericSmsFlagReader } from './sms-flags.js';
+import { createAwsEndUserMessagingSmsProvider } from './sms-provider.js';
+import {
+  InMemoryRateLimiter,
+  SMS_RATE_LIMIT_PER_PRINCIPAL,
+  SMS_RATE_LIMIT_WINDOW_MS,
+} from './sms-rate-limiter.js';
+import { createSmsSender } from './sms.js';
+import { createSsmFlagReader } from './ssm-flag-source.js';
 import {
   createStripeWebhookHandler,
   type StripeEvent,
@@ -47,7 +59,7 @@ export interface StripeWebhookHttpDeps {
   readonly eventStore: WebhookEventStore;
   readonly workshops: WorkshopRepository;
   readonly registrations: RegistrationRepository;
-  readonly sendConfirmationEmail: RegistrationEmailSender;
+  readonly notifier: Notifier;
 }
 
 export function createStripeWebhookHttpHandler(
@@ -58,7 +70,7 @@ export function createStripeWebhookHttpHandler(
     eventStore: deps.eventStore,
     workshops: deps.workshops,
     registrations: deps.registrations,
-    sendConfirmationEmail: deps.sendConfirmationEmail,
+    notifier: deps.notifier,
   });
 
   return async (event) => {
@@ -173,9 +185,39 @@ const registrations = new RegistrationRepository(
   systemClock,
 );
 
-const sendConfirmationEmail = createSesRegistrationEmailSender({
-  fromAddress: process.env.CONTACT_FORM_FROM_EMAIL ?? 'noreply@nourishthenerve.com',
-  configurationSetName: SES_CONFIGURATION_SET_NAME,
+// TASK workshop-confirmation-sms: same composition reminder-sweep-handler.ts
+// already established for a real, deployed Notifier — SMS tried first via
+// sms.ts's full guard chain, degrading to email (createSesGenericEmailSender,
+// the same verified identity the old direct-SES send used) on any failure.
+// The spend cap and rate limiter here are shared with appointment
+// reminders' own instances (same table, same SMS_MONTHLY_CAP_PENCE) —
+// docs/plan/02-risk-register.md's R-01 row accounts for the combined volume.
+const flags = createSsmFlagReader();
+
+const notifier = createNotifier({
+  sendEmail: createSesGenericEmailSender({
+    fromAddress: process.env.CONTACT_FORM_FROM_EMAIL ?? 'noreply@nourishthenerve.com',
+    configurationSetName: SES_CONFIGURATION_SET_NAME,
+  }),
+  sendSms: createSmsSender({
+    flags: new GenericSmsFlagReader(flags),
+    rateLimiter: new InMemoryRateLimiter({
+      clock: systemClock,
+      limit: SMS_RATE_LIMIT_PER_PRINCIPAL,
+      windowMs: SMS_RATE_LIMIT_WINDOW_MS,
+    }),
+    spendCounter: new DynamoSpendCounterStore({ tableName: process.env.NOTIFICATION_TABLE_NAME ?? '' }),
+    provider: createAwsEndUserMessagingSmsProvider({
+      // Empty until LL-02 provisions a real UK long code — the provider
+      // call then fails and every send degrades to email, same property
+      // reminder-sweep-handler.ts's own identical wiring documents.
+      originationIdentity: process.env.SMS_ORIGINATION_IDENTITY ?? '',
+      configurationSetName: SES_CONFIGURATION_SET_NAME,
+    }),
+    clock: systemClock,
+  }),
+  log: new DynamoDeliveryLog({ tableName: process.env.NOTIFICATION_TABLE_NAME ?? '' }),
+  clock: systemClock,
 });
 
 export const handler = createStripeWebhookHttpHandler({
@@ -183,5 +225,5 @@ export const handler = createStripeWebhookHttpHandler({
   eventStore,
   workshops,
   registrations,
-  sendConfirmationEmail,
+  notifier,
 });

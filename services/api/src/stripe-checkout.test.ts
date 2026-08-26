@@ -110,6 +110,18 @@ describe('createWorkshopCheckoutHandler — happy path', () => {
       attendeeEmail: 'attendee@example.com',
       stripeCheckoutSessionId: 'cs_test_1',
     });
+    expect(registration?.attendeePhone).toBeUndefined();
+  });
+
+  it('stores the attendee phone on the registration when one was given', async () => {
+    const deps = buildDeps();
+    await seedWorkshop(deps.workshops);
+    const checkout = createWorkshopCheckoutHandler(deps);
+
+    await checkout({ ...baseRequest, attendeePhone: '+447700900123' });
+
+    const registration = await deps.registrations.findById('workshop-1', 'registration-1');
+    expect(registration?.attendeePhone).toBe('+447700900123');
   });
 });
 

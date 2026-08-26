@@ -56,6 +56,7 @@ import {
   PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME,
   SES_CONFIGURATION_SET_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
+  SMS_ORIGINATION_IDENTITY,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   SITE_ORIGIN,
   STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
@@ -497,10 +498,17 @@ export class WebStack extends Stack {
           // rows confirm/cancel now write durably (data-stack.ts sets the
           // same pair on every function that writes through a repository).
           AUDIT_TABLE_NAME: props.table.tableName,
+          // TASK workshop-confirmation-sms: same table again, named for the
+          // delivery-log/spend-cap partitions the Notifier's SMS guard chain
+          // reads and writes — same convention reminder-sweep's own
+          // NOTIFICATION_TABLE_NAME in data-stack.ts documents.
+          NOTIFICATION_TABLE_NAME: props.table.tableName,
+          SMS_ORIGINATION_IDENTITY,
           STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
           STRIPE_SECRET_KEY_PARAMETER_NAME,
           CONTACT_FORM_FROM_EMAIL,
           SES_CONFIGURATION_SET_NAME,
+          ...FLAG_ENVIRONMENT,
         },
         logGroup: createLogGroup(
           this,
@@ -508,6 +516,12 @@ export class WebStack extends Stack {
           logGroupName('stripe-webhook-function'),
         ),
       });
+
+      // TASK workshop-confirmation-sms: sms.ts's guard chain reads SMS
+      // feature flags (kill switch etc.) via SSM — same grant every other
+      // function that constructs a real Notifier/SmsSender already needs
+      // (data-stack.ts's reminder-sweep role).
+      grantFlagReads(this, stripeWebhookRole);
 
       props.table.grantReadData(stripeWebhookRole);
       // Precise write actions only — same reasoning WorkshopCheckoutWrite
@@ -567,6 +581,19 @@ export class WebStack extends Stack {
               resourceName: SES_CONFIGURATION_SET_NAME,
             }),
           ],
+        }),
+      );
+      // TASK workshop-confirmation-sms: the Notifier's SMS attempt, tried
+      // before the email fallback above. Unscoped resources for now, same
+      // temporary posture data-stack.ts's own SendReminderSms statement
+      // documents — narrow to the leased identity's own ARN once LL-02
+      // provisions one.
+      stripeWebhookRole.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'SendRegistrationConfirmationSms',
+          effect: Effect.ALLOW,
+          actions: ['sms-voice:SendTextMessage'],
+          resources: ['*'],
         }),
       );
 

@@ -17,5 +17,7 @@ export interface Registration extends BaseRecord<RegistrationStatus> {
   status: RegistrationStatus;
   /** Needed to send the registration-confirmation email (ses.ts) — unlike Testimonial's hashed submitterContactHash, this record's own purpose requires delivering to the real address. */
   attendeeEmail: string;
+  /** Optional — present only when the attendee gave a number at checkout. When present, the confirmation (notifications.ts's Notifier) tries SMS first and falls back to email; when absent, it goes straight to email, same as before this field existed. */
+  attendeePhone?: string;
   stripeCheckoutSessionId: string;
 }

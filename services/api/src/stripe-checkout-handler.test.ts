@@ -117,6 +117,22 @@ describe('createStripeCheckoutHttpHandler — validation', () => {
     );
     expect(result).toMatchObject({ statusCode: 400 });
   });
+
+  it('returns 400 for an implausibly long phone value, without ever calling Stripe', async () => {
+    const { deps, createCheckoutSession } = buildDeps();
+    const handler = createStripeCheckoutHttpHandler(deps);
+
+    const result = await handler(
+      fakeEvent({
+        workshopId: 'workshop-1',
+        body: { attendeeEmail: 'a@example.com', attendeePhone: '0'.repeat(33) },
+      }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(createCheckoutSession).not.toHaveBeenCalled();
+  });
 });
 
 describe('createStripeCheckoutHttpHandler — happy path', () => {
@@ -135,6 +151,42 @@ describe('createStripeCheckoutHttpHandler — happy path', () => {
     expect(JSON.parse(result.body)).toEqual({
       checkoutUrl: 'https://checkout.stripe.com/cs_test_1',
     });
+  });
+
+  it('passes a trimmed attendeePhone through to the checkout handler when given', async () => {
+    const { deps, workshops, registrations } = buildDeps();
+    await seedPublishedWorkshop(workshops);
+    const handler = createStripeCheckoutHttpHandler(deps);
+
+    await handler(
+      fakeEvent({
+        workshopId: 'workshop-1',
+        body: { attendeeEmail: 'a@example.com', attendeePhone: '  07700 900123  ' },
+      }),
+      {} as never,
+      undefined as never,
+    );
+
+    const registration = await registrations.findById('workshop-1', 'registration-1');
+    expect(registration?.attendeePhone).toBe('07700 900123');
+  });
+
+  it('treats an empty/whitespace-only attendeePhone as not given', async () => {
+    const { deps, workshops, registrations } = buildDeps();
+    await seedPublishedWorkshop(workshops);
+    const handler = createStripeCheckoutHttpHandler(deps);
+
+    await handler(
+      fakeEvent({
+        workshopId: 'workshop-1',
+        body: { attendeeEmail: 'a@example.com', attendeePhone: '   ' },
+      }),
+      {} as never,
+      undefined as never,
+    );
+
+    const registration = await registrations.findById('workshop-1', 'registration-1');
+    expect(registration?.attendeePhone).toBeUndefined();
   });
 });
 

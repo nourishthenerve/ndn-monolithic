@@ -67,6 +67,20 @@ describe('RegistrationRepository.create', () => {
     await expect(repository.create(BUYER, buildInput())).rejects.toThrow(AppError);
   });
 
+  it('round-trips an optional attendeePhone, and leaves it undefined when omitted', async () => {
+    const { repository } = buildRepository();
+    await repository.create(BUYER, buildInput({ attendeePhone: '+447700900123' }));
+    expect(await repository.findById('workshop-1', 'registration-1')).toMatchObject({
+      attendeePhone: '+447700900123',
+    });
+
+    const { repository: repository2 } = buildRepository();
+    await repository2.create(BUYER, buildInput({ id: 'registration-2' }));
+    expect(
+      (await repository2.findById('workshop-1', 'registration-2'))?.attendeePhone,
+    ).toBeUndefined();
+  });
+
   it('has no method that removes a registration', () => {
     const methodNames = Object.getOwnPropertyNames(RegistrationRepository.prototype);
     expect(methodNames).not.toContain('delete');
