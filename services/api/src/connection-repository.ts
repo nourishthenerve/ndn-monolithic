@@ -10,7 +10,13 @@
 // needs to know about — the same distinction that task's own header draws
 // between what gets audited and what does not.
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import type { Connection, Role } from '@ndn/shared-types';
 
 import type { Clock } from './clock.js';
@@ -53,6 +59,14 @@ export interface ConnectionRepository {
    * points at, not gain a fresh 12h window of its own at join time.
    */
   recordCallJoin(input: RecordCallJoinInput): Promise<void>;
+  /**
+   * TASK 4.2.2: queries `CALL#<appointmentId>` — at most two items, the
+   * same partition `recordCallJoin` writes to — and hands every row back
+   * as-is. `ws-relay.ts`'s own job is deciding who, if anyone, among these
+   * rows the sender is and who the other party is; this method makes no
+   * decision, it only reads.
+   */
+  findCallParticipants(appointmentId: string): Promise<CallParticipant[]>;
 }
 
 export interface RecordCallJoinInput {
@@ -61,6 +75,12 @@ export interface RecordCallJoinInput {
   readonly principalId: string;
   readonly role: Role;
   readonly ttl: number;
+}
+
+export interface CallParticipant {
+  readonly connectionId: string;
+  readonly principalId: string;
+  readonly role: Role;
 }
 
 export interface DynamoConnectionRepositoryOptions {
@@ -144,5 +164,16 @@ export class DynamoConnectionRepository implements ConnectionRepository {
         },
       }),
     );
+  }
+
+  async findCallParticipants(appointmentId: string): Promise<CallParticipant[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'pk = :pk',
+        ExpressionAttributeValues: { ':pk': `CALL#${appointmentId}` },
+      }),
+    );
+    return (result.Items ?? []) as CallParticipant[];
   }
 }

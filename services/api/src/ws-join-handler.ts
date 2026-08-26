@@ -25,6 +25,7 @@ import { DynamoPrincipalDirectory } from './dynamo-principal-directory.js';
 import { DynamoAppointmentStore } from './dynamo-store.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
 import { createJoinMessageHandler, type JoinResult } from './ws-join.js';
+import { managementApiClientFor } from './ws-management-client.js';
 
 const client = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const tableName = process.env.PRINCIPAL_TABLE_NAME ?? '';
@@ -64,17 +65,6 @@ export interface JoinRequestEvent {
     readonly requestId: string;
     readonly identity?: { readonly sourceIp?: string };
   };
-}
-
-// One management-API client for the container's lifetime — domainName/stage
-// are stable for the life of a deployment (there is exactly one WebSocket
-// API in this app), the same "construct once per container, not per
-// invocation" reasoning jwt-verify.ts's memoiseVerifier states generally.
-let managementClient: ApiGatewayManagementApiClient | undefined;
-function managementApiClientFor(domainName: string, stage: string): ApiGatewayManagementApiClient {
-  return (managementClient ??= new ApiGatewayManagementApiClient({
-    endpoint: `https://${domainName}/${stage}`,
-  }));
 }
 
 async function postToConnection(

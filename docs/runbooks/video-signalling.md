@@ -1,12 +1,14 @@
-# WebSocket signalling channel: connect, disconnect, the connection table, and the call join (TASK 4.1.1, TASK 4.2.1)
+# WebSocket signalling channel: connect, disconnect, the connection table, the call join, and the relay (TASK 4.1.1, TASK 4.2.1, TASK 4.2.2)
 
-**Date:** 2026-08-26 · **Tasks:** [05-execution-plan.md § TASK 4.1.1](../plan/05-execution-plan.md), § TASK 4.2.1 · **Requirements:** D-12, R-03 (TASK 4.2.1) · **Decisions:** ADR-0007 (amended by TASK 4.1.1) · **Depends on:** 2.2.1, 2.2.2 (TASK 4.1.1); 4.1.1, 3.4.1, 3.4.2 (TASK 4.2.1) · **Blocks:** every later Phase 4 task
+**Date:** 2026-08-26 · **Tasks:** [05-execution-plan.md § TASK 4.1.1](../plan/05-execution-plan.md), § TASK 4.2.1, § TASK 4.2.2 · **Requirements:** D-12, R-03 (TASK 4.2.1) · **Decisions:** ADR-0007 (amended by TASK 4.1.1) · **Depends on:** 2.2.1, 2.2.2 (TASK 4.1.1); 4.1.1, 3.4.1, 3.4.2 (TASK 4.2.1); 4.2.1 (TASK 4.2.2) · **Blocks:** every later Phase 4 task
 
 ## What this covers
 
 **TASK 4.1.1** is the first WebSocket surface this codebase has built. An authenticated patient or clinician can open a `wss://` connection, have it recorded in a DynamoDB connection row, and close it cleanly. `docs/adr/0007-signalling.md`'s amendment records the one real constraint it surfaced: a browser's `WebSocket` constructor cannot set an `Authorization` header on the handshake, so the Cognito ID token rides as `?token=` on the connect URL instead.
 
 **TASK 4.2.1** answers the question 4.1.1 deliberately left open: a socket proves *who* is connected, not *whether they may join a given appointment's call, right now*. A `{ type: 'join', appointmentId }` message runs `can()`'s new `'join-call'` action (a stricter claim than `'read'` on the same `Appointments` row — granted only to the owning patient and the assigned sub-clinician, never the principal clinician), then checks the record is still `scheduled` and that `now` sits inside a named window around `scheduledAt`. Every attempt — allowed or denied — is audited; a denial always carries a typed reason on the same socket, never a bare close.
+
+**TASK 4.2.2** is the small handshake two joined parties still need before WebRTC can talk P2P: `{ appointmentId, type: 'offer' | 'answer' | 'ice-candidate' | 'leave', payload }`, relayed from one authorised party's socket to the other's, and to no one else. It never re-runs 4.2.1's own authorisation decision — the `CALL#<appointmentId>` partition 4.2.1 writes at join time is the sole source of truth for "who is the other party," queried directly rather than re-checked against `can()` a second time. Nothing here is video or audio media, only SDP/ICE messages, and the payload itself is never logged.
 
 ## What was built
 
@@ -31,6 +33,16 @@
 - **`services/api/src/ws-default-handler.ts`** (amended) — TASK 4.1.1's two-line stub is now the real `$default` dispatcher: Zod-validates the message shape and hands a `'join'` message to `ws-join-handler.ts`. Every message this codebase sends uses a `type` field, never `action`, so nothing ever matches a named WebSocket route — everything arrives here.
 - **`infra/src/data-stack.ts`** — `WsDefaultFunction`'s role gains: `GetItem` on `CONN#*`/`PAT#*`/`CLI#*` (the connection, directory and appointment reads — the same prefix covers both a principal's profile and an appointment row, since appointments live under `PAT#<patientId>` too); `PutItem` on `CALL#*` and `AUDIT#*`; `ssm:GetParameter` for `video.callAuthz.enabled`; and `execute-api:ManageConnections` on the WebSocket stage (`WebSocketStage.grantManagementApiAccess`) — the one IAM action no other role in this stack has needed.
 - **`services/api/package.json`** — new dependency, `@aws-sdk/client-apigatewaymanagementapi`, pinned to the same `3.1109.0` release train as every other `@aws-sdk/client-*` package here. **`pnpm-workspace.yaml`** gained a `@smithy/types: '4.17.0'` override: the new package's own transitive dependencies briefly pulled a second, newer copy of `@smithy/types` into the tree, which broke structural typing between it and every other `@aws-sdk/client-*` package (two installed copies of the same interface are nominally different types to TypeScript) — pinned to the version already used everywhere else so pnpm converges on one copy.
+
+### TASK 4.2.2 additions
+
+- **`services/api/src/connection-repository.ts`** — gains `findCallParticipants`, a `Query` (never `GetItem`) against the `CALL#<appointmentId>` partition 4.2.1's `recordCallJoin` writes to, returning every row as-is (at most two).
+- **`services/api/src/ws-relay.ts`** — `createRelayMessageHandler`: the SDK-free decision, mirroring `ws-join.ts`'s own split. Given a sender's own `connectionId` and the `appointmentId` they name, it queries the `CALL#` partition once and returns `forward` (to the other participant), `peer-unavailable` (the sender joined, the other party has not), or `not-authorised` (the sender's own `connectionId` is not one of this call's participants — refused silently, never audited, since 4.2.1's own join decision is the one place that access decision is recorded). It never calls `can()` or re-derives anything 4.2.1 already decided.
+- **`services/api/src/ws-management-client.ts`** (new) — the memoised `ApiGatewayManagementApiClient` construction TASK 4.2.1 first wrote inline in `ws-join-handler.ts`, extracted so `ws-relay-handler.ts` shares the identical cached client rather than keeping a second one: both handlers run inside the same Lambda container (`WsDefaultFunction`), since both `join` and the relay's own message types arrive at the same `$default` route.
+- **`services/api/src/ws-relay-handler.ts`** — the AWS wiring: resolves the decision, then either does nothing (unauthorised), answers the sender with `{ type: 'peer-unavailable' }`, or forwards the original envelope (`appointmentId`, `type`, `payload`) to the other party's connection via `PostToConnectionCommand`. A `GoneException` from that call soft-marks the stale row via `connections.markDisconnected` — the identical update `$disconnect` itself makes, never a delete. The payload is never logged; only `type` and `appointmentId` are.
+- **`services/api/src/ws-default-handler.ts`** (amended) — gains `RelayMessageSchema` alongside `JoinMessageSchema`; a message matching neither is still accepted and ignored, never a close.
+- **`services/api/src/ws-join-handler.ts`** (amended) — its own inline management-client memoisation moved to `ws-management-client.ts`; no behavioural change.
+- **`infra/src/data-stack.ts`** — `WsDefaultFunction`'s role gains two statements: `Query` on `CALL#*` (`QueryCallParticipants`) and `UpdateItem` on `CONN#*` (`MarkStaleConnectionRow`, for the `GoneException` soft-mark) — no new function, no new route, no new resource beyond these two IAM statements.
 
 ## Verification steps
 
@@ -57,14 +69,25 @@ Once `video.callAuthz.enabled` is also turned on, over the same connection:
 - Sent for an appointment the caller is not a party to: `{ "type": "join-denied", "reason": "not-your-appointment" }`, audited the same way.
 - `aws dynamodb query` on `CALL#<appointmentId>` (main table, no index) shows one item per successful joiner, each `CONN#<connectionId>`.
 
+Once both parties have joined the same appointment's call (two separate `wscat` sessions, one per socket from the previous step):
+
+```json
+{ "appointmentId": "<patientId>#<scheduledAt-iso>", "type": "offer", "payload": { "sdp": "..." } }
+```
+
+- Sent by one joined party, the other party's own socket receives the identical envelope — `appointmentId`, `type`, `payload` unchanged.
+- Sent by a socket that never joined this `appointmentId` (or joined a different one): nothing arrives on either socket, and no error is returned to the sender.
+- Sent by a joined party before the other has joined: the sender receives `{ "type": "peer-unavailable" }`.
+- In every case, `aws logs filter-log-events` against `WsDefaultFunction`'s log group shows `type` and `appointmentId` on each line — never `payload`.
+
 ## What was deliberately not built here
 
-- **No message relay.** `$default` now handles `join`; `offer`/`answer`/`ice-candidate`/`leave` are still unhandled — TASK 4.2.2 builds the relay on top of the `CALL#` partition this task writes.
+- **No peer connection, no media.** TASK 4.2.2 relays SDP/ICE messages between two already-joined sockets; nothing in this codebase yet constructs an `RTCPeerConnection` or touches a camera or microphone — TASK 4.3.1 is where that starts.
 - **No `DeleteItem` anywhere, for any reason.** `$disconnect` marks a row; a denied or successful join never removes one either. DynamoDB's own background TTL sweep is the only reclaim mechanism, the same pattern `log-retention-volume-control.md` already establishes for CloudWatch log expiry, used here for the first time on a table row.
 - **No persistent audit trail for a connection itself.** `connection-repository.ts`'s own header states why — operational metadata, not a clinical or personal record, not an `AuditAction`. A *join attempt* is the one exception this codebase now carries (TASK 4.2.1), and it is audited as an attempt against the appointment, not as an event about the connection row.
 - **No reuse of the HTTP `AuthorizerFunction` Lambda for $connect.** `WebSocketLambdaAuthorizer`'s IAM-policy-only response contract rules it out; see `docs/adr/0007-signalling.md`'s amendment.
-- **No re-running `can()`'s decision on a second, independent path.** TASK 4.2.2's relay confirms a sender's own `principalId` is one of the `CALL#` partition's two items — it does not re-authorise the join, because two independent authorisation paths for the same decision are a way for them to drift, not a safety margin.
+- **No re-running `can()`'s decision on a second, independent path.** TASK 4.2.2's relay confirms a sender's own `connectionId` is one of the `CALL#` partition's items — it does not re-authorise the join, because two independent authorisation paths for the same decision are a way for them to drift, not a safety margin.
 
 ## Cost
 
-$0.01/month at M6, $0.02/month at M12 — `03-cost-model.md`'s API Gateway WebSocket line, live-priced at Gate G3 (2026-08-26) ahead of TASK 4.1.1 and unchanged by it: $1.00/million messages + $0.25/million connection-minutes, `eu-west-2` standard rate, no free tier assumed. TASK 4.2.1 adds £0.00 net-new — Lambda logic and audit writes inside the same DynamoDB line, no new resource beyond one CloudWatch alarm reserved in TASK 4.4.2's own budget.
+$0.01/month at M6, $0.02/month at M12 — `03-cost-model.md`'s API Gateway WebSocket line, live-priced at Gate G3 (2026-08-26) ahead of TASK 4.1.1 and unchanged by it: $1.00/million messages + $0.25/million connection-minutes, `eu-west-2` standard rate, no free tier assumed. TASK 4.2.1 adds £0.00 net-new — Lambda logic and audit writes inside the same DynamoDB line, no new resource beyond one CloudWatch alarm reserved in TASK 4.4.2's own budget. TASK 4.2.2 adds £0.00 net-new too — the relay's own messages are already inside 4.1.1's own modelled message count (~30 signalling messages per call), and its two new IAM statements carry no cost of their own.

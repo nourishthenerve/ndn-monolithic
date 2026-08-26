@@ -41,11 +41,19 @@ describe('audit wiring', () => {
   // the audit log needs to know about, the same distinction TASK 2.1.3's
   // own header draws between what gets audited and what does not). A
   // handler wiring it can never "hand it the durable writer" because
-  // there is no writer parameter to hand — exempting the two call sites
-  // by name, not by weakening the check, keeps this test able to catch
-  // the next entity that silently drops audit wiring by omission rather
-  // than by this one, recorded decision.
-  const CONNECTION_REPOSITORY_HANDLERS = ['ws-connect-handler.ts', 'ws-disconnect-handler.ts'];
+  // there is no writer parameter to hand — exempting the call sites by
+  // name, not by weakening the check, keeps this test able to catch the
+  // next entity that silently drops audit wiring by omission rather than
+  // by this one, recorded decision. TASK 4.2.2's ws-relay-handler.ts is
+  // the third: the relay's own decision (ws-relay.ts) never writes an
+  // audit event — 4.2.1's join decision is the one place a call-related
+  // access decision is recorded, and relaying an already-authorised
+  // message is not a second one.
+  const CONNECTION_REPOSITORY_HANDLERS = [
+    'ws-connect-handler.ts',
+    'ws-disconnect-handler.ts',
+    'ws-relay-handler.ts',
+  ];
 
   it('every handler that constructs a repository hands it the durable writer', () => {
     const offenders = productionSources()

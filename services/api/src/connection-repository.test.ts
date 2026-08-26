@@ -1,7 +1,13 @@
 // TASK 4.1.1. Same aws-sdk-client-mock shape dynamo-principal-directory.test.ts
 // uses — the real command objects, so the key shape and the TTL math this
 // builds are asserted as they would reach DynamoDB.
-import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -198,5 +204,34 @@ describe('recordCallJoin (TASK 4.2.1)', () => {
     });
 
     expect(ddbMock.calls()).toHaveLength(1);
+  });
+});
+
+describe('findCallParticipants (TASK 4.2.2)', () => {
+  it('queries the CALL#<appointmentId> partition, nothing else', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    await repository().findCallParticipants('pat-1#2026-09-01T10:00:00.000Z');
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: TABLE_NAME,
+      KeyConditionExpression: 'pk = :pk',
+      ExpressionAttributeValues: { ':pk': 'CALL#pat-1#2026-09-01T10:00:00.000Z' },
+    });
+  });
+
+  it('returns every item the partition holds', async () => {
+    const items = [
+      { connectionId: 'conn-1', principalId: 'pat-1', role: 'patient', ttl: 1 },
+      { connectionId: 'conn-2', principalId: 'cli-1', role: 'sub-clinician', ttl: 1 },
+    ];
+    ddbMock.on(QueryCommand).resolves({ Items: items });
+
+    expect(await repository().findCallParticipants('pat-1#2026-09-01T10:00:00.000Z')).toEqual(items);
+  });
+
+  it('returns an empty array when nobody has joined', async () => {
+    ddbMock.on(QueryCommand).resolves({});
+
+    expect(await repository().findCallParticipants('pat-1#2026-09-01T10:00:00.000Z')).toEqual([]);
   });
 });
