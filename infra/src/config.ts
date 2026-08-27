@@ -322,6 +322,14 @@ export const SES_CONFIGURATION_SET_NAME = 'ndn-email';
 // so the two never drift apart silently.
 export const PR_STACK_ID_PREFIX = 'NdnWebStackPr';
 
+// TASK 5.1.1: the load-test stack's own fixed ids/label (bin/app.ts) —
+// fixed rather than a generated suffix like PR_STACK_ID_PREFIX's, because
+// exactly one load-test copy exists at a time (docs/runbooks/
+// load-testing.md), never several concurrently the way open PRs can be.
+export const LOAD_TEST_DATA_STACK_ID = 'NdnLoadTestDataStack';
+export const LOAD_TEST_WEB_STACK_ID = 'NdnLoadTestWebStack';
+export const LOAD_TEST_LABEL = 'load-test';
+
 // The one log group an ephemeral PR stack writes to but does not own.
 //
 // Gate G1 §4's fix gave `BucketDeployment`'s Lambda an explicit log group,

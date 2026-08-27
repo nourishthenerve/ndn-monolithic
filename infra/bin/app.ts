@@ -6,6 +6,9 @@ import {
   ACCOUNT_ID,
   COST_ALLOCATION_TAG_KEY,
   COST_ALLOCATION_TAG_VALUE,
+  LOAD_TEST_DATA_STACK_ID,
+  LOAD_TEST_LABEL,
+  LOAD_TEST_WEB_STACK_ID,
   PR_STACK_ID_PREFIX,
   REGION,
 } from '../src/config.js';
@@ -34,8 +37,37 @@ enforceLogRetention(app);
 // (docs/runbooks/ephemeral-pr-environments.md); this branch is what makes
 // the CDK app agree with that boundary rather than merely not violate it.
 const prNumber = process.env.PR_NUMBER;
+// TASK 5.1.1: a human-triggered, single-copy disposable stack for
+// `docs/runbooks/load-testing.md`'s own run — not CI-triggered like
+// `PR_NUMBER` above, and not per-PR: exactly one exists at a time, so its
+// two stack ids and its `DataStack`/`WebStack` `prLabel` are fixed
+// constants rather than a number substituted in. Deliberately no
+// `AuthStack` here — `NdnAuthStack`'s pools are `RETAIN` plus deletion
+// protection precisely so a disposable copy is never created (see
+// `AuthStack` below), and `DataStack`/`WebStack`'s Lambdas already resolve
+// Cognito identifiers from `config.ts`'s fixed constants rather than a
+// cross-stack reference — so this disposable copy authenticates against
+// the same real, already-provisioned production pools a real signed-in
+// test principal already exists in (`docs/runbooks/load-testing.md`'s own
+// test identities, shared with TASK 5.3.1's).
+const loadTest = process.env.LOAD_TEST;
 
-if (prNumber) {
+if (loadTest) {
+  const loadTestDataStack = new DataStack(app, LOAD_TEST_DATA_STACK_ID, {
+    env: { account: ACCOUNT_ID, region: REGION },
+    ephemeral: true,
+    prLabel: LOAD_TEST_LABEL,
+  });
+
+  new WebStack(app, LOAD_TEST_WEB_STACK_ID, {
+    env: { account: ACCOUNT_ID, region: REGION },
+    deployVersion: process.env.GITHUB_SHA ?? 'local',
+    ephemeral: true,
+    prLabel: LOAD_TEST_LABEL,
+    table: loadTestDataStack.table,
+    authorizerFunction: loadTestDataStack.authorizerFunction,
+  });
+} else if (prNumber) {
   new WebStack(app, `${PR_STACK_ID_PREFIX}${prNumber}`, {
     env: { account: ACCOUNT_ID, region: REGION },
     deployVersion: process.env.GITHUB_SHA ?? 'local',

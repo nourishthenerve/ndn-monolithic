@@ -1340,3 +1340,59 @@ describe('DataStack — TURN credentials (TASK 4.4.1, TASK 4.4.2)', () => {
     expect(statements[0]?.Action).toBe('ssm:GetParameter');
   });
 });
+
+// TASK 5.1.1: a second, ephemeral-mode synth — the production `synth()`
+// above is memoized and must stay on the default (non-ephemeral) shape.
+let ephemeralTemplate: Template | undefined;
+
+function synthEphemeral(): Template {
+  return (ephemeralTemplate ??= (() => {
+    const app = new App();
+    const stack = new DataStack(app, 'TestLoadTestDataStack', {
+      env: { account: '357601815388', region: 'eu-west-2' },
+      ephemeral: true,
+      prLabel: 'load-test',
+    });
+    return Template.fromStack(stack);
+  })());
+}
+
+describe('DataStack — ephemeral load-test mode (TASK 5.1.1)', () => {
+  it('destroys the table on cdk destroy, unlike production’s RETAIN', () => {
+    const template = synthEphemeral();
+    template.hasResource('AWS::DynamoDB::Table', {
+      UpdateReplacePolicy: 'Delete',
+      DeletionPolicy: 'Delete',
+    });
+  });
+
+  it('still enables PITR — DESTROY governs deletion, not recovery', () => {
+    const template = synthEphemeral();
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+    });
+  });
+
+  it('production’s own synth is unaffected by the ephemeral flag — still RETAIN', () => {
+    const template = synth();
+    template.hasResource('AWS::DynamoDB::Table', {
+      UpdateReplacePolicy: 'Retain',
+      DeletionPolicy: 'Retain',
+    });
+  });
+
+  it('scopes every explicit log group name to the load-test label, not the fixed production names', () => {
+    const template = synthEphemeral();
+    for (const baseName of [
+      'content-read-function',
+      'authorizer-function',
+      'ws-connect-function',
+      'turn-credentials-function',
+    ]) {
+      template.hasResourceProperties('AWS::Logs::LogGroup', {
+        LogGroupName: `/ndn/load-test/${baseName}`,
+        RetentionInDays: 14,
+      });
+    }
+  });
+});

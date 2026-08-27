@@ -1,0 +1,47 @@
+# TASK 5.1.1 — 10x HTTP baseline, derived from docs/plan/03-cost-model.md's
+# M12 "API Gateway HTTP API" line by derive-targets.ts (run
+# `node --experimental-strip-types derive-targets.ts` or the accompanying
+# vitest suite to see the arithmetic). 18.94 req/s is the 10x peak this
+# scenario ramps to and holds — if 03-cost-model.md's own 500k req/month
+# figure ever changes, this number must be re-derived and this file edited
+# by hand; nothing wires the two together automatically.
+#
+# Scoped to routes with no side effect worth worrying about at 10x volume:
+# a health check and a public content read. Deliberately excludes
+# /contact (sends a real email), /auth/* (real Cognito calls against a
+# shared account-wide rate limit — see load-testing.md's own note on this),
+# and anything that writes an appointment/message/SMS-triggering row — a
+# full authenticated-write load pass is out of this scenario's scope, named
+# honestly rather than silently attempted and mis-scaled.
+#
+# Run against the disposable load-test stack (docs/runbooks/
+# load-testing.md) — never production. Two different hosts are involved:
+# `NdnLoadTestDataStack`'s own ContentHttpApiUrl (config.target, the
+# default for every relative url: below) and `NdnLoadTestWebStack`'s
+# DistributionDomainName (TARGET_WEB_URL, named per-request since /health
+# lives on a second HttpApi entirely — data-stack.ts's own header explains
+# why ContentHttpApi has "no CloudFront behavior routing to it yet"). Both
+# are printed by `cdk deploy`'s own CfnOutputs.
+config:
+  target: '{{ $processEnvironment.TARGET_CONTENT_API_URL }}'
+  phases:
+    - name: ramp to 10x peak
+      duration: 120
+      arrivalRate: 1
+      rampTo: 19
+    - name: hold at 10x peak
+      duration: 300
+      arrivalRate: 19
+
+scenarios:
+  - name: health check (WebStack's own HttpApi, a different host)
+    weight: 30
+    flow:
+      - get:
+          url: 'https://{{ $processEnvironment.TARGET_WEB_URL }}/health'
+
+  - name: public content read (ContentHttpApi, this file's default target)
+    weight: 70
+    flow:
+      - get:
+          url: '/content'

@@ -52,6 +52,16 @@ overrides:
   '@smithy/types': '4.17.0'
 allowBuilds:
   esbuild: true
+  # TASK 5.1.1: all three reached only through artillery's own optional
+  # features this repo never uses — a browser-scenario engine, gRPC/
+  # OpenTelemetry cloud reporting, and a StatsD reporter (`pnpm why
+  # <pkg>` traces each to artillery alone). Denied rather than approved:
+  # artillery's HTTP/WS engines (what tests/load/*.yml actually use) need
+  # none of their install scripts, and declining a script this repo has
+  # no use for is a smaller trust surface than running it un-reviewed.
+  '@playwright/browser-chromium': false
+  protobufjs: false
+  unix-dgram: false
   unrs-resolver: true
 minimumReleaseAgeExclude:
   - '@esbuild/aix-ppc64@0.28.2'
