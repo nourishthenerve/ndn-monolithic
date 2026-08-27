@@ -662,9 +662,39 @@ export class WebStack extends Stack {
           // embedded rather than top-level-navigated to) needs
           // `https://checkout.stripe.com`. Both scoped to exactly these
           // origins, not widened generally.
+          //
+          // **Found live, 2026-08-27, the first time `auth.webSignIn.enabled`
+          // was ever turned on in production:** every `client:only="react"`
+          // island — the *entire* authenticated account shell (index,
+          // patient, caseload, content, messages, call, callback; every
+          // page TASK 2.2.4 through 4.5.1 built) — silently failed to
+          // hydrate. Astro's own hydration runtime for `client:only` emits
+          // two small inline `<script>` blocks (never a `src=` file) that
+          // define `window.Astro.only` and register the `<astro-island>`
+          // custom element; a `script-src` with no `'unsafe-inline'`, hash,
+          // or nonce blocks both outright, so the custom element never
+          // upgrades and nothing — not even RequireAuth's own loading
+          // state — ever renders. No prior task caught this because every
+          // "Verification" line through Phase 4 checked the *build output*
+          // (`dist/index.html` exists, the route resolves 200) or ran axe
+          // against an unauthenticated per-PR stack — never a real,
+          // signed-in, rendered DOM, which is exactly the gap TASK 5.3.1
+          // exists to close. This fix predates 5.3.1's own first live run.
+          //
+          // The two hashes are Astro's fixed, per-build-version runtime
+          // boilerplate — identical across every `client:only` island on
+          // every page (confirmed: byte-identical on both a one-island and
+          // a two-island page) — not per-page or per-component content.
+          // `apps/web/src/auth/csp-inline-scripts.test.ts` scans the real
+          // built `dist/` output and fails if a future Astro upgrade (or
+          // any new inline script anywhere on the site) ever produces a
+          // hash not listed here, so a drift is caught at build time
+          // rather than silently, live, again.
           contentSecurityPolicy:
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
-            "script-src 'self' https://challenges.cloudflare.com https://js.stripe.com; " +
+            "script-src 'self' https://challenges.cloudflare.com https://js.stripe.com " +
+            "'sha256-eIXWvAmxkr251LJZkjniEK5LcPF3NkapbJepohwYRIc=' " +
+            "'sha256-Ya0pUYrC7nM5Cn/056TyVuEiz6dFGrzmkWzgON0pF0U='; " +
             'frame-src https://challenges.cloudflare.com https://checkout.stripe.com; ' +
             "object-src 'none'; frame-ancestors 'none'",
         },
