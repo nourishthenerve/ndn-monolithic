@@ -17,6 +17,8 @@
     "test:integration": "pnpm --filter @ndn/tests run test:integration",
     "test:pr-env": "pnpm --filter @ndn/tests run test:pr-env",
     "test:coverage": "pnpm run build:web && vitest run --coverage",
+    "loadtest:http": "pnpm --filter @ndn/tests run loadtest:http",
+    "loadtest:signalling": "pnpm --filter @ndn/tests run loadtest:signalling",
     "audit": "pnpm audit --audit-level=high",
     "cwv": "lhci autorun",
     "format": "prettier --write .",

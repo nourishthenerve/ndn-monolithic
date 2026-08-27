@@ -1,0 +1,45 @@
+# TASK 5.1.1 — 10x signalling-connect baseline, derived from
+# docs/plan/03-cost-model.md's M12 "API Gateway WebSocket (signalling)"
+# line by derive-targets.ts: ~68 concurrent connections sustained, each
+# held open for the modelled 60 connection-minutes/call (Little's Law:
+# arrival rate x average duration). If that cost-model line's own figures
+# change, re-derive and edit this file by hand — nothing wires the two
+# together automatically.
+#
+# Deliberately connect-only for this first pass, not the full
+# connect->join->relay flow TASK 4.2.1-4.2.2 built: a real `join` needs a
+# real scheduled test appointment inside its own window, and that fixture
+# does not exist yet — it is TASK 5.3.1's own dependency too, and the two
+# should share one fixture rather than each inventing a slightly different
+# one. Named honestly here rather than attempted early and silently
+# undersized. TASK 5.1.2's own findings-and-fixes pass is where a
+# connect->join->relay scenario would be added, once that shared fixture
+# exists.
+#
+# TARGET_WS_URL is NdnLoadTestDataStack's own SignallingWebSocketUrl
+# CfnOutput; TARGET_WS_TOKEN is a real Cognito ID token for one of
+# docs/runbooks/load-testing.md's own test identities (shared with TASK
+# 5.3.1) — the connect authorizer (ws-authorizer.ts, TASK 4.1.1) reads it
+# from the query string, never a header, because a browser's WebSocket
+# constructor cannot set one on the handshake.
+config:
+  target: '{{ $processEnvironment.TARGET_WS_URL }}?token={{ $processEnvironment.TARGET_WS_TOKEN }}'
+  engine: ws
+  phases:
+    - name: ramp to 10x peak arrival rate
+      duration: 300
+      arrivalRate: 1
+      rampTo: 2
+    - name: hold — steady-state concurrency settles near 68 connections
+      duration: 3600
+      arrivalRate: 2
+
+scenarios:
+  - name: connect and hold for one modelled call duration
+    engine: ws
+    flow:
+      # 60 connection-minutes/call (03-cost-model.md) — held open, not
+      # immediately closed, so the phases above actually reach the
+      # ~68-concurrent steady state Little's Law predicts rather than a
+      # brief spike of short-lived connects.
+      - think: 3600

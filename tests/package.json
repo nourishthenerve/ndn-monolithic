@@ -8,7 +8,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:pr-env": "vitest run --config vitest.pr-env.config.ts && playwright test --config playwright.pr-env.config.ts"
+    "test:pr-env": "vitest run --config vitest.pr-env.config.ts && playwright test --config playwright.pr-env.config.ts",
+    "loadtest:http": "artillery run load/http-baseline.yml",
+    "loadtest:signalling": "artillery run load/signalling-connect.yml"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
@@ -16,6 +18,7 @@
     "@ndn/web": "workspace:*",
     "@playwright/test": "^1.62.1",
     "@types/node": "^22.20.1",
+    "artillery": "^2.0.34",
     "zod": "^4.4.3"
   }
 }

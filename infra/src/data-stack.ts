@@ -83,7 +83,28 @@ const GSI4_INDEX_NAME = 'GSI4';
 
 
 export interface DataStackProps extends StackProps {
-  /** TASK 0.6.3-style label for a future ephemeral stack's log group names. Unused today — no ephemeral DataStack is deployed yet (bin/app.ts). */
+  /**
+   * TASK 5.1.1: true for the disposable stack `LOAD_TEST=1` (bin/app.ts)
+   * synthesizes. Unlike `WebStack`'s own `ephemeral` (TASK 0.6.3, one
+   * per open PR, torn down within the same CI run), exactly one load-test
+   * copy exists at a time, deployed and destroyed by a human running
+   * `docs/runbooks/load-testing.md`'s own steps — so this flag only needs
+   * to make `cdk destroy` actually work, not additionally guard against
+   * concurrent collisions the way `prLabel` below does for two open PRs.
+   * Toggles `DataTable`'s `removalPolicy` to `DESTROY`; every other
+   * resource in this stack (the WebSocket/HTTP APIs, every Lambda) is
+   * already unprotected and destroys cleanly regardless. Defaults to
+   * false (production shape, unchanged) — `NdnDataStack` never sets this.
+   */
+  readonly ephemeral?: boolean;
+  /**
+   * TASK 0.6.3-style label mixed into every explicit log group name below,
+   * the same collision-avoidance `WebStack`'s own `prLabel` documents.
+   * First real caller is TASK 5.1.1's load-test stack (`'load-test'`) —
+   * a fixed, reused label is fine there (one copy at a time, per
+   * `ephemeral`'s own comment above), unlike a per-PR label's need for
+   * per-PR uniqueness.
+   */
   readonly prLabel?: string;
 }
 
@@ -112,7 +133,14 @@ export class DataStack extends Stack {
       sortKey: { name: 'sk', type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-      removalPolicy: RemovalPolicy.RETAIN,
+      // TASK 5.1.1: `DESTROY` for the load-test stack alone — a table full
+      // of synthetic 10x-derived traffic is exactly the data `RETAIN`
+      // exists to protect *against* leaving behind, not protect. PITR
+      // stays on either way; it governs recovery, not deletion, and
+      // matching production's own shape here means a restore drilled
+      // against this table (never done — TASK 5.4.1 restores production's)
+      // would behave identically if it ever needed to.
+      removalPolicy: props.ephemeral ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
       // TASK 4.1.1: enabled for the first time here, for the connection
       // table's own `ttl` attribute (connection-repository.ts) — sparse,
       // the same way GSI1-4's own projections are: only a `CONN#<id>` row
