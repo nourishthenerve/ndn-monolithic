@@ -47,8 +47,19 @@ class InMemoryAppointmentReader implements TurnAppointmentReader {
   }
 }
 
-function connectionsReturning(participants: TurnCallParticipant[]): TurnCallParticipantsReader {
-  return { findCallParticipants: async () => participants };
+class RecordingConnections implements TurnCallParticipantsReader {
+  readonly markedTurnActive: Array<{ appointmentId: string; connectionId: string }> = [];
+  constructor(private readonly participants: TurnCallParticipant[]) {}
+  async findCallParticipants() {
+    return this.participants;
+  }
+  async markTurnActive(appointmentId: string, connectionId: string): Promise<void> {
+    this.markedTurnActive.push({ appointmentId, connectionId });
+  }
+}
+
+function connectionsReturning(participants: TurnCallParticipant[]): RecordingConnections {
+  return new RecordingConnections(participants);
 }
 
 const OWNING_PATIENT_CONTEXT = {
@@ -98,7 +109,7 @@ function enabledFlags() {
   return new CachedFlagReader({ source, clock: clockAt(SCHEDULED_AT), ttlMs: 0 });
 }
 
-const LIVE_JOIN: TurnCallParticipant = { principalId: 'sub-1', ttl: NOW_SECONDS + 3600 };
+const LIVE_JOIN: TurnCallParticipant = { connectionId: 'conn-1', principalId: 'sub-1', ttl: NOW_SECONDS + 3600 };
 
 function jsonFetcher(status: number, body: unknown): Fetcher {
   return async () => ({ ok: status >= 200 && status < 300, json: async () => body });
@@ -136,7 +147,7 @@ function build(options: {
     logger: { logRequest: (entry) => logs.push({ route: entry.route, statusCode: entry.statusCode }) },
   };
 
-  return { handler: createTurnCredentialsHandler(deps), logs };
+  return { handler: createTurnCredentialsHandler(deps), logs, connections };
 }
 
 async function invoke(
@@ -199,21 +210,21 @@ describe('createTurnCredentialsHandler', () => {
 
   it('refuses a principal whose CALL# row has already expired, even though they joined earlier', async () => {
     const { handler } = build({
-      participants: [{ principalId: 'sub-1', ttl: NOW_SECONDS - 60 }],
+      participants: [{ connectionId: 'conn-1', principalId: 'sub-1', ttl: NOW_SECONDS - 60 }],
     });
     const response = await invoke(handler, fakeEvent({}));
     expect(JSON.parse(response.body)).toEqual({ error: 'FORBIDDEN', reason: 'not-joined' });
   });
 
   it("refuses against another principal's live CALL# row — matched by principalId, not merely by any row existing", async () => {
-    const { handler } = build({ participants: [{ principalId: 'someone-else', ttl: NOW_SECONDS + 3600 }] });
+    const { handler } = build({ participants: [{ connectionId: 'conn-2', principalId: 'someone-else', ttl: NOW_SECONDS + 3600 }] });
     const response = await invoke(handler, fakeEvent({}));
     expect(JSON.parse(response.body)).toEqual({ error: 'FORBIDDEN', reason: 'not-joined' });
   });
 
   it('the owning patient can also obtain credentials for their own live call', async () => {
     const { handler } = build({
-      participants: [{ principalId: 'pat-1', ttl: NOW_SECONDS + 3600 }],
+      participants: [{ connectionId: 'conn-1', principalId: 'pat-1', ttl: NOW_SECONDS + 3600 }],
     });
     const response = await invoke(handler, fakeEvent({ principal: OWNING_PATIENT_CONTEXT }));
     expect(response.statusCode).toBe(200);
@@ -226,6 +237,40 @@ describe('createTurnCredentialsHandler', () => {
     expect(JSON.parse(response.body)).toEqual({
       iceServer: { urls: ['turn:turn.cloudflare.com:3478'], username: 'u', credential: 'super-secret-turn-credential' },
     });
+  });
+
+  it("marks the caller's own row turnActive on a successful issuance (TASK 4.4.2)", async () => {
+    const { handler, connections } = build();
+    await invoke(handler, fakeEvent({}));
+    expect(connections.markedTurnActive).toEqual([{ appointmentId: APPOINTMENT_ID, connectionId: 'conn-1' }]);
+  });
+
+  it('does not mark turnActive when the provider call fails', async () => {
+    const { handler, connections } = build({ fetcher: jsonFetcher(500, {}) });
+    await invoke(handler, fakeEvent({}));
+    expect(connections.markedTurnActive).toEqual([]);
+  });
+
+  it("refuses a second relay once the other party's row is already turnActive (the concurrent-relay cap)", async () => {
+    const { handler } = build({
+      participants: [
+        LIVE_JOIN,
+        { connectionId: 'conn-other', principalId: 'pat-1', ttl: NOW_SECONDS + 3600, turnActive: true },
+      ],
+    });
+    const response = await invoke(handler, fakeEvent({}));
+    expect(JSON.parse(response.body)).toEqual({ error: 'FORBIDDEN', reason: 'relay-capped' });
+  });
+
+  it("does not cap a caller against their own prior turnActive row — only the other party's counts", async () => {
+    const { handler } = build({
+      participants: [
+        { ...LIVE_JOIN, turnActive: true },
+        { connectionId: 'conn-other', principalId: 'pat-1', ttl: NOW_SECONDS + 3600 },
+      ],
+    });
+    const response = await invoke(handler, fakeEvent({}));
+    expect(response.statusCode).toBe(200);
   });
 
   it('normalises a single-string urls field into an array', async () => {

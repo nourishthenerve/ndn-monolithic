@@ -1284,4 +1284,59 @@ describe('DataStack — WebSocket signalling (TASK 4.1.1)', () => {
       'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] },
     });
   });
+
+  it('grants WsDefaultFunction cloudwatch:PutMetricData for the EstimatedTurnRelayGB metric (TASK 4.4.2)', () => {
+    const statements = statementsWithSid('PutTurnRelayMetric');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('cloudwatch:PutMetricData');
+    expect(statements[0]?.Resource).toBe('*');
+  });
+});
+
+describe('DataStack — TURN credentials (TASK 4.4.1, TASK 4.4.2)', () => {
+  function statementsWithSid(sid: string): Record<string, unknown>[] {
+    return Object.values(synth().findResources('AWS::IAM::Policy'))
+      .flatMap(
+        (policy) =>
+          (policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } })
+            .Properties.PolicyDocument.Statement,
+      )
+      .filter((statement) => statement.Sid === sid);
+  }
+
+  it('routes POST /calls/{appointmentId}/turn-credentials to TurnCredentialsFunction, behind the real authorizer', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /calls/{appointmentId}/turn-credentials',
+      AuthorizationType: 'CUSTOM',
+    });
+  });
+
+  it('grants GetItem on PAT#* alone for the appointment lookup', () => {
+    const statements = statementsWithSid('ReadPatientAppointmentRows');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual('dynamodb:GetItem');
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] },
+    });
+  });
+
+  it('grants Query and UpdateItem on CALL#* — the live-join check and the concurrent-relay-cap write (TASK 4.4.2)', () => {
+    const statements = statementsWithSid('QueryCallParticipantsForTurnCredentials');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toEqual(['dynamodb:Query', 'dynamodb:UpdateItem']);
+    expect(statements[0]?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CALL#*'] },
+    });
+  });
+
+  it('grants ssm:GetParameter scoped to exactly the one Cloudflare TURN token parameter', () => {
+    const statements = statementsWithSid('ReadCloudflareTurnApiToken');
+
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.Action).toBe('ssm:GetParameter');
+  });
 });

@@ -67,6 +67,15 @@ export interface ConnectionRepository {
    * decision, it only reads.
    */
   findCallParticipants(appointmentId: string): Promise<CallParticipant[]>;
+  /**
+   * TASK 4.4.2: marks a `CALL#` row's own `turnActive` flag once
+   * `turn-credentials.ts` has issued a credential against it — never
+   * cleared, the same "no destructive primitives" discipline this row's
+   * own TTL reclaim already relies on for cleanup, so a call that has
+   * used TURN once stays capped at one active relay for the rest of that
+   * row's life, the conservative direction to err in.
+   */
+  markTurnActive(appointmentId: string, connectionId: string): Promise<void>;
 }
 
 export interface RecordCallJoinInput {
@@ -83,6 +92,8 @@ export interface CallParticipant {
   readonly role: Role;
   /** TASK 4.4.1: already stored by `recordCallJoin` (epoch seconds), only exposed on the type from this task on — `turn-credentials.ts` is its first reader, checking a caller's own row is still unexpired before minting a credential against it. */
   readonly ttl: number;
+  /** TASK 4.4.2: set by `markTurnActive` once this participant has been issued a TURN credential — absent (never `false`) until then. */
+  readonly turnActive?: boolean;
 }
 
 export interface DynamoConnectionRepositoryOptions {
@@ -177,5 +188,28 @@ export class DynamoConnectionRepository implements ConnectionRepository {
       }),
     );
     return (result.Items ?? []) as CallParticipant[];
+  }
+
+  async markTurnActive(appointmentId: string, connectionId: string): Promise<void> {
+    try {
+      await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: `CALL#${appointmentId}`, sk: `CONN#${connectionId}` },
+          // Never creates a row that doesn't already exist — the same
+          // guard `markDisconnected` keeps, here because a credential is
+          // only ever issued against a row `turn-credentials.ts` has
+          // already confirmed is live.
+          ConditionExpression: 'attribute_exists(pk)',
+          UpdateExpression: 'SET turnActive = :true',
+          ExpressionAttributeValues: { ':true': true },
+        }),
+      );
+    } catch (error) {
+      if ((error as { name?: string }).name === 'ConditionalCheckFailedException') {
+        return;
+      }
+      throw error;
+    }
   }
 }

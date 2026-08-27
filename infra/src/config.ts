@@ -270,6 +270,25 @@ export const CLOUDFLARE_TURN_KEY_ID = '';
 // SecureString` convention TURNSTILE_SECRET_PARAMETER_NAME documents.
 export const CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME = '/ndn/cloudflare-turn-api-token';
 
+// TASK 4.4.2 (R-03): the custom metric `services/api/src/ws-relay-handler.ts`
+// emits per TURN-assisted call — mirrored there as literal strings
+// (services/api and infra share no runtime package for this value, the
+// same "mirrors infra/src/config.ts" convention `contact-form-handler.ts`
+// already documents for a secret parameter name, applied here to a
+// metric name instead).
+export const TURN_RELAY_METRIC_NAMESPACE = 'Ndn/Video';
+export const TURN_RELAY_METRIC_NAME = 'EstimatedTurnRelayGB';
+
+// An early-warning threshold, not the hard cap — TASK 4.4.1's own
+// concurrent-relay cap is that, enforced before a credential is ever
+// issued. Half of Cloudflare's re-verified 1,000 GB/month TURN free tier
+// (`03-cost-model.md`), expressed as a daily rate so a one-day CloudWatch
+// alarm period (this stack's own existing convention, `LogIngestionVolumeAlarm`)
+// can watch it: 500 GB ÷ 30 days ≈ 16.7, rounded up to 17 — one sustained
+// day at this rate would, on its own, consume the entire month's early-
+// warning margin, well ahead of the real 1,000 GB ceiling.
+export const TURN_RELAY_ALARM_THRESHOLD_GB_PER_DAY = 17;
+
 // TASK 1.4.1 (ADR-0009): the contact-form relay's From/To addresses. From
 // is under the verified `nourishthenerve.com` domain identity (docs/
 // runbooks/ses-production-access.md); To is the existing Zoho inbox staff

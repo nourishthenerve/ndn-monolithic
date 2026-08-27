@@ -22,6 +22,20 @@
 // only, the same "identifiers only" discipline `ws-relay.ts` already
 // applies to a relayed SDP/ICE payload, extended here to a value that
 // would let anyone holding it relay media through Cloudflare's network.
+//
+// TASK 4.4.2 (R-03): the concurrent-relay cap, which is this risk's own
+// kill switch rather than a fourth new code path — a caller refused here
+// falls straight into TASK 4.3.3's existing terminal/STUN-only path, the
+// identical "a denial is just another 'no TURN this time' outcome"
+// `VideoCall.tsx`'s own `fetchTurnIceServer` already treats every other
+// denial reason as. The cap is per call, not global: relaying *both*
+// directions of one call through TURN is the worst-case doubling this
+// task's own counter exists to prevent, read from the exact `CALL#`
+// partition rows this file already fetches for the live-join check
+// above, filtered to a `turnActive` flag this file's own issuance step
+// sets (never cleared — the conservative direction to err in, the same
+// "no destructive primitives" discipline this row's own TTL reclaim
+// already relies on).
 import type { Appointment, Principal } from '@ndn/shared-types';
 import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
 import { z } from 'zod';
@@ -70,13 +84,25 @@ export interface TurnAppointmentReader {
 }
 
 export interface TurnCallParticipant {
+  readonly connectionId: string;
   readonly principalId: string;
   readonly ttl: number;
+  readonly turnActive?: boolean;
 }
 
 export interface TurnCallParticipantsReader {
   findCallParticipants(appointmentId: string): Promise<readonly TurnCallParticipant[]>;
+  /** TASK 4.4.2: marks the issuing participant's own row, so a later request — theirs or the other party's — sees this call has already used one relay. */
+  markTurnActive(appointmentId: string, connectionId: string): Promise<void>;
 }
+
+// R-03's own worst case is *both* parties relaying through TURN at once —
+// this is what keeps one call's contribution to that worst case from
+// doubling. Not tuned to a guess: a call that needs TURN for one party at
+// all is already the network-constrained case D-12's own "P2P first"
+// ordering exists to minimise, and a second, independent relay for the
+// same call is the specific doubling R-03's mitigation list names.
+export const MAX_CONCURRENT_TURN_RELAYS_PER_CALL = 1;
 
 export interface TurnCredentialsDeps {
   readonly appointments: TurnAppointmentReader;
@@ -175,11 +201,20 @@ export function createTurnCredentialsHandler(
 
     const participants = await deps.connections.findCallParticipants(rawAppointmentId);
     const nowSeconds = Math.floor(clock.now().getTime() / 1000);
-    const hasLiveJoin = participants.some(
-      (participant) => participant.principalId === principal.subjectId && participant.ttl > nowSeconds,
-    );
-    if (!hasLiveJoin) {
+    const live = participants.filter((participant) => participant.ttl > nowSeconds);
+    const mine = live.find((participant) => participant.principalId === principal.subjectId);
+    if (!mine) {
       return respond(403, { error: 'FORBIDDEN', reason: 'not-joined' });
+    }
+
+    // Only the *other* party's own active relay counts against this
+    // caller's own request — re-issuing to the same caller (their prior
+    // credential simply expired) is never capped by their own earlier row.
+    const activeRelays = live.filter(
+      (participant) => participant.turnActive && participant.principalId !== principal.subjectId,
+    ).length;
+    if (activeRelays >= MAX_CONCURRENT_TURN_RELAYS_PER_CALL) {
+      return respond(403, { error: 'FORBIDDEN', reason: 'relay-capped' });
     }
 
     try {
@@ -202,6 +237,7 @@ export function createTurnCredentialsHandler(
         username,
         credential,
       };
+      await deps.connections.markTurnActive(rawAppointmentId, mine.connectionId);
       return respond(200, { iceServer });
     } catch {
       return respond(502, { error: 'PROVIDER_ERROR' });

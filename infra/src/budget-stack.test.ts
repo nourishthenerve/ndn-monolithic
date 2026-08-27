@@ -15,6 +15,9 @@ import {
   LOG_INGESTION_ALARM_THRESHOLD_BYTES,
   MONITORED_LOG_GROUP_NAMES,
   MONTHLY_BUDGET_LIMIT_USD,
+  TURN_RELAY_ALARM_THRESHOLD_GB_PER_DAY,
+  TURN_RELAY_METRIC_NAME,
+  TURN_RELAY_METRIC_NAMESPACE,
 } from './config.js';
 
 function synth() {
@@ -148,11 +151,42 @@ describe('BudgetStack — log ingestion volume alarm (TASK 0.5.2, R-11)', () => 
   });
 });
 
+describe('BudgetStack — TURN relay volume alarm (TASK 4.4.2, R-03)', () => {
+  it('alarms on EstimatedTurnRelayGB crossing the named daily threshold', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ndn-turn-relay-volume',
+      ComparisonOperator: 'GreaterThanThreshold',
+      Threshold: TURN_RELAY_ALARM_THRESHOLD_GB_PER_DAY,
+      EvaluationPeriods: 1,
+      TreatMissingData: 'notBreaching',
+      Namespace: TURN_RELAY_METRIC_NAMESPACE,
+      MetricName: TURN_RELAY_METRIC_NAME,
+      Statistic: 'Sum',
+      Period: 86400,
+    });
+  });
+
+  it('notifies the same SNS topic the log-ingestion alarm already uses — not a second topic', () => {
+    const template = synth();
+    const topicLogicalIds = Object.keys(template.findResources('AWS::SNS::Topic'));
+    expect(topicLogicalIds).toHaveLength(1);
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ndn-turn-relay-volume',
+      AlarmActions: Match.arrayWith([{ Ref: topicLogicalIds[0] }]),
+    });
+  });
+});
+
 describe('BudgetStack — outputs', () => {
   it('exposes the budget name, anomaly monitor ARN, and log alarm name', () => {
     const template = synth();
     template.hasOutput('BudgetName', {});
     template.hasOutput('AnomalyMonitorArn', {});
     template.hasOutput('LogIngestionAlarmName', {});
+  });
+
+  it('exposes the TURN relay alarm name', () => {
+    synth().hasOutput('TurnRelayAlarmName', {});
   });
 });
