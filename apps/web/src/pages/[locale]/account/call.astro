@@ -23,8 +23,11 @@
 // this task's actual, working equivalent — read once, client-side, by
 // `VideoCall.tsx`, the same "resolve everything at runtime, bake in
 // nothing" posture `messages.astro`'s own `/patients/me/messages` `me`
-// resolution already established for a different unknown. 4.5.1's own
-// join button is what will link here with the real query string.
+// resolution already established for a different unknown. TASK 4.5.1
+// builds the join button *on* this page (`JoinCallButton.tsx`); nothing
+// outside this page links here with a real query string yet — a real
+// "find" entry point (the appointment list itself linking here) is a
+// gap neither task's own Files list includes.
 //
 // Deliberately absent from routes.ts, same as every other authenticated
 // account page — TASK 1.1.3's a11y gate (tests/pr-env/a11y-full.test.ts)
@@ -71,6 +74,7 @@ const heading = t('videoCall.heading', undefined, locale);
   >
     <VideoCall
       client:only="react"
+      locale={locale}
       strings={{
         loadingLabel: t('videoCall.loading', undefined, locale),
         forbiddenLabel: t('videoCall.forbidden', undefined, locale),
@@ -101,6 +105,8 @@ const heading = t('videoCall.heading', undefined, locale);
           microphoneLabel: t('deviceCheck.microphoneLabel', undefined, locale),
           continueLabel: t('deviceCheck.continue', undefined, locale),
         },
+        joinCall: { label: t('videoCall.join', undefined, locale) },
+        leaveLabel: t('videoCall.leave', undefined, locale),
       }}
     />
   </RequireAuth>

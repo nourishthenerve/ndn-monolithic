@@ -66,6 +66,47 @@
 // accumulated across every retry that used one. Reported once, on
 // `leave`, at the very end of this effect's own life — never a fabricated
 // zero for a call that never touched TURN, which simply reports nothing.
+//
+// TASK 4.5.1: the join-button state machine. Every earlier Phase 4 task
+// auto-advanced on its own; this task is where a human first has to
+// press something. Two new gates sit in front of the join sequence this
+// component already built:
+//
+//   1. **`too-early`.** The join window opens 10 minutes before
+//      `scheduledAt` (`ws-join.ts`'s own `JOIN_WINDOW_OPENS_BEFORE_MINUTES`,
+//      mirrored below rather than imported — `services/api` and `apps/web`
+//      are two separate deployables). `scheduledAt` itself needs no
+//      separate fetch: it is the second half of `appointmentId`
+//      (`<patientId>#<scheduledAt>`), the identical key shape `ws-join.ts`'s
+//      own `parseAppointmentId` already parses server-side. A caller who
+//      lands here hours early sees a live countdown and never even opens
+//      a WebSocket — the join sequence below does not start until the
+//      window is open, `DeviceCheck` has handed off a stream, *and* the
+//      caller has pressed `JoinCallButton`.
+//   2. **`joinRequested`.** `DeviceCheck` handing off a stream used to
+//      start the join sequence immediately; now it only unlocks
+//      `JoinCallButton`, and the join sequence's own effect gates on this
+//      flag being set by that button's `onClick`.
+//
+// **Leaving is now a real, two-way action, not only a tab close.**
+// Clicking "Leave call" sends `{ type: 'leave' }` (4.2.2's own message,
+// 4.4.2's own optional `turnDurationSeconds`) and drops `joinRequested`
+// back to `false` — the exact same dependency change that already tears
+// down the peer connection and signalling socket on unmount reruns here,
+// so leaving needs no separate teardown path. The `leave` send itself
+// moves from "only if TURN was used" to unconditional: it is now the
+// *notification* the other party's own `onRelayMessage` reads to leave
+// `'ended'` too, `turnDurationSeconds` still only ever a real, positive
+// figure, never a fabricated zero.
+//
+// **The live countdown's own translated text.** Every prior string in
+// this file is a plain value resolved once, at page-render time, by
+// `call.astro`'s own `t()` calls — none of them vary while the page is
+// open. A countdown does, every time the number of minutes remaining
+// changes, so this is the first component in this codebase to call
+// `t()` itself, at render time, rather than only ever receiving an
+// already-resolved string as a prop.
+import { defaultLocale, t, type Locale } from '@ndn/i18n';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -76,6 +117,8 @@ import { contentApiUrl, signallingWebSocketUrl } from '../site-config.js';
 import type { CallConnectionState, CallLifecycleState } from './call-state-machine.js';
 import { createCallStateMachine } from './call-state-machine.js';
 import { DeviceCheck, type DeviceCheckStrings } from './DeviceCheck.js';
+import { joinWindowOpensAt, minutesUntilJoinWindowOpens, parseScheduledAt } from './join-window.js';
+import { JoinCallButton, type JoinCallButtonStrings } from './JoinCallButton.js';
 import type { JoinDenialReason, RelayMessage, SignallingConnection } from './webrtc-signalling-client.js';
 import { connectSignalling } from './webrtc-signalling-client.js';
 
@@ -143,7 +186,13 @@ type Stage =
   | { readonly kind: 'join-denied'; readonly reason: JoinDenialReason }
   | { readonly kind: 'waiting-for-peer' }
   | { readonly kind: 'call'; readonly lifecycle: CallLifecycleState }
-  /** The signalling socket itself closed — see this file's own header for why this is not folded into `call-state-machine.ts`. */
+  /**
+   * The call ended, expectedly — reached three ways: this side pressed
+   * "Leave call", the other party's own `leave` arrived over the relay,
+   * or the signalling socket itself closed. Never `call-failed`'s own
+   * stage — one is expected, the other is not, and TASK 4.5.1's own
+   * DoD line is that a caller must never have to guess which happened.
+   */
   | { readonly kind: 'ended' }
   | { readonly kind: 'error' };
 
@@ -167,15 +216,19 @@ export interface VideoCallStrings {
   readonly localVideoLabel: string;
   readonly remoteVideoLabel: string;
   readonly deviceCheck: DeviceCheckStrings;
+  readonly joinCall: JoinCallButtonStrings;
+  readonly leaveLabel: string;
 }
 
 export interface VideoCallProps {
   readonly strings: VideoCallStrings;
   readonly client?: SessionClient;
-  /** TASK 4.5.1's own seam — the join-button state machine's first real reader of what TASK 4.3.3 now produces. */
+  /** TASK 4.5.1's own join-button state machine is this callback's first real reader. */
   readonly onLifecycleChange?: (state: CallLifecycleState) => void;
   /** Injectable for tests; defaults to `window.location.search`. */
   readonly getAppointmentId?: () => string | undefined;
+  /** For the live too-early countdown's own `t()` call — every other string here is resolved once, at page-render time, by the caller. Defaults to `defaultLocale`. */
+  readonly locale?: Locale;
 }
 
 const defaultClient = createSessionClient();
@@ -185,10 +238,17 @@ export function VideoCall({
   client = defaultClient,
   onLifecycleChange,
   getAppointmentId = defaultGetAppointmentId,
+  locale = defaultLocale,
 }: VideoCallProps): ReactNode {
   const [stage, setStage] = useState<Stage>({ kind: 'checking' });
   const [session, setSession] = useState<Session | undefined>();
   const [deviceStream, setDeviceStream] = useState<MediaStream | undefined>();
+  // TASK 4.5.1: flipped by `JoinCallButton`'s own `onClick`, dropped back
+  // to `false` by "Leave call" or by receiving the other party's own
+  // `leave` — the join-sequence effect below is gated on this exactly
+  // the way it is already gated on `deviceStream`.
+  const [joinRequested, setJoinRequested] = useState(false);
+  const [now, setNow] = useState(() => new Date());
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -222,11 +282,30 @@ export function VideoCall({
     }
   }, [deviceStream]);
 
-  // The actual join sequence — gated on both a resolved session and a
-  // device state `DeviceCheck` has handed off. Neither existing before
-  // this effect runs is this task's own "before either party joins".
+  // Ticks the too-early countdown. Coarse (15s) on purpose: the displayed
+  // text only ever changes once a minute, and this is a live region a
+  // screen reader will re-announce on every change — ticking any faster
+  // would announce nothing new, only more often.
   useEffect(() => {
-    if (!session || !deviceStream) return;
+    const interval = setInterval(() => setNow(new Date()), 15_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // A derived value, not stored state — recomputed each render from
+  // `session` (set once) and `now` (ticking above). `undefined` for a
+  // malformed appointment id, which is not this component's own decision
+  // to police (the join attempt itself will be refused server-side).
+  const scheduledAt = session ? parseScheduledAt(session.appointmentId) : undefined;
+  const minutesRemaining = scheduledAt
+    ? minutesUntilJoinWindowOpens(joinWindowOpensAt(scheduledAt), now)
+    : undefined;
+
+  // The actual join sequence — gated on a resolved session, a device
+  // state `DeviceCheck` has handed off, and now (TASK 4.5.1) the caller
+  // having pressed `JoinCallButton`. Nothing existing before this effect
+  // runs is this task's own "before either party joins".
+  useEffect(() => {
+    if (!session || !deviceStream || !joinRequested) return;
     const { appointmentId, accessToken } = session;
     const stream = deviceStream;
 
@@ -293,6 +372,15 @@ export function VideoCall({
     };
 
     async function handleRelayMessage(message: RelayMessage): Promise<void> {
+      if (message.type === 'leave') {
+        // The other party ended the call — TASK 4.5.1's own DoD line:
+        // never leave this side staring at a frozen video. `ended`, not
+        // `call-failed` — this is expected, not a failure, and the two
+        // must never be indistinguishable to the caller.
+        setStageIfLive({ kind: 'ended' });
+        setJoinRequested(false);
+        return;
+      }
       if (!pc) return;
       try {
         if (message.type === 'offer') {
@@ -415,16 +503,22 @@ export function VideoCall({
       clearTimeout(retryTimer);
       stateMachine.dispose();
       // Flushes any still-accumulating TURN time (the connection was
-      // `connected` at the moment of unmount) into the total this call
-      // is about to report.
+      // `connected` at the moment this effect tore down) into the total
+      // this call is about to report.
       noteTurnConnectionState('disconnected');
-      if (turnSecondsAccumulated > 0) {
-        connection?.send({
-          type: 'leave',
-          appointmentId,
-          payload: { turnDurationSeconds: Math.round(turnSecondsAccumulated) },
-        });
-      }
+      // TASK 4.5.1: sent unconditionally now, whichever of the three
+      // things tore this effect down (a "Leave call" click, receiving the
+      // other party's own `leave`, or a true unmount) — this is the one
+      // notification the other party's own `onRelayMessage` reads to
+      // leave `'ended'` too, not only a best-effort telemetry report.
+      // `turnDurationSeconds` stays an honest, optional figure: included
+      // only when this call really did accumulate TURN time, never a
+      // fabricated zero.
+      connection?.send({
+        type: 'leave',
+        appointmentId,
+        payload: turnSecondsAccumulated > 0 ? { turnDurationSeconds: Math.round(turnSecondsAccumulated) } : {},
+      });
       connection?.close();
       pc?.close();
       // This effect's own `stream` (`DeviceCheck`'s handed-off grant) is
@@ -433,7 +527,7 @@ export function VideoCall({
       // itself already keeps for the stream it never hands off.
       stream.getTracks().forEach((track) => track.stop());
     };
-  }, [session, deviceStream, onLifecycleChange]);
+  }, [session, deviceStream, joinRequested, onLifecycleChange]);
 
   if (stage.kind === 'forbidden') {
     return <p role="alert">{strings.forbiddenLabel}</p>;
@@ -448,15 +542,20 @@ export function VideoCall({
       </p>
     );
   }
+  if (minutesRemaining !== undefined) {
+    return (
+      <p role="status" aria-live="polite">
+        {t('videoCall.tooEarly', { minutes: minutesRemaining }, locale)}
+      </p>
+    );
+  }
   if (!deviceStream) {
     return <DeviceCheck strings={strings.deviceCheck} onReady={setDeviceStream} />;
   }
-  if (stage.kind === 'join-denied') {
-    return <p role="alert">{strings.joinDeniedLabels[stage.reason]}</p>;
-  }
-  if (stage.kind === 'error') {
-    return <p role="alert">{strings.errorLabel}</p>;
-  }
+  // Every one of these is a stage this call can never come back from —
+  // checked before `joinRequested` below so a caller who has left, been
+  // denied, or hit a terminal failure is never shown the join button
+  // again as if none of that had happened.
   if (stage.kind === 'ended') {
     return (
       <p role="status" aria-live="polite">
@@ -464,10 +563,19 @@ export function VideoCall({
       </p>
     );
   }
+  if (stage.kind === 'join-denied') {
+    return <p role="alert">{strings.joinDeniedLabels[stage.reason]}</p>;
+  }
+  if (stage.kind === 'error') {
+    return <p role="alert">{strings.errorLabel}</p>;
+  }
   // The terminal state this task's own DoD names explicitly: styled as a
   // real alert, never a blank screen or an unstyled error.
   if (stage.kind === 'call' && stage.lifecycle.kind === 'call-failed') {
     return <p role="alert">{strings.failedLabel}</p>;
+  }
+  if (!joinRequested) {
+    return <JoinCallButton strings={strings.joinCall} onJoin={() => setJoinRequested(true)} />;
   }
 
   const statusLabel =
@@ -486,6 +594,19 @@ export function VideoCall({
       </p>
       <video ref={localVideoRef} aria-label={strings.localVideoLabel} autoPlay playsInline muted />
       <video ref={remoteVideoRef} aria-label={strings.remoteVideoLabel} autoPlay playsInline />
+      <button
+        type="button"
+        onClick={() => {
+          // TASK 4.5.1 step 3: a real button, not only a tab close — the
+          // effect's own cleanup (this is the exact dependency change
+          // that triggers it) is what actually sends `leave` and tears
+          // down the peer connection and signalling socket.
+          setStage({ kind: 'ended' });
+          setJoinRequested(false);
+        }}
+      >
+        {strings.leaveLabel}
+      </button>
     </section>
   );
 }
