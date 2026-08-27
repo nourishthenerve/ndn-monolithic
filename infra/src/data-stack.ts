@@ -2263,6 +2263,19 @@ export class DataStack extends Stack {
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] } },
       }),
     );
+    // TASK 4.4.2 (R-03): `cloudwatch:PutMetricData`, for the
+    // `EstimatedTurnRelayGB` custom metric `infra/src/budget-stack.ts`'s
+    // own alarm watches — the first metric-publishing grant in this
+    // stack. The action supports no resource-level scoping (AWS's own
+    // constraint, not a shortcut taken here).
+    wsDefaultRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'PutTurnRelayMetric',
+        effect: Effect.ALLOW,
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      }),
+    );
     attachDestructiveActionGuardrail(wsDefaultRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(wsDefaultRole, this.table);
 
@@ -2357,11 +2370,15 @@ export class DataStack extends Stack {
     // credential against it. A distinct sid (`data-stack.test.ts`'s own
     // TASK 4.2.2 test finds `wsDefaultRole`'s statement by this exact
     // name, and a second role reusing it would break that lookup).
+    // TASK 4.4.2 adds `UpdateItem` on the same partition — `markTurnActive`,
+    // the concurrent-relay cap's own write, conditioned in
+    // `connection-repository.ts` on the row already existing, so this
+    // grant can never create one.
     turnCredentialsRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'QueryCallParticipantsForTurnCredentials',
         effect: Effect.ALLOW,
-        actions: ['dynamodb:Query'],
+        actions: ['dynamodb:Query', 'dynamodb:UpdateItem'],
         resources: [this.table.tableArn],
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CALL#*'] } },
       }),

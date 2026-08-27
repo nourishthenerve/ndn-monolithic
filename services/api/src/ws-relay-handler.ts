@@ -8,10 +8,18 @@
 // an SDP payload can carry network-topology information about a caller's
 // device, the first plausibly-sensitive shape this discipline has met
 // since `00-conventions.md` first stated "identifiers only."
+//
+// TASK 4.4.2: the one AWS-specific step `ws-relay.ts`'s own SDK-free
+// estimate can't do itself — emitting the `EstimatedTurnRelayGB` custom
+// metric `infra/src/budget-stack.ts`'s new alarm watches. A metric-emission
+// failure never fails the relay itself, the same "an internal failure here
+// is not a reason to break the call" discipline this file already keeps
+// for a `GoneException` below.
 import {
   ApiGatewayManagementApiClient,
   PostToConnectionCommand,
 } from '@aws-sdk/client-apigatewaymanagementapi';
+import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
@@ -26,6 +34,39 @@ const tableName = process.env.CONNECTION_TABLE_NAME ?? '';
 const connections = new DynamoConnectionRepository({ tableName, clock: systemClock, client });
 
 const relay = createRelayMessageHandler({ connections });
+
+// Mirrors infra/src/config.ts's TURN_RELAY_METRIC_NAMESPACE/
+// TURN_RELAY_METRIC_NAME — those constants are what budget-stack.ts's own
+// alarm reads; the literals here are the identical strings, duplicated
+// rather than imported since services/api and infra are two separate
+// deployables with no shared runtime package between them for this value
+// (the same convention contact-form-handler.ts documents for a secret
+// parameter name).
+const TURN_RELAY_METRIC_NAMESPACE = 'Ndn/Video';
+const TURN_RELAY_METRIC_NAME = 'EstimatedTurnRelayGB';
+
+const cloudWatchClient = new CloudWatchClient({});
+
+async function recordEstimatedTurnRelay(estimatedGb: number): Promise<void> {
+  try {
+    await cloudWatchClient.send(
+      new PutMetricDataCommand({
+        Namespace: TURN_RELAY_METRIC_NAMESPACE,
+        MetricData: [
+          {
+            MetricName: TURN_RELAY_METRIC_NAME,
+            Value: estimatedGb,
+            Unit: 'Gigabytes',
+            Timestamp: new Date(),
+          },
+        ],
+      }),
+    );
+  } catch {
+    // A missed data point degrades the alarm's own early-warning margin,
+    // never the call this metric is only ever a side-effect of reporting.
+  }
+}
 
 /** The subset of a real WebSocket message event this file needs — the identical structural shape ws-join-handler.ts's own `JoinRequestEvent` names, minus the fields relaying has no use for. */
 export interface RelayRequestEvent {
@@ -56,7 +97,12 @@ export async function handleRelayMessage(event: RelayRequestEvent, message: Rela
   const { connectionId, domainName, stage } = event.requestContext;
   const management = managementApiClientFor(domainName, stage);
 
-  const decision = await relay({ appointmentId: message.appointmentId, senderConnectionId: connectionId });
+  const decision = await relay({
+    appointmentId: message.appointmentId,
+    senderConnectionId: connectionId,
+    type: message.type,
+    payload: message.payload,
+  });
 
   if (decision.kind === 'not-authorised') {
     // No lookup beyond the CALL# query above runs, and nothing is sent
@@ -66,6 +112,10 @@ export async function handleRelayMessage(event: RelayRequestEvent, message: Rela
     // that fact, once, when it happened (or didn't).
     logIdentifiersOnly({ type: message.type, appointmentId: message.appointmentId, relayed: false });
     return;
+  }
+
+  if (decision.estimatedTurnRelayGb !== undefined) {
+    await recordEstimatedTurnRelay(decision.estimatedTurnRelayGb);
   }
 
   if (decision.kind === 'peer-unavailable') {

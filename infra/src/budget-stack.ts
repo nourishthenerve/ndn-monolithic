@@ -26,6 +26,9 @@ import {
   LOG_INGESTION_ALARM_THRESHOLD_BYTES,
   MONITORED_LOG_GROUP_NAMES,
   MONTHLY_BUDGET_LIMIT_USD,
+  TURN_RELAY_ALARM_THRESHOLD_GB_PER_DAY,
+  TURN_RELAY_METRIC_NAME,
+  TURN_RELAY_METRIC_NAMESPACE,
 } from './config.js';
 
 // AWS::Budgets::Budget and AWS::CE::Anomaly* don't take a resource-level
@@ -156,8 +159,32 @@ export class BudgetStack extends Stack {
     });
     logIngestionAlarm.addAlarmAction(new SnsAction(logAlarmTopic));
 
+    // TASK 4.4.2 (R-03): "egress telemetry + alarm" — an early-warning
+    // companion to TASK 4.4.1's own hard cap (enforced at credential-
+    // issuance time), not a second enforcement mechanism. Notifies the
+    // same topic every CloudWatch-alarm-shaped budget guard in this stack
+    // already shares, per this task's own instruction.
+    const turnRelayGbPerDay = new Metric({
+      namespace: TURN_RELAY_METRIC_NAMESPACE,
+      metricName: TURN_RELAY_METRIC_NAME,
+      statistic: 'Sum',
+      period: Duration.days(1),
+    });
+
+    const turnRelayAlarm = turnRelayGbPerDay.createAlarm(this, 'TurnRelayVolumeAlarm', {
+      alarmName: 'ndn-turn-relay-volume',
+      threshold: TURN_RELAY_ALARM_THRESHOLD_GB_PER_DAY,
+      evaluationPeriods: 1,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      // A day with no TURN-assisted calls at all (the ordinary case — TURN
+      // is the fallback, not the default) is not a breach.
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    });
+    turnRelayAlarm.addAlarmAction(new SnsAction(logAlarmTopic));
+
     new CfnOutput(this, 'BudgetName', { value: 'ndn-monthly-cost-cap' });
     new CfnOutput(this, 'AnomalyMonitorArn', { value: monitor.attrMonitorArn });
     new CfnOutput(this, 'LogIngestionAlarmName', { value: logIngestionAlarm.alarmName });
+    new CfnOutput(this, 'TurnRelayAlarmName', { value: turnRelayAlarm.alarmName });
   }
 }

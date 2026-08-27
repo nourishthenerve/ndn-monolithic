@@ -235,3 +235,53 @@ describe('findCallParticipants (TASK 4.2.2)', () => {
     expect(await repository().findCallParticipants('pat-1#2026-09-01T10:00:00.000Z')).toEqual([]);
   });
 });
+
+describe('markTurnActive (TASK 4.4.2)', () => {
+  it('sets turnActive on the caller-specific CALL# row', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+    await repository().markTurnActive('pat-1#2026-09-01T10:00:00.000Z', 'conn-1');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      TableName: TABLE_NAME,
+      Key: { pk: 'CALL#pat-1#2026-09-01T10:00:00.000Z', sk: 'CONN#conn-1' },
+      UpdateExpression: 'SET turnActive = :true',
+      ExpressionAttributeValues: { ':true': true },
+    });
+  });
+
+  it('conditions on the row already existing, so it can never create one', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+    await repository().markTurnActive('pat-1#2026-09-01T10:00:00.000Z', 'conn-1');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input.ConditionExpression).toBe(
+      'attribute_exists(pk)',
+    );
+  });
+
+  it('is a no-op, not a thrown error, when the row is already gone', async () => {
+    const error = new Error('The conditional request failed');
+    error.name = 'ConditionalCheckFailedException';
+    ddbMock.on(UpdateCommand).rejects(error);
+
+    await expect(
+      repository().markTurnActive('pat-1#2026-09-01T10:00:00.000Z', 'conn-1'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('propagates any other DynamoDB failure', async () => {
+    ddbMock.on(UpdateCommand).rejects(new Error('ProvisionedThroughputExceededException'));
+
+    await expect(
+      repository().markTurnActive('pat-1#2026-09-01T10:00:00.000Z', 'conn-1'),
+    ).rejects.toThrow();
+  });
+
+  it('never issues a DeleteItem', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+    await repository().markTurnActive('pat-1#2026-09-01T10:00:00.000Z', 'conn-1');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input.UpdateExpression).not.toMatch(
+      /REMOVE/,
+    );
+  });
+});

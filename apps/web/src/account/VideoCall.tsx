@@ -59,6 +59,13 @@
 // `call-state-machine.ts` itself needed no change: it stays SDK-free by
 // construction, and its own `onRetry: () => void` contract already
 // covered a caller doing async work inside it before this task existed.
+//
+// TASK 4.4.2: the client's own half of R-03's egress telemetry — an
+// honest, best-effort count of how many seconds this call spent
+// `connected` while a TURN-assisted peer connection was active,
+// accumulated across every retry that used one. Reported once, on
+// `leave`, at the very end of this effect's own life — never a fabricated
+// zero for a call that never touched TURN, which simply reports nothing.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -234,6 +241,24 @@ export function VideoCall({
     // constructed — every closure below that reads it (`onJoined`,
     // `onPeerUnavailable`, `retryConnection`) only ever runs after that.
     let role: CallRole | undefined;
+    // TASK 4.4.2's own client-side half: an honest, best-effort estimate
+    // of how long this call spent relaying through TURN, accumulated
+    // across every retry that used one (never reset by a later STUN-only
+    // attempt), reported once on `leave` at the very end of this effect's
+    // own life.
+    let usingTurn = false;
+    let turnActiveSinceMs: number | undefined;
+    let turnSecondsAccumulated = 0;
+
+    const noteTurnConnectionState = (state: CallConnectionState): void => {
+      if (!usingTurn) return;
+      if (state === 'connected') {
+        turnActiveSinceMs ??= Date.now();
+      } else if (turnActiveSinceMs !== undefined) {
+        turnSecondsAccumulated += (Date.now() - turnActiveSinceMs) / 1000;
+        turnActiveSinceMs = undefined;
+      }
+    };
 
     const setStageIfLive = (next: Stage): void => {
       if (live) setStage(next);
@@ -306,7 +331,9 @@ export function VideoCall({
         }
       };
       created.onconnectionstatechange = () => {
-        stateMachine.handleConnectionState(toCallConnectionState(created.connectionState));
+        const state = toCallConnectionState(created.connectionState);
+        noteTurnConnectionState(state);
+        stateMachine.handleConnectionState(state);
       };
       return created;
     }
@@ -323,6 +350,7 @@ export function VideoCall({
         pc?.close();
         remoteDescriptionSet = false;
         pendingCandidates = [];
+        usingTurn = Boolean(turnIceServer);
         pc = buildPeerConnection(turnIceServer);
         if (role === 'patient') {
           void sendOffer();
@@ -386,6 +414,17 @@ export function VideoCall({
       live = false;
       clearTimeout(retryTimer);
       stateMachine.dispose();
+      // Flushes any still-accumulating TURN time (the connection was
+      // `connected` at the moment of unmount) into the total this call
+      // is about to report.
+      noteTurnConnectionState('disconnected');
+      if (turnSecondsAccumulated > 0) {
+        connection?.send({
+          type: 'leave',
+          appointmentId,
+          payload: { turnDurationSeconds: Math.round(turnSecondsAccumulated) },
+        });
+      }
       connection?.close();
       pc?.close();
       // This effect's own `stream` (`DeviceCheck`'s handed-off grant) is

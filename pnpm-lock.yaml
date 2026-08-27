@@ -191,6 +191,9 @@ importers:
       '@aws-sdk/client-apigatewaymanagementapi':
         specifier: ^3.1109.0
         version: 3.1109.0
+      '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1109.0
+        version: 3.1118.0
       '@aws-sdk/client-codedeploy':
         specifier: ^3.1108.0
         version: 3.1108.0
@@ -452,6 +455,10 @@ packages:
 
   '@aws-sdk/client-apigatewaymanagementapi@3.1109.0':
     resolution: {integrity: sha512-JVhY1gPApCvfGFzGFzVS/hTy5Xg+yVX7JLBKTpek5H6ciS+fbBMLa5wdTSFEj9AIDcVY3apVfPHgyqr9Jm1/HA==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-cloudwatch@3.1118.0':
+    resolution: {integrity: sha512-Oz7dj2Xjsm/KG5Y02AYszGizswYtsRL7zYt7PxgdPhKIM/GqgPhxxp7TjUkpRixz7heaYMTNtv4nM1QRZWs0WQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-codedeploy@3.1108.0':
@@ -1552,6 +1559,10 @@ packages:
 
   '@smithy/fetch-http-handler@5.7.2':
     resolution: {integrity: sha512-nZyWTmSpJEXl6VtWVMBJve/7x12DZu6sIX1z1a+ZMaHlQQRs9Zpu6NbTe/gmxYXVRpkjxyDYpZ5gx2IM6f/Wkw==}
+    engines: {node: '>=18.0.0'}
+
+  '@smithy/middleware-compression@4.6.2':
+    resolution: {integrity: sha512-Q9d+luiRjyHT6kCL/9NyGpdZJgodh4vtvfHC6H8SqoVKrV2k9RoyI9/IloVfdCYks3/2DIi7BsYYLcda5KZS0A==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/node-http-handler@4.10.0':
@@ -2699,6 +2710,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
 
   figures@2.0.0:
     resolution: {integrity: sha512-Oa2M9atig69ZkfwiApY8F2Yy+tzMbazyvqv21R0NsSC8floSOC09BbT1ITWAdoMGQvJ/aZnR1KMwdx9tvHnTNA==}
@@ -4864,6 +4878,18 @@ snapshots:
       '@smithy/types': 4.17.0
       tslib: 2.8.1
 
+  '@aws-sdk/client-cloudwatch@3.1118.0':
+    dependencies:
+      '@aws-sdk/core': 3.977.9
+      '@aws-sdk/credential-provider-node': 3.972.81
+      '@aws-sdk/types': 3.974.5
+      '@smithy/core': 3.33.3
+      '@smithy/fetch-http-handler': 5.7.2
+      '@smithy/middleware-compression': 4.6.2
+      '@smithy/node-http-handler': 4.11.3
+      '@smithy/types': 4.17.0
+      tslib: 2.8.1
+
   '@aws-sdk/client-codedeploy@3.1108.0':
     dependencies:
       '@aws-sdk/core': 3.977.7
@@ -6162,6 +6188,13 @@ snapshots:
     dependencies:
       '@smithy/core': 3.33.3
       '@smithy/types': 4.17.0
+      tslib: 2.8.1
+
+  '@smithy/middleware-compression@4.6.2':
+    dependencies:
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.0
+      fflate: 0.8.3
       tslib: 2.8.1
 
   '@smithy/node-http-handler@4.10.0':
@@ -7546,6 +7579,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
+
+  fflate@0.8.3: {}
 
   figures@2.0.0:
     dependencies:
