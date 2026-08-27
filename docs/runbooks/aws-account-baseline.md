@@ -50,6 +50,25 @@ TASK 0.1.1 as written proposes IAM Identity Center (AWS SSO) with an `NDNAdmin` 
 - ~~Cost Explorer enablement~~ — **confirmed already active**, no opt-in step required (AWS removed the manual "Enable Cost Explorer" toggle; new accounts get the cost-and-usage dashboard by default). Verified via screenshot of the `ndn-prod` console showing the live report (all $0.00, as expected for a brand-new account).
 - Root-key deletion for `803129122420` remains explicitly the owner's own action (D-28), deferred with no deadline — unaffected by anything above.
 
+## Periodic hygiene checks (added TASK 5.2.1)
+
+TASK 5.2.1's own security review found 76 S3 buckets orphaned by `RemovalPolicy.RETAIN` being unconditional in `web-stack.ts` for every ephemeral PR stack — none caught by the CI job's own "zero standing cost" assertion, which checks only that the *stack* is gone, not whether a RETAIN resource inside it survived. Fixed for future PRs (ephemeral buckets now `DESTROY` + `autoDeleteObjects`); the 76 existing ones removed directly. That fix's own `autoDeleteObjects` singleton has a small, named, unclosed residual (`docs/plan/gate-g4-security-review.md` finding #3): one small, infinite-retention log group per ephemeral stack destroyed, because CDK's built-in construct exposes no way to give it an explicit one and this repo's own `ExplicitLambdaLogGroupAspect` guard does not see it (a raw `CfnResource`, not `aws-cdk-lib/aws-lambda`'s `CfnFunction`).
+
+Until that is closed for real (an upstream CDK fix, or widening the aspect to match by CloudFormation resource type), check periodically:
+
+```bash
+# Orphaned S3 buckets from a destroyed ephemeral stack (should be empty —
+# cross-check any hit against `aws cloudformation list-stacks` first).
+aws --profile ndn-prod s3api list-buckets --query "Buckets[?starts_with(Name, 'ndnwebstackpr')].Name"
+
+# Log groups with no retention set (should be empty — 14-day retention is
+# the app-wide default; a hit here is exactly the `autoDeleteObjects`
+# residual above, or a new instance of the same failure class).
+aws --profile ndn-prod logs describe-log-groups --query "logGroups[?retentionInDays==null].logGroupName"
+```
+
+Both are safe to delete directly under this repo's standing authority to remove unneeded infrastructure — neither is patient/clinical/financial data.
+
 ## Cost delta
 
 £0.00 — Organization, member account, OIDC provider, IAM role, and a CloudTrail trail logging only management events (no data events) are all free. The S3 log bucket itself is free tier at this volume (a handful of small management-event objects/month).

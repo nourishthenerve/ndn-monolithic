@@ -961,11 +961,29 @@ describe('WebStack — site deployment log group', () => {
     expect((logGroups[0] as { DeletionPolicy?: string }).DeletionPolicy).toBe('Delete');
   });
 
+  // TASK 5.2.1: CDK's own `Bucket.autoDeleteObjects` singleton
+  // (`CustomS3AutoDeleteObjectsCustomResourceProviderHandler...`, only
+  // present in the ephemeral synth once TASK 5.2.1's SiteBucket/
+  // MediaBucket fix is live) is built via a raw `CfnResource` inside
+  // aws-cdk-lib/core, not `aws-cdk-lib/aws-lambda`'s `CfnFunction` class —
+  // and exposes no public prop to give it an explicit log group the way
+  // `BucketDeployment`'s own `logGroup` prop lets this stack do just below.
+  // A real, small, named residual (invoked only at delete time, a handful
+  // of log lines, infinite retention) rather than something this repo can
+  // close today — see web-stack.ts's own comment on `siteBucket` and
+  // docs/runbooks/aws-account-baseline.md's periodic-check note. Excluded
+  // by exact, matched-prefix logical ID rather than broadened to "any
+  // unrecognised function", so a real future regression still fails here.
+  const KNOWN_IMPLICIT_LOG_GROUP_PREFIXES = ['CustomS3AutoDeleteObjectsCustomResourceProvider'];
+
   it('leaves no Lambda in the stack relying on CloudWatch’s implicit group', () => {
     for (const template of [synth(), synthEphemeral()]) {
       const functions = Object.entries(template.findResources('AWS::Lambda::Function'));
       expect(functions.length).toBeGreaterThan(0);
       for (const [logicalId, resource] of functions) {
+        if (KNOWN_IMPLICIT_LOG_GROUP_PREFIXES.some((prefix) => logicalId.startsWith(prefix))) {
+          continue;
+        }
         const loggingConfig = (
           resource as { Properties?: { LoggingConfig?: { LogGroup?: unknown } } }
         ).Properties?.LoggingConfig;
@@ -991,6 +1009,31 @@ describe('WebStack — outputs', () => {
 });
 
 describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
+  // TASK 5.2.1: this had been RETAIN unconditionally since 0.6.3 first
+  // added `ephemeral` — every per-PR stack's own SiteBucket/MediaBucket
+  // orphaned on `cdk destroy` rather than being deleted, 76 of them by the
+  // time this gap was found, none caught by the CI job's own "zero
+  // standing cost" assertion (which checks only that the stack is gone).
+  it('destroys SiteBucket and MediaBucket on cdk destroy, unlike production’s RETAIN, with autoDeleteObjects wired so a non-empty bucket does not block it', () => {
+    const template = synthEphemeral();
+    template.resourceCountIs('AWS::S3::Bucket', 2);
+    for (const bucket of Object.values(template.findResources('AWS::S3::Bucket'))) {
+      expect((bucket as { DeletionPolicy: string }).DeletionPolicy).toBe('Delete');
+      expect((bucket as { UpdateReplacePolicy: string }).UpdateReplacePolicy).toBe('Delete');
+    }
+    // autoDeleteObjects wires an S3 bucket notification-free custom
+    // resource per bucket, backed by one shared provider Lambda.
+    template.resourceCountIs('Custom::S3AutoDeleteObjects', 2);
+  });
+
+  it('production’s own synth is unaffected by the ephemeral flag — both buckets still RETAIN', () => {
+    const template = synth();
+    template.resourceCountIs('Custom::S3AutoDeleteObjects', 0);
+    for (const bucket of Object.values(template.findResources('AWS::S3::Bucket'))) {
+      expect((bucket as { DeletionPolicy: string }).DeletionPolicy).toBe('Retain');
+    }
+  });
+
   it('has no CloudFront alias and no custom viewer certificate — avoids colliding with the prod distribution', () => {
     const template = synthEphemeral();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
