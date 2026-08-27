@@ -117,6 +117,7 @@ import { contentApiUrl, signallingWebSocketUrl } from '../site-config.js';
 import type { CallConnectionState, CallLifecycleState } from './call-state-machine.js';
 import { createCallStateMachine } from './call-state-machine.js';
 import { DeviceCheck, type DeviceCheckStrings } from './DeviceCheck.js';
+import { joinWindowOpensAt, minutesUntilJoinWindowOpens, parseScheduledAt } from './join-window.js';
 import { JoinCallButton, type JoinCallButtonStrings } from './JoinCallButton.js';
 import type { JoinDenialReason, RelayMessage, SignallingConnection } from './webrtc-signalling-client.js';
 import { connectSignalling } from './webrtc-signalling-client.js';
@@ -157,19 +158,6 @@ async function resolveRole(accessToken: string): Promise<CallRole> {
 
 function defaultGetAppointmentId(): string | undefined {
   return new URLSearchParams(window.location.search).get('appointmentId') ?? undefined;
-}
-
-/** Mirrors `ws-join.ts`'s own `JOIN_WINDOW_OPENS_BEFORE_MINUTES` — not imported, since `services/api` and `apps/web` are two separate deployables. The server-side window check remains the real boundary; this is only what decides when this component even attempts a join. */
-export const JOIN_WINDOW_OPENS_BEFORE_MINUTES = 10;
-
-/** `<patientId>#<scheduledAt>` — mirrors `ws-join.ts`'s own `parseAppointmentId`, needing only the second half here. `undefined` for anything that doesn't parse to a real date, the same deny-by-default reading a malformed id gets everywhere else this shape is parsed. Exported for direct unit testing, the same reason `webrtc-signalling-client.ts`'s `parseIncomingMessage`/`DeviceCheck.tsx`'s `classifyMediaError` are. */
-export function parseScheduledAt(appointmentId: string): Date | undefined {
-  const separator = appointmentId.indexOf('#');
-  if (separator <= 0 || separator === appointmentId.length - 1) {
-    return undefined;
-  }
-  const scheduledAt = new Date(appointmentId.slice(separator + 1));
-  return Number.isNaN(scheduledAt.getTime()) ? undefined : scheduledAt;
 }
 
 /** Never throws — a denial, a flag off, or a provider failure are all the same "no TURN entry for this attempt" outcome to the caller, `turn-credentials.ts`'s own `502`/`403`/`404` responses collapsed into one. */
@@ -308,10 +296,9 @@ export function VideoCall({
   // malformed appointment id, which is not this component's own decision
   // to police (the join attempt itself will be refused server-side).
   const scheduledAt = session ? parseScheduledAt(session.appointmentId) : undefined;
-  const opensAtMs = scheduledAt
-    ? scheduledAt.getTime() - JOIN_WINDOW_OPENS_BEFORE_MINUTES * 60_000
+  const minutesRemaining = scheduledAt
+    ? minutesUntilJoinWindowOpens(joinWindowOpensAt(scheduledAt), now)
     : undefined;
-  const isTooEarly = opensAtMs !== undefined && now.getTime() < opensAtMs;
 
   // The actual join sequence — gated on a resolved session, a device
   // state `DeviceCheck` has handed off, and now (TASK 4.5.1) the caller
@@ -555,8 +542,7 @@ export function VideoCall({
       </p>
     );
   }
-  if (isTooEarly && opensAtMs !== undefined) {
-    const minutesRemaining = Math.max(1, Math.ceil((opensAtMs - now.getTime()) / 60_000));
+  if (minutesRemaining !== undefined) {
     return (
       <p role="status" aria-live="polite">
         {t('videoCall.tooEarly', { minutes: minutesRemaining }, locale)}
