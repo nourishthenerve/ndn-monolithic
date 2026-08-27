@@ -9,6 +9,22 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # TASK 5.3.1: the account-a11y job below is the only job gated on this
+  # trigger (its own `if:`) — a live-session accessibility scan against
+  # **production**, which needs a real signed-in session and (for `call`)
+  # a real time-boxed appointment, neither of which a per-PR event can
+  # provide. Nightly rather than per-PR for the same reason
+  # docs/runbooks/live-session-accessibility.md names: gating it to
+  # arbitrary PR-merge timing would be flaky in a way the existing
+  # per-PR a11y gate never has to tolerate. 03:00 UTC — outside any
+  # plausible UK working-hours traffic this account's real patients or
+  # clinicians would ever generate.
+  schedule:
+    - cron: '0 3 * * *'
+  # Manual trigger for verifying this job before its first real nightly
+  # run, and for re-running it on demand afterward — no other job in this
+  # workflow needs one, so this is scoped to the one job that does.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -377,6 +393,50 @@ jobs:
             exit 1
           fi
           echo "NdnWebStackPr${PR_NUMBER}: ${status} — zero standing cost confirmed."
+
+  # TASK 5.3.1: the live-session accessibility check the account shell has
+  # never had — docs/runbooks/live-session-accessibility.md. Runs against
+  # **production**, on the schedule/workflow_dispatch triggers above only;
+  # `needs: []` deliberately (nothing above builds anything this job uses —
+  # it drives a real browser against already-deployed production URLs).
+  account-a11y:
+    name: Live-session accessibility (production, scheduled)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Own concurrency group, not the workflow-level default
+    # (`ci-${{ github.workflow }}-${{ github.ref }}`): a schedule/
+    # workflow_dispatch run's `github.ref` is `refs/heads/main`, identical
+    # to an ordinary push's — sharing the default group would let a
+    # same-moment push cancel this job, or this job cancel a push's own
+    # deploy, neither of which has anything to do with the other.
+    concurrency:
+      group: ci-account-a11y
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: pnpm/action-setup@v6.0.10
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright's Chromium browser
+        run: pnpm --filter @ndn/tests exec playwright install --with-deps chromium
+      - name: Sign in + axe-scan every registered account-shell route
+        env:
+          A11Y_CLINICIAN_EMAIL: ${{ secrets.A11Y_CLINICIAN_EMAIL }}
+          A11Y_CLINICIAN_PASSWORD: ${{ secrets.A11Y_CLINICIAN_PASSWORD }}
+          A11Y_CLINICIAN_TOTP_SECRET: ${{ secrets.A11Y_CLINICIAN_TOTP_SECRET }}
+          A11Y_TEST_APPOINTMENT_ID: ${{ secrets.A11Y_TEST_APPOINTMENT_ID }}
+        run: pnpm run test:account-a11y
 
   # TASK 0.4.1: first real deploy job. CI is the only gate (C-06) — a green
   # `quality` run on push to main is what takes the CDK stack (S3 site

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./routes.js": "./src/routes.ts",
+    "./account-routes.js": "./src/account-routes.ts",
     "./social-links.js": "./src/config/social-links.ts",
     "./legal-pages.js": "./src/config/legal-pages.ts"
   },

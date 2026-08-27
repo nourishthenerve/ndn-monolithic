@@ -16,6 +16,7 @@
     "test": "pnpm run build:web && pnpm -r run test",
     "test:integration": "pnpm --filter @ndn/tests run test:integration",
     "test:pr-env": "pnpm --filter @ndn/tests run test:pr-env",
+    "test:account-a11y": "pnpm --filter @ndn/tests run test:account-a11y",
     "test:coverage": "pnpm run build:web && vitest run --coverage",
     "loadtest:http": "pnpm --filter @ndn/tests run loadtest:http",
     "loadtest:signalling": "pnpm --filter @ndn/tests run loadtest:signalling",
