@@ -115,6 +115,7 @@ Rollback is the same command with `false`. Sign-in disappears; the static site i
 - `pnpm --filter @ndn/web run build` — 18 pages, including `/en/account` and `/en/account/callback`; a grep of `dist/` finds no `localStorage` or `sessionStorage` anywhere.
 - **Not yet run**, and named rather than reported as done: the plan's browser check (a full sign-in leaves no token in `localStorage`/`sessionStorage`, checked in the browser rather than inferred; a captured cookie stops refreshing after sign-out) needs the flag on, a deployed pool domain, and mail that can leave the account — SES production access was denied on 2026-08-21 ([ses-production-access.md](ses-production-access.md)), so no patient can receive a sign-in code yet. The same gate as [patient-registration.md](patient-registration.md).
 - The pr-env a11y suite covers the new routes' loading, signed-out, callback and error states. The OTP field is Cognito's page and is out of its reach — see above.
+- **`/en/account`'s own signed-in state, added by TASK 5.3.1** ([live-session-accessibility.md](live-session-accessibility.md)): registered in `account-routes.ts`, axe-scanned in a real, signed-in session on a nightly schedule against production — the state this task's own Verification line above could not reach without a real Cognito sign-in, closed the same way every later account-shell page's construction-time-only gap is.
 
 ## Do not
 
