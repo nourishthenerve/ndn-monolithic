@@ -51,6 +51,18 @@ describe('DataStack — table', () => {
     });
   });
 
+  // TASK 5.2.1: RETAIN alone only stops CloudFormation; a direct
+  // `aws dynamodb delete-table` by `ndn-deploy`/`ndn-admin` bypasses it
+  // entirely — the same reasoning `auth-stack.ts`'s Cognito pools already
+  // state for their own `deletionProtection` prop, applied here for the
+  // first time.
+  it('refuses a direct DeleteTable call, independent of RETAIN', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      DeletionProtectionEnabled: true,
+    });
+  });
+
   it('creates only GSI1 (clinician -> patients/calendar), GSI2 (keyword -> content), GSI3 (cross-caseload) and GSI4 (reminder window), all KEYS_ONLY, nothing else', () => {
     const template = synth();
     template.hasResourceProperties('AWS::DynamoDB::Table', {
@@ -1370,6 +1382,15 @@ describe('DataStack — ephemeral load-test mode (TASK 5.1.1)', () => {
     const template = synthEphemeral();
     template.hasResourceProperties('AWS::DynamoDB::Table', {
       PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+    });
+  });
+
+  // TASK 5.2.1: the opposite of production's own DeletionProtectionEnabled
+  // assertion above — a disposable copy must stay freely destroyable.
+  it('does not enable DynamoDB deletion protection — must stay freely destroyable', () => {
+    const template = synthEphemeral();
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      DeletionProtectionEnabled: false,
     });
   });
 

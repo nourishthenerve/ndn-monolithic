@@ -141,6 +141,23 @@ export class DataStack extends Stack {
       // against this table (never done — TASK 5.4.1 restores production's)
       // would behave identically if it ever needed to.
       removalPolicy: props.ephemeral ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
+      // TASK 5.2.1: the same two-layer reasoning `auth-stack.ts`'s Cognito
+      // pools already state for themselves — "RETAIN only governs what
+      // CloudFormation does" — applied here for the first time. Neither
+      // layer alone stops a direct `aws dynamodb delete-table` by a
+      // principal outside CloudFormation (`ndn-deploy`, `ndn-admin`);
+      // this table's own runtime-role IAM Deny (`guardrails.ts`) protects
+      // every *application* Lambda from that action, but not those two.
+      // `deletionProtection` is DynamoDB's own server-side refusal,
+      // exactly Cognito's `deletionProtection` prop's own analogue,
+      // applied to the one table holding every patient/clinical record
+      // this system has — found holistically reviewing the whole account
+      // rather than one gate's diff, since TASK 1.3.1 (this table) predates
+      // TASK 2.2.1 (where the two-layer pattern was first established) by
+      // weeks and was never revisited. `false` for the load-test copy —
+      // it must stay freely destroyable, the same reasoning `removalPolicy`
+      // above already gives.
+      deletionProtection: !props.ephemeral,
       // TASK 4.1.1: enabled for the first time here, for the connection
       // table's own `ttl` attribute (connection-repository.ts) — sparse,
       // the same way GSI1-4's own projections are: only a `CONN#<id>` row

@@ -142,8 +142,38 @@ export class WebStack extends Stack {
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       // Matches every other protected resource in this repo: never
-      // auto-deleted by code, even on `cdk destroy` of this stack.
-      removalPolicy: RemovalPolicy.RETAIN,
+      // auto-deleted by code, even on `cdk destroy` of this stack —
+      // for production. TASK 5.2.1's own security review found this had
+      // been unconditional since TASK 0.6.3 first added `ephemeral`: every
+      // per-PR stack's own SiteBucket/MediaBucket RETAINed too, and
+      // `cdk destroy` orphans a RETAINed bucket rather than deleting it —
+      // 76 of them, back to PR #23, none caught by the CI job's own
+      // "zero standing cost" assertion, which checks only that the *stack*
+      // is gone. `ephemeral` ? DESTROY, with `autoDeleteObjects` (needed
+      // because DESTROY alone still refuses to delete a non-empty bucket)
+      // closes it for every future PR; the 76 already-orphaned buckets
+      // were removed directly (`docs/runbooks/aws-account-baseline.md`).
+      //
+      // **A named, accepted residual, not a second silent leak.**
+      // `autoDeleteObjects` is CDK's own singleton
+      // `Custom::S3AutoDeleteObjectsCustomResourceProvider` Lambda — built
+      // via a raw `CfnResource`, not `aws-cdk-lib/aws-lambda`'s
+      // `CfnFunction` class, so `log-retention.ts`'s
+      // `ExplicitLambdaLogGroupAspect` (`node instanceof CfnFunction`)
+      // does not see it and cannot fail synth on it the way it would a
+      // function this repo owns. It has no public prop to give it an
+      // explicit log group. Its own CloudWatch group is therefore the
+      // same shape `BucketDeployment`'s was before that fix — one small,
+      // infinite-retention group per ephemeral stack — except this one is
+      // invoked only at delete time, so its log volume is a handful of
+      // lines, not a per-deploy stream. Left as a real, small, tracked gap
+      // rather than solved here: closing it needs either a CDK upstream
+      // fix or widening the aspect to match by CloudFormation resource
+      // type rather than TS class, both bigger than this task's own scope.
+      // `docs/runbooks/aws-account-baseline.md` names the periodic manual
+      // check until one of those lands.
+      removalPolicy: props.ephemeral ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
+      autoDeleteObjects: props.ephemeral,
     });
 
     // TASK 1.5.1: same shape as siteBucket — versioned, private, retained.
@@ -158,7 +188,9 @@ export class WebStack extends Stack {
       versioned: true,
       blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
-      removalPolicy: RemovalPolicy.RETAIN,
+      // Same TASK 5.2.1 correction as `siteBucket` above, same reasoning.
+      removalPolicy: props.ephemeral ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
+      autoDeleteObjects: props.ephemeral,
     });
     this.mediaBucket = mediaBucket;
 
