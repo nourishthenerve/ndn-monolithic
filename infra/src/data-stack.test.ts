@@ -483,6 +483,8 @@ describe('DataStack — feature-flag reads', () => {
     // TASK 4.2.1: video.callAuthz.enabled, default off — read inside
     // ws-join.ts, wired through the $default dispatcher.
     'ws-default-handler',
+    // TASK 4.4.1: video.turn.enabled, default off.
+    'turn-credentials-handler',
   ];
 
   it('gives every flag-reading function the prefix its handler resolves against', () => {
@@ -600,13 +602,15 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // satisfy the constructor, never actually reached" reasoning as
     // caseload-function — this task's own runbook names it directly),
     // TASK 3.5.1's content-assignment function, TASK 3.6.1's message
-    // function, and TASK 4.2.1's WsDefaultFunction (the join handler,
+    // function, TASK 4.2.1's WsDefaultFunction (the join handler,
     // wired to the same `DynamoAuditLog` `AppointmentRepository`'s
     // constructor needs regardless of whether `.get()` itself ever
-    // writes through it).
+    // writes through it), and TASK 4.4.1's TurnCredentialsFunction (the
+    // identical reasoning again — its own `AppointmentRepository` lookup
+    // never writes through the audit log either, only ever reads).
     // The two authorizers are deliberately absent — both read a status
     // and write nothing.
-    expect(withAuditTable).toHaveLength(21);
+    expect(withAuditTable).toHaveLength(22);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -658,11 +662,12 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // 3.1.1's patient role, TASK 3.2.1's clinical-record role, TASK
     // 3.3.1's assessment role, TASK 3.4.1's appointment role, TASK
     // 3.4.3's reminder-sweep role, TASK 3.5.1's content-assignment role,
-    // TASK 3.6.1's message role, and TASK 4.1.1's four WebSocket roles
-    // (ws-authorizer/ws-connect/ws-disconnect/ws-default); the audit
-    // reader is deliberately not among them, being the one role that is
-    // supposed to read that partition.
-    expect(denials).toHaveLength(24);
+    // TASK 3.6.1's message role, TASK 4.1.1's four WebSocket roles
+    // (ws-authorizer/ws-connect/ws-disconnect/ws-default), and TASK
+    // 4.4.1's turn-credentials role; the audit reader is deliberately not
+    // among them, being the one role that is supposed to read that
+    // partition.
+    expect(denials).toHaveLength(25);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -679,7 +684,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(24);
+    expect(denials).toHaveLength(25);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -773,7 +778,9 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // `AppointmentFunction`; TASK 3.5.1 added `POST`/`GET
     // /patients/{id}/content`, served by a new `ContentAssignmentFunction`;
     // TASK 3.6.1 added `POST`/`GET /patients/{id}/messages`, served by a
-    // new `MessageFunction`.
+    // new `MessageFunction`. TASK 4.4.1 added
+    // `POST /calls/{appointmentId}/turn-credentials`, served by a new
+    // `TurnCredentialsFunction`.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
@@ -791,6 +798,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'PATCH /content/{id}',
         'PATCH /patients/{id}',
         'PATCH /workshops/{id}',
+        'POST /calls/{appointmentId}/turn-credentials',
         'POST /clinicians',
         'POST /clinicians/{id}/deactivate',
         'POST /clinicians/{id}/reactivate',

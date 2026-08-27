@@ -47,6 +47,18 @@
 // be happily `connected` over an already-negotiated P2P path with no
 // further use for the socket, so it gets its own `'ended'` stage rather
 // than being folded into the same ICE-failure state machine.
+//
+// TASK 4.4.1: `retryConnection` — `call-state-machine.ts`'s own `onRetry`
+// callback — now asks `POST /calls/{appointmentId}/turn-credentials` for
+// a short-lived TURN credential before rebuilding the peer connection,
+// and adds it to `iceServers` for that one attempt only. `fetchTurnIceServer`
+// never throws and returns `undefined` on any denial, flag-off, or
+// provider failure — the retry proceeds STUN-only exactly as TASK 4.3.3
+// already built, since TURN gives a retry a better chance of succeeding,
+// it does not remove the case where nothing does.
+// `call-state-machine.ts` itself needed no change: it stays SDK-free by
+// construction, and its own `onRetry: () => void` contract already
+// covered a caller doing async work inside it before this task existed.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -60,8 +72,10 @@ import { DeviceCheck, type DeviceCheckStrings } from './DeviceCheck.js';
 import type { JoinDenialReason, RelayMessage, SignallingConnection } from './webrtc-signalling-client.js';
 import { connectSignalling } from './webrtc-signalling-client.js';
 
-// Cloudflare's own free, unlimited STUN service — no TURN entry until
-// TASK 4.4.1 wires one into TASK 4.3.3's own fallback state machine.
+// Cloudflare's own free, unlimited STUN service — always present. A TURN
+// entry (TASK 4.4.1) is added only for a retry attempt, never the first
+// connection (TASK 4.3.1's own DoD), via `buildPeerConnection`'s own
+// optional `turnIceServer` parameter.
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 
 // A patient who joins moments before their clinician is the ordinary
@@ -94,6 +108,25 @@ async function resolveRole(accessToken: string): Promise<CallRole> {
 
 function defaultGetAppointmentId(): string | undefined {
   return new URLSearchParams(window.location.search).get('appointmentId') ?? undefined;
+}
+
+/** Never throws — a denial, a flag off, or a provider failure are all the same "no TURN entry for this attempt" outcome to the caller, `turn-credentials.ts`'s own `502`/`403`/`404` responses collapsed into one. */
+async function fetchTurnIceServer(accessToken: string, appointmentId: string): Promise<RTCIceServer | undefined> {
+  try {
+    const response = await fetch(
+      `${contentApiUrl}/calls/${encodeURIComponent(appointmentId)}/turn-credentials`,
+      { method: 'POST', headers: { authorization: `Bearer ${accessToken}` } },
+    );
+    if (!response.ok) {
+      return undefined;
+    }
+    const payload = (await response.json()) as {
+      iceServer?: { urls: string[]; username: string; credential: string };
+    };
+    return payload.iceServer;
+  } catch {
+    return undefined;
+  }
 }
 
 type Stage =
@@ -256,8 +289,9 @@ export function VideoCall({
       }
     }
 
-    function buildPeerConnection(): RTCPeerConnection {
-      const created = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    function buildPeerConnection(turnIceServer?: RTCIceServer): RTCPeerConnection {
+      const iceServers = turnIceServer ? [...ICE_SERVERS, turnIceServer] : ICE_SERVERS;
+      const created = new RTCPeerConnection({ iceServers });
       for (const track of stream.getTracks()) {
         created.addTrack(track, stream);
       }
@@ -279,15 +313,21 @@ export function VideoCall({
 
     // TASK 4.3.3's own retry: a fresh `RTCPeerConnection` (never the
     // failed one, renegotiated) over the same already-joined call — the
-    // relay and the `CALL#` row this effect never touches again.
+    // relay and the `CALL#` row this effect never touches again. TASK
+    // 4.4.1 adds the one thing before that rebuild: an attempt at a TURN
+    // credential for this retry alone.
     function retryConnection(): void {
-      pc?.close();
-      remoteDescriptionSet = false;
-      pendingCandidates = [];
-      pc = buildPeerConnection();
-      if (role === 'patient') {
-        void sendOffer();
-      }
+      void (async () => {
+        const turnIceServer = await fetchTurnIceServer(accessToken, appointmentId);
+        if (!live) return;
+        pc?.close();
+        remoteDescriptionSet = false;
+        pendingCandidates = [];
+        pc = buildPeerConnection(turnIceServer);
+        if (role === 'patient') {
+          void sendOffer();
+        }
+      })();
     }
 
     const stateMachine = createCallStateMachine({

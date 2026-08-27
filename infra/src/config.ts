@@ -215,6 +215,10 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   '/ndn/ws-connect-function',
   '/ndn/ws-disconnect-function',
   '/ndn/ws-default-function',
+  // TASK 4.4.1: one credential-issuance call per retry attempt, bounded
+  // by the same low call-volume every prior video function on this list
+  // already is. Displacing nothing.
+  '/ndn/turn-credentials-function',
 ];
 
 // TASK 3.4.3 (ADR-0008): the leased origination identity (a UK long code
@@ -244,6 +248,27 @@ export const SMS_ORIGINATION_IDENTITY = '';
 // TURNSTILE_SECRET_PARAMETER_NAME env var) and contact-form-handler.ts's
 // own fallback default.
 export const TURNSTILE_SECRET_PARAMETER_NAME = '/ndn/turnstile-secret-key';
+
+// TASK 4.4.1 (D-12, ADR-0006): the Cloudflare Realtime TURN key id —
+// which of the account's keys `turn-credentials.ts` mints credentials
+// against. Not secret on its own (it only names a key, the API token
+// below is what authorises minting against it), but left empty rather
+// than invented: a Cloudflare Calls/Realtime TURN key is a manual
+// dashboard step for the site owner, the same "not something CDK can
+// provision" category CERTIFICATE_ARN/TURNSTILE_SECRET_PARAMETER_NAME/
+// SMS_ORIGINATION_IDENTITY above already document.
+// `turn-credentials-handler.ts` still deploys and every guard in the
+// issuance chain still runs correctly against an empty key id — the
+// provider call itself fails (`PROVIDER_ERROR`), and a denied credential
+// request degrades to TASK 4.3.3's own STUN-only terminal path, never a
+// hang. See docs/runbooks/video-calls.md for the provisioning step this
+// leaves as the site owner's own action.
+export const CLOUDFLARE_TURN_KEY_ID = '';
+
+// TASK 4.4.1: the SSM SecureString holding the matching Cloudflare TURN
+// API token (D-14) — same out-of-band `aws ssm put-parameter --type
+// SecureString` convention TURNSTILE_SECRET_PARAMETER_NAME documents.
+export const CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME = '/ndn/cloudflare-turn-api-token';
 
 // TASK 1.4.1 (ADR-0009): the contact-form relay's From/To addresses. From
 // is under the verified `nourishthenerve.com` domain identity (docs/

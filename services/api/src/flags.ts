@@ -82,7 +82,15 @@ export type FlagName =
   // reminding. A socket that connects but can never join a call is a
   // safe intermediate state to ship; this flag is what turns the call
   // join itself on. Default off.
-  | 'video.callAuthz.enabled';
+  | 'video.callAuthz.enabled'
+  // TASK 4.4.1: independent of video.call.enabled (never wired to a
+  // flag of its own — see docs/runbooks/video-calls.md) — a call that
+  // works P2P and simply fails without a relay option is a safe, cheaper
+  // intermediate state to ship and prove before spending anything
+  // against Cloudflare's free tier. Off means TASK 4.3.3's retry has no
+  // TURN entry to add and falls straight to its own terminal state,
+  // never a hang. Default off.
+  | 'video.turn.enabled';
 
 export interface FlagSource {
   /** Raw read of one flag. Undefined means the flag has never been set. */
