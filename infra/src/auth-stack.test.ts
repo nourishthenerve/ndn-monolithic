@@ -382,3 +382,34 @@ describe('AuthStack — the post-confirmation trigger (TASK 2.2.3)', () => {
     expect(poolProperties(PATIENT_USER_POOL_NAME).LambdaConfig).toBeUndefined();
   });
 });
+
+// Found live, 2026-08-27: `NEWER_MANAGED_LOGIN` (above) renders no login
+// page at all — Cognito returns 403 "Login pages unavailable" — until a
+// branding style is explicitly assigned to the app client. Nothing here
+// asserted that until now, which is exactly how it went unnoticed since
+// this stack's first deploy.
+describe('AuthStack — managed login branding (found missing live, 2026-08-27)', () => {
+  interface ManagedLoginBrandingResource {
+    Properties: {
+      UserPoolId: unknown;
+      ClientId: unknown;
+      UseCognitoProvidedValues?: boolean;
+    };
+  }
+
+  function brandings(): ManagedLoginBrandingResource[] {
+    return Object.values(
+      synth().findResources('AWS::Cognito::ManagedLoginBranding'),
+    ) as ManagedLoginBrandingResource[];
+  }
+
+  it('assigns a branding style to both app clients, not just the domain', () => {
+    expect(brandings()).toHaveLength(2);
+  });
+
+  it('uses Cognito-provided defaults rather than an unset, broken style', () => {
+    for (const branding of brandings()) {
+      expect(branding.Properties.UseCognitoProvidedValues).toBe(true);
+    }
+  });
+});

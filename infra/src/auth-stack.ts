@@ -21,6 +21,7 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import {
   AccountRecovery,
+  CfnManagedLoginBranding,
   ClientAttributes,
   FeaturePlan,
   Mfa,
@@ -233,6 +234,26 @@ export class AuthStack extends Stack {
       userPool: this.clinicianUserPool,
       cognitoDomain: { domainPrefix: CLINICIAN_USER_POOL_DOMAIN_PREFIX },
       managedLoginVersion: ManagedLoginVersion.NEWER_MANAGED_LOGIN,
+    });
+
+    // Found live, 2026-08-27, the first real sign-in attempt against
+    // either pool: `NEWER_MANAGED_LOGIN` (above) renders nothing at all —
+    // Cognito returns "Login pages unavailable. Please contact an
+    // administrator." (403) — until a branding style is explicitly
+    // assigned to the app client. This is not optional configuration on
+    // top of a working page; without it, the page does not exist. AWS's
+    // own default branding is enough (`useCognitoProvidedValues: true`) —
+    // this stack has no custom visual identity to apply, only a working
+    // login page to have at all.
+    new CfnManagedLoginBranding(this, 'PatientManagedLoginBranding', {
+      userPoolId: this.patientUserPool.userPoolId,
+      clientId: this.patientUserPoolClient.userPoolClientId,
+      useCognitoProvidedValues: true,
+    });
+    new CfnManagedLoginBranding(this, 'ClinicianManagedLoginBranding', {
+      userPoolId: this.clinicianUserPool.userPoolId,
+      clientId: this.clinicianUserPoolClient.userPoolClientId,
+      useCognitoProvidedValues: true,
     });
 
     // TASK 2.2.3 step 3: the only thing that creates a `PAT#` record, and
