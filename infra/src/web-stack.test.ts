@@ -1356,6 +1356,28 @@ describe('WebStack — the authenticated web shell (TASK 2.2.4)', () => {
     });
   });
 
+  it('forwards query strings, cookies and headers to the origin (found missing live, 2026-08-27)', () => {
+    // CachePolicy.CACHING_DISABLED alone governs only the cache key; with
+    // no OriginRequestPolicy, CloudFront forwards nothing beyond it. Found
+    // live: GET /auth/signin?pool=clinician always resolved to the
+    // patient pool, and — the same gap — POST /auth/token's PKCE cookie
+    // and POST /auth/refresh's session cookie were equally being
+    // stripped. ALL_VIEWER_EXCEPT_HOST_HEADER, not ALL_VIEWER: forwarding
+    // CloudFront's own Host header to the execute-api origin breaks that
+    // origin's routing.
+    synthWithTable().hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: {
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: '/auth/*',
+            // ALL_VIEWER_EXCEPT_HOST_HEADER's AWS-managed policy id.
+            OriginRequestPolicyId: 'b689b0a8-53d0-40ab-baf2-68738e2966ac',
+          }),
+        ]),
+      },
+    });
+  });
+
   it('gives /auth/* the same security-header policy as every other behaviour', () => {
     // An auth response gets no weaker headers than a blog page.
     const distribution = Object.values(

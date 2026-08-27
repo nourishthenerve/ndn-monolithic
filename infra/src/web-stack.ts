@@ -20,6 +20,7 @@ import {
   FunctionRuntime,
   HeadersFrameOption,
   HeadersReferrerPolicy,
+  OriginRequestPolicy,
   PriceClass,
   ResponseHeadersPolicy,
   Function as CloudFrontFunction,
@@ -811,6 +812,27 @@ function handler(event) {
         // that starts the flow), and caching is disabled because every
         // response either sets or spends a credential — a cached
         // `Set-Cookie` would be a session handed to the next visitor.
+        //
+        // **`originRequestPolicy` found missing live, 2026-08-27**, the
+        // first real sign-in attempt after #109/#110 fixed hydration and
+        // login-page branding: `?pool=clinician` on `GET /auth/signin`
+        // silently always resolved to the patient pool. Root cause,
+        // confirmed by comparing a request straight to `httpApi`'s own
+        // execute-api URL (correct) against the identical request through
+        // this distribution (wrong): `CachePolicy.CACHING_DISABLED` alone
+        // governs only the cache *key* — with no `OriginRequestPolicy`
+        // attached, CloudFront's own default forwards nothing beyond the
+        // cache key to the origin at all, confirmed against the live
+        // distribution's own `CachePolicy` (`QueryStringsConfig: none`,
+        // `CookiesConfig: none`, `HeadersConfig: none`). That is not only
+        // the query string: `POST /auth/token`'s PKCE verifier and
+        // `POST /auth/refresh`'s session both live in `HttpOnly` cookies
+        // (web-authentication.md), which this same gap was silently
+        // stripping too — no real sign-in has ever completed through this
+        // distribution. `ALL_VIEWER_EXCEPT_HOST_HEADER` (not `ALL_VIEWER`):
+        // forwarding CloudFront's own `Host` header to the `execute-api`
+        // origin breaks the origin's own routing, the standard reason this
+        // variant exists for a non-`Host`-matching origin.
         '/auth/*': {
           origin: new HttpOrigin(
             `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
@@ -818,6 +840,7 @@ function handler(event) {
           viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           allowedMethods: AllowedMethods.ALLOW_ALL,
           cachePolicy: CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
           // The same policy every other behaviour uses. Auth responses get
           // no weaker headers than a blog page.
           responseHeadersPolicy: securityHeaders,
