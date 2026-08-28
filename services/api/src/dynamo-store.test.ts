@@ -653,13 +653,13 @@ describe('DynamoClinicianStore', () => {
     client: ddbMock as unknown as DynamoDBDocumentClient,
   });
 
-  it('get() reads the META row and strips pk/sk', async () => {
-    ddbMock.on(GetCommand).resolves({ Item: { pk: 'CLI#sub-1', sk: 'META', ...buildClinician() } });
+  it('get() reads the PROFILE row and strips pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'CLI#sub-1', sk: 'PROFILE', ...buildClinician() } });
 
     const result = await store.get('sub-1');
     expect(result).toMatchObject({ id: 'sub-1', role: 'sub' });
     expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
-      Key: { pk: 'CLI#sub-1', sk: 'META' },
+      Key: { pk: 'CLI#sub-1', sk: 'PROFILE' },
     });
   });
 
@@ -671,7 +671,7 @@ describe('DynamoClinicianStore', () => {
     expect(call?.TransactItems).toHaveLength(1);
     expect(call?.TransactItems?.[0]?.Put).toMatchObject({
       TableName: 'ndn-data',
-      Item: expect.objectContaining({ pk: 'CLI#sub-1', sk: 'META', role: 'sub' }),
+      Item: expect.objectContaining({ pk: 'CLI#sub-1', sk: 'PROFILE', role: 'sub' }),
       ConditionExpression: 'attribute_not_exists(pk)',
     });
   });
@@ -697,7 +697,7 @@ describe('DynamoClinicianStore', () => {
         CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
       }),
     );
-    ddbMock.on(GetCommand).resolves({ Item: { pk: 'CLI#sub-1', sk: 'META', ...buildClinician() } });
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'CLI#sub-1', sk: 'PROFILE', ...buildClinician() } });
 
     await expect(store.create(buildClinician())).rejects.toMatchObject({
       code: 'RECORD_ALREADY_EXISTS',
@@ -725,7 +725,7 @@ describe('DynamoClinicianStore', () => {
 
     expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
       TableName: 'ndn-data',
-      Item: expect.objectContaining({ pk: 'CLI#sub-1', sk: 'META', account_status: 'deactivated' }),
+      Item: expect.objectContaining({ pk: 'CLI#sub-1', sk: 'PROFILE', account_status: 'deactivated' }),
     });
     expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input.ConditionExpression).toBeUndefined();
   });
