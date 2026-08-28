@@ -125,6 +125,6 @@ The reply's third answer promised a configuration set with an SNS event destinat
 
 In short: SES configuration set `ndn-email` attached to every send by both senders, an SNS destination matching `BOUNCE`/`COMPLAINT`/`REJECT`/`RENDERING_FAILURE` to topic `ndn-email-events` with the alert address subscribed, and CloudWatch alarms on bounce rate (>3%) and complaint rate (>0.1%) — both below AWS's own review thresholds, so a problem surfaces to us before it surfaces to them. Full detail, verification commands and the mailbox-simulator test procedure are in `docs/runbooks/email-events.md`, added on its own branch.
 
-**One owner action comes with it:** AWS emails a subscription confirmation to the alert address when the topic is first created, and until that link is clicked the topic delivers nothing — silently, in a way indistinguishable from no bounces having occurred. Confirm it after the first deploy that includes this.
+**One owner action came with it, now done:** AWS emails a subscription confirmation to the alert address when the topic is first created, and until that link is clicked the topic delivers nothing — silently, in a way indistinguishable from no bounces having occurred. **Confirmed live** (real `SubscriptionArn`, not `PendingConfirmation`) — found during TASK 5.5.2's runbook consolidation pass, 2026-08-28; see [email-events.md](email-events.md)'s own Owner action section.
 
 If AWS follows up asking for more on bounce handling, that answer is now "here is what runs" rather than "here is what we intend".
