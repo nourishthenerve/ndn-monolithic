@@ -1177,6 +1177,12 @@ export class DataStack extends Stack {
           'cognito-idp:AdminEnableUser',
           'cognito-idp:AdminUserGlobalSignOut',
           'cognito-idp:AdminGetUser',
+          // Found missing live, 2026-08-28 — see clinician-admin.ts's
+          // AdminCreateClinicianPort header. Without this, a "principal"
+          // clinician's own DynamoDB record was never reachable through
+          // Cognito's `cognito:groups` claim, which is what
+          // authorizer.ts's `roleFor()` actually reads.
+          'cognito-idp:AdminAddUserToGroup',
         ],
         resources: [clinicianUserPoolArn],
       }),

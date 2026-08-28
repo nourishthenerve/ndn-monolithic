@@ -630,12 +630,29 @@ export class DynamoWebhookEventStore implements WebhookEventStore {
   }
 }
 
-// TASK 2.4.1: `PK = CLI#<sub>` / `SK = META` — the clinician-repository.ts
-// header explains why the record is keyed by the Cognito `sub`. The
-// singleton "exactly one principal" marker is a second, fixed-key row
-// (`PK = CLI#PRINCIPAL_MARKER`), conditioned in the *same* transaction as
-// the main item so the invariant holds even under concurrent creates.
+// TASK 2.4.1: `PK = CLI#<sub>` / `SK = PROFILE`, per
+// docs/plan/04-data-model-rbac.md's own row for this entity — the
+// clinician-repository.ts header explains why the record is keyed by the
+// Cognito `sub`. The singleton "exactly one principal" marker is a second,
+// fixed-key row (`PK = CLI#PRINCIPAL_MARKER`), conditioned in the *same*
+// transaction as the main item so the invariant holds even under
+// concurrent creates.
+//
+// **Found live, 2026-08-28, the first real clinician sign-in ever
+// attempted:** this file previously wrote `SK = META` here (the same
+// `META_SORT_KEY` every non-profile entity in this file uses), which
+// disagreed with dynamo-principal-directory.ts's own independently-written
+// `PROFILE_SORT_KEY` — the authorizer's lookup key for *every* pool,
+// correctly matching `PATIENT_PROFILE_SK` below. No test caught it because
+// each side is well-tested in isolation; nothing before now exercised a
+// real signed-in clinician end to end. The practical effect: every
+// clinician account ever created, real or test, has been authorization-
+// dead — `no-directory-record` on every request — since TASK 2.4.1
+// shipped. `CLINICIAN_PROFILE_SK` is now its own named constant, matching
+// `PATIENT_PROFILE_SK`'s own shape, rather than reusing the generic
+// `META_SORT_KEY` that caused the drift.
 const CLINICIAN_PK = (id: string) => `CLI#${id}`;
+const CLINICIAN_PROFILE_SK = 'PROFILE';
 const CLINICIAN_PRINCIPAL_MARKER_PK = 'CLI#PRINCIPAL_MARKER';
 const CLINICIAN_PRINCIPAL_MARKER_SK = 'MARKER';
 
@@ -657,7 +674,7 @@ export class DynamoClinicianStore implements ClinicianStore {
     const result = await this.client.send(
       new GetCommand({
         TableName: this.tableName,
-        Key: { pk: CLINICIAN_PK(id), sk: META_SORT_KEY },
+        Key: { pk: CLINICIAN_PK(id), sk: CLINICIAN_PROFILE_SK },
       }),
     );
     if (!result.Item) {
@@ -675,7 +692,7 @@ export class DynamoClinicianStore implements ClinicianStore {
    * only.
    */
   async create(item: Clinician): Promise<void> {
-    const mainItem = { ...item, pk: CLINICIAN_PK(item.id), sk: META_SORT_KEY };
+    const mainItem = { ...item, pk: CLINICIAN_PK(item.id), sk: CLINICIAN_PROFILE_SK };
     const transactItems = [
       {
         Put: {
@@ -720,7 +737,7 @@ export class DynamoClinicianStore implements ClinicianStore {
     await this.client.send(
       new PutCommand({
         TableName: this.tableName,
-        Item: { ...item, pk: CLINICIAN_PK(item.id), sk: META_SORT_KEY },
+        Item: { ...item, pk: CLINICIAN_PK(item.id), sk: CLINICIAN_PROFILE_SK },
       }),
     );
   }
