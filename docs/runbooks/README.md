@@ -72,7 +72,8 @@ This directory holds one runbook per task, or per closely-related task cluster �
 
 - [load-testing.md](load-testing.md) — the 10×-derived load harness, the real HTTP baseline run, and the cold-start p95 finding (TASK 5.1.1, TASK 5.1.2)
 - [live-session-accessibility.md](live-session-accessibility.md) — the real, signed-in, live-session axe + keyboard sweep for the account shell (TASK 5.3.1, TASK 5.3.2)
-- [restore-drill.md](restore-drill.md) — a real DynamoDB PITR restore, executed and measured; the still-missing D-22 export layer, named (TASK 5.4.1)
+- [restore-drill.md](restore-drill.md) — a real DynamoDB PITR restore, executed and measured; the D-22 export layer named as missing, then built (TASK 5.4.1)
+- [backup-export.md](backup-export.md) — D-22's periodic export layer: a daily, GOVERNANCE-mode Object-Locked DynamoDB backup, built as its own task once `restore-drill.md` found it missing
 
 Phase 5's security review (TASK 5.2.1) and DPIA update (TASK 5.2.2) live outside this directory by their own nature — `docs/plan/gate-g4-security-review.md` and `docs/compliance/dpia-skeleton.md` respectively, not duplicated here.
 
@@ -86,7 +87,7 @@ Genuinely still open, owner-side, as of this pass (2026-08-28) — not stale, no
 - **LL-02 (UK SMS long code)** — not leased; AWS End User Messaging account confirmed still `SANDBOX` tier, 0 phone numbers, live-checked this pass. Blocks [sms-provider.md](sms-provider.md)'s real-account proof and [workshop-confirmation-sms.md](workshop-confirmation-sms.md).
 - **Cloudflare Realtime/Calls TURN key** — not provisioned; `/ndn/cloudflare-turn-api-token` confirmed absent from SSM, live-checked this pass. Named since Gate G4 as the one blocking action item for a real cross-network video call, [video-calls.md](video-calls.md).
 - **Real Turnstile widget + secret** — `contact-form.md` still runs Cloudflare's public test key; the real SSM SecureString parameter confirmed absent, live-checked this pass.
-- **D-22's export layer (periodic backup to an object-locked S3 prefix)** — confirmed not built anywhere in the account, [restore-drill.md](restore-drill.md). Needs its own future task, not a fix bolted onto a drill.
+- **D-22's export layer is built** ([backup-export.md](backup-export.md)) but its restore-side check isn't — once a real export has run, import it into a scratch table and verify against known rows, the same discipline `restore-drill.md`'s own PITR half already used.
 - **The cold-start / feature-flag SSM latency finding** — priced, not fixed, [load-testing.md](load-testing.md)'s TASK 5.1.2 section. Owner decision named there.
 - **`video.signalling.enabled` and every other go-live flag** — deliberately off; TASK 5.5.3's own job, not this index's.
 

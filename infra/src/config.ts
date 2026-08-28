@@ -219,6 +219,11 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // by the same low call-volume every prior video function on this list
   // already is. Displacing nothing.
   '/ndn/turn-credentials-function',
+  // D-22: a fixed rate(1 day) schedule — one invocation, one log line, per
+  // day, the lowest and most predictable volume of any function in the
+  // estate. The same "scheduled, not traffic-driven" reasoning
+  // reminder-sweep-function above already carries. Displacing nothing.
+  '/ndn/backup-export-function',
 ];
 
 // TASK 3.4.3 (ADR-0008): the leased origination identity (a UK long code

@@ -2,9 +2,13 @@
 
 **Date:** 2026-08-28 · **Task:** [05-execution-plan.md § TASK 5.4.1](../plan/05-execution-plan.md) · **Decisions:** [D-21](../plan/01-decisions.md), [D-22](../plan/01-decisions.md) · **Depends on:** 4.5.1
 
-## Status: PITR half executed and verified; D-22's export half found not to exist
+## Status: PITR half executed and verified; D-22's export half now built, restore-side check still open
 
-This task's own DoD has two independent halves — "a real PITR restore **and** a real export restore have both been executed at least once." The PITR half is done, live, verified against known data, measured, and cleaned up (below). **The export half could not be executed: D-22's "periodic export to a separate object-locked prefix" was never built.** No S3 bucket with Object Lock, no `AWS Backup` plan, no EventBridge export rule exists anywhere in `ndn-prod` — checked directly (`aws s3api list-buckets`, `aws backup list-backup-plans`, `aws events list-rules`), not assumed from an absent grep hit alone. `05-execution-plan.md`'s own task text treats this as something to *restore from*, at M5.4, written as though an earlier task built it; tracing every task from Phase 0 through the DataStack build (TASK 1.3.1, which added PITR itself) finds no task that ever did. This is a plan gap, not a drill failure: TASK 5.4.1 cannot complete its own DoD until D-22's export mechanism is designed and built as its own task — sized, reviewed, and shipped like any other new AWS resource (an S3 bucket, Object Lock configuration, an export schedule, IAM), not improvised as a side effect of running this drill.
+This task's own DoD has two independent halves — "a real PITR restore **and** a real export restore have both been executed at least once." The PITR half is done, live, verified against known data, measured, and cleaned up (below).
+
+**The export half could not be executed at the time this drill first ran: D-22's "periodic export to a separate object-locked prefix" had never been built.** No S3 bucket with Object Lock, no `AWS Backup` plan, no EventBridge export rule existed anywhere in `ndn-prod` — checked directly (`aws s3api list-buckets`, `aws backup list-backup-plans`, `aws events list-rules`), not assumed from an absent grep hit alone. `05-execution-plan.md`'s own task text treats this as something to *restore from*, at M5.4, written as though an earlier task built it; tracing every task from Phase 0 through the DataStack build (TASK 1.3.1, which added PITR itself) found no task that ever did.
+
+**Built as its own task, 2026-08-28 — see [backup-export.md](backup-export.md).** The pipeline (a daily, GOVERNANCE-mode Object-Locked export) is live-diffed against production and pending deploy on merge. What's still open is the *restore*-side half of this drill: once a real export has actually run at least once, come back here and import it into a scratch table (`ImportTableCommand`), verify against known rows, the same discipline §3 below already used for the PITR half — `backup-export.md`'s own "What is still needed" section names this as its item 2, not duplicated here.
 
 ## What was executed
 
@@ -55,7 +59,7 @@ Table reached `ACTIVE` at **22:13:23+01:00** (3m43s after the restore call). Ver
 
 **Verified-usable: 22:13:52+01:00.**
 
-### 5. D-22's export restore — not performed (see Status above)
+### 5. D-22's export restore — not performed in this run (see Status above); the export pipeline itself now exists ([backup-export.md](backup-export.md))
 
 ### 6. Torn down
 
@@ -78,4 +82,4 @@ Transient, sub-cent: the restored table's own `PAY_PER_REQUEST` billing for ~5 m
 
 ## Do NOT
 
-Restore into or over the live table (this drill never did — a new, uniquely-named target every time). Leave a drill's restored table running after verification (this one existed 5 minutes, start to delete). Treat this runbook as closing D-22 — it names the export-layer gap; building it is a separate, unstarted task.
+Restore into or over the live table (this drill never did — a new, uniquely-named target every time). Leave a drill's restored table running after verification (this one existed 5 minutes, start to delete). Treat this runbook as closing D-22 on its own — the export pipeline is built ([backup-export.md](backup-export.md)), but the restore-side check (item 2 there) is still open.
