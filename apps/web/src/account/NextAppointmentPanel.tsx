@@ -11,7 +11,8 @@
 // filter over already-authorised-to-see data, not the client-side
 // private-field filtering `private-field-boundary.md` warns against
 // (`Appointment` carries no `private{}` field at all, today or planned).
-import { Heading } from '@ndn/ui';
+import type { Locale } from '@ndn/i18n';
+import { Heading, Link } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -23,6 +24,15 @@ export interface AppointmentEntry {
   readonly scheduledAt: string;
   readonly durationMinutes: number;
   readonly appointment_status: string;
+  /**
+   * TASK 5.5.3 step 1: the field this component always received but never
+   * read — `GET /patients/me/appointments`'s own response already carries
+   * it (`Appointment`'s own shape, `packages/shared-types/src/appointment.ts`;
+   * no `private{}` split on this entity, confirmed against `projection.ts`).
+   * `call.astro`'s own appointment id is `<patientId>#<scheduledAt>`
+   * (`ws-join.ts`'s `parseAppointmentId`) — this is the other half.
+   */
+  readonly patientId: string;
 }
 
 type ViewState =
@@ -38,10 +48,13 @@ export interface NextAppointmentPanelStrings {
   readonly errorLabel: string;
   readonly emptyLabel: string;
   readonly durationLabel: string;
+  readonly joinCallLabel: string;
 }
 
 export interface NextAppointmentPanelProps {
   readonly strings: NextAppointmentPanelStrings;
+  /** Locale-prefixed, matching `account-routes.ts`'s own `call` entry — needed to build the join link. */
+  readonly locale: Locale;
   readonly client?: SessionClient;
   /** Injectable for tests; defaults to a real same-origin-authorised fetch against `contentApiUrl`. */
   readonly fetchAppointments?: (accessToken: string) => Promise<Response>;
@@ -57,14 +70,24 @@ function defaultFetchAppointments(accessToken: string): Promise<Response> {
   });
 }
 
-function findNext(items: readonly AppointmentEntry[], nowIso: string): AppointmentEntry | undefined {
+export function findNext(
+  items: readonly AppointmentEntry[],
+  nowIso: string,
+): AppointmentEntry | undefined {
   return items.find(
     (item) => item.appointment_status === 'scheduled' && item.scheduledAt >= nowIso,
   );
 }
 
+/** `call.astro`'s own composite id (`ws-join.ts`'s `parseAppointmentId`) — encoded once here, decoded automatically by `URLSearchParams` on the read side (`account-a11y.setup.ts`/`a11y-authenticated.test.ts` already build the same shape the same way). */
+export function callHref(locale: Locale, appointment: AppointmentEntry): string {
+  const appointmentId = `${appointment.patientId}#${appointment.scheduledAt}`;
+  return `/${locale}/account/call?appointmentId=${encodeURIComponent(appointmentId)}`;
+}
+
 export function NextAppointmentPanel({
   strings,
+  locale,
   client = defaultClient,
   fetchAppointments = defaultFetchAppointments,
   now = () => new Date(),
@@ -122,6 +145,8 @@ export function NextAppointmentPanel({
         <p>
           {new Date(state.next.scheduledAt).toLocaleString()} — {strings.durationLabel}{' '}
           {state.next.durationMinutes}
+          {' — '}
+          <Link href={callHref(locale, state.next)}>{strings.joinCallLabel}</Link>
         </p>
       ) : (
         <p>{strings.emptyLabel}</p>
