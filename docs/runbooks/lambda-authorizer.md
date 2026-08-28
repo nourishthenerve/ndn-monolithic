@@ -130,7 +130,7 @@ The authorizer's role holds **one** data-plane action: `dynamodb:GetItem`, condi
 
 - `pnpm -r lint && pnpm -r typecheck && pnpm test` — green. `services/api` 580 → **659** tests; `infra` 164 → **174**.
 - `pnpm --filter @ndn/infra run synth` — all four stacks.
-- **Not yet verifiable:** the plan's own verification for this task ("a valid patient token gets 200 on a patient route and 403 on a clinician route") needs routes that do not exist until 2.2.3/2.5.x, and a token that cannot be minted until a profile row exists. It is deferred to those tasks rather than reported as done.
+- **Verified live, 2026-08-28** — found during TASK 5.5.2's runbook consolidation pass: this note deferred verification to 2.2.3/2.5.x, both long complete. The real-world proof landed as a side effect of TASK 5.3.1/5.3.2's own live-session accessibility suite (`live-session-accessibility.md`) — a real, signed-in clinician token hitting both clinician-owned routes (`caseload`, 200) and patient-owned ones (`patient`, `content` — a real, legible 403/forbidden state, not the unauthenticated-route case this task's own original wording pictured). Not re-run as a standalone check; the equivalent claim is what that suite's own nightly green run already proves.
 
 ## Rollback
 

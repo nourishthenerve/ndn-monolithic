@@ -45,6 +45,8 @@ The two sender functions still carry `SES_CONFIGURATION_SET_NAME` and its IAM gr
 
 ## Owner action — confirm the SNS subscription
 
+**Done — confirmed live, found during TASK 5.5.2's runbook consolidation pass (2026-08-28).** `aws sns list-subscriptions` shows a real `SubscriptionArn` (a UUID, not the literal string `PendingConfirmation`) for `ndn-email-events`'s own email subscription — the confirmation link was clicked at some point before this check; no further action needed. Left here as the reference for what a *not-yet-confirmed* state looks like, and how to check for it again after any future topic recreation:
+
 AWS sends a **"Subscription Confirmation"** email to `mohammed.zia33+ndnprod@gmail.com` when the topic is first created. **Until the link in it is clicked, the topic delivers nothing** — no bounce notification, no alarm. It fails silently and looks identical to "no bounces have happened".
 
 Confirm it after the first deploy that includes this, then verify:

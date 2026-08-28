@@ -255,7 +255,7 @@ CloudFront performs a live DNS lookup on every alias you try to add and **refuse
 
 ## Remaining steps
 
-**Step 4 and step 5 are DONE** (2026-08-21 — see "Cutover executed"). Steps 6 and 7 were done ahead of the cutover on 2026-08-15. **Step 8 (cost reconciliation) is the only substantive step still open**, and it is waiting on traffic, not on a decision.
+**Step 4 and step 5 are DONE** (2026-08-21 — see "Cutover executed"). Steps 6 and 7 were done ahead of the cutover on 2026-08-15. **Step 8 (cost reconciliation) is DONE** — found during TASK 5.5.2's runbook consolidation pass (2026-08-28): TASK 5.5.1's own account-wide reconciliation (`docs/plan/03-cost-model.md`, live `aws ce get-cost-and-usage`) necessarily covers the same real Route 53/CloudFront/Lambda spend this step asked to re-check, apex traffic included since the 2026-08-21 cutover — no separate apex-only pass is needed on top of it.
 
 The step 4 procedure below is kept as written, both as the record of what was executed and because its ordering rules are the reusable part.
 
@@ -363,6 +363,8 @@ Leaves the S3 bucket `nourishthenerve` exactly as TASK 0.0.2 configured it — v
 ### Step 8: Update the cost model reconciliation
 
 `docs/plan/03-cost-model.md`'s M1 line items were all modelled pre-traffic; once real apex traffic is being served, re-check actual vs modelled spend (Route 53 queries, CloudFront requests, Lambda invocations at real visitor volume) and record it there per Gate G1's checklist.
+
+**Done — via TASK 5.5.1, 2026-08-28.** See `docs/plan/03-cost-model.md`'s own "TASK 5.5.1 — Live reconciliation" section: a live, account-wide `aws ce get-cost-and-usage` pull, covering every service this step named (Route 53 shows $0 this month, explained there as the model's own annual-amortisation working as designed, not missing data) plus every other cost-model line. Not run as a separate apex-only pass — the account has no other traffic source to isolate it from, so the account-wide figure *is* the apex figure.
 
 ## Verification (final, once steps 4–8 all run)
 
