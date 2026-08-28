@@ -24,8 +24,12 @@ setup('sign in as the clinician test identity', async ({ page }) => {
   // flow diagram), and `infra/src/config.ts`'s AUTH_CALLBACK_URL sends
   // Cognito back to a fixed `/en/account/callback` regardless of which
   // locale a caller started from — this goto's own locale has no bearing
-  // on where the flow lands.
-  await page.goto(`${PRODUCTION_BASE_URL}/auth/signin`);
+  // on where the flow lands. `?pool=clinician` is required — found live,
+  // 2026-08-28, this project's own first real run of this exact flow:
+  // without it, `poolFrom()` (auth-routes.ts) defaults to the *patient*
+  // pool, which is passwordless email OTP and shows no password field at
+  // all — the `locator.fill` timeout this task's own first CI run hit.
+  await page.goto(`${PRODUCTION_BASE_URL}/auth/signin?pool=clinician`);
 
   // Cognito's own managed-login page, not this repo's — `web-authentication.md`
   // states directly that "no test in this repository can reach" the OTP/
@@ -33,41 +37,37 @@ setup('sign in as the clinician test identity', async ({ page }) => {
   // locators exist only to get a real session, not to assert anything
   // about Cognito's own UI. Accessible-role/label locators, not guessed
   // CSS selectors, both for resilience against markup Cognito can change
-  // without notice and because no test in this repo has ever driven this
-  // page live before — the first scheduled run is this flow's own
-  // selector verification, named honestly in the runbook rather than
-  // claimed proven ahead of it.
-  await page
-    .getByLabel(/email|username/i)
-    .first()
-    .fill(identity.email);
-  await page
-    .getByRole('button', { name: /continue|next|sign in/i })
-    .first()
-    .click();
-
-  await page
-    .getByLabel(/password/i)
-    .first()
-    .fill(identity.password);
-  await page
-    .getByRole('button', { name: /continue|sign in|submit/i })
-    .first()
-    .click();
+  // without notice.
+  //
+  // **Corrected against the real page, 2026-08-28 — this flow's own first
+  // live run.** Two things this file's own original text assumed
+  // incorrectly, both found by actually driving the page rather than
+  // guessing at its shape: (1) email and password are one screen, one
+  // submit — there is no separate "continue" step between them; (2) the
+  // real managed-login page is a controlled React form whose submit button
+  // stays disabled after Playwright's plain `.fill()` (which sets the
+  // value without the per-keystroke events this form's own validation
+  // watches for) — `pressSequentially` plus a `Tab` blur is what actually
+  // enables it, confirmed against a live sign-in before this fix landed.
+  const emailField = page.getByLabel(/email|username/i).first();
+  await emailField.click();
+  await emailField.pressSequentially(identity.email, { delay: 20 });
+  const passwordField = page.getByLabel(/^password$/i).first();
+  await passwordField.click();
+  await passwordField.pressSequentially(identity.password, { delay: 20 });
+  await page.keyboard.press('Tab');
+  await page.getByRole('button', { name: /sign in/i }).first().click();
 
   // ADR-0004: the clinician pool is password + REQUIRED TOTP, never email
   // OTP — computable from a stored secret with no external mailbox,
   // unlike the patient pool (see account-env.ts's own comment on why only
   // this identity is wired up today).
   const code = await generate({ secret: identity.totpSecret });
-  await page
-    .getByLabel(/code|authenticator|one-time/i)
-    .first()
-    .fill(code);
-  await page
-    .getByRole('button', { name: /continue|sign in|submit/i })
-    .first()
-    .click();
+  const codeField = page.getByLabel(/enter code|code|authenticator|one-time/i).first();
+  await codeField.click();
+  await codeField.pressSequentially(code, { delay: 20 });
+  await page.keyboard.press('Tab');
+  await page.getByRole('button', { name: /sign in|continue|submit/i }).first().click();
 
   // SignInPanel.tsx's AuthCallback does `location.replace('/en/account')`
   // only once `/auth/token`'s exchange actually succeeds — waiting for
