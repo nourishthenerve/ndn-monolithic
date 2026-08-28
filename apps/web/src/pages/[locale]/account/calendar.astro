@@ -1,0 +1,78 @@
+---
+// TASK 5.5.3 step 1: any clinician's own upcoming appointments — and the
+// clinician half of video-calls.md's own "no reachable link to this page
+// from anywhere else in the account shell" gap. Statically generated and
+// **empty**, same discipline every other authenticated account page in
+// this codebase already states — what makes this page private is not
+// server rendering but that its content is not in the HTML at all.
+//
+// GET /clinicians/me/calendar (TASK 3.4.1) had zero frontend consumers
+// until this page. `caseload.astro`'s own CaseloadView is the only
+// clinician-facing list that existed before it, and renders a caseload
+// roster (patient name, assigned clinician) with no appointment data at
+// all — not the same page, not a fit for this link.
+//
+// Deliberately absent from routes.ts, same as every other authenticated
+// account page — TASK 1.1.3's a11y gate scans every registered route
+// unauthenticated, and an authenticated-only page has no accessible
+// content to find that way. Registered instead in account-routes.ts, the
+// same live-session sweep every other account page goes through
+// (TASK 5.3.1/5.3.2).
+//
+// Not yet linked from any in-app navigation — the same URL-only
+// reachability caseload.astro itself has had since TASK 2.5.3. This page
+// closes the specific, named "no link into call.astro" gap; it does not
+// newly introduce the broader "no account-shell navigation between
+// pages" gap, which predates it.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { ClinicianCalendar } from '../../../account/ClinicianCalendar.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('calendar.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('calendar.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    signedOut={
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signIn', undefined, locale)} />
+      </p>
+    }
+  >
+    <ClinicianCalendar
+      client:only="react"
+      locale={locale}
+      strings={{
+        loadingLabel: t('calendar.loading', undefined, locale),
+        forbiddenLabel: t('calendar.forbidden', undefined, locale),
+        errorLabel: t('calendar.error', undefined, locale),
+        emptyLabel: t('calendar.empty', undefined, locale),
+        dateColumnLabel: t('calendar.dateColumn', undefined, locale),
+        durationColumnLabel: t('calendar.durationColumn', undefined, locale),
+        statusColumnLabel: t('calendar.statusColumn', undefined, locale),
+        joinCallLabel: t('calendar.joinCall', undefined, locale),
+        caption: heading,
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>

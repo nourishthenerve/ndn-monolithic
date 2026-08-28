@@ -64,6 +64,9 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   { segment: 'patient', ownerRole: 'patient' },
   // TASK 2.5.3: the principal clinician's cross-caseload view.
   { segment: 'caseload', ownerRole: 'clinician' },
+  // TASK 5.5.3 step 1: any clinician's own upcoming appointments, and the
+  // first real inbound link to call.astro from a page other than itself.
+  { segment: 'calendar', ownerRole: 'clinician' },
   // TASK 3.5.2: the patient's own assigned-content list.
   { segment: 'content', ownerRole: 'patient' },
   // TASK 3.6.2: both parties read and compose on the same page.
