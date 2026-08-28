@@ -87,6 +87,7 @@ function build(overrides: { flagEnabled?: boolean } = {}) {
   let nextSub = 0;
   const createClinicianUser: AdminCreateClinicianPort = {
     createUser: vi.fn(async () => `sub-${(nextSub += 1)}`),
+    addToPrincipalGroup: vi.fn(async () => {}),
   };
 
   const deactivateClinicianUser: AdminDeactivateClinicianPort = {
@@ -149,6 +150,60 @@ describe('POST /clinicians', () => {
     const body = JSON.parse(response.body) as { item: { id: string; role: string } };
     expect(body.item.role).toBe('sub');
     expect(await repository.findById(body.item.id)).toMatchObject({ displayName: 'New Clinician' });
+  });
+
+  it('never adds a sub-clinician to the principal Cognito group', async () => {
+    const { handler, createClinicianUser } = build();
+
+    await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'new@example.com', displayName: 'New Clinician', role: 'sub' },
+      }),
+    );
+
+    expect(createClinicianUser.addToPrincipalGroup).not.toHaveBeenCalled();
+  });
+
+  it('adds a newly-created principal to the principal Cognito group, only after the record is accepted', async () => {
+    const { handler, createClinicianUser } = build();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'first@example.com', displayName: 'First', role: 'principal' },
+      }),
+    );
+
+    const body = JSON.parse(response.body) as { item: { id: string } };
+    expect(createClinicianUser.addToPrincipalGroup).toHaveBeenCalledWith(body.item.id);
+    expect(createClinicianUser.addToPrincipalGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('is 409 for a second principal and never grants that second attempt the group', async () => {
+    const { handler, createClinicianUser } = build();
+    await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'first@example.com', displayName: 'First', role: 'principal' },
+      }),
+    );
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'second@example.com', displayName: 'Second', role: 'principal' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(409);
+    // Exactly once total across both attempts — the first (accepted)
+    // creation grants it, the second (rejected, 409) never does.
+    expect(createClinicianUser.addToPrincipalGroup).toHaveBeenCalledTimes(1);
   });
 
   it('is 403 for a sub-clinician caller', async () => {

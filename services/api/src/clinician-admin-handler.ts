@@ -4,6 +4,7 @@
 // place that wires the real Cognito Admin* calls, the real DynamoDB-backed
 // stores, and the real Notifier.
 import {
+  AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminDisableUserCommand,
   AdminEnableUserCommand,
@@ -12,6 +13,7 @@ import {
   CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider';
 
+import { PRINCIPAL_CLINICIAN_GROUP } from './authorizer.js';
 import {
   createClinicianAdminHandler,
   type AdminCreateClinicianPort,
@@ -68,6 +70,15 @@ const createClinicianUser: AdminCreateClinicianPort = {
       throw new Error('AdminCreateUser did not return a sub attribute');
     }
     return sub;
+  },
+  async addToPrincipalGroup(subjectId) {
+    await cognitoClient.send(
+      new AdminAddUserToGroupCommand({
+        UserPoolId: clinicianUserPoolId,
+        Username: subjectId,
+        GroupName: PRINCIPAL_CLINICIAN_GROUP,
+      }),
+    );
   },
 };
 

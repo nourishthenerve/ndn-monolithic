@@ -64,6 +64,17 @@ const createClinicianBodySchema = z.object({
  */
 export interface AdminCreateClinicianPort {
   createUser(email: string): Promise<string>;
+  /**
+   * Found missing live, 2026-08-28: nothing in this codebase ever called
+   * `AdminAddUserToGroup`, so `authorizer.ts`'s `roleFor()` — which reads
+   * `cognito:groups`, never the `CLI#` record's own `role` field — could
+   * never resolve anyone to `principal-clinician`, no matter what the
+   * DynamoDB record said. Called only when `role === 'principal'`, after
+   * `repository.create()` has actually accepted the row (never before —
+   * a rejected `PRINCIPAL_ALREADY_EXISTS` create must not have already
+   * granted the group).
+   */
+  addToPrincipalGroup(subjectId: string): Promise<void>;
 }
 
 /** Both calls step 4 requires, as one port — deactivation is never "just" the disable. */
@@ -156,13 +167,18 @@ export function createClinicianAdminHandler(
           // TASK 2.2.2 having no `cognito-idp` grant does not apply here —
           // unlike `SignUp`, `AdminCreateUser` is an authenticated,
           // IAM-authorised operation; clinician-admin-handler.ts's role
-          // carries exactly the four Admin* grants this file's ports use.
+          // carries exactly the five Admin* grants this file's ports use
+          // (AdminAddUserToGroup joined the other four 2026-08-28 — see
+          // AdminCreateClinicianPort's own header).
           const subjectId = await deps.createClinicianUser.createUser(parsed.data.email);
           const clinician = await deps.repository.create(
             subjectId,
             { displayName: parsed.data.displayName, role: parsed.data.role },
             actor,
           );
+          if (clinician.role === 'principal') {
+            await deps.createClinicianUser.addToPrincipalGroup(subjectId);
+          }
           return respond(201, { item: clinician });
         }
         case 'POST /clinicians/{id}/deactivate': {
