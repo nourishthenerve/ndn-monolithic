@@ -1,8 +1,26 @@
 # Load testing (TASK 5.1.1)
 
-**Date:** 2026-08-27 · **Task:** [05-execution-plan.md § TASK 5.1.1](../plan/05-execution-plan.md) · **Requirements:** NFR-05 · **Decisions:** [D-20](../plan/01-decisions.md) · **Risks:** [R-10](../plan/02-risk-register.md) · **Depends on:** 0.6.3, 4.5.1
+**Date:** 2026-08-27, updated 2026-08-28 · **Task:** [05-execution-plan.md § TASK 5.1.1](../plan/05-execution-plan.md) · **Requirements:** NFR-05 · **Decisions:** [D-20](../plan/01-decisions.md) · **Risks:** [R-10](../plan/02-risk-register.md) · **Depends on:** 0.6.3, 4.5.1
 
-## Status: mechanism built, live run not yet executed
+## Status: HTTP baseline executed live; signalling-connect deliberately deferred
+
+The disposable `LOAD_TEST=1` stack (`NdnLoadTestDataStack` + `NdnLoadTestWebStack`) was deployed for real on 2026-08-28, the HTTP baseline scenario was run against it end-to-end, and the stack was torn down afterward — `aws cloudformation list-stacks` confirms neither stack exists post-run. **`signalling-connect.yml` was not run.** Its own comment already names why a real `join` needs a live fixture this codebase doesn't have yet; the deeper reason found this run is upstream of that: `ws-authorizer.ts` denies every `$connect` outright while `video.signalling.enabled` is off, and that flag being off is production's own current, deliberate posture (TASK 5.5.3 turns it on last, after every other Phase 5 gate). Running the WS scenario at all would first require deciding to flip a real production capability early, purely to satisfy a load test — a call this runbook does not make unilaterally, named honestly here rather than worked around. TASK 5.1.1's own DoD ("a repeatable, documented 10×-derived load run has been executed") is met for the HTTP half; the WS half stays open pending that flag decision, which is TASK 5.5.3's to make, not this task's.
+
+### HTTP baseline results (2026-08-28)
+
+7 minutes, 6,900 requests, **0 failed**. `health` (30% weight, unauthenticated, unflagged) and `content` (70% weight, `content.readApi.enabled` — also off in production today, so every request hit the flag's own early-return path rather than a real `DynamoDB Query`, named honestly rather than presented as full end-to-end coverage):
+
+| | p50 | p95 | p99 | max | vs NFR-05 (500ms) |
+|---|---|---|---|---|---|
+| Overall | 27.9ms | 39.3ms | 53ms | 1793ms (single outlier, first request) | **pass, 12.7x headroom at p95** |
+| `health` (2xx) | 32.8ms | 43.4ms | 54.1ms | 268ms | pass |
+| `content` (4xx, flag-off path) | 26.8ms | 34.8ms | 53ms | 1793ms | pass (see caveat above) |
+
+CloudWatch Logs Insights against `/ndn/load-test/health-function`'s own `REPORT` lines (2,092 invocations): 3 cold starts, average `Init Duration` 105.6ms, max 113.31ms, execution-only p95 1.9ms. `content-read-function`'s own log group had **zero** log streams for the entire run despite 4,809 real requests — not a load-test artefact; see the new Follow-up section in [log-retention-volume-control.md](log-retention-volume-control.md) for why and its fix. `TARGET_WS_TOKEN` was never obtained (moot regardless, given the flag-deny above) — the shared clinician test identity's credentials live only as GitHub Actions secrets for TASK 5.3.1's own scheduled job, not anywhere this runbook's live-CLI steps can reach them, and creating a second, throwaway identity just to route around that was rejected as unnecessary risk to a shared fixture for a scenario that couldn't have connected regardless.
+
+**Cost:** the 2026-08-28 run's own stack lifetime (~30 minutes total: deploy, 7-minute run, destroy) — DynamoDB `PAY_PER_REQUEST` at near-zero item count, ~6,900 Lambda invocations at 128MB/arm64, one CloudFront distribution and one WebSocket API provisioned but never invoked. Not separately added to `03-cost-model.md`: at this volume the one-off is a fraction of a cent, well inside the "modelled before the run, re-priced against the actual bill afterward" allowance this task's own header already carries, and `ndn-prod`'s monthly budget alarm (TASK 0.5.1) would have caught any real overrun.
+
+## Status (original, 2026-08-27): mechanism built, live run not yet executed
 
 This task's harness, its CDK ephemeral-mode extension, and its 10x-target derivation are built and verified by `cdk synth` and unit tests. **No load has actually been run against a deployed stack** — the account owner deferred the live deploy/run/teardown cycle (a real, if disposable, ~15–30 minute-each-way Cognito+CloudFront+DynamoDB provisioning) to a separate, explicit go-ahead. TASK 5.1.1's own DoD in `05-execution-plan.md` — "a repeatable, documented 10×-derived load run **has been executed**" — is therefore not yet met by this PR alone. TASK 5.1.2 (the cold-start p95 finding) cannot start until a real run exists to measure.
 
@@ -54,16 +72,16 @@ Both files were syntax- and wiring-verified locally (`artillery run -s` against 
 
 Adding `artillery` pulled in `@playwright/browser-chromium`, `protobufjs`, and `unix-dgram` as transitive devDependencies, each with its own install-time build script. Traced with `pnpm why <pkg>` — all three reach back to artillery's own **optional** features this repo does not use (a browser-based scenario engine, gRPC/OpenTelemetry cloud reporting, and a StatsD reporter; this runbook's scenarios use only the HTTP and WS engines, `local` platform, no `--record`). Denied rather than approved, following the existing `allowBuilds` convention in this file (`esbuild: true`, `unrs-resolver: true`) — declining a script this repo has no use for is a smaller trust surface than running it un-reviewed.
 
-## What is still needed before a live run — owner action / separate go-ahead
+## What is still needed — owner decision, not owner action
 
-None of this was executed. In order, whenever authorised:
+Steps 2, 3 (for the HTTP scenario), 4 (HTTP half), and 5 below are done (2026-08-28 — see Status above). What's left is not a deferred *action* the way the whole list was before this date; it's a **decision**, and it belongs to TASK 5.5.3, not this task:
 
-1. **Two real, permanent, clearly-labelled test identities** (one patient, one clinician) in production Cognito — the same fixture TASK 5.3.1 needs, so build it once and share it, not twice differently. Excluded from any real notification/marketing path.
-2. `LOAD_TEST=1 npx cdk deploy --all` from `infra/` (bootstrap-role permitting) — expect **15–30 minutes**, mostly the Cognito-adjacent and CloudFront provisioning `WebStack`'s own resources always take.
-3. Sign in as the test identities against the real (production) hosted UI to obtain real ID tokens for `TARGET_WS_TOKEN`; read `ContentHttpApiUrl`/`DistributionDomainName`/`SignallingWebSocketUrl` from the deploy's own `CfnOutput`s for the other environment variables.
-4. `pnpm run loadtest:http` and `pnpm run loadtest:signalling`, capturing p50/p95/p99 latency, error rate, and DynamoDB/Lambda throttle counts per route (TASK 5.1.1's own DoD).
-5. `LOAD_TEST=1 npx cdk destroy --all` — confirm via `aws cloudformation describe-stacks` that both stacks reach `NOT_FOUND`/`DELETE_COMPLETE`.
-6. Add the one-off run-cost line to `03-cost-model.md` (TASK 5.1.1's own Steps) and hand the p95 figures to TASK 5.1.2.
+1. ~~Two real, permanent, clearly-labelled test identities~~ — the **clinician** identity exists (built for TASK 5.3.1, shared per this item's own original note). The **patient** identity is still not built, and building it alone would not unblock the signalling scenario below regardless (item 3 was never the actual blocker — see Status).
+2. ~~`LOAD_TEST=1 npx cdk deploy --all`~~ — done, ~7 minutes to `CREATE_COMPLETE` on both stacks (faster than the 15–30 minute estimate; no `AuthStack` in the critical path, per this file's own correction above).
+3. Sign in for a real `TARGET_WS_TOKEN` — not attempted. Moot on its own: `video.signalling.enabled` off means `ws-authorizer.ts` denies `$connect` before token validity is even checked (Status above). Revisit only once that flag decision is made.
+4. ~~`pnpm run loadtest:http`~~ — done, results above. `pnpm run loadtest:signalling` — blocked on item 3/the flag decision, not on this task's own mechanism.
+5. ~~`LOAD_TEST=1 npx cdk destroy --all`~~ — done; confirmed via `aws cloudformation list-stacks` that neither stack exists.
+6. **The actual remaining decision:** whether `video.signalling.enabled` is turned on in a real or disposable environment before TASK 5.5.3's own deliberate go-live sequencing, specifically to let the signalling-connect scenario run. Until that's decided, TASK 5.1.1 stays HTTP-complete/WS-open rather than fully closed, and TASK 5.1.2's own cold-start finding is correspondingly scoped to the routes actually measured (`health`, `content` — both comfortably pass NFR-05, see Status above; no fix needed for either).
 
 ## A real safety note for whoever runs this
 

@@ -1425,18 +1425,29 @@ describe('WebStack — the authenticated web shell (TASK 2.2.4)', () => {
     expect(variables.CLINICIAN_OAUTH_BASE_URL).toContain('ndn-clinicians.auth');
     expect(variables.AUTH_CALLBACK_URL).toBe(AUTH_CALLBACK_URL);
 
-    // It touches no table and no bucket: the only thing its role holds is
-    // the SSM flag read. A client secret would be worse still, and there
-    // is none to hold — TASK 2.2.1's clients are public.
+    // It touches no table and no bucket: the only *data-plane-shaped*
+    // permission its role holds is the SSM flag read (its log-write grant,
+    // added alongside every other hand-rolled role's — log-retention.test.ts's
+    // own "every hand-rolled Lambda role can write its own logs" —  is
+    // operational exhaust, not data access). A client secret would be
+    // worse still, and there is none to hold — TASK 2.2.1's clients are
+    // public.
     expect(variables).not.toHaveProperty('PRINCIPAL_TABLE_NAME');
 
     const authPolicy = Object.entries(template.findResources('AWS::IAM::Policy')).find(([id]) =>
       id.startsWith('AuthTokenFunctionRole'),
-    )?.[1] as { Properties: { PolicyDocument: { Statement: { Sid?: string }[] } } };
+    )?.[1] as {
+      Properties: { PolicyDocument: { Statement: { Sid?: string; Action?: string | string[] }[] } };
+    };
+    const statements = authPolicy.Properties.PolicyDocument.Statement;
 
-    expect(authPolicy.Properties.PolicyDocument.Statement.map((entry) => entry.Sid)).toEqual([
-      'ReadFeatureFlags',
-    ]);
+    expect(statements.map((entry) => entry.Sid)).toContain('ReadFeatureFlags');
+    for (const { Action } of statements) {
+      const actions = Array.isArray(Action) ? Action : [Action];
+      for (const action of actions) {
+        expect(action).not.toMatch(/^(dynamodb|s3):/);
+      }
+    }
   });
 
   it('writes the auth decision log to its own unmonitored group', () => {
