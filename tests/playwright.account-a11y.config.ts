@@ -34,7 +34,10 @@ export default defineConfig({
     },
     {
       name: 'chromium',
-      testMatch: 'a11y-authenticated.test.ts',
+      // TASK 5.3.2: keyboard-authenticated.test.ts joins the axe scan in
+      // the same signed-in project — one real Cognito sign-in shared by
+      // both, not two.
+      testMatch: ['a11y-authenticated.test.ts', 'keyboard-authenticated.test.ts'],
       use: { ...devices['Desktop Chrome'], storageState: authFile },
       dependencies: ['setup'],
     },

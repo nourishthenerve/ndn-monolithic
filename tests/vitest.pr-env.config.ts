@@ -12,14 +12,16 @@ export default defineConfig({
     // reverse direction (it owns exactly these files); this exclude is the
     // other half of that split. TASK 1.2.3 added cookie-consent.test.ts to
     // the same Playwright-only set. TASK 5.3.1 adds a11y-authenticated.test.ts
-    // — owned by playwright.account-a11y.config.ts instead, never this
-    // config or playwright.pr-env.config.ts (it targets production, not an
+    // and TASK 5.3.2 adds keyboard-authenticated.test.ts — both owned by
+    // playwright.account-a11y.config.ts instead, never this config or
+    // playwright.pr-env.config.ts (they target production, not an
     // ephemeral PR stack, and must never run on every PR).
     exclude: [
       'pr-env/a11y-full.test.ts',
       'pr-env/keyboard.test.ts',
       'pr-env/cookie-consent.test.ts',
       'pr-env/a11y-authenticated.test.ts',
+      'pr-env/keyboard-authenticated.test.ts',
     ],
     // TASK 0.6.3: this suite hits a real, just-deployed ephemeral stack
     // (see tests/pr-env/env.ts) — a CloudFront/Lambda cold start plus a
