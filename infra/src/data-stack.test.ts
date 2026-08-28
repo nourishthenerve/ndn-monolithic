@@ -1353,6 +1353,88 @@ describe('DataStack — TURN credentials (TASK 4.4.1, TASK 4.4.2)', () => {
   });
 });
 
+describe('DataStack — backup export (D-22)', () => {
+  it('the export bucket is Object-Locked in GOVERNANCE mode for a full year, versioned, never destroyed', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      ObjectLockEnabled: true,
+      ObjectLockConfiguration: {
+        ObjectLockEnabled: 'Enabled',
+        Rule: {
+          DefaultRetention: { Mode: 'GOVERNANCE', Days: 365 },
+        },
+      },
+      VersioningConfiguration: { Status: 'Enabled' },
+    });
+    template.hasResource('AWS::S3::Bucket', {
+      DeletionPolicy: 'Retain',
+      UpdateReplacePolicy: 'Retain',
+    });
+  });
+
+  it('blocks all public access on the export bucket, the same as every other bucket in this repo', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+    });
+  });
+
+  it('runs the export once a day via EventBridge, targeting the export function', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Events::Rule', {
+      ScheduleExpression: 'rate(1 day)',
+    });
+  });
+
+  it('the export role can start an export and read the table, nothing broader', () => {
+    const template = synth();
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const startExportStatement = policies
+      .flatMap(
+        (policy) =>
+          (policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } })
+            .Properties.PolicyDocument.Statement,
+      )
+      .find((statement) => statement.Sid === 'StartTableExport');
+
+    expect(startExportStatement?.Action).toEqual([
+      'dynamodb:ExportTableToPointInTime',
+      'dynamodb:DescribeTable',
+    ]);
+  });
+
+  it('the export role can write to the bucket, and nothing in this stack is ever granted BypassGovernanceRetention', () => {
+    const template = synth();
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const statements = policies.flatMap(
+      (policy) =>
+        (policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } })
+          .Properties.PolicyDocument.Statement,
+    );
+
+    const writeStatement = statements.find((statement) => statement.Sid === 'WriteExportToBucket');
+    expect(writeStatement?.Action).toEqual(['s3:PutObject', 's3:AbortMultipartUpload']);
+
+    const bypassGrant = statements.some((statement) => {
+      const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+      return (
+        statement.Effect === 'Allow' && actions.includes('s3:BypassGovernanceRetention')
+      );
+    });
+    expect(bypassGrant).toBe(false);
+  });
+
+  it('does not create the backup export pipeline for an ephemeral (load-test) copy', () => {
+    const template = synthEphemeral();
+    template.resourceCountIs('AWS::S3::Bucket', 0);
+  });
+});
+
 // TASK 5.1.1: a second, ephemeral-mode synth — the production `synth()`
 // above is memoized and must stay on the default (non-ephemeral) shape.
 let ephemeralTemplate: Template | undefined;

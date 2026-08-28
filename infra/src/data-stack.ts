@@ -47,6 +47,7 @@ import { Architecture, Runtime, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 
+import { createBackupExportPipeline } from './backup-export.js';
 import {
   CLINICIAN_USER_POOL_CLIENT_ID,
   CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME,
@@ -2466,6 +2467,15 @@ export class DataStack extends Stack {
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration('TurnCredentialsIntegration', turnCredentialsFunction),
     });
+
+    // D-22: a load-test/ephemeral copy is destroyed within the hour it's
+    // created (props.ephemeral's own removalPolicy above) — nothing about
+    // it is worth a year-long, object-locked backup, the identical
+    // reasoning web-stack.ts's own `if (!props.ephemeral)` gate already
+    // applies to the email-events pipeline.
+    if (!props.ephemeral) {
+      createBackupExportPipeline(this, this.table);
+    }
 
     new CfnOutput(this, 'TableName', { value: this.table.tableName });
     new CfnOutput(this, 'ContentHttpApiUrl', { value: httpApi.apiEndpoint });
