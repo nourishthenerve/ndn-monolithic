@@ -4,6 +4,7 @@
 
 import { App, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { CfnLogGroup, type LogGroup } from 'aws-cdk-lib/aws-logs';
 import { describe, expect, it } from 'vitest';
@@ -25,6 +26,47 @@ describe('createLogGroup', () => {
       RetentionInDays: 14,
     });
     template.hasResource('AWS::Logs::LogGroup', { DeletionPolicy: 'Delete' });
+  });
+});
+
+// Found live in production 2026-08-28: every Lambda built with its own
+// explicit `role:` prop (every hand-rolled role in data-stack.ts/
+// web-stack.ts, narrowed on purpose so a guardrail has a concrete
+// construct to attach to) had zero CloudWatch log streams, ever — CDK
+// only wires the `logs:CreateLogStream`/`PutLogEvents` grant in for free
+// when it *also* auto-creates the role, and an explicit role plus an
+// explicit log group got neither. `contentReadRole`'s own comment already
+// claimed "read the table, write its own logs"; nothing enforced the
+// second half. `grantee` closes it structurally, the same "insist on the
+// supported prop, never a silent pass" shape ExplicitLambdaLogGroupAspect
+// already holds for the log group itself.
+describe('createLogGroup — write grant', () => {
+  it('grants CreateLogStream/PutLogEvents when a grantee is passed', () => {
+    const app = new App();
+    const stack = new Stack(app, 'TestStack');
+    const role = new Role(stack, 'TestRole', { assumedBy: new ServicePrincipal('lambda.amazonaws.com') });
+    createLogGroup(stack, 'ExplicitLogGroup', '/ndn/test-function', role);
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(['logs:PutLogEvents']),
+            Effect: 'Allow',
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('grants nothing when no grantee is passed — unchanged from before this task', () => {
+    const app = new App();
+    const stack = new Stack(app, 'TestStack');
+    createLogGroup(stack, 'ExplicitLogGroup', '/ndn/test-function');
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::IAM::Policy', 0);
   });
 });
 
@@ -163,6 +205,62 @@ describe('enforceLogRetention — implicit Lambda log groups', () => {
         const properties = (resource as { Properties?: { LoggingConfig?: { LogGroup?: unknown } } })
           .Properties;
         expect(properties?.LoggingConfig?.LogGroup, `${stackName}/${logicalId}`).toBeDefined();
+      }
+    }
+  });
+});
+
+// Structural, not enumerated: catches this class of bug for any future
+// function too, not only the 26 (data-stack.ts) + 4 (web-stack.ts) this
+// task found and fixed. Every hand-rolled role in this codebase is built
+// bare (`new Role(scope, id, { assumedBy })`, no `managedPolicies:` —
+// confirmed by grep, not assumed) specifically so a guardrail has "exactly
+// what this function needs, nothing broader" to attach to; CDK's own
+// auto-created default role always carries `AWSLambdaBasicExecutionRole`
+// (which is where the free log grant health-function/smoke-test-function
+// still get comes from), so "no ManagedPolicyArns" is the same
+// discriminator this codebase's own role-construction convention already
+// makes true, not a heuristic invented for this test.
+describe('every hand-rolled Lambda role can write its own logs', () => {
+  it('holds across the real app — no explicit role is missing a logs:PutLogEvents grant', () => {
+    for (const { stackName, template } of productionTemplates()) {
+      const roles = template.findResources('AWS::IAM::Role');
+      const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+
+      const explicitRoleLogicalIds = Object.entries(roles)
+        .filter(([, resource]) => {
+          const properties = (resource as { Properties?: { ManagedPolicyArns?: unknown } }).Properties;
+          return properties?.ManagedPolicyArns === undefined;
+        })
+        .map(([logicalId]) => logicalId);
+
+      expect(explicitRoleLogicalIds.length).toBeGreaterThan(0);
+
+      for (const roleLogicalId of explicitRoleLogicalIds) {
+        const grantsLogs = policies.some((policy) => {
+          const properties = (
+            policy as {
+              Properties?: {
+                Roles?: unknown[];
+                PolicyDocument?: { Statement?: Array<{ Action?: string | string[] }> };
+              };
+            }
+          ).Properties;
+          const referencesThisRole = (properties?.Roles ?? []).some(
+            (role) =>
+              typeof role === 'object' &&
+              role !== null &&
+              (role as { Ref?: string }).Ref === roleLogicalId,
+          );
+          if (!referencesThisRole) return false;
+
+          return (properties?.PolicyDocument?.Statement ?? []).some((statement) => {
+            const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+            return actions.includes('logs:PutLogEvents');
+          });
+        });
+
+        expect(grantsLogs, `${stackName}/${roleLogicalId} has no logs:PutLogEvents grant`).toBe(true);
       }
     }
   });

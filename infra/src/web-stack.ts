@@ -307,6 +307,7 @@ export class WebStack extends Stack {
         this,
         'ContactFormFunctionLogGroup',
         logGroupName('contact-form-function'),
+        contactFormRole,
       ),
     });
     grantFlagReads(this, contactFormRole);
@@ -387,6 +388,7 @@ export class WebStack extends Stack {
         this,
         'AuthTokenFunctionLogGroup',
         logGroupName('auth-token-function'),
+        authTokenRole,
       ),
     });
     grantFlagReads(this, authTokenRole);
@@ -462,6 +464,7 @@ export class WebStack extends Stack {
           this,
           'MediaUploadFunctionLogGroup',
           logGroupName('media-upload-function'),
+          mediaUploadRole,
         ),
       });
       grantFlagReads(this, mediaUploadRole);
@@ -547,6 +550,7 @@ export class WebStack extends Stack {
           this,
           'StripeWebhookFunctionLogGroup',
           logGroupName('stripe-webhook-function'),
+          stripeWebhookRole,
         ),
       });
 

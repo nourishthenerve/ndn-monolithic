@@ -9,14 +9,38 @@
 // capped at 14 days rather than silently reverting to infinite retention —
 // "CDK default rather than a habit" (docs/plan/09-self-audit.md, item 5).
 import { Annotations, Aspects, RemovalPolicy, Tokenization, type IAspect } from 'aws-cdk-lib';
+import type { IGrantable } from 'aws-cdk-lib/aws-iam';
 import { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import { CfnLogGroup, LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct, IConstruct } from 'constructs';
 
 export const LOG_RETENTION = RetentionDays.TWO_WEEKS;
 
-export function createLogGroup(scope: Construct, id: string, logGroupName: string): LogGroup {
-  return new LogGroup(scope, id, {
+/**
+ * `grantee`: required whenever the function this log group belongs to is
+ * given its own explicit `role:` prop (every hand-rolled role in
+ * data-stack.ts/web-stack.ts, built narrow on purpose so a guardrail has a
+ * concrete construct to attach to) — CDK only wires `logs:CreateLogStream`/
+ * `PutLogEvents` into a function's role automatically when it *also*
+ * auto-creates that role; an explicit role plus an explicit log group gets
+ * neither for free. Confirmed live in production 2026-08-28: every
+ * function built this way (patient, appointment, message, caseload,
+ * clinical-record, content-read, even audit-read itself) had zero
+ * CloudWatch log streams, ever — the handler ran and answered correctly,
+ * because a Lambda's platform-level log delivery failing is silent, not a
+ * thrown error. Omit `grantee` only for a function with no explicit
+ * `role:` (CDK's own auto-created role already gets this grant) — pass it
+ * in every other case, matching `contentReadRole`'s own comment's claim
+ * ("read the table, write its own logs") for real rather than in a
+ * comment alone.
+ */
+export function createLogGroup(
+  scope: Construct,
+  id: string,
+  logGroupName: string,
+  grantee?: IGrantable,
+): LogGroup {
+  const logGroup = new LogGroup(scope, id, {
     logGroupName,
     retention: LOG_RETENTION,
     // Logs are operational exhaust, not the "patient, clinical, content or
@@ -24,6 +48,10 @@ export function createLogGroup(scope: Construct, id: string, logGroupName: strin
     // reasoning web-stack.ts's SiteDeployment pruning uses.
     removalPolicy: RemovalPolicy.DESTROY,
   });
+  if (grantee) {
+    logGroup.grantWrite(grantee);
+  }
+  return logGroup;
 }
 
 class LogRetentionAspect implements IAspect {

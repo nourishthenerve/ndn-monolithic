@@ -311,7 +311,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'ContentReadFunctionLogGroup', logGroupName),
+      logGroup: createLogGroup(this, 'ContentReadFunctionLogGroup', logGroupName, contentReadRole),
     });
     grantFlagReads(this, contentReadRole);
 
@@ -353,7 +353,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'ContentAuthoringFunctionLogGroup', authoringLogGroupName),
+      logGroup: createLogGroup(this, 'ContentAuthoringFunctionLogGroup', authoringLogGroupName, contentAuthoringRole),
     });
     grantFlagReads(this, contentAuthoringRole);
 
@@ -421,7 +421,7 @@ export class DataStack extends Stack {
         CLINICIAN_USER_POOL_ID,
         CLINICIAN_USER_POOL_CLIENT_ID,
       },
-      logGroup: createLogGroup(this, 'AuthorizerFunctionLogGroup', authorizerLogGroupName),
+      logGroup: createLogGroup(this, 'AuthorizerFunctionLogGroup', authorizerLogGroupName, authorizerRole),
     });
 
     // `dynamodb:GetItem`, on two partition prefixes, and nothing else.
@@ -558,6 +558,7 @@ export class DataStack extends Stack {
           this,
           'TestimonialSubmissionFunctionLogGroup',
           testimonialSubmissionLogGroupName,
+          testimonialSubmissionRole,
         ),
       },
     );
@@ -634,6 +635,7 @@ export class DataStack extends Stack {
           this,
           'TestimonialModerationFunctionLogGroup',
           testimonialModerationLogGroupName,
+          testimonialModerationRole,
         ),
       },
     );
@@ -715,7 +717,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'WorkshopReadFunctionLogGroup', workshopReadLogGroupName),
+      logGroup: createLogGroup(this, 'WorkshopReadFunctionLogGroup', workshopReadLogGroupName, workshopReadRole),
     });
     grantFlagReads(this, workshopReadRole);
 
@@ -755,6 +757,7 @@ export class DataStack extends Stack {
         this,
         'WorkshopAuthoringFunctionLogGroup',
         workshopAuthoringLogGroupName,
+        workshopAuthoringRole,
       ),
     });
     grantFlagReads(this, workshopAuthoringRole);
@@ -841,6 +844,7 @@ export class DataStack extends Stack {
         this,
         'WorkshopCheckoutFunctionLogGroup',
         workshopCheckoutLogGroupName,
+        workshopCheckoutRole,
       ),
     });
     grantFlagReads(this, workshopCheckoutRole);
@@ -913,7 +917,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'AuditReadFunctionLogGroup', auditReadLogGroupName),
+      logGroup: createLogGroup(this, 'AuditReadFunctionLogGroup', auditReadLogGroupName, auditReadRole),
     });
     grantFlagReads(this, auditReadRole);
 
@@ -968,7 +972,7 @@ export class DataStack extends Stack {
         TURNSTILE_SECRET_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'RegistrationFunctionLogGroup', registrationLogGroupName),
+      logGroup: createLogGroup(this, 'RegistrationFunctionLogGroup', registrationLogGroupName, registrationRole),
     });
     grantFlagReads(this, registrationRole);
 
@@ -1026,6 +1030,7 @@ export class DataStack extends Stack {
         this,
         'PostConfirmationFunctionLogGroup',
         postConfirmationLogGroupName,
+        postConfirmationRole,
       ),
     });
 
@@ -1119,7 +1124,7 @@ export class DataStack extends Stack {
         SES_CONFIGURATION_SET_NAME,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'ClinicianAdminFunctionLogGroup', clinicianAdminLogGroupName),
+      logGroup: createLogGroup(this, 'ClinicianAdminFunctionLogGroup', clinicianAdminLogGroupName, clinicianAdminRole),
     });
     grantFlagReads(this, clinicianAdminRole);
 
@@ -1259,7 +1264,7 @@ export class DataStack extends Stack {
         CLINICIAN_USER_POOL_ID,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'AssignmentFunctionLogGroup', assignmentLogGroupName),
+      logGroup: createLogGroup(this, 'AssignmentFunctionLogGroup', assignmentLogGroupName, assignmentRole),
     });
     grantFlagReads(this, assignmentRole);
 
@@ -1374,7 +1379,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'CaseloadFunctionLogGroup', caseloadLogGroupName),
+      logGroup: createLogGroup(this, 'CaseloadFunctionLogGroup', caseloadLogGroupName, caseloadRole),
     });
     grantFlagReads(this, caseloadRole);
 
@@ -1444,7 +1449,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'PatientFunctionLogGroup', patientLogGroupName),
+      logGroup: createLogGroup(this, 'PatientFunctionLogGroup', patientLogGroupName, patientRole),
     });
     grantFlagReads(this, patientRole);
 
@@ -1536,7 +1541,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'ClinicalRecordFunctionLogGroup', clinicalRecordLogGroupName),
+      logGroup: createLogGroup(this, 'ClinicalRecordFunctionLogGroup', clinicalRecordLogGroupName, clinicalRecordRole),
     });
     grantFlagReads(this, clinicalRecordRole);
 
@@ -1622,7 +1627,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'AssessmentFunctionLogGroup', assessmentLogGroupName),
+      logGroup: createLogGroup(this, 'AssessmentFunctionLogGroup', assessmentLogGroupName, assessmentRole),
     });
     grantFlagReads(this, assessmentRole);
 
@@ -1690,7 +1695,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'AppointmentFunctionLogGroup', appointmentLogGroupName),
+      logGroup: createLogGroup(this, 'AppointmentFunctionLogGroup', appointmentLogGroupName, appointmentRole),
     });
     grantFlagReads(this, appointmentRole);
 
@@ -1795,7 +1800,7 @@ export class DataStack extends Stack {
         SMS_ORIGINATION_IDENTITY,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'ReminderSweepFunctionLogGroup', reminderSweepLogGroupName),
+      logGroup: createLogGroup(this, 'ReminderSweepFunctionLogGroup', reminderSweepLogGroupName, reminderSweepRole),
     });
     grantFlagReads(this, reminderSweepRole);
 
@@ -1925,6 +1930,7 @@ export class DataStack extends Stack {
         this,
         'ContentAssignmentFunctionLogGroup',
         contentAssignmentLogGroupName,
+        contentAssignmentRole,
       ),
     });
     grantFlagReads(this, contentAssignmentRole);
@@ -2017,7 +2023,7 @@ export class DataStack extends Stack {
         CLINICIAN_USER_POOL_ID,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'MessageFunctionLogGroup', messageLogGroupName),
+      logGroup: createLogGroup(this, 'MessageFunctionLogGroup', messageLogGroupName, messageRole),
     });
     grantFlagReads(this, messageRole);
 
@@ -2134,7 +2140,7 @@ export class DataStack extends Stack {
         CLINICIAN_USER_POOL_CLIENT_ID,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'WsAuthorizerFunctionLogGroup', wsAuthorizerLogGroupName),
+      logGroup: createLogGroup(this, 'WsAuthorizerFunctionLogGroup', wsAuthorizerLogGroupName, wsAuthorizerRole),
     });
     grantFlagReads(this, wsAuthorizerRole);
 
@@ -2168,7 +2174,7 @@ export class DataStack extends Stack {
       timeout: Duration.seconds(5),
       role: wsConnectRole,
       environment: { CONNECTION_TABLE_NAME: this.table.tableName },
-      logGroup: createLogGroup(this, 'WsConnectFunctionLogGroup', wsConnectLogGroupName),
+      logGroup: createLogGroup(this, 'WsConnectFunctionLogGroup', wsConnectLogGroupName, wsConnectRole),
     });
     // `PutItem` only, and only on `CONN#*` — this function never reads or
     // updates anything, including its own row.
@@ -2197,7 +2203,7 @@ export class DataStack extends Stack {
       timeout: Duration.seconds(5),
       role: wsDisconnectRole,
       environment: { CONNECTION_TABLE_NAME: this.table.tableName },
-      logGroup: createLogGroup(this, 'WsDisconnectFunctionLogGroup', wsDisconnectLogGroupName),
+      logGroup: createLogGroup(this, 'WsDisconnectFunctionLogGroup', wsDisconnectLogGroupName, wsDisconnectRole),
     });
     // `UpdateItem` only, and only on `CONN#*` — never `PutItem` (this
     // function creates nothing) and never `DeleteItem` (00-conventions.md's
@@ -2247,7 +2253,7 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'WsDefaultFunctionLogGroup', wsDefaultLogGroupName),
+      logGroup: createLogGroup(this, 'WsDefaultFunctionLogGroup', wsDefaultLogGroupName, wsDefaultRole),
     });
     grantFlagReads(this, wsDefaultRole);
     // One `GetItem` statement, three leading-key prefixes: `CONN#*`
@@ -2398,7 +2404,7 @@ export class DataStack extends Stack {
         CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME,
         ...FLAG_ENVIRONMENT,
       },
-      logGroup: createLogGroup(this, 'TurnCredentialsFunctionLogGroup', turnCredentialsLogGroupName),
+      logGroup: createLogGroup(this, 'TurnCredentialsFunctionLogGroup', turnCredentialsLogGroupName, turnCredentialsRole),
     });
     grantFlagReads(this, turnCredentialsRole);
 

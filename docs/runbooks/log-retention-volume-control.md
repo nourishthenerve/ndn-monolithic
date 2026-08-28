@@ -186,3 +186,33 @@ aws logs put-retention-policy --log-group-name /ndn/pr-env/site-deployment --ret
 ### What this does not cover
 
 Any PR stack still deploying from a branch cut before this change will leave one more `/aws/lambda/NdnWebStackPrNN-CustomCDKBucketDeployment...` orphan behind, with no retention, until that branch merges or rebases. The count should stop at 13 and go no higher once `main` carries this; if a 14th appears, that is what it means. (`/ndn/pr-48/site-deployment`, the one the race created, was capped at 14 days by hand along with the other 13.)
+
+## Follow-up, 2026-08-28 — every hand-rolled role could log nowhere at all
+
+**The finding, in one line:** every Lambda in this repo built with its own explicit `role:` prop — 26 in `data-stack.ts`, 4 in `web-stack.ts`, essentially the entire application — had never written a single CloudWatch log line in production, because nothing ever granted its role permission to write to the log group `createLogGroup()` gave it.
+
+Found live, incidentally, while capturing TASK 5.1.1's deferred load-test run: `content-read-function`'s log group had zero log streams despite thousands of real requests during the run. A direct `aws lambda invoke` against production reproduced it — the function ran and returned a correct response, but wrote nothing. `patient-function`, `appointment-function`, `message-function`, `caseload-function`, `clinical-record-function`, and `audit-read-function` — the audit-log reader itself — were all checked live and were all the same: zero log streams, ever.
+
+### Root cause
+
+`contentReadRole`'s own comment (`data-stack.ts`, TASK 1.3.1) states the intent directly: "this function's permissions are exactly 'read the table, write its own logs' — no broader default policy." The table-read half was granted (`this.table.grantReadData(contentReadRole)`); the log-write half never was. CDK only wires `logs:CreateLogStream`/`PutLogEvents` into a Lambda's role automatically when it *also* auto-creates that role — every function in this codebase that needs a narrower, hand-built role (so `attachDestructiveActionGuardrail`/`attachAuditPartitionReadGuardrail` have a concrete construct to attach to, `data-stack.ts`'s own stated reason) got neither half for free, and nobody separately called `logGroup.grantWrite(role)`. A Lambda's platform-level log delivery failing is silent — it does not throw, does not affect the handler's return value, and produces no error anywhere a normal test or a manual `curl` would see. `health-function`/`smoke-test-function` (no explicit `role:`, CDK's own auto-created role) were the only two functions unaffected, which is why this went unnoticed through every prior gate review.
+
+### What was fixed
+
+- **`log-retention.ts`** — `createLogGroup()` takes an optional fourth parameter, `grantee?: IGrantable`, and calls `logGroup.grantWrite(grantee)` when one is passed. Omitted for the two functions that rely on CDK's own auto-created role (`health-function`, `smoke-test-function`) and for `SiteDeploymentLogGroup` (a `BucketDeployment`-owned singleton Lambda, a different construct pattern this file's own comment already treats separately).
+- **`data-stack.ts` (26 call sites) and `web-stack.ts` (4 call sites)** — every `createLogGroup(...)` call for a function with an explicit `role:` now passes that same role as `grantee`. Mechanical and 1:1: each role variable already existed in scope before its function's `createLogGroup` call (the established pattern — role constructed first, function second), so no reordering was needed anywhere.
+
+### Verification
+
+`log-retention.test.ts`:
+
+- `createLogGroup` grants `logs:CreateLogStream`/`PutLogEvents` when a `grantee` is passed, and creates no `AWS::IAM::Policy` at all when it isn't — unchanged behaviour for the two call sites that still omit it.
+- **A structural guard, not an enumerated list** — "every hand-rolled Lambda role can write its own logs" walks both production stacks' synthesized templates, finds every `AWS::IAM::Role` with no `ManagedPolicyArns` (this codebase's own hand-rolled-role signature: `new Role(scope, id, { assumedBy })`, confirmed by grep to never attach a managed policy — CDK's auto-created role always carries `AWSLambdaBasicExecutionRole`, which is where `health-function`'s free grant comes from), and asserts each one has an `AWS::IAM::Policy` statement naming `logs:PutLogEvents`. Proved capable of failing, not just passing: reverting `createLogGroup`'s own fix while keeping every call site's fourth argument (TypeScript's extra-argument checking doesn't run inside `vitest`'s transform, so this reproduces "callers ask for the grant, helper silently drops it" exactly) fails this test and names the first broken role — `NdnDataStack/ContentReadFunctionRole296B5077` — by logical id.
+
+`web-stack.test.ts`'s existing "gives the auth function both pools, both clients, and no data-plane permission" test asserted `AuthTokenFunctionRole`'s policy held *exactly* the `ReadFeatureFlags` statement — true before this fix, and now incomplete, since the role correctly gains a second, unnamed log-write statement. Updated to assert `ReadFeatureFlags` is present and that no statement anywhere in the policy names a `dynamodb:`/`s3:` action, preserving the test's actual intent ("no data-plane permission") rather than its incidental exact-count assumption.
+
+`pnpm -r lint && pnpm -r typecheck && pnpm --filter @ndn/infra run test` — all green (236 infra tests, 0 failures).
+
+### Live-account status
+
+Not yet deployed as of this writing — lands via the ordinary `deploy` job (`ci.yml`, OIDC via `ndn-deploy`) on merge to `main`, the same additive-only path TASK 0.5.2's own fixes above took. Nothing here is a manual/live remediation the way the implicit-log-group leak's 13 orphaned groups needed: this is a pure IAM policy addition (`logs:CreateLogStream`/`PutLogEvents` scoped to each function's own log group) on 30 existing roles, no resource replacement, no data to backfill — every invocation before this deploys is a gap in the historical record, not a state anything can retroactively correct.
