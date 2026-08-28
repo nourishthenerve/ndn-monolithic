@@ -89,6 +89,7 @@ const heading = t('patientProfile.heading', undefined, locale);
     />
     <NextAppointmentPanel
       client:only="react"
+      locale={locale}
       strings={{
         heading: t('nextAppointment.heading', undefined, locale),
         loadingLabel: t('nextAppointment.loading', undefined, locale),
@@ -96,6 +97,7 @@ const heading = t('patientProfile.heading', undefined, locale);
         errorLabel: t('nextAppointment.error', undefined, locale),
         emptyLabel: t('nextAppointment.empty', undefined, locale),
         durationLabel: t('nextAppointment.duration', undefined, locale),
+        joinCallLabel: t('nextAppointment.joinCall', undefined, locale),
       }}
     />
     <ClinicalRecordTimeline

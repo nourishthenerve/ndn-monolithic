@@ -143,6 +143,7 @@
   "nextAppointment.error": "Something went wrong loading your next appointment. Please try again.",
   "nextAppointment.empty": "You have no upcoming appointment scheduled.",
   "nextAppointment.duration": "Duration (minutes):",
+  "nextAppointment.joinCall": "Join this call",
   "assignedContent.heading": "Content shared with you",
   "assignedContent.description": "Articles your clinician has shared with you.",
   "assignedContent.loading": "Loading your content…",
