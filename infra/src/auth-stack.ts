@@ -157,6 +157,7 @@ export class AuthStack extends Stack {
   public readonly clinicianUserPool: UserPool;
   public readonly patientUserPoolClient: UserPoolClient;
   public readonly clinicianUserPoolClient: UserPoolClient;
+  public readonly clinicianAdminAuthClient: UserPoolClient;
   public readonly patientUserPoolDomain: UserPoolDomain;
   public readonly clinicianUserPoolDomain: UserPoolDomain;
 
@@ -279,6 +280,60 @@ export class AuthStack extends Stack {
       authFlows: { userSrp: true },
     });
 
+    // D-30 (2026-08-29): a second, narrowly-scoped app client on the same
+    // pool — never the browser's. `ClinicianAdminFunction` needs to walk a
+    // brand-new clinician through Cognito's own `MFA_SETUP` challenge on
+    // their behalf (associate a software token, verify it, complete the
+    // challenge) so the principal can hand over a working TOTP secret
+    // without Cognito ever emailing anything — the same "a second app
+    // client per surface, not a second capability on the existing one"
+    // reasoning Phase 6's own mobile sign-in design already applied
+    // (05-execution-plan.md, TASK 6.1.2). `adminUserPassword: true` is the
+    // *only* flow this client is given — `AdminInitiateAuth` is an
+    // IAM-authorised operation with no public, unauthenticated equivalent,
+    // so granting it here adds no capability a browser could ever reach;
+    // `ClinicianUserPoolClient` above is completely untouched, still SRP
+    // only, still the only client any frontend ever names. No OAuth
+    // config, no hosted-login branding, no callback URL — this client is
+    // never used for a redirect-based sign-in, only for the three-call
+    // `AdminInitiateAuth` → `AssociateSoftwareToken` → `VerifySoftwareToken`
+    // → `AdminRespondToAuthChallenge` round trip `clinician-admin.ts`'s own
+    // TOTP-provisioning port performs.
+    this.clinicianAdminAuthClient = new UserPoolClient(this, 'ClinicianAdminAuthClient', {
+      userPool: this.clinicianUserPool,
+      userPoolClientName: `${CLINICIAN_USER_POOL_NAME}-admin-auth`,
+      authFlows: { adminUserPassword: true },
+      // No secret: IAM (scoped to `ClinicianAdminFunctionRole` alone) is
+      // the real authorisation boundary for who can call `AdminInitiateAuth`
+      // against this client at all — a client secret would only add a
+      // second SSM parameter to manage for no additional real boundary,
+      // the same reasoning every browser client in this file already
+      // states for its own `generateSecret: false`.
+      generateSecret: false,
+      // Found live at synth, not assumed: CDK's own default for a client
+      // with no `oAuth` prop at all is *not* "no OAuth" — it is every flow
+      // enabled (`AllowedOAuthFlows: [implicit, code]`), silently, with no
+      // callback URL to send either grant's response to. Explicit, all
+      // false, closes that rather than relying on "no callback URL means
+      // no working redirect" to carry the actual boundary.
+      oAuth: {
+        flows: { authorizationCodeGrant: false, implicitCodeGrant: false, clientCredentials: false },
+      },
+      supportedIdentityProviders: [UserPoolClientIdentityProvider.COGNITO],
+      // Tokens from this flow are discarded the moment the round trip
+      // completes (`AdminUserGlobalSignOut` runs immediately after) — the
+      // validity windows below are this pool's own standing constants for
+      // consistency, not because anything here is meant to live that long.
+      accessTokenValidity: ACCESS_TOKEN_VALIDITY,
+      idTokenValidity: ID_TOKEN_VALIDITY,
+      refreshTokenValidity: REFRESH_TOKEN_VALIDITY,
+      // Makes the post-provisioning `AdminUserGlobalSignOut` meaningful —
+      // without it, a token minted through this client during setup would
+      // simply expire on its own schedule rather than being revoked the
+      // moment provisioning finishes.
+      enableTokenRevocation: true,
+    });
+
     // TASK 2.2.4: the hosted sign-in pages and, more importantly, the
     // `/oauth2/*` endpoints — `authorize`, `token` and `revoke` all live on
     // this domain and none of them exists without it. TASK 2.2.1
@@ -337,6 +392,18 @@ export class AuthStack extends Stack {
     // in docs/runbooks/cognito-user-pools.md, and 2.2.2's first move.
     this.exportIdentifiers('Patient', this.patientUserPool, this.patientUserPoolClient);
     this.exportIdentifiers('Clinician', this.clinicianUserPool, this.clinicianUserPoolClient);
+    // D-30: a standalone output, not `exportIdentifiers` — this client has
+    // no pool or issuer URL of its own to export alongside it (it shares
+    // the clinician pool `ClinicianUserPoolId` above already names). This
+    // id is captured once, after this stack's first real deploy, and
+    // hardcoded into `config.ts` as `CLINICIAN_ADMIN_AUTH_CLIENT_ID` — the
+    // same "these are captured, not computed" convention every other
+    // Cognito id in that file already documents.
+    new CfnOutput(this, 'ClinicianAdminAuthClientId', {
+      value: this.clinicianAdminAuthClient.userPoolClientId,
+      description:
+        'Clinician admin-auth client id — record in infra/src/config.ts once deployed (D-30).',
+    });
   }
 
   private addWebClient(
