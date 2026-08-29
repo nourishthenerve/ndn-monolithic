@@ -30,50 +30,8 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
-/** What the create form collects, before any trimming/omission. */
-export interface CreatePatientFormFields {
-  readonly email: string;
-  readonly fullName: string;
-  readonly phone: string;
-  readonly marketingOptIn: boolean;
-  readonly referralSource: string;
-  readonly presentingCondition: string;
-}
-
-/** What `POST /patients` (patient-admin.ts's own `createPatientBodySchema`) actually accepts. */
-export interface CreatePatientRequestBody {
-  readonly email: string;
-  readonly fullName: string;
-  readonly phone?: string;
-  readonly marketingOptIn: boolean;
-  readonly referralSource?: string;
-  readonly presentingCondition?: string;
-}
-
-/**
- * A blank optional field must arrive as *absent*, not as an empty
- * string — `phone: ''` would pass the backend's own `z.string().optional()`
- * validation and get stored as a real, blank `personal.phone`, which is a
- * different fact than "no phone was given." Pure and exported so it is
- * tested directly, matching this directory's own established convention
- * (`ClinicianCalendar.tsx`'s `calendarWindow`/`callHref`) of testing the
- * pure logic a component depends on rather than rendering the component.
- */
-export function buildCreatePatientRequestBody(
-  fields: CreatePatientFormFields,
-): CreatePatientRequestBody {
-  const phone = fields.phone.trim();
-  const referralSource = fields.referralSource.trim();
-  const presentingCondition = fields.presentingCondition.trim();
-  return {
-    email: fields.email.trim(),
-    fullName: fields.fullName.trim(),
-    marketingOptIn: fields.marketingOptIn,
-    ...(phone ? { phone } : {}),
-    ...(referralSource ? { referralSource } : {}),
-    ...(presentingCondition ? { presentingCondition } : {}),
-  };
-}
+import { buildCreatePatientRequestBody } from './patient-admin-request.js';
+import type { CreatePatientFormFields, CreatePatientRequestBody } from './patient-admin-request.js';
 
 type CreateStatus = 'idle' | 'submitting' | 'success' | 'conflict' | 'invalid' | 'forbidden' | 'error';
 type ResetStatus = 'idle' | 'submitting' | 'success' | 'notFound' | 'forbidden' | 'error';

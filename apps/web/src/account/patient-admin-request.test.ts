@@ -1,10 +1,7 @@
-// This directory has no jsdom/RTL rendering pattern — `ClinicianCalendar.test.ts`'s
-// own header names the convention: test the pure logic a component
-// depends on, not the component's rendering.
 import { describe, expect, it } from 'vitest';
 
-import { buildCreatePatientRequestBody } from './PatientAdminPanel.js';
-import type { CreatePatientFormFields } from './PatientAdminPanel.js';
+import { buildCreatePatientRequestBody } from './patient-admin-request.js';
+import type { CreatePatientFormFields } from './patient-admin-request.js';
 
 function fields(overrides: Partial<CreatePatientFormFields> = {}): CreatePatientFormFields {
   return {
