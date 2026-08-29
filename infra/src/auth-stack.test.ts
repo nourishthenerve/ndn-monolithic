@@ -106,11 +106,15 @@ function clientNamed(name: string): UserPoolClientProperties {
 
 const POOL_NAMES = [PATIENT_USER_POOL_NAME, CLINICIAN_USER_POOL_NAME];
 const CLIENT_NAMES = [`${PATIENT_USER_POOL_NAME}-web`, `${CLINICIAN_USER_POOL_NAME}-web`];
+const CLINICIAN_ADMIN_AUTH_CLIENT_NAME = `${CLINICIAN_USER_POOL_NAME}-admin-auth`;
 
 describe('AuthStack — the pools exist and cannot be deleted', () => {
-  it('creates exactly two pools and two app clients, no more', () => {
+  it('creates exactly two pools and three app clients, no more', () => {
     synth().resourceCountIs('AWS::Cognito::UserPool', 2);
-    synth().resourceCountIs('AWS::Cognito::UserPoolClient', 2);
+    // Three, not two, since D-30: the two browser clients (unchanged) plus
+    // the clinician-only admin-auth client this stack's own D-30 section
+    // adds — asserted individually below, this is only the total count.
+    synth().resourceCountIs('AWS::Cognito::UserPoolClient', 3);
   });
 
   it.each(POOL_NAMES)('%s has deletion protection ACTIVE and is retained', (name) => {
@@ -292,10 +296,50 @@ describe('AuthStack — the browser clients', () => {
   });
 });
 
+describe('AuthStack — D-30: the clinician admin-auth client, and the boundary it must not cross', () => {
+  it('exists on the clinician pool alone, with ALLOW_ADMIN_USER_PASSWORD_AUTH and nothing else', () => {
+    const properties = clientNamed(CLINICIAN_ADMIN_AUTH_CLIENT_NAME);
+    expect(properties.ExplicitAuthFlows).toEqual([
+      'ALLOW_ADMIN_USER_PASSWORD_AUTH',
+      'ALLOW_REFRESH_TOKEN_AUTH',
+    ]);
+    expect(properties.ExplicitAuthFlows).not.toContain('ALLOW_USER_SRP_AUTH');
+    expect(properties.ExplicitAuthFlows).not.toContain('ALLOW_USER_PASSWORD_AUTH');
+    expect(properties.ExplicitAuthFlows).not.toContain('ALLOW_CUSTOM_AUTH');
+  });
+
+  it('holds no client secret and no OAuth configuration — never a redirect-based sign-in', () => {
+    const properties = clientNamed(CLINICIAN_ADMIN_AUTH_CLIENT_NAME);
+    expect(properties.GenerateSecret).toBe(false);
+    expect(properties.AllowedOAuthFlows).toBeUndefined();
+    expect(properties.CallbackURLs).toBeUndefined();
+    expect(properties.LogoutURLs).toBeUndefined();
+  });
+
+  it('does not exist on the patient pool — clinician-only, per D-30', () => {
+    const clients = Object.values(
+      synth().findResources('AWS::Cognito::UserPoolClient'),
+    ) as { Properties: UserPoolClientProperties }[];
+    const names = clients.map((client) => client.Properties.ClientName);
+    expect(names).toContain(CLINICIAN_ADMIN_AUTH_CLIENT_NAME);
+    expect(names).not.toContain(`${PATIENT_USER_POOL_NAME}-admin-auth`);
+  });
+
+  it("leaves the browser client's own flows exactly as D-29's own test already proved — the boundary this client exists to preserve", () => {
+    const browserClinician = clientNamed(`${CLINICIAN_USER_POOL_NAME}-web`);
+    expect(browserClinician.ExplicitAuthFlows).toEqual([
+      'ALLOW_USER_SRP_AUTH',
+      'ALLOW_REFRESH_TOKEN_AUTH',
+    ]);
+    expect(browserClinician.ExplicitAuthFlows).not.toContain('ALLOW_ADMIN_USER_PASSWORD_AUTH');
+  });
+});
+
 describe('AuthStack — exported identifiers', () => {
-  it('outputs both pool ids, both client ids and both issuer URLs', () => {
+  it('outputs both pool ids, both client ids, both issuer URLs, and D-30s admin-auth client id', () => {
     const outputs = synth().findOutputs('*');
     expect(Object.keys(outputs).sort()).toEqual([
+      'ClinicianAdminAuthClientId',
       'ClinicianUserPoolClientId',
       'ClinicianUserPoolId',
       'ClinicianUserPoolIssuerUrl',

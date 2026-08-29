@@ -1,8 +1,16 @@
 # Clinician accounts (TASK 2.4.1)
 
-**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.4.1](../plan/05-execution-plan.md) · **Requirements:** §5 (clinician accounts), NFR-03 · **Decisions:** D-09 · **Risks:** [R-09](../plan/02-risk-register.md) · **Depends on:** 2.2.1, 2.2.2, 2.1.3, 2.3.1
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.4.1](../plan/05-execution-plan.md) · **Requirements:** §5 (clinician accounts), NFR-03 · **Decisions:** D-09, **D-30** · **Risks:** [R-09](../plan/02-risk-register.md), **[R-17](../plan/02-risk-register.md)** · **Depends on:** 2.2.1, 2.2.2, 2.1.3, 2.3.1
 
-## What this covers
+## Status, D-30 (2026-08-29) — landing in two steps, first step done
+
+**Everything below this line describes the mechanism as TASK 2.4.1 originally built it — Cognito's own invite email, self-service TOTP enrolment on the new clinician's own first sign-in. D-30 replaces both, the same "staff-issued credentials, no email" pivot D-29 already made for patients**, because giving the new clinician their own TOTP secret without an email means the principal has to generate and relay it directly, which needs Cognito to walk through the `MFA_SETUP` challenge on the principal's behalf rather than the new clinician's.
+
+**Step 1, done:** `infra/src/auth-stack.ts` gains `ClinicianAdminAuthClient` — a second, narrowly-scoped app client on the clinician pool, `ALLOW_ADMIN_USER_PASSWORD_AUTH` only, no OAuth, never reachable from a browser (`ClinicianUserPoolClient` above is untouched). This is the client `ClinicianAdminFunction` will drive the `AdminInitiateAuth` → `AssociateSoftwareToken` → `VerifySoftwareToken` → `AdminRespondToAuthChallenge` round trip through — the same sequence Cognito documents for setting up TOTP without the account holder's own browser session, run here by the principal's own request instead. Its real client id is captured after this stack's own next deploy and recorded in `infra/src/config.ts` as `CLINICIAN_ADMIN_AUTH_CLIENT_ID`, the same "captured, not computed" convention `CLINICIAN_USER_POOL_CLIENT_ID` already documents.
+
+**Step 2, not yet built:** `POST /clinicians`'s own behaviour change — `MessageAction: SUPPRESS` on `AdminCreateUser` (no Cognito email at all), `generatePassword()`/`AdminSetUserPassword` (`Permanent: true`, the same function D-29 already built for patients), the admin-side TOTP round trip against the new client above, and the response returning the password and TOTP setup secret once, for the principal to relay. `AdminUserGlobalSignOut` runs immediately after, so no token this round trip mints outlives the request. See D-30 (`01-decisions.md`) and R-17 (`02-risk-register.md`) for the full reasoning and the trade-off this accepts.
+
+## What this covers (TASK 2.4.1, as originally built — see the status note above for what D-30 changes)
 
 `04-data-model-rbac.md`'s "Clinician accounts: C R U (deactivate only), principal alone" row becomes real: the principal clinician can invite a colleague (TOTP enrolment unavoidable, per 2.2.1's pool policy), deactivate one (record, Cognito disable and token revocation, together), and reactivate one. Nobody is ever deleted — deactivation is the only lifecycle this identity layer has, and `AdminDeleteUser` is now a repo-wide lint ban, not a habit to remember.
 
