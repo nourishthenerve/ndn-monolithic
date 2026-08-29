@@ -31,10 +31,13 @@
 // WhatsApp conversation again, never a self-service reset.
 //
 // What changes here, concretely: `selfSignUpEnabled: false` (matching the
-// clinician pool's own "admin action creates a user" model exactly);
-// `signInPolicy` removed (the default — password only — is what a
-// password-based pool wants, the same reason the clinician pool has never
-// carried one); a `passwordPolicy`, identical to the clinician pool's;
+// clinician pool's own "admin action creates a user" model exactly); an
+// explicit, narrowed `signInPolicy` (`AllowedFirstAuthFactors: [PASSWORD]`
+// — **not simply removed**, see the live finding on the pool construction
+// below: `UpdateUserPool` does not clear a previously-set `SignInPolicy`
+// on omission, so the first deploy of this amendment left `EMAIL_OTP`
+// stale at the pool level despite the template showing no policy at all);
+// a `passwordPolicy`, identical to the clinician pool's;
 // `accountRecovery: AccountRecovery.NONE`, the one setting this amendment
 // could not skip — `ForgotPassword`/`ConfirmForgotPassword` are
 // unauthenticated, un-IAM-gated Cognito APIs, independent of which
@@ -170,9 +173,36 @@ export class AuthStack extends Stack {
       // a state on the DynamoDB record, unaffected by this change — see
       // this file's own header amendment.
       selfSignUpEnabled: false,
-      // No `signInPolicy` — the Cognito default (password only) is
-      // exactly what a password-based pool wants, the same reason the
-      // clinician pool has never carried one.
+      // **An explicit `signInPolicy`, not an omitted one — found live,
+      // 2026-08-29, the first deploy of this amendment.** The clinician
+      // pool has never carried a `SignInPolicy` at all, so "omit it, get
+      // Cognito's password-only default" holds there. This pool is
+      // different: TASK 2.2.1 explicitly *set* `AllowedFirstAuthFactors:
+      // [PASSWORD, EMAIL_OTP]` on it, and `UpdateUserPool` does not clear
+      // a previously-set `Policies.SignInPolicy` when the field is simply
+      // absent from a later update's `Policies` object — confirmed
+      // directly: `PasswordPolicy` (added the same deploy, in the same
+      // `Policies` object) applied correctly, while `SignInPolicy` stayed
+      // exactly as `EMAIL_OTP`-inclusive as it was before, even though
+      // CloudFormation's own template — and this file's own git history —
+      // both show the field simply removed. An omission is not a clear;
+      // only an explicit narrower value is. Harmless in practice today
+      // (the client's own `ExplicitAuthFlows`, just below, no longer
+      // offers `ALLOW_USER_AUTH`, so nothing can reach `EMAIL_OTP` through
+      // the one client that exists — the identical "the client is the
+      // real boundary" property this file already relied on for the
+      // *original* `[PASSWORD, EMAIL_OTP]` policy), but a dormant,
+      // undocumented pool-level allowance one future app client with
+      // `ALLOW_USER_AUTH` would silently reactivate. Closed at the source
+      // instead of left resting on the client alone.
+      signInPolicy: {
+        allowedFirstAuthFactors: {
+          password: true,
+          emailOtp: false,
+          smsOtp: false,
+          passkey: false,
+        },
+      },
       mfa: Mfa.OFF,
       // Matches the clinician pool's own policy exactly — CDK's defaults,
       // written out so they are visible in the synthesized template and
