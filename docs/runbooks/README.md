@@ -75,6 +75,7 @@ This directory holds one runbook per task, or per closely-related task cluster �
 - [live-session-accessibility.md](live-session-accessibility.md) — the real, signed-in, live-session axe + keyboard sweep for the account shell (TASK 5.3.1, TASK 5.3.2)
 - [restore-drill.md](restore-drill.md) — a real DynamoDB PITR restore and a real export restore, both executed and measured; D-22's own export layer named as missing, then built and drilled from (TASK 5.4.1)
 - [backup-export.md](backup-export.md) — D-22's periodic export layer: a daily, GOVERNANCE-mode Object-Locked DynamoDB backup, built once `restore-drill.md` found it missing, deployed, and exercised for real
+- [go-live.md](go-live.md) — the flag flip sequence, split into a public-site track and an LL-05/LL-06-gated patient-facing track, and the current live flag state (TASK 5.5.3)
 
 Phase 5's security review (TASK 5.2.1) and DPIA update (TASK 5.2.2) live outside this directory by their own nature — `docs/plan/gate-g4-security-review.md` and `docs/compliance/dpia-skeleton.md` respectively, not duplicated here.
 
@@ -82,15 +83,15 @@ Phase 5's security review (TASK 5.2.1) and DPIA update (TASK 5.2.2) live outside
 
 A spot-check pass (not exhaustive — 51 files) found and closed three stale items this task's own writing exposed as already resolved: the `ndn-email-events` SNS subscription (confirmed live, [email-events.md](email-events.md)/[ses-production-access.md](ses-production-access.md)), the lambda authorizer's deferred token-based verification (proven as a side effect of the TASK 5.3.x live-session suite, [lambda-authorizer.md](lambda-authorizer.md)), and [g1-cutover.md](g1-cutover.md)'s own step 8 cost reconciliation (satisfied by TASK 5.5.1's account-wide pass). Everything else this pass checked was already accurately marked, open or closed.
 
-Genuinely still open, owner-side, as of this pass (2026-08-28) — not stale, not this task's to close:
+Genuinely still open, owner-side, as of this pass (2026-08-28), **updated 2026-08-29 where TASK 5.5.3's own work closed or corrected an item below** — not stale otherwise, not this index's job to close further:
 
 - **LL-01 (SES production access)** — denied 2026-08-21, [ses-production-access.md](ses-production-access.md). Blocks the clinician-invite-email check named in [web-authentication.md](web-authentication.md); no longer blocks a patient check — D-29 (2026-08-29) removed patient sign-in's own dependency on it, see [patient-account-provisioning.md](patient-account-provisioning.md).
-- **D-29's staff-facing UI, staff identity-verification training, and DPIA update** — all named explicitly as not built/not done in [patient-account-provisioning.md](patient-account-provisioning.md), by the owner's own deliberate choice: prove the technical mechanism with synthetic test patients first, defer legal/DPIA review and a real UI until then. Not this index's job to close.
+- **D-29's staff-facing UI — built same day, 2026-08-29,** the day after this bullet first named it missing; corrected here rather than left stale. **Staff identity-verification training and the DPIA update remain not done**, by the owner's own deliberate choice named in [patient-account-provisioning.md](patient-account-provisioning.md): prove the technical mechanism with synthetic test patients first (now proven, live, end to end), defer legal/DPIA review until then. Not this index's job to close.
 - **LL-02 (UK SMS long code)** — not leased; AWS End User Messaging account confirmed still `SANDBOX` tier, 0 phone numbers, live-checked this pass. Blocks [sms-provider.md](sms-provider.md)'s real-account proof and [workshop-confirmation-sms.md](workshop-confirmation-sms.md).
-- **Cloudflare Realtime/Calls TURN key** — not provisioned; `/ndn/cloudflare-turn-api-token` confirmed absent from SSM, live-checked this pass. Named since Gate G4 as the one blocking action item for a real cross-network video call, [video-calls.md](video-calls.md).
+- **Cloudflare Realtime/Calls TURN key** — not provisioned; `/ndn/cloudflare-turn-api-token` confirmed absent from SSM, live-checked this pass. Named since Gate G4 as the one blocking action item for a real cross-network video call, [video-calls.md](video-calls.md); also the one flag in [go-live.md](go-live.md)'s own sequence with a non-LL blocker of its own.
 - **Real Turnstile widget + secret** — `contact-form.md` still runs Cloudflare's public test key; the real SSM SecureString parameter confirmed absent, live-checked this pass.
 - **The cold-start / feature-flag SSM latency finding** — priced, not fixed, [load-testing.md](load-testing.md)'s TASK 5.1.2 section. Owner decision named there.
-- **`video.signalling.enabled` and every other go-live flag** — deliberately off; TASK 5.5.3's own job, not this index's.
+- **LL-05 (DPIA) and LL-06 (solicitor sign-off, R-04)** — deliberately deferred by the owner until proven with synthetic patients (now proven, per D-29's 2026-08-29 status update); still open, and the standing gate on every patient-facing flag beyond the four already on for synthetic testing. The sequence itself — mechanism-proven and ready — is now documented in [go-live.md](go-live.md) (TASK 5.5.3); flipping any of it for a real patient still waits on these two.
 
 ## Do NOT
 
