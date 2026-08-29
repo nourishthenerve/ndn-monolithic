@@ -64,6 +64,11 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   { segment: 'patient', ownerRole: 'patient' },
   // TASK 2.5.3: the principal clinician's cross-caseload view.
   { segment: 'caseload', ownerRole: 'clinician' },
+  // D-29: the principal clinician's patient-account creation/reset-password
+  // form. Principal-only in practice (services/api/src/patient-admin.ts's
+  // own `can()` check), the same "no finer role than 'clinician' in this
+  // enum" reasoning `caseload` above already accepts.
+  { segment: 'patient-admin', ownerRole: 'clinician' },
   // TASK 5.5.3 step 1: any clinician's own upcoming appointments, and the
   // first real inbound link to call.astro from a page other than itself.
   { segment: 'calendar', ownerRole: 'clinician' },
