@@ -1,8 +1,12 @@
 # Workshop confirmation: phone collection + SMS-first delivery
 
-**Task:** workshop-confirmation-sms · **Decisions:** ADR-0008, ADR-0009, D-10 · **Depends on:** 1.5.2, 2.3.1, 2.3.2, 3.4.3
+**Task:** workshop-confirmation-sms · **Decisions:** ADR-0008, ADR-0009, D-10, **superseded by D-31** · **Depends on:** 1.5.2, 2.3.1, 2.3.2, 3.4.3
 
-## Why this ran
+## Abandoned before its first real use — D-31 (2026-08-29)
+
+**This entire task is moot.** It hardened workshop registration confirmations against SES's sandbox restriction — but D-31 abandons workshop registration itself before its first real use: no online registration exists on the website at all, so no confirmation of any kind, SMS or email, is ever sent. The `workshopRegistrationConfirmation` `smsEligible` template this task built is unreachable code, the same "dark, unreachable, not removed" posture every other superseded mechanism in this codebase holds. Full reasoning: [01-decisions.md](../plan/01-decisions.md)'s D-31.
+
+## Why this ran (as originally built — see the note above for its current status)
 
 SES production access remains denied (`docs/runbooks/ses-production-access.md`, case `178661888300813`, denied twice) — the account stays sandboxed, unable to send to any address outside the verified `nourishthenerve.com` domain. Workshop registration confirmations (TASK 1.5.2) go to arbitrary attendee addresses, so they'll fail outright once workshops go live. Appointment reminders already solve the equivalent problem by preferring SMS over email (ADR-0008, D-10). `docs/runbooks/notifications.md` named migrating the workshop-confirmation email onto that same `Notifier` abstraction as deliberately deferred, separate work — this is that work, done to cut reliance on SES as much as possible rather than wait on a third SES appeal.
 
