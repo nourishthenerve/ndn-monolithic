@@ -49,6 +49,7 @@ import type { Construct } from 'constructs';
 
 import { createBackupExportPipeline } from './backup-export.js';
 import {
+  CLINICIAN_ADMIN_AUTH_CLIENT_ID,
   CLINICIAN_USER_POOL_CLIENT_ID,
   CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME,
   CLOUDFLARE_TURN_KEY_ID,
@@ -1080,6 +1081,11 @@ export class DataStack extends Stack {
         AUDIT_TABLE_NAME: this.table.tableName,
         NOTIFICATION_TABLE_NAME: this.table.tableName,
         CLINICIAN_USER_POOL_ID,
+        // D-30: the server-side-only client `AdminInitiateAuth` runs
+        // against to complete the new clinician's `MFA_SETUP` challenge —
+        // never `CLINICIAN_USER_POOL_CLIENT_ID` above, which is the
+        // browser's.
+        CLINICIAN_ADMIN_AUTH_CLIENT_ID,
         CLINICIAN_ADMIN_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
         SES_CONFIGURATION_SET_NAME,
         ...FLAG_ENVIRONMENT,
@@ -1148,8 +1154,33 @@ export class DataStack extends Stack {
           // Cognito's `cognito:groups` claim, which is what
           // authorizer.ts's `roleFor()` actually reads.
           'cognito-idp:AdminAddUserToGroup',
+          // D-30: the three Admin* calls `provisionTotp`'s own round trip
+          // uses, and `AdminSetUserPassword` for the permanent password.
+          // All four take a `UserPoolId`, so all four support this same
+          // ARN-scoped resource condition — confirmed live via
+          // `iam simulate-custom-policy` before this shipped, not assumed.
+          'cognito-idp:AdminSetUserPassword',
+          'cognito-idp:AdminInitiateAuth',
+          'cognito-idp:AdminRespondToAuthChallenge',
         ],
         resources: [clinicianUserPoolArn],
+      }),
+    );
+    // D-30: `AssociateSoftwareToken`/`VerifySoftwareToken` operate on a
+    // `Session` token, not a `UserPoolId` — confirmed live via
+    // `iam simulate-custom-policy` that neither supports resource-level
+    // scoping at all (a policy naming the clinician pool's own ARN
+    // evaluates as `implicitDeny`; only `Resource: '*'` matches). The same
+    // documented exception `wsDefaultRole`'s own `cloudwatch:PutMetricData`
+    // grant already carries for the identical reason: some actions support
+    // no resource-level scoping, and this is one of them, not a shortcut
+    // taken here.
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ProvisionClinicianTotpSoftwareToken',
+        effect: Effect.ALLOW,
+        actions: ['cognito-idp:AssociateSoftwareToken', 'cognito-idp:VerifySoftwareToken'],
+        resources: ['*'],
       }),
     );
     // The deactivation notice, sent through 2.3.1's Notifier — same
