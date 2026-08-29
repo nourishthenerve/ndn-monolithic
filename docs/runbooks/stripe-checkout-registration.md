@@ -1,8 +1,12 @@
 # Stripe Checkout, idempotent webhooks, registration confirmation email (TASK 1.5.2)
 
-**Date:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.5.2](../plan/05-execution-plan.md) · **Requirements:** FR-WEB-02 · **Decisions:** D-13, ADR-0010 · **Depends on:** 1.5.1, 1.4.1, 0.6.1
+**Date:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.5.2](../plan/05-execution-plan.md) · **Requirements:** FR-WEB-02 · **Decisions:** D-13, ADR-0010, **superseded by D-31** · **Depends on:** 1.5.1, 1.4.1, 0.6.1
 
-## What this covers
+## Abandoned before its first real use — D-31 (2026-08-29)
+
+**Everything below this line describes a mechanism that is built, tested, and will never be turned on.** The owner decided against any online payment or registration on the public site at all — a workshop announcement states what and when, nothing is booked or paid for through the website; anything requiring an actual reservation goes through WhatsApp directly, the same human-mediated channel D-29/D-30 already established for patient and clinician onboarding. `payments.stripeCheckout.enabled` is never flipped; LL-03 (Stripe account/KYC) is closed as moot, no account ever needed. The code stays in place, unused, the same "dark, unreachable, not removed" posture `patient-registration.md` already holds for TASK 2.2.3's own retired self-registration path — nothing here was wrong when it was built, the business it served no longer exists. Full reasoning: [01-decisions.md](../plan/01-decisions.md)'s D-31.
+
+## What this covers (as originally built — see the note above for its current status)
 
 Workshop registration and payment: a public `POST /workshops/:id/checkout` that reserves capacity and creates a Stripe Checkout Session, an idempotent `POST /stripe/webhook` that confirms or releases that reservation, and a confirmation email on success. Registrations are never deleted — `pending → confirmed` or `pending → cancelled` are the only transitions, same discipline TASK 1.3.2/1.4.2/1.5.1 established for content/testimonials/workshops.
 

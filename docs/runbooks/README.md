@@ -28,7 +28,7 @@ This directory holds one runbook per task, or per closely-related task cluster �
 - [content-authoring.md](content-authoring.md) — blog authoring, publish/unpublish, SEO (TASK 1.3.2)
 - [testimonials.md](testimonials.md) — moderation queue and consent record for published testimonials (TASK 1.4.2)
 - [workshops.md](workshops.md) — the workshop model, poster images, per-language detail pages (TASK 1.5.1)
-- [stripe-checkout-registration.md](stripe-checkout-registration.md) — Stripe Checkout, idempotent webhooks, registration confirmation email (TASK 1.5.2)
+- [stripe-checkout-registration.md](stripe-checkout-registration.md) — Stripe Checkout, idempotent webhooks, registration confirmation email (TASK 1.5.2); **abandoned before its first real use, D-31 (2026-08-29)** — built and tested, never wired into any page, `payments.stripeCheckout.enabled` never to be turned on
 - [workshop-confirmation-sms.md](workshop-confirmation-sms.md) — SMS-first workshop confirmation, phone number collection
 - [g1-cutover.md](g1-cutover.md) — the apex/`www` DNS cutover from the legacy site, legacy Lambda decommission (TASK 1.6.1)
 - [g1-cutover-support-case.md](g1-cutover-support-case.md) — the AWS Support case that resolved the CloudFront alias-uniqueness blocker
