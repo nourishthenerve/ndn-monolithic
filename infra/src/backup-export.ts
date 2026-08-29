@@ -27,6 +27,8 @@
 import { fileURLToPath } from 'node:url';
 
 import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
+import { Alarm, ComparisonOperator, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type { ITable } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
@@ -34,8 +36,11 @@ import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws
 import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { BlockPublicAccess, Bucket, ObjectLockRetention } from 'aws-cdk-lib/aws-s3';
+import { Topic } from 'aws-cdk-lib/aws-sns';
+import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Construct } from 'constructs';
 
+import { ALERT_EMAIL } from './config.js';
 import { attachDestructiveActionGuardrail } from './guardrails.js';
 import { createLogGroup } from './log-retention.js';
 
@@ -140,4 +145,66 @@ export function createBackupExportPipeline(scope: Construct, table: ITable): voi
     schedule: EXPORT_SCHEDULE,
     targets: [new LambdaFunction(exportFunction)],
   });
+
+  // Named as a deliberate follow-up in backup-export.md's own "What is
+  // still needed" list: "a missed or failed daily export degrades
+  // silently until someone checks." Two alarms, not one — a
+  // once-a-day scheduled function can fail in two different ways a
+  // single "did it error" check would miss between them:
+  createBackupExportAlarms(scope, exportFunction);
+}
+
+function createBackupExportAlarms(scope: Construct, exportFunction: NodejsFunction): void {
+  const alarmTopic = new Topic(scope, 'BackupExportAlarmTopic', {
+    topicName: 'ndn-backup-export-alarm',
+  });
+  alarmTopic.addSubscription(new EmailSubscription(ALERT_EMAIL));
+
+  // 1. The Lambda ran and threw — a real invocation-level failure (IAM
+  // revoked, a bad env var, etc). Caught by Lambda's own `Errors` metric.
+  // What this does *not* catch: `ExportTableToPointInTime` only starts an
+  // async job (this file's own comment on the function's timeout already
+  // says so) — a job that starts successfully and fails *later*, inside
+  // DynamoDB's own export process, produces no Lambda error at all. No
+  // CloudWatch metric this codebase found exposes that failure mode
+  // directly; catching it would need a follow-up invocation polling
+  // `dynamodb:DescribeExport`, which is more mechanism than this
+  // "small follow-up" earned — named honestly as a real, remaining gap
+  // rather than silently covered by this alarm's own name.
+  const errorsAlarm = new Alarm(scope, 'BackupExportErrorsAlarm', {
+    alarmName: 'ndn-backup-export-errors',
+    alarmDescription:
+      'The daily backup-export Lambda threw instead of starting a real export — see docs/runbooks/backup-export.md',
+    metric: exportFunction.metricErrors({ period: Duration.days(1) }),
+    threshold: 1,
+    evaluationPeriods: 1,
+    comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+    // A quiet day with zero invocations produces no Errors datapoint
+    // either — not a breach on its own; the missed-invocation alarm
+    // below is what catches that case instead.
+    treatMissingData: TreatMissingData.NOT_BREACHING,
+  });
+  errorsAlarm.addAlarmAction(new SnsAction(alarmTopic));
+
+  // 2. The Lambda never ran at all — the schedule's own `Rule` got
+  // disabled, deleted, or lost its target, none of which would ever show
+  // up as an "error" since nothing was invoked to error. The more
+  // dangerous failure mode for a low-frequency job precisely because it
+  // is silent: `Errors` alone would stay permanently OK. 25 hours, not
+  // 24, so an alarm evaluated a little after the schedule's own next tick
+  // isn't a false positive on ordinary EventBridge scheduling jitter.
+  // `BREACHING` on missing data is deliberate here, the mirror image of
+  // the errors alarm above: zero invocations in 25 hours *is* the failure
+  // this alarm exists to catch, not an absence of information about one.
+  const missedInvocationAlarm = new Alarm(scope, 'BackupExportMissedInvocationAlarm', {
+    alarmName: 'ndn-backup-export-missed',
+    alarmDescription:
+      'The daily backup-export schedule did not invoke the export Lambda at all in the last 25 hours — see docs/runbooks/backup-export.md',
+    metric: exportFunction.metricInvocations({ period: Duration.hours(25) }),
+    threshold: 1,
+    evaluationPeriods: 1,
+    comparisonOperator: ComparisonOperator.LESS_THAN_THRESHOLD,
+    treatMissingData: TreatMissingData.BREACHING,
+  });
+  missedInvocationAlarm.addAlarmAction(new SnsAction(alarmTopic));
 }

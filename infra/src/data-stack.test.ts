@@ -8,6 +8,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ALERT_EMAIL,
   CLINICIAN_USER_POOL_CLIENT_ID,
   CLINICIAN_USER_POOL_ID,
   FLAG_PARAMETER_NAME_PREFIX,
@@ -1432,6 +1433,64 @@ describe('DataStack — backup export (D-22)', () => {
   it('does not create the backup export pipeline for an ephemeral (load-test) copy', () => {
     const template = synthEphemeral();
     template.resourceCountIs('AWS::S3::Bucket', 0);
+  });
+
+  it('alarms if the export Lambda errors instead of starting a real export', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ndn-backup-export-errors',
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+      Threshold: 1,
+      EvaluationPeriods: 1,
+      Period: 86400,
+      TreatMissingData: 'notBreaching',
+      Namespace: 'AWS/Lambda',
+      MetricName: 'Errors',
+    });
+  });
+
+  it('alarms if the daily schedule does not invoke the export Lambda at all in 25 hours', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ndn-backup-export-missed',
+      ComparisonOperator: 'LessThanThreshold',
+      Threshold: 1,
+      EvaluationPeriods: 1,
+      Period: 90000,
+      // The mirror image of the errors alarm's own notBreaching — zero
+      // invocations in 25 hours *is* the failure this alarm exists to
+      // catch, not an absence of information about one.
+      TreatMissingData: 'breaching',
+      Namespace: 'AWS/Lambda',
+      MetricName: 'Invocations',
+    });
+  });
+
+  it('notifies the alert email via SNS for both backup-export alarms', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'email',
+      Endpoint: ALERT_EMAIL,
+      TopicArn: Match.objectLike({
+        Ref: Match.stringLikeRegexp('BackupExportAlarmTopic'),
+      }),
+    });
+    const [topicLogicalId] = Object.keys(template.findResources('AWS::SNS::Topic')).filter((id) =>
+      id.startsWith('BackupExportAlarmTopic'),
+    );
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ndn-backup-export-errors',
+      AlarmActions: Match.arrayWith([{ Ref: topicLogicalId }]),
+    });
+    template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'ndn-backup-export-missed',
+      AlarmActions: Match.arrayWith([{ Ref: topicLogicalId }]),
+    });
+  });
+
+  it('does not create the backup-export alarms for an ephemeral (load-test) copy', () => {
+    const template = synthEphemeral();
+    template.resourceCountIs('AWS::SNS::Topic', 0);
   });
 });
 

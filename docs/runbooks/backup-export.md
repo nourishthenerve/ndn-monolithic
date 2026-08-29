@@ -56,7 +56,13 @@ Live-verified, read-only, against production before this PR: `aws cdk synth NdnD
 
 1. ~~Confirm the first scheduled run~~ — done, see above. The `rate(1 day)` schedule's own first *unattended* firing has not yet been separately observed, the same "manually verified, not yet seen fire on its own timer" gap `live-session-accessibility.md` named for its own cron trigger.
 2. ~~Close TASK 5.4.1's own remaining gap~~ — done, see above and `restore-drill.md`.
-3. **A CloudWatch alarm on export failure** was deliberately not built here — this task's own scope is the pipeline existing and running, not yet its own failure-alerting layer. A missed or failed daily export degrades silently until someone checks, the same honestly-named gap this codebase names elsewhere rather than leaves undiscussed. Worth its own small follow-up once the pipeline has a real run history to alarm against.
+3. ~~A CloudWatch alarm on export failure~~ — **built, 2026-08-29.** Two alarms, not one, both on `ndn-backup-export-alarm` (SNS, subscribed to `ALERT_EMAIL`) — a once-a-day function can fail in two ways one check would miss between them:
+   - `ndn-backup-export-errors`: `BackupExportFunction`'s own `Errors` metric, `Period: 1 day`, `treatMissingData: notBreaching`. Catches the Lambda actually throwing (a bad env var, a revoked grant).
+   - `ndn-backup-export-missed`: the same function's `Invocations` metric, `Period: 25 hours`, `LessThanThreshold: 1`, **`treatMissingData: breaching`** — deliberately the mirror image of the errors alarm. The more dangerous failure mode for a low-frequency scheduled job is exactly the silent one: the `EventBridge` rule disabled, deleted, or losing its target produces no error at all, since nothing was ever invoked to error. Zero invocations in 25 hours *is* the failure this alarm exists to catch, not an absence of information about one.
+
+   **Named honestly, not covered by either alarm:** `ExportTableToPointInTime` only *starts* an async job (this file's own "What was built" section already says so) — a job that starts successfully and fails later, inside DynamoDB's own export process, produces no Lambda error and no missed invocation either. No CloudWatch metric this codebase found exposes that failure mode directly; catching it would need a follow-up invocation polling `dynamodb:DescribeExport`, more mechanism than this alarm pair's own small scope earned. A real, remaining gap, not silently claimed as covered.
+
+   Live-diffed against production before merge: `cdk diff NdnDataStack` shows exactly 4 new resources (the topic, its email subscription, both alarms) — no change to `BackupExportFunction`, the bucket, or anything built by [#122](https://github.com/nourishthenerve/ndn-monolithic/pull/122). `data-stack.test.ts` (4 new tests): both alarms' exact metric/period/threshold/`treatMissingData` shape, and that neither exists in an ephemeral synth.
 
 ## Cost
 
