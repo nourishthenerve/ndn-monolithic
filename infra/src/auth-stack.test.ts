@@ -146,10 +146,16 @@ describe('AuthStack — the two policies one pool could not hold', () => {
   });
 
   it('D-29: neither pool offers a first factor beyond a plain password', () => {
-    // Cognito's own default (no `SignInPolicy` at all) is password-only —
-    // exactly what both pools want now that TASK 2.2.3's patient email-OTP
-    // path is retired (auth-stack.ts's own D-29 amendment).
-    expect(poolProperties(PATIENT_USER_POOL_NAME).Policies?.SignInPolicy).toBeUndefined();
+    // The patient pool carries an *explicit* password-only policy, not an
+    // omitted one — found live, 2026-08-29 (auth-stack.ts's own comment on
+    // the pool construction): `UpdateUserPool` left a previously-set
+    // `EMAIL_OTP` allowance stale when the field was merely removed from
+    // the template, so only an explicit narrower value actually clears it.
+    // The clinician pool has never had one to leave stale, so Cognito's
+    // own omitted-field default (password-only) genuinely holds there.
+    expect(poolProperties(PATIENT_USER_POOL_NAME).Policies?.SignInPolicy).toEqual({
+      AllowedFirstAuthFactors: ['PASSWORD'],
+    });
     expect(poolProperties(CLINICIAN_USER_POOL_NAME).Policies?.SignInPolicy).toBeUndefined();
   });
 

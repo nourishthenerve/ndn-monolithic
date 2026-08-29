@@ -71,7 +71,7 @@ Patient ◀──WhatsApp── staff relays the new password
 |---|---|---|
 | `selfSignUpEnabled` | `true` | `false` |
 | First factor | Email OTP, choice-based (`ALLOW_USER_AUTH`) | Password over SRP (`ALLOW_USER_SRP_AUTH`) |
-| `signInPolicy` | `['PASSWORD', 'EMAIL_OTP']` (Cognito requires `PASSWORD` in the list regardless) | none — Cognito's own password-only default |
+| `signInPolicy` | `['PASSWORD', 'EMAIL_OTP']` (Cognito requires `PASSWORD` in the list regardless) | `['PASSWORD']`, **explicitly** — not omitted; see "A live finding" below |
 | `passwordPolicy` | none | identical to the clinician pool's |
 | `accountRecovery` | `EMAIL_ONLY` | `NONE` (`admin_only`) |
 | Post-Confirmation trigger | `post-confirmation.ts`, wired | deleted outright — no `ConfirmSignUp` event can fire |
@@ -79,6 +79,18 @@ Patient ◀──WhatsApp── staff relays the new password
 **`accountRecovery: NONE` is the one change that is not merely symmetric with the clinician pool — it is load-bearing.** `ForgotPassword`/`ConfirmForgotPassword` are unauthenticated Cognito APIs, independent of which `ExplicitAuthFlows` an app client carries. Leaving `EMAIL_ONLY` in place — even with self sign-up off and the trigger deleted — would have let anyone who knew or guessed a patient's email address self-serve a password reset entirely outside the WhatsApp-verified process this whole design exists to enforce. Found and closed before any code shipped, not after.
 
 The email attribute itself is untouched — still required, still mutable, still the pool's only attribute. Changing a pool's required attributes needs recreating it, which this change has no reason to force; staff still collect an address during WhatsApp intake (for the `personal{}` record, not for anything Cognito uses) and it is still set on the Cognito user.
+
+## A live finding: an omitted `SignInPolicy` is not a cleared one
+
+The first production deploy of this change (2026-08-29, same day) surfaced a real `UpdateUserPool` behaviour worth recording precisely, because a synth-only test suite cannot catch it: **`describe-user-pool` against the live `ndn-patients` pool, immediately post-deploy, still showed `AllowedFirstAuthFactors: [PASSWORD, EMAIL_OTP]`** — the exact value TASK 2.2.1 originally set — even though `PasswordPolicy` (added by the same deploy, in the same `Policies` object) applied correctly, and even though CloudFormation's own template for the stack showed `SignInPolicy` simply absent.
+
+**Root cause:** removing a property from a CDK template removes it from the CloudFormation template and from the `UpdateUserPool` API call CloudFormation issues — but Cognito's own `Policies.SignInPolicy` sub-field does not reset to a default when it is absent from an update; it is left exactly as it was. CloudFormation, having received a success response, has no way to know its own belief about the resource's state has diverged from reality — this is drift CloudFormation itself cannot detect, because its own template genuinely matches what it *asked for*, not what Cognito actually *did*.
+
+**Not a security incident, because the app client's own `ExplicitAuthFlows` closed the door regardless** — `ALLOW_USER_AUTH` (the only flow through which `EMAIL_OTP` is reachable at all) was correctly removed the same deploy, so nothing could reach the stale pool-level allowance through the one client that exists. The same "the client is the real boundary, not the pool policy" property `docs/runbooks/cognito-user-pools.md` already documented for the *original* `[PASSWORD, EMAIL_OTP]` design held here too, by luck of the design rather than by this fix.
+
+**Fixed by setting an explicit, narrower value rather than omitting the field**: `signInPolicy: { allowedFirstAuthFactors: { password: true, emailOtp: false, smsOtp: false, passkey: false } }`. An explicit value is a real transition CloudFormation sends and Cognito applies, unlike an omission — read-only `aws cdk diff NdnAuthStack` against the already-drifted live pool showed exactly `[+] Added: .SignInPolicy` (a genuine addition from CloudFormation's own point of view, since its template had none), confirming this is a real change about to be sent, not another no-op.
+
+**The lesson, stated for the next person who removes a Cognito pool property expecting it to reset:** verify the *live* resource after deploy, not only the synthesized template. `auth-stack.test.ts` asserts against the template CDK produces, which was correct throughout — the drift was never in what this codebase asked CloudFormation to do.
 
 ## Least privilege
 
@@ -109,6 +121,7 @@ Turned on together with `assignment.enabled`, the same "creating an account into
 - `aws cdk synth NdnAuthStack NdnDataStack` (admin profile, read-only) — succeeds.
 - `aws cdk diff NdnAuthStack` (read-only, before merge) — confirmed **no replacement** of `PatientUserPool` or `PatientUserPoolClient`: `AccountRecoverySetting` (`verified_email` → `admin_only`), `AdminCreateUserConfig`, `Policies.PasswordPolicy`/`SignInPolicy`, `LambdaConfig` (removed) and the client's `ExplicitAuthFlows` all change in place. One `AWS::Lambda::Permission` (Cognito's own grant to invoke the now-deleted `PostConfirmationFunction`) is destroyed.
 - `aws cdk diff NdnDataStack` (read-only, before merge) — purely additive/replacement-free: `RegistrationFunction`/`PostConfirmationFunction` and their roles, routes, log groups and permissions destroyed; `PatientAdminFunction` and its role/routes/log group/permission created. A handful of unrelated functions show a `Code.S3Key` change only — the expected esbuild re-bundle of every handler that transitively imports `authz-matrix.ts` or `audit.ts`, both edited by this change; no IAM or configuration change to any of them.
+- **Post-deploy, 2026-08-29:** `describe-user-pool`/`describe-user-pool-client` against the real, deployed `ndn-patients` pool confirmed `AllowAdminCreateUserOnly: true`, `AccountRecoverySetting: admin_only`, the real `PasswordPolicy`, and the client's `ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]` — all as intended. It also surfaced "A live finding" above (`SignInPolicy` left stale) — see that section for the fix and its own read-only `cdk diff` confirmation ahead of merge.
 
 ## Not built yet — named honestly, not silently deferred
 
