@@ -15,14 +15,13 @@
 // never-persisted password display — building that once and reusing it
 // is simpler than two near-identical files.
 //
-// **The one real limitation, named rather than hidden**: resetting a
-// password needs the patient's account id, and this codebase has no
-// lookup-by-email or lookup-by-name endpoint — `PAT#` records are keyed
-// by id, not indexed by email. The create form's own success panel is
-// therefore the *only* place an id is ever surfaced before a patient is
-// approved and appears in the caseload view (which shows names, not
-// ids, in any case). Staff must keep the id from account creation; a
-// real lookup is a follow-up this task does not attempt.
+// **The find-by-email search (follow-up, same day)**: resetting a password
+// needs the patient's account id, and the create form's own success panel
+// was, at first, the only place one was ever surfaced. `GET /patients?email=`
+// (patient-admin.ts) now answers that directly — no new DynamoDB index,
+// just Cognito's own `AdminGetUser` against the pool's email-keyed
+// username. Finding a patient fills the reset form's own id field, so
+// staff never have to copy it by hand between the two sections.
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -35,6 +34,13 @@ import type { CreatePatientFormFields, CreatePatientRequestBody } from './patien
 
 type CreateStatus = 'idle' | 'submitting' | 'success' | 'conflict' | 'invalid' | 'forbidden' | 'error';
 type ResetStatus = 'idle' | 'submitting' | 'success' | 'notFound' | 'forbidden' | 'error';
+type FindStatus = 'idle' | 'submitting' | 'success' | 'notFound' | 'forbidden' | 'error';
+
+interface FoundPatient {
+  readonly id: string;
+  readonly fullName: string;
+  readonly accountStatus: string;
+}
 
 const EMPTY_CREATE_FIELDS: CreatePatientFormFields = {
   email: '',
@@ -64,6 +70,15 @@ export interface PatientAdminPanelStrings {
   readonly createConflictError: string;
   readonly createValidationError: string;
   readonly createError: string;
+  readonly findHeading: string;
+  readonly findIntro: string;
+  readonly findButton: string;
+  readonly finding: string;
+  readonly findNotFoundError: string;
+  readonly findError: string;
+  readonly foundPatientLabel: string;
+  readonly foundStatusLabel: string;
+  readonly useIdButton: string;
   readonly resetHeading: string;
   readonly resetIntro: string;
   readonly patientIdInputLabel: string;
@@ -81,6 +96,7 @@ export interface PatientAdminPanelProps {
   /** Injectable for tests; defaults to a real same-origin-authorised fetch against `contentApiUrl`. */
   readonly createPatient?: (accessToken: string, body: CreatePatientRequestBody) => Promise<Response>;
   readonly resetPassword?: (accessToken: string, patientId: string) => Promise<Response>;
+  readonly findPatient?: (accessToken: string, email: string) => Promise<Response>;
 }
 
 const defaultClient = createSessionClient();
@@ -101,6 +117,12 @@ function defaultResetPassword(accessToken: string, patientId: string): Promise<R
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}` },
   });
+}
+
+function defaultFindPatient(accessToken: string, email: string): Promise<Response> {
+  const url = new URL(`${contentApiUrl}/patients`);
+  url.searchParams.set('email', email);
+  return fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
 }
 
 /** A password, shown once, in a plain readonly field — easy to select-all and copy, no clipboard-API permission to fail on. */
@@ -124,10 +146,15 @@ export function PatientAdminPanel({
   client = defaultClient,
   createPatient = defaultCreatePatient,
   resetPassword = defaultResetPassword,
+  findPatient = defaultFindPatient,
 }: PatientAdminPanelProps): ReactNode {
   const [createFields, setCreateFields] = useState<CreatePatientFormFields>(EMPTY_CREATE_FIELDS);
   const [createStatus, setCreateStatus] = useState<CreateStatus>('idle');
   const [createResult, setCreateResult] = useState<{ id: string; password: string } | undefined>();
+
+  const [findEmailInput, setFindEmailInput] = useState('');
+  const [findStatus, setFindStatus] = useState<FindStatus>('idle');
+  const [foundPatient, setFoundPatient] = useState<FoundPatient | undefined>();
 
   const [patientIdInput, setPatientIdInput] = useState('');
   const [resetStatus, setResetStatus] = useState<ResetStatus>('idle');
@@ -173,6 +200,51 @@ export function PatientAdminPanel({
     }
   };
 
+  const handleFind = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const email = findEmailInput.trim();
+    if (!email) {
+      return;
+    }
+    setFindStatus('submitting');
+    setFoundPatient(undefined);
+    const accessToken = await client.authorization();
+    if (!accessToken) {
+      setFindStatus('forbidden');
+      return;
+    }
+    try {
+      const response = await findPatient(accessToken, email);
+      if (response.status === 403 || response.status === 401) {
+        setFindStatus('forbidden');
+        return;
+      }
+      if (response.status === 404) {
+        setFindStatus('notFound');
+        return;
+      }
+      if (!response.ok) {
+        setFindStatus('error');
+        return;
+      }
+      const payload = (await response.json()) as {
+        item?: { id?: string; personal?: { fullName?: string }; account_status?: string };
+      };
+      if (!payload.item?.id) {
+        setFindStatus('error');
+        return;
+      }
+      setFoundPatient({
+        id: payload.item.id,
+        fullName: payload.item.personal?.fullName ?? '',
+        accountStatus: payload.item.account_status ?? '',
+      });
+      setFindStatus('success');
+    } catch {
+      setFindStatus('error');
+    }
+  };
+
   const handleReset = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const patientId = patientIdInput.trim();
@@ -213,6 +285,7 @@ export function PatientAdminPanel({
   };
 
   const isCreating = createStatus === 'submitting';
+  const isFinding = findStatus === 'submitting';
   const isResetting = resetStatus === 'submitting';
 
   return (
@@ -305,6 +378,43 @@ export function PatientAdminPanel({
             <p>
               {strings.patientIdLabel}: <code>{createResult.id}</code>
             </p>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h2>{strings.findHeading}</h2>
+        <p>{strings.findIntro}</p>
+        <form onSubmit={(event) => void handleFind(event)}>
+          <p>
+            <label htmlFor="find-email">{strings.emailLabel}</label>
+            <input
+              id="find-email"
+              type="email"
+              required
+              disabled={isFinding}
+              value={findEmailInput}
+              onChange={(event) => setFindEmailInput(event.target.value)}
+            />
+          </p>
+          {findStatus === 'forbidden' && <p role="alert">{strings.forbidden}</p>}
+          {findStatus === 'notFound' && <p role="alert">{strings.findNotFoundError}</p>}
+          {findStatus === 'error' && <p role="alert">{strings.findError}</p>}
+          <button type="submit" disabled={isFinding}>
+            {isFinding ? strings.finding : strings.findButton}
+          </button>
+        </form>
+        {findStatus === 'success' && foundPatient && (
+          <div role="status">
+            <p>
+              {strings.foundPatientLabel}: {foundPatient.fullName} (<code>{foundPatient.id}</code>)
+            </p>
+            <p>
+              {strings.foundStatusLabel}: {foundPatient.accountStatus}
+            </p>
+            <button type="button" onClick={() => setPatientIdInput(foundPatient.id)}>
+              {strings.useIdButton}
+            </button>
           </div>
         )}
       </section>

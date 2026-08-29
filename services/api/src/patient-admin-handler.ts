@@ -5,6 +5,7 @@
 // real DynamoDB-backed repository.
 import {
   AdminCreateUserCommand,
+  AdminGetUserCommand,
   AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider';
@@ -13,7 +14,11 @@ import type { Patient } from '@ndn/shared-types';
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
 import { DynamoStore } from './dynamo-store.js';
-import type { AdminCreatePatientPort, AdminSetPatientPasswordPort } from './patient-admin.js';
+import type {
+  AdminCreatePatientPort,
+  AdminFindPatientPort,
+  AdminSetPatientPasswordPort,
+} from './patient-admin.js';
 import { createPatientAdminHandler } from './patient-admin.js';
 import { PatientRepository } from './patient-repository.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
@@ -98,10 +103,37 @@ const setPatientPassword: AdminSetPatientPasswordPort = {
   },
 };
 
+/**
+ * `AdminGetUser` by email — the pool's own username (TASK 2.2.1,
+ * `UsernameAttributes: ['email']`), so this is a direct lookup, not a
+ * scan or a second index. `UserNotFoundException` is the plain "no such
+ * account" answer, not an error.
+ */
+const findPatientUser: AdminFindPatientPort = {
+  async findByEmail(email) {
+    try {
+      const response = await cognitoClient.send(
+        new AdminGetUserCommand({ UserPoolId: patientUserPoolId, Username: email }),
+      );
+      const sub = response.UserAttributes?.find((attribute) => attribute.Name === 'sub')?.Value;
+      if (!sub) {
+        throw new Error('AdminGetUser did not return a sub attribute');
+      }
+      return { subjectId: sub };
+    } catch (error) {
+      if ((error as { name?: string }).name === 'UserNotFoundException') {
+        return undefined;
+      }
+      throw error;
+    }
+  },
+};
+
 export const handler = createPatientAdminHandler({
   repository,
   flags,
   audit: auditLog,
   createPatientUser,
   setPatientPassword,
+  findPatientUser,
 });

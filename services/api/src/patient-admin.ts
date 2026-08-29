@@ -1,11 +1,24 @@
-// D-29 (2026-08-29): `POST /patients`, `POST /patients/{id}/reset-password`
-// — SDK-free and unit-testable, the same split every other authoring
-// endpoint uses (clinician-admin.ts / patient-admin-handler.ts wires the
-// real AWS clients). This replaces TASK 2.2.3's self-registration route
-// (retired — docs/runbooks/patient-registration.md) and TASK 2.2.3's
-// Post-Confirmation trigger (also retired, deleted outright): there is no
-// more Cognito sign-up event for either to react to, because a patient
-// never signs themselves up.
+// D-29 (2026-08-29): `POST /patients`, `POST /patients/{id}/reset-password`,
+// `GET /patients?email=` — SDK-free and unit-testable, the same split
+// every other authoring endpoint uses (clinician-admin.ts /
+// patient-admin-handler.ts wires the real AWS clients). This replaces
+// TASK 2.2.3's self-registration route (retired —
+// docs/runbooks/patient-registration.md) and TASK 2.2.3's Post-Confirmation
+// trigger (also retired, deleted outright): there is no more Cognito
+// sign-up event for either to react to, because a patient never signs
+// themselves up.
+//
+// **`GET /patients?email=` (follow-up, same day): the lookup this design's
+// own first cut left as a named limitation.** Resetting a password needs
+// the patient's account id, and staff have no way to find one except
+// having kept it from account creation. Rather than a new DynamoDB index
+// — which would duplicate the email this codebase already keeps exactly
+// once, in Cognito, as the patient pool's own username/alias
+// (`UsernameAttributes: ['email']`, TASK 2.2.1) — this calls
+// `AdminGetUser` by email directly and reads the `sub` back off it. No
+// GSI, no second copy of the address to keep consistent, no schema
+// migration: the directory already answers "which account has this
+// email" by construction, for free.
 //
 // **The model, in full, is on docs/runbooks/patient-account-provisioning.md.**
 // In short: a patient contacts the clinic's WhatsApp Business number — a
@@ -70,6 +83,8 @@ const createPatientBodySchema = z.object({
   presentingCondition: z.string().optional(),
 });
 
+const findPatientQuerySchema = z.object({ email: z.string().email().max(254) });
+
 /**
  * The Cognito call, as a port — same shape registration.ts's retired
  * `SignUpPort` took, for the same reason: keeping AWS behind an interface
@@ -96,12 +111,24 @@ export interface AdminSetPatientPasswordPort {
   setPassword(subjectId: string, password: string): Promise<void>;
 }
 
+/**
+ * `AdminGetUser` by email (the pool's own username), as a port. `undefined`
+ * means no account exists with that address — `AdminGetUser`'s own
+ * `UserNotFoundException` — which is the plain, useful answer for an
+ * authenticated principal asking (unlike self-registration's retired
+ * existence-oracle concern, which applied only to an unauthenticated caller).
+ */
+export interface AdminFindPatientPort {
+  findByEmail(email: string): Promise<{ subjectId: string } | undefined>;
+}
+
 export interface PatientAdminDeps {
   readonly repository: PatientRepository;
   readonly flags: FlagReader;
   readonly audit: AuditWriter;
   readonly createPatientUser: AdminCreatePatientPort;
   readonly setPatientPassword: AdminSetPatientPasswordPort;
+  readonly findPatientUser: AdminFindPatientPort;
   /** Overridable only so tests can assert against a known value; production never sets this. */
   readonly generatePassword?: () => string;
   readonly clock?: Clock;
@@ -233,6 +260,30 @@ export function createPatientAdminHandler(
             }),
           );
           return respond(200, { password });
+        }
+        case 'GET /patients': {
+          if (!can(principal, 'read', PATIENT_PROFILE_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          const parsed = findPatientQuerySchema.safeParse(event.queryStringParameters ?? {});
+          if (!parsed.success) {
+            return respond(400, { error: 'INVALID_QUERY', issues: parsed.error.issues });
+          }
+          const found = await deps.findPatientUser.findByEmail(parsed.data.email);
+          if (!found) {
+            return respond(404, { error: 'NOT_FOUND' });
+          }
+          const patient = await deps.repository.findById(found.subjectId);
+          if (!patient) {
+            // A Cognito user with no matching `PAT#` record — an
+            // inconsistent state no ordinary path in this codebase
+            // produces (patient-admin.ts's own create writes both
+            // together), but not this route's job to repair. The plain,
+            // honest answer for a caller asking "does this patient exist"
+            // is the same 404 a genuinely-absent email gets.
+            return respond(404, { error: 'NOT_FOUND' });
+          }
+          return respond(200, { item: patient });
         }
         default:
           return respond(404, { error: 'NOT_FOUND' });
