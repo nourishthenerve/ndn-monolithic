@@ -1003,9 +1003,12 @@ export class DataStack extends Stack {
     attachDestructiveActionGuardrail(patientAdminRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(patientAdminRole, this.table);
 
-    // `AdminCreateUser` and `AdminSetUserPassword` only — no
-    // `AdminDeleteUser` anywhere, the same repo-wide banned-identifier
+    // `AdminCreateUser`, `AdminSetUserPassword` and `AdminGetUser` only —
+    // no `AdminDeleteUser` anywhere, the same repo-wide banned-identifier
     // guarantee `ClinicianAdminFunction`'s own grant comment below states.
+    // `AdminGetUser` (D-29 follow-up, same day) is what `GET /patients?email=`
+    // uses to find a patient's id by email — a direct lookup against the
+    // pool's own username/alias, not a new DynamoDB index.
     const patientUserPoolArn = Stack.of(this).formatArn({
       service: 'cognito-idp',
       resource: 'userpool',
@@ -1015,7 +1018,11 @@ export class DataStack extends Stack {
       new PolicyStatement({
         sid: 'AdministerPatientCognitoUsers',
         effect: Effect.ALLOW,
-        actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminSetUserPassword'],
+        actions: [
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminSetUserPassword',
+          'cognito-idp:AdminGetUser',
+        ],
         resources: [patientUserPoolArn],
       }),
     );
@@ -1027,6 +1034,11 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/patients',
       methods: [HttpMethod.POST],
+      integration: patientAdminIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients',
+      methods: [HttpMethod.GET],
       integration: patientAdminIntegration,
     });
     httpApi.addRoutes({

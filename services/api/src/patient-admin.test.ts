@@ -8,6 +8,7 @@ import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags
 import {
   createPatientAdminHandler,
   type AdminCreatePatientPort,
+  type AdminFindPatientPort,
   type AdminSetPatientPasswordPort,
 } from './patient-admin.js';
 import { PatientRepository } from './patient-repository.js';
@@ -24,6 +25,7 @@ function eventFor(
   options: {
     readonly principal?: Record<string, unknown>;
     readonly pathParameters?: Record<string, string>;
+    readonly queryStringParameters?: Record<string, string>;
     readonly body?: unknown;
   } = {},
 ): LambdaAuthorizerEvent {
@@ -34,6 +36,7 @@ function eventFor(
     rawQueryString: '',
     headers: {},
     pathParameters: options.pathParameters,
+    queryStringParameters: options.queryStringParameters,
     body: options.body ? JSON.stringify(options.body) : undefined,
     isBase64Encoded: false,
     requestContext: {
@@ -89,16 +92,27 @@ function build(overrides: { flagEnabled?: boolean; nextCreateResult?: 'created' 
   const repository = new PatientRepository(store, audit, clock);
 
   let nextSub = 0;
+  const emailToSub = new Map<string, string>();
   const createPatientUser: AdminCreatePatientPort = {
-    createUser: vi.fn(async () =>
-      overrides.nextCreateResult === 'exists'
-        ? ({ outcome: 'exists' } as const)
-        : ({ outcome: 'created', subjectId: `sub-${(nextSub += 1)}` } as const),
-    ),
+    createUser: vi.fn(async (email: string) => {
+      if (overrides.nextCreateResult === 'exists') {
+        return { outcome: 'exists' } as const;
+      }
+      const subjectId = `sub-${(nextSub += 1)}`;
+      emailToSub.set(email, subjectId);
+      return { outcome: 'created', subjectId } as const;
+    }),
   };
 
   const setPatientPassword: AdminSetPatientPasswordPort = {
     setPassword: vi.fn(async () => {}),
+  };
+
+  const findPatientUser: AdminFindPatientPort = {
+    findByEmail: vi.fn(async (email: string) => {
+      const subjectId = emailToSub.get(email);
+      return subjectId ? { subjectId } : undefined;
+    }),
   };
 
   const handler = createPatientAdminHandler({
@@ -107,11 +121,12 @@ function build(overrides: { flagEnabled?: boolean; nextCreateResult?: 'created' 
     audit,
     createPatientUser,
     setPatientPassword,
+    findPatientUser,
     generatePassword: () => 'Fixed-Passw0rd!',
     clock,
   });
 
-  return { handler, repository, audit, createPatientUser, setPatientPassword };
+  return { handler, repository, audit, createPatientUser, setPatientPassword, findPatientUser };
 }
 
 async function invoke(handler: ReturnType<typeof build>['handler'], event: LambdaAuthorizerEvent) {
@@ -297,5 +312,85 @@ describe('POST /patients/{id}/reset-password', () => {
       entityType: 'patient',
       entityId: id,
     });
+  });
+});
+
+describe('GET /patients', () => {
+  async function createPatient(handler: ReturnType<typeof build>['handler']) {
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients', { principal: PRINCIPAL_CONTEXT, body: VALID_BODY }),
+    );
+    return (JSON.parse(response.body) as { item: { id: string } }).item.id;
+  }
+
+  it('404s when the flag is off', async () => {
+    const { handler } = build({ flagEnabled: false });
+    const response = await invoke(
+      handler,
+      eventFor('GET /patients', {
+        principal: PRINCIPAL_CONTEXT,
+        queryStringParameters: { email: VALID_BODY.email },
+      }),
+    );
+    expect(response.statusCode).toBe(404);
+  });
+
+  it.each([SUB_CLINICIAN_CONTEXT, PATIENT_CONTEXT])(
+    '403s a non-principal caller',
+    async (principal) => {
+      const { handler } = build();
+      const response = await invoke(
+        handler,
+        eventFor('GET /patients', { principal, queryStringParameters: { email: VALID_BODY.email } }),
+      );
+      expect(response.statusCode).toBe(403);
+    },
+  );
+
+  it('400s a missing or invalid email query parameter', async () => {
+    const { handler } = build();
+    const missing = await invoke(handler, eventFor('GET /patients', { principal: PRINCIPAL_CONTEXT }));
+    expect(missing.statusCode).toBe(400);
+
+    const invalid = await invoke(
+      handler,
+      eventFor('GET /patients', {
+        principal: PRINCIPAL_CONTEXT,
+        queryStringParameters: { email: 'not-an-email' },
+      }),
+    );
+    expect(invalid.statusCode).toBe(400);
+  });
+
+  it('404s an email with no matching account', async () => {
+    const { handler } = build();
+    const response = await invoke(
+      handler,
+      eventFor('GET /patients', {
+        principal: PRINCIPAL_CONTEXT,
+        queryStringParameters: { email: 'nobody@example.com' },
+      }),
+    );
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('finds a real patient by email and returns their full profile', async () => {
+    const { handler, findPatientUser } = build();
+    const id = await createPatient(handler);
+
+    const response = await invoke(
+      handler,
+      eventFor('GET /patients', {
+        principal: PRINCIPAL_CONTEXT,
+        queryStringParameters: { email: VALID_BODY.email },
+      }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(findPatientUser.findByEmail).toHaveBeenCalledWith(VALID_BODY.email);
+    const body = JSON.parse(response.body) as { item: { id: string; account_status: string } };
+    expect(body.item.id).toBe(id);
+    expect(body.item.account_status).toBe('pending');
   });
 });

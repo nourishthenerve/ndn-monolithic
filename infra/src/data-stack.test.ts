@@ -801,12 +801,15 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // and `POST /patients/{id}/reset-password`, served by a new
     // `PatientAdminFunction`, replacing TASK 2.2.3's public
     // `POST /registrations` (route-protection.ts's own PUBLIC_ROUTE_KEYS).
+    // The same day's own follow-up added `GET /patients` — finding a
+    // patient's id by email, served by the same function.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
         'GET /caseload',
         'GET /caseload/mine',
         'GET /clinicians/me/calendar',
+        'GET /patients',
         'GET /patients/{id}',
         'GET /patients/{id}/appointments',
         'GET /patients/{id}/assessments/{assessmentId}',
@@ -929,10 +932,14 @@ describe('DataStack — patient administration (D-29)', () => {
       .filter((statement) => statement.Sid === sid);
   }
 
-  it('routes both patient-admin endpoints behind the real authorizer, with their own 14-day log group', () => {
+  it('routes all three patient-admin endpoints behind the real authorizer, with their own 14-day log group', () => {
     const template = synth();
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'POST /patients',
+      AuthorizationType: 'CUSTOM',
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'GET /patients',
       AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
@@ -963,7 +970,7 @@ describe('DataStack — patient administration (D-29)', () => {
     }
   });
 
-  it('grants AdminCreateUser and AdminSetUserPassword on the patient pool only — never AdminDeleteUser, never the clinician pool', () => {
+  it('grants AdminCreateUser, AdminSetUserPassword and AdminGetUser on the patient pool only — never AdminDeleteUser, never the clinician pool', () => {
     const template = synth();
     const [patientAdminRoleId] = Object.entries(template.findResources('AWS::IAM::Role')).find(
       ([logicalId]) => logicalId.startsWith('PatientAdminFunctionRole'),
@@ -979,6 +986,9 @@ describe('DataStack — patient administration (D-29)', () => {
     const serialised = JSON.stringify(patientAdminPolicies);
     expect(serialised).toContain('cognito-idp:AdminCreateUser');
     expect(serialised).toContain('cognito-idp:AdminSetUserPassword');
+    // D-29 follow-up, same day: GET /patients?email= finds a patient's id
+    // by email via AdminGetUser — no new DynamoDB index.
+    expect(serialised).toContain('cognito-idp:AdminGetUser');
     expect(serialised).not.toContain('cognito-idp:AdminDeleteUser');
     expect(serialised).not.toContain(CLINICIAN_USER_POOL_ID);
     expect(serialised).toContain(PATIENT_USER_POOL_ID);
