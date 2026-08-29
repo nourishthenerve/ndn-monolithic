@@ -310,15 +310,32 @@ export class AuthStack extends Stack {
       // the same reasoning every browser client in this file already
       // states for its own `generateSecret: false`.
       generateSecret: false,
-      // Found live at synth, not assumed: CDK's own default for a client
-      // with no `oAuth` prop at all is *not* "no OAuth" — it is every flow
-      // enabled (`AllowedOAuthFlows: [implicit, code]`), silently, with no
-      // callback URL to send either grant's response to. Explicit, all
-      // false, closes that rather than relying on "no callback URL means
-      // no working redirect" to carry the actual boundary.
-      oAuth: {
-        flows: { authorizationCodeGrant: false, implicitCodeGrant: false, clientCredentials: false },
-      },
+      // **Found live, not at synth — the first real deploy attempt of this
+      // client failed** (`CREATE_FAILED`, `AllowedOAuthFlows and
+      // AllowedOAuthScopes are required if user pool client is allowed to
+      // use OAuth flows`). The first version of this file set every OAuth
+      // flow to `false` explicitly via the `oAuth` prop — which still sets
+      // `AllowedOAuthFlowsUserPoolClient: true` on the underlying resource
+      // (CDK's L2 construct treats *any* `oAuth` prop, regardless of which
+      // individual flows are true, as "this client uses OAuth"), and
+      // Cognito's own `CreateUserPoolClient` API rejects that combination
+      // outright when the resulting scope list is empty. `cdk diff`
+      // against the live account did not catch this — a changeset
+      // preview doesn't run Cognito's own request-time validation, only
+      // resource replacement/deletion analysis; only a real
+      // `CreateUserPoolClient` call does.
+      //
+      // The fix is `disableOAuth: true`, not a hand-rolled all-false
+      // `oAuth` block — a distinct, documented prop (`user-pool-client.js`
+      // throws if both are given together) that sets
+      // `AllowedOAuthFlowsUserPoolClient: false` and omits
+      // `AllowedOAuthFlows`/`AllowedOAuthScopes`/`CallbackURLs` from the
+      // template entirely, rather than populating them with empty/false
+      // values Cognito's API then rejects. The `CfnUserPoolClient`
+      // construct's own doc comment states plainly what this leaves:
+      // "When false, only SDK-based API sign-in is permitted" — exactly
+      // this client's only real use.
+      disableOAuth: true,
       supportedIdentityProviders: [UserPoolClientIdentityProvider.COGNITO],
       // Tokens from this flow are discarded the moment the round trip
       // completes (`AdminUserGlobalSignOut` runs immediately after) — the

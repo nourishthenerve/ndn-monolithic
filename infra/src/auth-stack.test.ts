@@ -66,6 +66,7 @@ interface UserPoolResource {
 interface UserPoolClientProperties {
   ClientName?: string;
   GenerateSecret?: boolean;
+  AllowedOAuthFlowsUserPoolClient?: boolean;
   AllowedOAuthFlows?: string[];
   AllowedOAuthScopes?: string[];
   SupportedIdentityProviders?: string[];
@@ -311,7 +312,14 @@ describe('AuthStack — D-30: the clinician admin-auth client, and the boundary 
   it('holds no client secret and no OAuth configuration — never a redirect-based sign-in', () => {
     const properties = clientNamed(CLINICIAN_ADMIN_AUTH_CLIENT_NAME);
     expect(properties.GenerateSecret).toBe(false);
+    // The property whose absence caused a real live deploy failure
+    // (`disableOAuth: true` vs. an all-flows-false `oAuth` block, this
+    // file's own header comment) — asserted directly so a regression to
+    // the broken shape fails here, at synth, rather than at a real
+    // CreateUserPoolClient call again.
+    expect(properties.AllowedOAuthFlowsUserPoolClient).toBe(false);
     expect(properties.AllowedOAuthFlows).toBeUndefined();
+    expect(properties.AllowedOAuthScopes).toBeUndefined();
     expect(properties.CallbackURLs).toBeUndefined();
     expect(properties.LogoutURLs).toBeUndefined();
   });
