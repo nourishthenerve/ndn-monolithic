@@ -13,14 +13,27 @@
 // say `admin-token` for exactly the operation whose audit trail most needs
 // to say *which* clinician acted.
 //
-// **Invite email: Cognito's own, not the Notifier — a deliberate deviation
-// from this task's step 8.** `AdminCreateUser`'s built-in invite is the
-// only thing that ever knows the temporary password; routing it through
-// `Notifier.send` would mean generating that secret ourselves and putting
-// it in a plain-text SES relay this codebase does not otherwise treat as
-// credential-safe, in place of Cognito's own security-reviewed delivery
-// path (the same mechanism `SignUp`'s email-OTP flow already trusts).
-// **Deactivation notice does go through the Notifier**, per step 8 — no
+// ## Amendment, D-30 (2026-08-29) — no invite email, ever
+//
+// This file's own header used to explain why the invite email went
+// through Cognito's own `AdminCreateUser` delivery rather than the
+// Notifier — that reasoning is gone, not superseded in place: D-30
+// removes the invite email entirely, the same "staff-issued credentials,
+// no email" pivot D-29 already made for patients. `createUser` now
+// suppresses Cognito's own delivery (`MessageAction: SUPPRESS`,
+// `clinician-admin-handler.ts`); this file generates a permanent
+// password (`password-generator.ts`, the identical function D-29 already
+// built) and completes the clinician pool's mandatory TOTP enrolment on
+// the new clinician's own behalf (`AdminCreateClinicianPort.provisionTotp`,
+// wired against `auth-stack.ts`'s `ClinicianAdminAuthClient`), returning
+// both to the principal once, in the `POST /clinicians` response body —
+// never stored beyond that response, never logged. The principal relays
+// both however staff already communicate — in person, phone, WhatsApp —
+// the same channel-agnostic handoff D-29 already established, now on the
+// clinician side too. See `docs/plan/01-decisions.md`'s D-30 and
+// `docs/plan/02-risk-register.md`'s R-17 for the trade-off this accepts.
+//
+// **Deactivation notice still goes through the Notifier**, unchanged — no
 // credential involved, and it is exactly the kind of "closes the loop"
 // message the abstraction exists for.
 import type { Principal } from '@ndn/shared-types';
@@ -38,6 +51,7 @@ import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
 import type { Notifier } from './notifications.js';
+import { generatePassword } from './password-generator.js';
 import { requirePrincipal } from './request-principal.js';
 
 const CLINICIAN_ADMIN_FLAG = 'clinicians.administration.enabled';
@@ -76,6 +90,32 @@ export interface AdminCreateClinicianPort {
    * granted the group).
    */
   addToPrincipalGroup(subjectId: string): Promise<void>;
+  /**
+   * D-30: a permanent password, set once — the same `AdminSetUserPassword`
+   * shape `patient-admin.ts`'s own port already uses for D-29, `Permanent:
+   * true` so no `NEW_PASSWORD_REQUIRED` challenge exists for this account
+   * to get stuck on.
+   */
+  setPassword(subjectId: string, password: string): Promise<void>;
+  /**
+   * D-30: completes the clinician pool's mandatory `MFA_SETUP` challenge
+   * on the new clinician's own behalf, so a working TOTP secret exists
+   * before Cognito ever gets a chance to email anyone about it —
+   * `AdminInitiateAuth` (against `auth-stack.ts`'s `ClinicianAdminAuthClient`,
+   * never the browser-facing one) → `AssociateSoftwareToken` →
+   * `VerifySoftwareToken` (the one-time code computed by this codebase
+   * itself, `totp.ts`, not typed in by a human) → `AdminRespondToAuthChallenge`
+   * → `AdminUserGlobalSignOut`, so nothing this round trip mints outlives
+   * the request that triggered it. Returns the secret and an `otpauth://`
+   * URI for the principal to relay — never stored beyond the API response
+   * that carries it once, never logged, the same discipline
+   * `patient-admin.ts`'s own generated password already follows.
+   */
+  provisionTotp(
+    subjectId: string,
+    email: string,
+    password: string,
+  ): Promise<{ secret: string; otpauthUri: string }>;
 }
 
 /** Both calls step 4 requires, as one port — deactivation is never "just" the disable. */
@@ -100,6 +140,8 @@ export interface ClinicianAdminDeps {
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
   readonly log?: (line: Record<string, unknown>) => void;
+  /** Overridable for test determinism only — `patient-admin.ts`'s own identical seam for D-29. */
+  readonly generatePassword?: () => string;
 }
 
 function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
@@ -121,6 +163,7 @@ export function createClinicianAdminHandler(
   const logger =
     deps.logger ?? createSampledLogger({ clock, sampleRate: CLINICIAN_ADMIN_LOG_SAMPLE_RATE });
   const log = deps.log ?? ((line) => process.stdout.write(`${JSON.stringify(line)}\n`));
+  const makePassword = deps.generatePassword ?? generatePassword;
 
   return async (event) => {
     const start = clock.now();
@@ -168,10 +211,24 @@ export function createClinicianAdminHandler(
           // TASK 2.2.2 having no `cognito-idp` grant does not apply here —
           // unlike `SignUp`, `AdminCreateUser` is an authenticated,
           // IAM-authorised operation; clinician-admin-handler.ts's role
-          // carries exactly the five Admin* grants this file's ports use
-          // (AdminAddUserToGroup joined the other four 2026-08-28 — see
-          // AdminCreateClinicianPort's own header).
+          // carries exactly the Admin* grants this file's ports use.
+          //
+          // D-30: Cognito artefacts first, the `CLI#` record last — the
+          // same ordering `clinician-repository.ts`'s own header already
+          // chose and accepts the same failure mode for ("an orphaned
+          // Cognito user is the failure mode, not an orphaned record").
+          // If `repository.create()` throws below (most likely
+          // `PRINCIPAL_ALREADY_EXISTS`), the password and TOTP secret
+          // already minted are never returned to anyone and the Cognito
+          // user is simply unusable — nobody ever learns its password.
           const subjectId = await deps.createClinicianUser.createUser(parsed.data.email);
+          const password = makePassword();
+          await deps.createClinicianUser.setPassword(subjectId, password);
+          const totp = await deps.createClinicianUser.provisionTotp(
+            subjectId,
+            parsed.data.email,
+            password,
+          );
           const clinician = await deps.repository.create(
             subjectId,
             { displayName: parsed.data.displayName, role: parsed.data.role },
@@ -180,7 +237,16 @@ export function createClinicianAdminHandler(
           if (clinician.role === 'principal') {
             await deps.createClinicianUser.addToPrincipalGroup(subjectId);
           }
-          return respond(201, { item: clinician });
+          // Shown once, here, and nowhere else — never stored, never
+          // logged (`logger.logRequest` above logs only route/status/
+          // duration), the identical discipline `patient-admin.ts`'s own
+          // generated password already follows for D-29.
+          return respond(201, {
+            item: clinician,
+            password,
+            totpSecret: totp.secret,
+            otpauthUri: totp.otpauthUri,
+          });
         }
         case 'POST /clinicians/{id}/deactivate': {
           if (!can(principal, 'update', CLINICIAN_RESOURCE).allowed) {

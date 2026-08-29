@@ -421,6 +421,23 @@ export const PATIENT_USER_POOL_ID = 'eu-west-2_lMonWXA0b';
 export const PATIENT_USER_POOL_CLIENT_ID = '6r45vfhjv9atkq3iojfinr3lda';
 export const CLINICIAN_USER_POOL_ID = 'eu-west-2_1SFN2y0Jt';
 export const CLINICIAN_USER_POOL_CLIENT_ID = '2dt02jv4lstdvh9fl4cnsqn4gn';
+// D-30: `ClinicianAdminAuthClient` (auth-stack.ts) — captured from
+// `NdnAuthStack`'s own `ClinicianAdminAuthClientId` output after its first
+// real deploy, 2026-08-29, the same "captured, not computed" convention as
+// the two ids above. Never the browser's — only
+// `ClinicianAdminFunctionRole` (data-stack.ts) is granted `AdminInitiateAuth`
+// against it.
+//
+// Not a secret — a Cognito app client id is a public identifier (this
+// client also has no client secret at all, `generateSecret: false`,
+// auth-stack.ts), the identical non-secret shape `PATIENT_USER_POOL_CLIENT_ID`/
+// `CLINICIAN_USER_POOL_CLIENT_ID` above already are. `gitleaks`'s
+// `generic-api-key` rule flags this one and not those two on a variable-name
+// heuristic alone (this one contains "AUTH"); found live in this PR's own
+// CI run, confirmed a false positive by testing the same string under
+// several other names locally against the identical gitleaks version
+// before suppressing it — not assumed safe to silence.
+export const CLINICIAN_ADMIN_AUTH_CLIENT_ID = '5kdh1j3tiv1s101rut3s6jpmtv'; // gitleaks:allow
 
 // The two `iss` values TASK 2.2.2 verifies a token against, and the only
 // two it may ever accept. Derived from the ids above rather than pasted

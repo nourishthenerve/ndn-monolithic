@@ -75,7 +75,7 @@ const PATIENT_CONTEXT = {
   patientId: 'patient-sub',
 };
 
-function build(overrides: { flagEnabled?: boolean } = {}) {
+function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
   const flagSource = new InMemoryFlagSource();
   flagSource.set('clinicians.administration.enabled', overrides.flagEnabled ?? true);
   const flags = new CachedFlagReader({ source: flagSource, clock, ttlMs: FLAG_CACHE_TTL_MS });
@@ -88,6 +88,11 @@ function build(overrides: { flagEnabled?: boolean } = {}) {
   const createClinicianUser: AdminCreateClinicianPort = {
     createUser: vi.fn(async () => `sub-${(nextSub += 1)}`),
     addToPrincipalGroup: vi.fn(async () => {}),
+    setPassword: vi.fn(async () => {}),
+    provisionTotp: vi.fn(async () => ({
+      secret: 'JBSWY3DPEHPK3PXP',
+      otpauthUri: 'otpauth://totp/Nourish%20the%20Nerve:test@example.com?secret=JBSWY3DPEHPK3PXP',
+    })),
   };
 
   const deactivateClinicianUser: AdminDeactivateClinicianPort = {
@@ -114,6 +119,7 @@ function build(overrides: { flagEnabled?: boolean } = {}) {
     notifier,
     clock,
     log: vi.fn(),
+    generatePassword: vi.fn(() => overrides.password ?? 'Gen3rat3d!Pass'),
   });
 
   return {
@@ -150,6 +156,93 @@ describe('POST /clinicians', () => {
     const body = JSON.parse(response.body) as { item: { id: string; role: string } };
     expect(body.item.role).toBe('sub');
     expect(await repository.findById(body.item.id)).toMatchObject({ displayName: 'New Clinician' });
+  });
+
+  it('D-30: sets a permanent password and provisions TOTP, returning both once — no invite email involved', async () => {
+    const { handler, createClinicianUser } = build({ password: 'Str0ng!Passw0rd' });
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'new@example.com', displayName: 'New Clinician', role: 'sub' },
+      }),
+    );
+
+    const body = JSON.parse(response.body) as {
+      item: { id: string };
+      password: string;
+      totpSecret: string;
+      otpauthUri: string;
+    };
+    expect(createClinicianUser.setPassword).toHaveBeenCalledWith(body.item.id, 'Str0ng!Passw0rd');
+    expect(createClinicianUser.provisionTotp).toHaveBeenCalledWith(
+      body.item.id,
+      'new@example.com',
+      'Str0ng!Passw0rd',
+    );
+    expect(body.password).toBe('Str0ng!Passw0rd');
+    expect(body.totpSecret).toBe('JBSWY3DPEHPK3PXP');
+    expect(body.otpauthUri).toMatch(/^otpauth:\/\/totp\//);
+  });
+
+  it('D-30: Cognito artefacts are provisioned before the CLI# record is written, in order', async () => {
+    const { handler, createClinicianUser, repository } = build();
+    const order: string[] = [];
+    createClinicianUser.createUser = vi.fn(async () => {
+      order.push('createUser');
+      return 'sub-ordered';
+    });
+    createClinicianUser.setPassword = vi.fn(async () => {
+      order.push('setPassword');
+    });
+    createClinicianUser.provisionTotp = vi.fn(async () => {
+      order.push('provisionTotp');
+      return { secret: 's', otpauthUri: 'otpauth://totp/x' };
+    });
+    const originalCreate = repository.create.bind(repository);
+    repository.create = vi.fn(async (...args: Parameters<typeof originalCreate>) => {
+      order.push('repository.create');
+      return originalCreate(...args);
+    });
+
+    await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'ordered@example.com', displayName: 'Ordered', role: 'sub' },
+      }),
+    );
+
+    expect(order).toEqual(['createUser', 'setPassword', 'provisionTotp', 'repository.create']);
+  });
+
+  it('D-30: a rejected record write never surfaces the password or TOTP secret to the caller', async () => {
+    const { handler, createClinicianUser } = build();
+    await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'first@example.com', displayName: 'First', role: 'principal' },
+      }),
+    );
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'second@example.com', displayName: 'Second', role: 'principal' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).not.toMatch(/password/i);
+    expect(response.body).not.toMatch(/totp/i);
+    // Still called for the second (rejected) attempt too — this is the
+    // orphaned-Cognito-user failure mode this task's own header accepts,
+    // not a leak: the secret exists in Cognito but is never returned to
+    // anyone, so nobody — including this test — can ever learn it.
+    expect(createClinicianUser.provisionTotp).toHaveBeenCalledTimes(2);
   });
 
   it('never adds a sub-clinician to the principal Cognito group', async () => {
