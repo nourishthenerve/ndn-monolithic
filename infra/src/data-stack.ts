@@ -117,14 +117,6 @@ export class DataStack extends Stack {
    * constructs, one implementation.
    */
   public readonly authorizerFunction: IFunction;
-  /**
-   * TASK 2.2.3: attached to the patient pool's Post-Confirmation trigger
-   * by `AuthStack` (bin/app.ts). The function lives here because
-   * everything it writes — the patient profile, the intake row it
-   * consumes, the audit row — is on this stack's table; the pool it fires
-   * from lives there. One prop, one direction.
-   */
-  public readonly postConfirmationFunction: IFunction;
 
   constructor(scope: Construct, id: string, props: DataStackProps = {}) {
     super(scope, id, props);
@@ -239,12 +231,9 @@ export class DataStack extends Stack {
     const authorizerLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/authorizer-function`
       : '/ndn/authorizer-function';
-    const registrationLogGroupName = props.prLabel
-      ? `/ndn/${props.prLabel}/registration-function`
-      : '/ndn/registration-function';
-    const postConfirmationLogGroupName = props.prLabel
-      ? `/ndn/${props.prLabel}/post-confirmation-function`
-      : '/ndn/post-confirmation-function';
+    const patientAdminLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/patient-admin-function`
+      : '/ndn/patient-admin-function';
     const clinicianAdminLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/clinician-admin-function`
       : '/ndn/clinician-admin-function';
@@ -940,152 +929,110 @@ export class DataStack extends Stack {
     // one role that is supposed to read that partition.
     attachDestructiveActionGuardrail(auditReadRole, { buckets: [], tables: [this.table] });
 
-    // TASK 2.2.3: the front door. Two functions, deliberately — the plan
-    // named one log group and this needs two, for a reason worth stating.
-    //
-    // `RegistrationFunction` is an ordinary HTTP endpoint because step 7
-    // asks for a rate limit **per source IP**, and a Cognito Lambda
-    // trigger cannot see one: Pre-SignUp events carry no client address,
-    // and the address is only available on the paid threat-protection tier
-    // TASK 2.2.1 declined. Behind API Gateway it is free.
-    //
-    // `PostConfirmationFunction` is the Cognito trigger that writes the
-    // `PAT#` record, and it can only be a trigger — nothing else knows
-    // when a patient has proved they can read the mailbox.
-    const registrationRole = new Role(this, 'RegistrationFunctionRole', {
+    // D-29 (2026-08-29): the front door — `POST /patients` (staff create
+    // an account on a patient's behalf, after a WhatsApp conversation) and
+    // `POST /patients/{id}/reset-password` (staff issue a new one).
+    // Replaces TASK 2.2.3's `RegistrationFunction`/`PostConfirmationFunction`
+    // pair, both deleted outright: self sign-up is off (auth-stack.ts's own
+    // header amendment), so there is no unauthenticated caller left to
+    // rate-limit and no `ConfirmSignUp` event left for a trigger to react
+    // to. Both routes here take no `authorizer:` override — the identical
+    // shape `ClinicianAdminFunction`'s three routes below already use: the
+    // caller is a real, authenticated principal, so the real authorizer
+    // (2.2.2) is exactly the gate this needs, never `PUBLIC_ROUTE`.
+    const patientAdminRole = new Role(this, 'PatientAdminFunctionRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
     });
 
-    const registrationFunction = new NodejsFunction(this, 'RegistrationFunction', {
-      entry: `${moduleDir}../../services/api/src/registration-handler.ts`,
+    const patientAdminFunction = new NodejsFunction(this, 'PatientAdminFunction', {
+      entry: `${moduleDir}../../services/api/src/patient-admin-handler.ts`,
       handler: 'handler',
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       memorySize: 128,
-      // Turnstile's siteverify round trip plus Cognito's SignUp, both
-      // outbound HTTPS.
+      // Up to two sequential Cognito Admin* calls on the create path
+      // (AdminCreateUser, then AdminSetUserPassword), one alone on the
+      // reset path, each its own HTTPS round trip.
       timeout: Duration.seconds(10),
-      role: registrationRole,
+      role: patientAdminRole,
       environment: {
         PRINCIPAL_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
-        PATIENT_USER_POOL_CLIENT_ID,
-        TURNSTILE_SECRET_PARAMETER_NAME,
+        PATIENT_USER_POOL_ID,
         ...FLAG_ENVIRONMENT,
-      },
-      logGroup: createLogGroup(this, 'RegistrationFunctionLogGroup', registrationLogGroupName, registrationRole),
-    });
-    grantFlagReads(this, registrationRole);
-
-    // **No `cognito-idp` grant anywhere.** `SignUp` is an unauthenticated
-    // Cognito operation — AWS's own API reference says it "doesn't evaluate
-    // IAM policies" — so this function calls it with no credentials at
-    // all. A grant here would be permission that does nothing, which is
-    // worse than none: it reads as if the function had admin reach into
-    // the directory.
-    registrationRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'WriteRegistrationIntake',
-        effect: Effect.ALLOW,
-        actions: ['dynamodb:PutItem'],
-        resources: [this.table.tableArn],
-        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['REG#*'] } },
-      }),
-    );
-    registrationRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadTurnstileSecret',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: TURNSTILE_SECRET_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
-    attachDestructiveActionGuardrail(registrationRole, { buckets: [], tables: [this.table] });
-    attachAuditPartitionReadGuardrail(registrationRole, this.table);
-
-    const postConfirmationRole = new Role(this, 'PostConfirmationFunctionRole', {
-      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-    });
-
-    this.postConfirmationFunction = new NodejsFunction(this, 'PostConfirmationFunction', {
-      entry: `${moduleDir}../../services/api/src/post-confirmation-handler.ts`,
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
-      memorySize: 128,
-      timeout: Duration.seconds(10),
-      role: postConfirmationRole,
-      environment: {
-        PRINCIPAL_TABLE_NAME: this.table.tableName,
-        AUDIT_TABLE_NAME: this.table.tableName,
-        REGISTRATION_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
-        SES_CONFIGURATION_SET_NAME,
       },
       logGroup: createLogGroup(
         this,
-        'PostConfirmationFunctionLogGroup',
-        postConfirmationLogGroupName,
-        postConfirmationRole,
+        'PatientAdminFunctionLogGroup',
+        patientAdminLogGroupName,
+        patientAdminRole,
       ),
     });
+    grantFlagReads(this, patientAdminRole);
 
-    // Reads the intake row and the patient profile (to be idempotent),
-    // writes the profile, the consumed marker and one audit row. Scoped to
-    // the three partitions it touches — a table-wide grant would let the
-    // one function Cognito can invoke reach every record in the estate.
-    postConfirmationRole.addToPrincipalPolicy(
+    // `GetItem` (the idempotent-register lookup on create, and the
+    // existence check on reset) and `PutItem` (a new `PAT#` profile) on
+    // the same `PAT#*` partition — the identical grant `PatientFunction`'s
+    // own `ReadWritePatientProfile` statement already carries.
+    patientAdminRole.addToPrincipalPolicy(
       new PolicyStatement({
-        sid: 'WritePatientProfile',
+        sid: 'ReadWritePatientProfile',
         effect: Effect.ALLOW,
-        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    // A separate statement, on `AUDIT#*` alone — account creation's audit
+    // row rides `PatientRepository.register`'s own write (the same
+    // `DynamoAuditLog` every repository uses); the reset-password route
+    // writes one directly (patient-admin.ts's own header explains why).
+    // The guardrail directly below is what stops this grant from ever
+    // widening into a read of that partition.
+    patientAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'WriteAuditRows',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
         resources: [this.table.tableArn],
         conditions: {
-          'ForAllValues:StringLike': {
-            'dynamodb:LeadingKeys': ['PAT#*', 'REG#*', `${AUDIT_PARTITION_KEY_PREFIX}*`],
-          },
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] },
         },
       }),
     );
-    postConfirmationRole.addToPrincipalPolicy(
+    attachDestructiveActionGuardrail(patientAdminRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(patientAdminRole, this.table);
+
+    // `AdminCreateUser` and `AdminSetUserPassword` only — no
+    // `AdminDeleteUser` anywhere, the same repo-wide banned-identifier
+    // guarantee `ClinicianAdminFunction`'s own grant comment below states.
+    const patientUserPoolArn = Stack.of(this).formatArn({
+      service: 'cognito-idp',
+      resource: 'userpool',
+      resourceName: PATIENT_USER_POOL_ID,
+    });
+    patientAdminRole.addToPrincipalPolicy(
       new PolicyStatement({
-        sid: 'SendRegistrationEmail',
+        sid: 'AdministerPatientCognitoUsers',
         effect: Effect.ALLOW,
-        actions: ['ses:SendEmail'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'identity',
-            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
-          }),
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'configuration-set',
-            resourceName: SES_CONFIGURATION_SET_NAME,
-          }),
-        ],
+        actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminSetUserPassword'],
+        resources: [patientUserPoolArn],
       }),
     );
-    attachDestructiveActionGuardrail(postConfirmationRole, { buckets: [], tables: [this.table] });
-    // Writes audit rows, so it must not be able to read them — the same
-    // separation TASK 2.1.3 applies to every other writer. The `PutItem`
-    // above is what lets it append; there is no matching read.
-    attachAuditPartitionReadGuardrail(postConfirmationRole, this.table);
 
+    const patientAdminIntegration = new HttpLambdaIntegration(
+      'PatientAdminIntegration',
+      patientAdminFunction,
+    );
     httpApi.addRoutes({
-      path: '/registrations',
+      path: '/patients',
       methods: [HttpMethod.POST],
-      // Public by necessity: the caller has no account yet — that is what
-      // they are asking for. Turnstile and the per-IP rate limit are the
-      // gate, and the flag is default-off until TASK 2.5.1 can approve
-      // anyone.
-      authorizer: PUBLIC_ROUTE,
-      integration: new HttpLambdaIntegration('RegistrationIntegration', registrationFunction),
+      integration: patientAdminIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/reset-password',
+      methods: [HttpMethod.POST],
+      integration: patientAdminIntegration,
     });
 
     // TASK 2.5.4: no `authorizer:` override — `defaultAuthorizer` applies,

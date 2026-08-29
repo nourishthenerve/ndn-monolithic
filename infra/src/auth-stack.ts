@@ -17,6 +17,48 @@
 // registration trigger (2.2.3), no sign-in UI (2.2.4). A deployed, empty
 // user pool with no authorizer in front of it is inert, which is why this
 // task carries no feature flag.
+//
+// ## Amendment, D-29 (2026-08-29) — the patient pool reverts to a
+// password, and self sign-up is retired
+//
+// TASK 2.2.3's own patient pool config — `selfSignUpEnabled: true`,
+// passwordless email-OTP as the only reachable first factor — is gone.
+// The owner's own decision (D-29, `docs/plan/01-decisions.md`): a patient
+// never registers themselves. They contact the clinic's WhatsApp Business
+// number, a human verifies who they are and creates the account on their
+// behalf (`services/api/src/patient-admin.ts`), setting a permanent
+// password the patient does not choose. Forgetting it is the same
+// WhatsApp conversation again, never a self-service reset.
+//
+// What changes here, concretely: `selfSignUpEnabled: false` (matching the
+// clinician pool's own "admin action creates a user" model exactly);
+// `signInPolicy` removed (the default — password only — is what a
+// password-based pool wants, the same reason the clinician pool has never
+// carried one); a `passwordPolicy`, identical to the clinician pool's;
+// `accountRecovery: AccountRecovery.NONE`, the one setting this amendment
+// could not skip — `ForgotPassword`/`ConfirmForgotPassword` are
+// unauthenticated, un-IAM-gated Cognito APIs, independent of which
+// `ExplicitAuthFlows` an app client carries, so leaving `EMAIL_ONLY` in
+// place would have let anyone who knew or guessed a patient's email
+// self-serve a password reset entirely outside the WhatsApp-verified
+// process this whole design exists to enforce. The web client's
+// `authFlows` move from `{ user: true }` (choice-based, the only flow that
+// can present an `EMAIL_OTP` challenge) to `{ userSrp: true }` — the
+// clinician pool's own flow, proving a password rather than transmitting
+// one. The Post-Confirmation trigger this pool used to carry
+// (`post-confirmation.ts`, TASK 2.2.3) is deleted outright, not merely
+// unwired: with self sign-up off, `ConfirmSignUp` can never fire, so the
+// trigger had no event left to react to.
+//
+// The email attribute stays exactly as TASK 2.2.1 built it — required,
+// mutable, the pool's only attribute. It carries no functional weight any
+// more (no OTP is ever sent to it, and `AccountRecovery.NONE` means
+// nothing recovers through it either), but changing a pool's required
+// attributes needs recreating the pool, which this amendment has no
+// reason to force. Staff still collect an address during WhatsApp intake
+// and it is still set on the Cognito user, unverified in any real sense —
+// see `patient-admin-handler.ts`'s own header for why `email_verified` is
+// still set `true` regardless.
 
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import {
@@ -30,11 +72,9 @@ import {
   UserPoolClient,
   UserPoolClientIdentityProvider,
   UserPoolDomain,
-  UserPoolOperation,
   ManagedLoginVersion,
   type UserPoolProps,
 } from 'aws-cdk-lib/aws-cognito';
-import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
 
 import {
@@ -67,7 +107,8 @@ const EMAIL_ONLY_ATTRIBUTES = {
 
 // What the app clients may read and write. `emailVerified` is readable
 // because the sign-in UI needs to know it; nothing is writable but the
-// address itself, which self-registration (2.2.3) has to set.
+// address itself — `patient-admin.ts`'s `AdminCreateUser` call sets the
+// patient's, `clinician-admin.ts`'s sets the clinician's.
 const CLIENT_READ_ATTRIBUTES = new ClientAttributes().withStandardAttributes({
   email: true,
   emailVerified: true,
@@ -101,18 +142,12 @@ const SHARED_POOL_PROPS = {
   removalPolicy: RemovalPolicy.RETAIN,
 } satisfies UserPoolProps;
 
-export interface AuthStackProps extends StackProps {
-  /**
-   * TASK 2.2.3: `NdnDataStack`'s Post-Confirmation function
-   * (data-stack.ts), attached here as the patient pool's trigger. The
-   * function lives there because everything it writes is on that stack's
-   * table; the pool lives here. Optional so this stack still synthesizes
-   * on its own — a pool with no trigger is a pool nobody can register
-   * into usefully, but it is not a broken one, and auth-stack.test.ts
-   * asserts both shapes.
-   */
-  readonly postConfirmationFunction?: IFunction;
-}
+// TASK 2.2.3 gave this stack a `postConfirmationFunction` prop, attaching
+// `NdnDataStack`'s Post-Confirmation trigger to the patient pool. Deleted
+// by D-29 (2026-08-29), not merely made optional-and-unused: with self
+// sign-up off, no `ConfirmSignUp` event can ever fire, so there is nothing
+// left for a trigger to react to — see this file's own header amendment.
+export type AuthStackProps = StackProps;
 
 export class AuthStack extends Stack {
   public readonly patientUserPool: UserPool;
@@ -128,33 +163,40 @@ export class AuthStack extends Stack {
     this.patientUserPool = new UserPool(this, 'PatientUserPool', {
       ...SHARED_POOL_PROPS,
       userPoolName: PATIENT_USER_POOL_NAME,
-      // Patients register themselves (2.2.3) and sit in `pending` until a
-      // clinician approves them — approval is a state on the DynamoDB
-      // record, not a gate on the directory.
-      selfSignUpEnabled: true,
-      // Step 3, and the one place AWS does not let this task say exactly
-      // what it means. Cognito requires `PASSWORD` in
-      // `AllowedFirstAuthFactors` — the console words it "The Password
-      // option is always available" and CDK rejects `password: false`
-      // outright — so a pool that offers *only* email OTP cannot be
-      // configured. What is enforceable is the app client below: it holds
-      // `ALLOW_USER_AUTH` and nothing password-shaped, so the only
-      // first factor reachable through the only client that exists is the
-      // email OTP. Recorded rather than papered over; the runbook carries
-      // the same note.
-      signInPolicy: {
-        allowedFirstAuthFactors: {
-          password: true,
-          emailOtp: true,
-          smsOtp: false,
-          passkey: false,
-        },
-      },
-      // No second factor on top of a first factor that is already a
-      // one-time code sent to the same mailbox — that is friction without
-      // a security gain, and it is precisely what one shared pool would
-      // have forced.
+      // D-29 (2026-08-29): a patient account is created by a principal via
+      // `patient-admin.ts`, never by the patient themselves — the same
+      // "admin action creates a user" model the clinician pool has always
+      // used. Approval (a clinician moving `pending` to `approved`) stays
+      // a state on the DynamoDB record, unaffected by this change — see
+      // this file's own header amendment.
+      selfSignUpEnabled: false,
+      // No `signInPolicy` — the Cognito default (password only) is
+      // exactly what a password-based pool wants, the same reason the
+      // clinician pool has never carried one.
       mfa: Mfa.OFF,
+      // Matches the clinician pool's own policy exactly — CDK's defaults,
+      // written out so they are visible in the synthesized template and
+      // assertable in a test rather than inherited silently. There is no
+      // reason for the two pools' password strength to differ, and every
+      // patient password is machine-generated (`password-generator.ts`)
+      // to satisfy it, never typed in by a person choosing their own.
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: true,
+      },
+      // The one setting this amendment could not leave at
+      // `SHARED_POOL_PROPS`'s own `EMAIL_ONLY` default. `ForgotPassword`/
+      // `ConfirmForgotPassword` are unauthenticated Cognito APIs,
+      // independent of the app client's own `ExplicitAuthFlows` — leaving
+      // email-based recovery enabled would let anyone who knew or guessed
+      // a patient's address self-serve a password reset entirely outside
+      // the WhatsApp-verified process this design exists to enforce.
+      // `NONE` is Cognito's own name for exactly this model: "users will
+      // have to contact an administrator to reset their passwords."
+      accountRecovery: AccountRecovery.NONE,
     });
 
     this.clinicianUserPool = new UserPool(this, 'ClinicianUserPool', {
@@ -191,11 +233,11 @@ export class AuthStack extends Stack {
     this.patientUserPoolClient = this.addWebClient('PatientUserPoolClient', {
       userPool: this.patientUserPool,
       clientName: `${PATIENT_USER_POOL_NAME}-web`,
-      // `ALLOW_USER_AUTH` is choice-based authentication — the only flow
-      // that can present an `EMAIL_OTP` challenge. Every password-shaped
-      // flow is absent, so a patient account has no password path through
-      // this client even though the pool policy above has to list one.
-      authFlows: { user: true },
+      // D-29: SRP, not `ALLOW_USER_PASSWORD_AUTH` — the same reasoning the
+      // clinician client below has always used. The password is proved
+      // rather than transmitted; unlike the clinician pool, no MFA
+      // challenge follows.
+      authFlows: { userSrp: true },
     });
 
     this.clinicianUserPoolClient = this.addWebClient('ClinicianUserPoolClient', {
@@ -214,10 +256,11 @@ export class AuthStack extends Stack {
     // UI at all"); the answer is yes, because the authorization-code flow
     // is what keeps a refresh token out of the browser entirely.
     //
-    // `NEWER_MANAGED_LOGIN` rather than the classic hosted UI: passwordless
-    // email OTP is only offered by the newer pages, so the classic version
-    // would show a patient a password box for an account that has no
-    // password. Both are free at the Essentials tier.
+    // `NEWER_MANAGED_LOGIN` rather than the classic hosted UI: TASK 2.2.1
+    // chose it for the passwordless email-OTP pages D-29 has since
+    // retired, but it costs nothing to keep — both versions are free at
+    // the Essentials tier, and a second hosted-UI migration has nothing
+    // this amendment needs it for.
     //
     // A Cognito-prefix domain rather than a custom one: a custom domain
     // needs its own ACM certificate in `us-east-1` and a DNS record in a
@@ -255,18 +298,6 @@ export class AuthStack extends Stack {
       clientId: this.clinicianUserPoolClient.userPoolClientId,
       useCognitoProvidedValues: true,
     });
-
-    // TASK 2.2.3 step 3: the only thing that creates a `PAT#` record, and
-    // it fires after the patient has proved they can read the mailbox they
-    // signed up with. Attached to the **patient** pool only — the
-    // clinician pool has self sign-up disabled, so nothing there ever
-    // confirms a sign-up.
-    if (props.postConfirmationFunction) {
-      this.patientUserPool.addTrigger(
-        UserPoolOperation.POST_CONFIRMATION,
-        props.postConfirmationFunction,
-      );
-    }
 
     // "This task deploys infrastructure and exports identifiers." The four
     // identifiers below are what 2.2.2's authorizer verifies tokens

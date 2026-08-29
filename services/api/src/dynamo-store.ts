@@ -748,7 +748,7 @@ export class DynamoClinicianStore implements ClinicianStore {
 // same way dynamo-audit-log.ts's does — low-odds here, given decisions
 // are single-principal, human-paced actions, but cheap insurance and the
 // established convention). The patient's own `PAT#<id>` / `PROFILE` row
-// (post-confirmation-handler.ts's key shape, unchanged) is overwritten in
+// (patient-admin-handler.ts's key shape, unchanged) is overwritten in
 // the same transaction.
 //
 // **GSI1's shape, proved against both access patterns docs/adr/0002-

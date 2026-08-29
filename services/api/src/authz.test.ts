@@ -17,7 +17,7 @@ import { can } from './authz.js';
 const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string>>>> = {
   //                            | Patient (own)      | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Principal                 |
   'Own profile':              { 'Patient (own)': 'R U',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'R U' },
-  'Patient profile':          { 'Patient (own)': 'R U (self)',     'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'R U' },
+  'Patient profile':          { 'Patient (own)': 'R U (self)',     'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'C R U P' },
   'Patient assignment':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
   'Diagnosis / care plan':    { 'Patient (own)': '**R**',          'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
   'Assessment — `visible{}`': { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'R' },
@@ -38,6 +38,9 @@ const CELL_LETTERS: Record<string, Action> = {
   U: 'update',
   // TASK 4.2.1: join-call, only ever set on the Appointments row.
   J: 'join-call',
+  // D-29: reset-password, only ever set on the Patient profile row's
+  // Principal column.
+  P: 'reset-password',
 };
 
 /**
@@ -70,7 +73,7 @@ const COLUMNS: readonly MatrixColumn[] = [
   'Sub-clinician (unassigned)',
   'Principal',
 ];
-const ACTIONS: readonly Action[] = ['create', 'read', 'update', 'join-call'];
+const ACTIONS: readonly Action[] = ['create', 'read', 'update', 'join-call', 'reset-password'];
 
 const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   'Own profile': 'own-profile',
@@ -161,7 +164,7 @@ describe('RBAC_MATRIX transcribes docs/plan/04-data-model-rbac.md', () => {
     }
   });
 
-  it('grants nothing outside create/read/update/join-call in any cell', () => {
+  it('grants nothing outside create/read/update/join-call/reset-password in any cell', () => {
     for (const row of ROWS) {
       for (const column of COLUMNS) {
         for (const action of RBAC_MATRIX[row][column]) {

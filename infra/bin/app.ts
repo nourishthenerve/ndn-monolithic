@@ -107,15 +107,15 @@ if (loadTest) {
   // TASK 2.2.1: production only, for DataStack's reason above and one of
   // its own — these pools are RETAIN plus deletion protection, so an
   // ephemeral per-PR copy would be a directory nothing could clean up.
-  // No cross-stack reference in either direction yet: nothing is in front
-  // of the pools until 2.2.2's authorizer, and the identifiers this stack
+  // No cross-stack reference in either direction: nothing is in front of
+  // the pools until 2.2.2's authorizer, and the identifiers this stack
   // exports reach the rest of the estate through config.ts rather than a
-  // CloudFormation export, so the stacks can deploy in any order.
+  // CloudFormation export, so the stacks can deploy in any order. TASK
+  // 2.2.3 once passed the patient pool's Post-Confirmation trigger here;
+  // D-29 (2026-08-29) deleted it along with self sign-up
+  // (auth-stack.ts's own header amendment) — there is no longer a
+  // DataStack function for this stack to take.
   new AuthStack(app, 'NdnAuthStack', {
     env: { account: ACCOUNT_ID, region: REGION },
-    // TASK 2.2.3: the patient pool's Post-Confirmation trigger. Same
-    // one-directional DataStack -> consumer reference `table` and
-    // `authorizerFunction` already use.
-    postConfirmationFunction: dataStack.postConfirmationFunction,
   });
 }

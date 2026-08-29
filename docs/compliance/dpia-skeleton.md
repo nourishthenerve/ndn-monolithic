@@ -48,6 +48,17 @@ The one Phase 4 area a DPO reviewing "what does this system process" needs named
 - **The TURN credential is a Cloudflare-issued, short-lived token** (TASK 4.4.1) — scoped to one call, never a stored secret the way a session token or API key is; nothing in this system's own data store retains it past issuance.
 - **The two operational rows this phase introduces (`CONN#<connectionId>`, `CALL#<appointmentId>`/`CONN#<connectionId>`) are non-clinical, TTL-reclaimed metadata** — a connection's existence and its role, nothing about what was said or shown on the call. `connection-repository.ts`'s own header states this directly: not an entity `AuditWriter`'s `AuditAction` union needs to know about.
 
+## Patient account creation moves to a human channel (D-29) — implemented 2026-08-29, DPIA review explicitly deferred
+
+**Self-registration (email-OTP sign-up, TASK 2.2.3) is retired.** A patient now contacts the clinic's WhatsApp Business number; a human member of staff verifies their identity and creates their account (`docs/runbooks/patient-account-provisioning.md`). This is a genuine, new data-processing question a completed DPIA needs to cover, and it is recorded here as a placeholder rather than assessed — **the owner has explicitly deferred DPIA/solicitor review (LL-05/LL-06) until the technical system is proven working end-to-end against synthetic test patients**, a deliberate, informed sequencing decision, not an oversight this skeleton is papering over.
+
+What a completed DPIA will need to weigh, named here so the DPO is not starting from nothing:
+
+- **WhatsApp itself is outside this codebase's data flow, but not outside the patient's.** No message content, phone number, or WhatsApp identifier is stored, transmitted to, or received from any Meta system by this platform — the "integration" is a human relaying information by hand, then typing it into `POST /patients`. The DPIA question is what the *patient* discloses to Meta by using WhatsApp at all (Meta's own processing, under its own terms), which this system neither controls nor can see.
+- **A password is generated and disclosed once, over WhatsApp, by a human.** It never transits email or SMS, is never logged, and is never persisted by this system beyond the single API response that creates it (`services/api/src/password-generator.ts`, `patient-admin.ts`). The DPIA's own lawful-basis table should treat this as a credential-issuance event, not a communication the platform itself sends.
+- **Identity verification is now a human judgement call, not a code path.** `docs/plan/02-risk-register.md`'s new R-16 names the resulting risk (social engineering) and its mitigation (staff training) as explicitly outside what this codebase can build or audit beyond recording *which* principal acted, and *when*.
+- **No new field, table, or retention basis.** The `PAT#`/`PROFILE` record this flow writes is byte-for-byte the same shape self-registration wrote — same `personal{}`/`clinical{}` split, same `pending` starting status, same append-only audit trail. Nothing about the schema-separation or audit-log sections above changes.
+
 ## Open tension — R-04
 
 **GDPR erasure vs C-03 (never delete patient/clinical/content/media data) is unresolved by design.** This is a decision for your DPO/solicitor (**LL-06**), not a decision the executor makes unilaterally. See `docs/plan/02-risk-register.md` (R-04).

@@ -25,8 +25,15 @@ export type Role = 'patient' | 'sub-clinician' | 'principal-clinician';
  * `Appointments` row — granted only to the two parties actually on the
  * call (`Patient (own)`, `Sub-clinician (assigned)`), never to `Principal`
  * even though the principal clinician can `read` every appointment.
+ *
+ * `'reset-password'` (D-29, 2026-08-29): issuing a patient a new Cognito
+ * password is not `'update'` on their profile — it touches no field of the
+ * `PAT#` record at all, only the directory. Named as its own action so a
+ * reviewer of `authz-matrix.ts` sees exactly which cell governs handing
+ * someone a credential, rather than that reach hiding inside a grant meant
+ * for editing a name or a phone number.
  */
-export type Action = 'create' | 'read' | 'update' | 'join-call';
+export type Action = 'create' | 'read' | 'update' | 'join-call' | 'reset-password';
 
 /**
  * Both lifecycles in one union: a patient is `pending` → `approved` |

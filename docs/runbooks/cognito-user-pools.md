@@ -30,6 +30,14 @@ aws --profile ndn-prod pricing get-products --region us-east-1 --service-code Am
 # EUW2-CognitoEssentialsMAU | Cognito Essentials eu-west-2 tier 1 pricing -> {'USD': '0.0150000000'} 0 - Inf
 ```
 
+## Amendment, D-29 (2026-08-29) — the patient pool reverts to a password
+
+The owner's own decision: a patient never registers or authenticates themselves via a self-serve email-OTP flow at all. They contact the clinic's WhatsApp Business number; a human verifies who they are and creates the account on their behalf, setting a permanent password the patient does not choose. **Full detail:** [patient-account-provisioning.md](patient-account-provisioning.md) (the new runbook this task built) and `infra/src/auth-stack.ts`'s own header amendment (the exact CDK-level reasoning, including why `AccountRecovery.NONE` is the one setting this change could not skip).
+
+What actually changed on `ndn-patients`, in brief: `selfSignUpEnabled: false` (matches the clinician pool now); no `signInPolicy` (password-only, the Cognito default); a `passwordPolicy` identical to the clinician pool's; `accountRecovery: AccountRecovery.NONE` (`ForgotPassword` is unauthenticated and pool-recovery-setting-gated, not app-client-flow-gated — leaving `EMAIL_ONLY` would have been a real hole in the WhatsApp-verified model); the web client's `authFlows` move from `{ user: true }` to `{ userSrp: true }`; the Post-Confirmation trigger is deleted outright (no `ConfirmSignUp` event can fire with self sign-up off).
+
+**Everything below this point that describes the patient pool's first factor as email OTP, its self sign-up as on, or its recovery as email-based is TASK 2.2.1's original, 2026-08-22 design — kept as the historical record of what was actually deployed and verified that day, not updated in place.** The "two pools, side by side" table immediately below is the one exception: its patient column is corrected to current state, with this note as the pointer to why.
+
 ## Why two pools
 
 Cognito's MFA policy is **pool-wide**. `REQUIRED` would stack a second factor on top of a patient's passwordless email OTP; `OPTIONAL` cannot compel a clinician to enrol. D-09 asks for both, so one pool cannot hold it. The full decision, what it costs and what was rejected is in [ADR-0004's Gate G1 amendment](../adr/0004-auth.md); this runbook is what was built and how to operate it.
@@ -46,12 +54,12 @@ Cognito's MFA policy is **pool-wide**. `REQUIRED` would stack a second factor on
 
 | | `ndn-patients` | `ndn-clinicians` |
 |---|---|---|
-| Self sign-up | **On** — 2.2.3 registers, approval is a state on the DynamoDB record | **Off at the directory level** — 2.4.1's principal creates every clinician |
-| First factor | Email OTP (choice-based, `ALLOW_USER_AUTH`) | Password over SRP (`ALLOW_USER_SRP_AUTH`) |
+| Self sign-up | **Off at the directory level** (D-29) — `patient-admin.ts`'s principal creates every account | **Off at the directory level** — 2.4.1's principal creates every clinician |
+| First factor | Password over SRP (`ALLOW_USER_SRP_AUTH`) (D-29) | Password over SRP (`ALLOW_USER_SRP_AUTH`) |
 | MFA | `OFF` | `ON`, `SOFTWARE_TOKEN_MFA` only |
 | SMS | Nowhere — not as a factor, not as a channel; no SNS role is synthesized | same |
-| Password policy | none configured (nothing sets one) | 8 chars, upper + lower + digit + symbol |
-| Recovery | Verified email only | Verified email only |
+| Password policy | 8 chars, upper + lower + digit + symbol (D-29) — every password machine-generated | 8 chars, upper + lower + digit + symbol |
+| Recovery | Admin only — no self-service reset (D-29) | Verified email only |
 | Attributes | `email`, required and mutable — the only one configured, the only one required, and the only one either client can write. Cognito's 21 unremovable standard attributes are still present but unreachable; see "One imprecision" below | same |
 | Tier | Essentials | Essentials |
 | Threat protection | Not enabled (paid tier) | Not enabled (paid tier) |
@@ -111,6 +119,8 @@ The `allowed` half matters as much as the `explicitDeny` half: a guard that also
 `ndn-deploy-pr` is deliberately not given the same policy — no ephemeral stack creates a pool, so there is nothing there to protect.
 
 ## The first deploy, and what it actually reported
+
+**The patient-pool findings below (email OTP, `AllowAdminCreateUserOnly: false`, `[PASSWORD, EMAIL_OTP]`) describe 2026-08-22's deploy and are superseded for the patient pool by D-29 (2026-08-29) — see the amendment above.** Kept verbatim as the historical record of that day's real, verified state; the clinician-pool findings are unaffected by D-29 and remain current.
 
 Deployed by CI on the merge of PR #56, **2026-08-22**. Everything below is the deployed state, not the template's intent — three things came back differently from what `describe-user-pool` alone suggests, and all three are recorded rather than smoothed over.
 
@@ -177,14 +187,11 @@ The "Attributes" row below reads `email` and nothing else. That is true of what 
 
 So the real guarantee is not "the schema has one attribute" — it is that `email` is the only one marked `Required`, no custom attribute exists, and **both app clients can read only `email`/`email_verified` and write only `email`**. A handler cannot put a patient's name or phone number into the directory because the client it goes through cannot write those fields. That is the assertion `auth-stack.test.ts` makes, and it is the one that holds.
 
-## Email delivery is the open constraint, and 2.2.3 owns it
+## Email delivery — moot for patients since D-29, still real for anything else Cognito emails
 
-Both pools use **Cognito's default email sender**, not SES. Two facts follow, and neither is a defect in this task:
+This section described a real, binding constraint on TASK 2.2.3's email-OTP design: Cognito's default sender is capped at 50 emails/day, a patient signed in with an OTP *every time*, and SES production access was denied, so no real patient could ever have received one. **D-29 removes the constraint by removing the flow it constrained** — a patient's Cognito account is created with `MessageAction: SUPPRESS` (`patient-admin-handler.ts`) and never emailed or texted anything; the password reaches the patient over WhatsApp, not through Cognito. Neither pool sends a patient any message at all any more.
 
-- Cognito's default sender is capped at **50 emails/day per account**. A patient signs in with an email OTP *every time*, so at any real patient volume that cap binds.
-- Switching to SES today would be **worse**, not better: SES production access for this account was **denied** on 2026-08-21 ([ses-production-access.md](ses-production-access.md)), so sandbox rules apply and mail can only reach verified identities — i.e. no real patient could receive an OTP at all.
-
-So the correct order is: SES production access first, then point both pools at the existing verified `nourishthenerve.com` identity and the `ndn-email` configuration set (which already carries bounce/complaint alarms). **TASK 2.2.3 must not go live to real patients until one of those two is true.**
+The clinician pool is unaffected: `AdminCreateUser`'s own invite email (`clinician-admin.ts`) still goes through Cognito's default sender, and the same 50/day cap and SES-sandbox constraint still apply to it, at clinician volume rather than patient volume.
 
 ## Cost
 
@@ -208,5 +215,5 @@ So the correct order is: SES production access first, then point both pools at t
 - **No user pool domain / managed login.** The app clients carry OAuth callback and logout URLs, but no hosted-UI domain exists, so the `/oauth2/*` endpoints are unreachable. That is TASK 2.2.4's call to make: its own steps describe a React island with its own OTP input (SDK-based, choice-based auth), which needs no domain at all — and standing up a hosted UI this task cannot exercise would be guessing at 2.2.4's design. Until then the OAuth block is configuration, not a live surface.
 - **No SES email configuration** — see "Email delivery" above.
 - **No `cognito:groups` membership.** `principal-clinician` versus `sub-clinician` is 2.2.2's read of the group claim and 2.4.1's write of it; the pools ship with no groups.
-- **No Lambda triggers.** The Post-Confirmation trigger that creates a `PAT#`/`PROFILE` row is TASK 2.2.3.
+- **No Lambda triggers.** TASK 2.2.3 later added the Post-Confirmation trigger that created a `PAT#`/`PROFILE` row on sign-up confirmation; D-29 (2026-08-29) deleted it — self sign-up is off, so no `ConfirmSignUp` event exists for a trigger to react to any more. Neither pool carries a Lambda trigger of any kind today.
 - **No authorizer.** TASK 2.2.2. Until it exists, these pools are inert — which is why this task carries no feature flag.

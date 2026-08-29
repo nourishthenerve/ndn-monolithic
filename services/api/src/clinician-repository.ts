@@ -23,8 +23,8 @@
 //
 // This repository is deliberately silent on Cognito — it knows nothing
 // about `AdminCreateUser`/`AdminDisableUser`/`AdminEnableUser`. Those are
-// clinician-admin-handler.ts's job, the same split registration.ts
-// (SDK-free) keeps from registration-handler.ts (SDK wiring).
+// clinician-admin-handler.ts's job, the same split patient-admin.ts
+// (SDK-free) keeps from patient-admin-handler.ts (SDK wiring).
 import type { Clinician, ClinicianRole } from '@ndn/shared-types';
 
 import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';

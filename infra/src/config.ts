@@ -140,19 +140,19 @@ export const MONITORED_LOG_GROUP_NAMES = [
 // last entry of the monitored list. It keeps its 14-day retention and its
 // bytes still expire; they are simply no longer summed into the alarm.
 //
-// TASK 2.2.3 adds both of its functions here, displacing nothing. The
-// answer to this file's "which list, and what does it displace" question
-// is: registration is a once-per-patient act behind a default-off flag, and
-// the Post-Confirmation trigger fires exactly once per registration. At
-// 509 patients over a year that is a few hundred invocations in total —
-// the two smallest log volumes in the estate after site-deployment.
+// TASK 2.2.3 added `/ndn/registration-function` and
+// `/ndn/post-confirmation-function` here. D-29 (2026-08-29) retires both —
+// self-registration and its Post-Confirmation trigger are deleted, not
+// merely disabled — and replaces them with `/ndn/patient-admin-function`
+// below: a once-per-WhatsApp-conversation act behind a default-off flag,
+// smaller volume than every function already on this list, bounded by
+// staff activity rather than patient traffic. Displacing nothing.
 export const UNMONITORED_LOG_GROUP_NAMES = [
   '/ndn/content-authoring-function',
   '/ndn/workshop-authoring-function',
   '/ndn/audit-read-function',
   '/ndn/media-upload-function',
-  '/ndn/registration-function',
-  '/ndn/post-confirmation-function',
+  '/ndn/patient-admin-function',
   // TASK 2.2.4: one call per sign-in, refresh or sign-out — a handful of
   // lines per patient per day at most, and behind a default-off flag until
   // the account pages open. Displacing nothing, for the same reason.

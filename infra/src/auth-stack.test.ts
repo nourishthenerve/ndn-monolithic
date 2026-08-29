@@ -24,7 +24,6 @@ import {
   REGION,
   SITE_ORIGIN,
 } from './config.js';
-import { DataStack } from './data-stack.js';
 
 // No Lambdas in this stack, so synth is cheap — memoized anyway for the
 // same reason its siblings are: a Template is only ever read.
@@ -146,39 +145,63 @@ describe('AuthStack — the two policies one pool could not hold', () => {
     expect(properties.EnabledMfas).toBeUndefined();
   });
 
-  it('offers email OTP as a first factor to patients and not to clinicians', () => {
-    // PASSWORD is present because Cognito requires it in the list — see
-    // auth-stack.ts's note. What matters is that EMAIL_OTP is offered here
-    // and that the clinician pool has no SignInPolicy at all, so its
-    // default (password only) stands and there is no way past the TOTP
-    // requirement above.
-    expect(poolProperties(PATIENT_USER_POOL_NAME).Policies?.SignInPolicy).toEqual({
-      AllowedFirstAuthFactors: ['PASSWORD', 'EMAIL_OTP'],
-    });
+  it('D-29: neither pool offers a first factor beyond a plain password', () => {
+    // Cognito's own default (no `SignInPolicy` at all) is password-only —
+    // exactly what both pools want now that TASK 2.2.3's patient email-OTP
+    // path is retired (auth-stack.ts's own D-29 amendment).
+    expect(poolProperties(PATIENT_USER_POOL_NAME).Policies?.SignInPolicy).toBeUndefined();
     expect(poolProperties(CLINICIAN_USER_POOL_NAME).Policies?.SignInPolicy).toBeUndefined();
   });
 
-  it('lets patients register themselves and never lets a clinician', () => {
+  it('D-29: creates both accounts by admin action only — self sign-up is off for both pools', () => {
     // AllowAdminCreateUserOnly is the inverse of selfSignUpEnabled: `true`
-    // means only an admin action creates a user, which is 2.4.1's whole
-    // model for the clinician directory.
+    // means only an admin action creates a user. TASK 2.4.1's clinician
+    // directory has always worked this way; D-29 (2026-08-29) brings the
+    // patient pool onto the identical model — see auth-stack.ts's header.
     expect(poolProperties(PATIENT_USER_POOL_NAME).AdminCreateUserConfig).toEqual({
-      AllowAdminCreateUserOnly: false,
+      AllowAdminCreateUserOnly: true,
     });
     expect(poolProperties(CLINICIAN_USER_POOL_NAME).AdminCreateUserConfig).toEqual({
       AllowAdminCreateUserOnly: true,
     });
   });
 
-  it('gives the clinician pool a password policy and the patient pool none to need', () => {
-    expect(poolProperties(CLINICIAN_USER_POOL_NAME).Policies?.PasswordPolicy).toEqual({
+  it('D-29: gives both pools the identical password policy', () => {
+    const expectedPolicy = {
       MinimumLength: 8,
       RequireLowercase: true,
       RequireUppercase: true,
       RequireNumbers: true,
       RequireSymbols: true,
-    });
-    expect(poolProperties(PATIENT_USER_POOL_NAME).Policies?.PasswordPolicy).toBeUndefined();
+    };
+    expect(poolProperties(CLINICIAN_USER_POOL_NAME).Policies?.PasswordPolicy).toEqual(
+      expectedPolicy,
+    );
+    expect(poolProperties(PATIENT_USER_POOL_NAME).Policies?.PasswordPolicy).toEqual(
+      expectedPolicy,
+    );
+  });
+
+  it.each(POOL_NAMES)('D-29: %s carries no Lambda trigger of any kind', (name) => {
+    // TASK 2.2.3's Post-Confirmation trigger — the only trigger either
+    // pool ever carried — is deleted outright, not merely unwired
+    // (auth-stack.ts's own header amendment): with self sign-up off on
+    // both pools, no `ConfirmSignUp` event exists for one to react to.
+    expect(poolProperties(name).LambdaConfig).toBeUndefined();
+  });
+
+  it('D-29: the patient pool recovers by admin only — email-based recovery is off', () => {
+    // `ForgotPassword` is unauthenticated and independent of the app
+    // client's own `ExplicitAuthFlows` — see auth-stack.ts's own D-29
+    // amendment for why leaving `EMAIL_ONLY` in place would have been a
+    // real hole in the WhatsApp-verified reset model.
+    expect(poolProperties(PATIENT_USER_POOL_NAME).AccountRecoverySetting?.RecoveryMechanisms).toEqual([
+      { Name: 'admin_only', Priority: 1 },
+    ]);
+    // Unchanged for the clinician pool — nothing about D-29 touches it.
+    expect(
+      poolProperties(CLINICIAN_USER_POOL_NAME).AccountRecoverySetting?.RecoveryMechanisms,
+    ).toEqual([{ Name: 'verified_email', Priority: 1 }]);
   });
 });
 
@@ -186,12 +209,11 @@ describe('AuthStack — no personal data in the directory', () => {
   it.each(POOL_NAMES)('%s carries a required, mutable email and nothing else', (name) => {
     const properties = poolProperties(name);
     expect(properties.Schema).toEqual([{ Name: 'email', Required: true, Mutable: true }]);
-    // Recovery by email only: no phone number to recover through, because
-    // there is no phone number.
-    expect(properties.AccountRecoverySetting?.RecoveryMechanisms).toEqual([
-      { Name: 'verified_email', Priority: 1 },
-    ]);
     expect(properties.UsernameAttributes).toEqual(['email']);
+    // Which recovery mechanism (if any) each pool's own account-recovery
+    // setting resolves to is D-29's own dedicated test above — the two
+    // pools deliberately differ here, so it does not belong in this
+    // identical-for-both-pools block.
   });
 
   it.each(POOL_NAMES)('%s has no custom attribute of any kind', (name) => {
@@ -233,13 +255,10 @@ describe('AuthStack — the browser clients', () => {
     }
   });
 
-  it('gives each client only the auth flow its own users need', () => {
-    // A patient has no password path through the only client that exists;
-    // a clinician's password is proved by SRP rather than transmitted.
-    // Neither client can ever be handed a plaintext password.
+  it('D-29: gives both clients the identical SRP auth flow — neither is ever handed a plaintext password', () => {
     const patient = clientNamed(`${PATIENT_USER_POOL_NAME}-web`);
     const clinician = clientNamed(`${CLINICIAN_USER_POOL_NAME}-web`);
-    expect(patient.ExplicitAuthFlows).toEqual(['ALLOW_USER_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH']);
+    expect(patient.ExplicitAuthFlows).toEqual(['ALLOW_USER_SRP_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH']);
     expect(clinician.ExplicitAuthFlows).toEqual(['ALLOW_USER_SRP_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH']);
     for (const properties of [patient, clinician]) {
       expect(properties.ExplicitAuthFlows).not.toContain('ALLOW_USER_PASSWORD_AUTH');
@@ -338,50 +357,12 @@ describe('the recorded pool identifiers', () => {
   });
 });
 
-// TASK 2.2.3: the trigger that turns a confirmed Cognito account into a
-// `PAT#` record, attached to the patient pool and to nothing else.
-describe('AuthStack — the post-confirmation trigger (TASK 2.2.3)', () => {
-  const synthWithTrigger = (() => {
-    let template: Template | undefined;
-    return () =>
-      (template ??= (() => {
-        const app = new App();
-        const dataStack = new DataStack(app, 'TestDataStackForAuthStack', {
-          env: { account: '357601815388', region: 'eu-west-2' },
-        });
-        const stack = new AuthStack(app, 'TestAuthStackWithTrigger', {
-          env: { account: '357601815388', region: 'eu-west-2' },
-          postConfirmationFunction: dataStack.postConfirmationFunction,
-        });
-        return Template.fromStack(stack);
-      })());
-  })();
-
-  function poolWith(name: string): UserPoolResource['Properties'] {
-    const pools = Object.values(
-      synthWithTrigger().findResources('AWS::Cognito::UserPool'),
-    ) as UserPoolResource[];
-    const match = pools.find((pool) => pool.Properties.UserPoolName === name);
-    expect(match, `no user pool named ${name}`).toBeDefined();
-    return match!.Properties;
-  }
-
-  it('attaches PostConfirmation to the patient pool', () => {
-    expect(poolWith(PATIENT_USER_POOL_NAME).LambdaConfig).toEqual({
-      PostConfirmation: expect.anything(),
-    });
-  });
-
-  it('attaches no trigger to the clinician pool, which has no sign-up to confirm', () => {
-    // Self sign-up is disabled there at the directory level (2.2.1), so a
-    // PostConfirmation trigger would be dead code with a live IAM path.
-    expect(poolWith(CLINICIAN_USER_POOL_NAME).LambdaConfig).toBeUndefined();
-  });
-
-  it('still synthesizes with no trigger function, for a stack deployed on its own', () => {
-    expect(poolProperties(PATIENT_USER_POOL_NAME).LambdaConfig).toBeUndefined();
-  });
-});
+// D-29 (2026-08-29): TASK 2.2.3's Post-Confirmation trigger, once tested
+// here, is deleted along with self sign-up — see auth-stack.ts's own
+// header amendment. Neither pool carries a `LambdaConfig` any more; the
+// existing "still synthesizes" shape is now simply how both pools
+// synthesize, unconditionally, which is covered by every `poolProperties`
+// call above rather than needing its own block.
 
 // Found live, 2026-08-27: `NEWER_MANAGED_LOGIN` (above) renders no login
 // page at all — Cognito returns 403 "Login pages unavailable" — until a

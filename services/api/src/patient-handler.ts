@@ -3,8 +3,8 @@
 // every other endpoint uses: patient.ts is SDK-free and unit-testable,
 // this file wires the real DynamoDB-backed repository together.
 // `DynamoStore<Patient>` (generic, dynamo-store.ts) rather than a bespoke
-// store — `post-confirmation-handler.ts` already wires the identical
-// `PAT#<id>` / `PROFILE` key shape this way.
+// store — `patient-admin-handler.ts` wires the identical `PAT#<id>` /
+// `PROFILE` key shape the same way.
 import type { Patient } from '@ndn/shared-types';
 
 import { systemClock } from './clock.js';
