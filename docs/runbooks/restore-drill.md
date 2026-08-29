@@ -1,14 +1,12 @@
 # Restore drill: a real DynamoDB PITR restore, executed (TASK 5.4.1)
 
-**Date:** 2026-08-28 · **Task:** [05-execution-plan.md § TASK 5.4.1](../plan/05-execution-plan.md) · **Decisions:** [D-21](../plan/01-decisions.md), [D-22](../plan/01-decisions.md) · **Depends on:** 4.5.1
+**Date:** 2026-08-28, closed 2026-08-29 · **Task:** [05-execution-plan.md § TASK 5.4.1](../plan/05-execution-plan.md) · **Decisions:** [D-21](../plan/01-decisions.md), [D-22](../plan/01-decisions.md) · **Depends on:** 4.5.1
 
-## Status: PITR half executed and verified; D-22's export half now built, restore-side check still open
+## Status: both halves executed and verified — TASK 5.4.1's own DoD met in full
 
-This task's own DoD has two independent halves — "a real PITR restore **and** a real export restore have both been executed at least once." The PITR half is done, live, verified against known data, measured, and cleaned up (below).
+This task's own DoD has two independent halves — "a real PITR restore **and** a real export restore have both been executed at least once." Both are now done, live, verified against known data, measured, and cleaned up.
 
-**The export half could not be executed at the time this drill first ran: D-22's "periodic export to a separate object-locked prefix" had never been built.** No S3 bucket with Object Lock, no `AWS Backup` plan, no EventBridge export rule existed anywhere in `ndn-prod` — checked directly (`aws s3api list-buckets`, `aws backup list-backup-plans`, `aws events list-rules`), not assumed from an absent grep hit alone. `05-execution-plan.md`'s own task text treats this as something to *restore from*, at M5.4, written as though an earlier task built it; tracing every task from Phase 0 through the DataStack build (TASK 1.3.1, which added PITR itself) found no task that ever did.
-
-**Built as its own task, 2026-08-28 — see [backup-export.md](backup-export.md).** The pipeline (a daily, GOVERNANCE-mode Object-Locked export) is live-diffed against production and pending deploy on merge. What's still open is the *restore*-side half of this drill: once a real export has actually run at least once, come back here and import it into a scratch table (`ImportTableCommand`), verify against known rows, the same discipline §3 below already used for the PITR half — `backup-export.md`'s own "What is still needed" section names this as its item 2, not duplicated here.
+**The export half could not be executed at the time this drill first ran, 2026-08-28: D-22's "periodic export to a separate object-locked prefix" had never been built.** No S3 bucket with Object Lock, no `AWS Backup` plan, no EventBridge export rule existed anywhere in `ndn-prod` — checked directly, not assumed from an absent grep hit alone. Built as its own task the same day — [backup-export.md](backup-export.md) — merged, deployed, and exercised for real the next day, 2026-08-29: §5 below.
 
 ## What was executed
 
@@ -59,7 +57,17 @@ Table reached `ACTIVE` at **22:13:23+01:00** (3m43s after the restore call). Ver
 
 **Verified-usable: 22:13:52+01:00.**
 
-### 5. D-22's export restore — not performed in this run (see Status above); the export pipeline itself now exists ([backup-export.md](backup-export.md))
+### 5. D-22's export restore — executed for real, 2026-08-29, one day after the pipeline deployed
+
+`backup-export.md`'s own pipeline deployed via [#122](https://github.com/nourishthenerve/ndn-monolithic/pull/122), then triggered on demand (`aws lambda invoke` against `BackupExportFunction`, ahead of its own first scheduled tick) rather than waiting a full day for the `rate(1 day)` rule to fire. `dynamodb:ExportTableToPointInTime` completed in ~2 minutes: **6 items, 1,560 bytes — an exact match to §2's own live-table baseline**, written to `s3://ndn-prod-backup-exports-357601815388/exports/2026-08-29/AWSDynamoDB/01787990334662-cdf7a008/`.
+
+**Object Lock confirmed on a real object, not just the bucket default**: `aws s3api get-object-retention` on the manifest returns `Mode: GOVERNANCE`, `RetainUntilDate: 2027-08-29` — exactly 365 days out, the mechanism working end to end for the first time.
+
+**A real usage mistake, found and fixed live, not guessed.** The first `dynamodb import-table` attempt failed (`ItemValidationError`, all 8 objects under the prefix): `S3KeyPrefix` pointed at the export's whole folder, so `ImportTable` tried to parse the manifest JSON/MD5 files as item data too, and `InputCompressionType` was never set even though DynamoDB's own export writes gzip-compressed `.json.gz` files. `aws logs get-log-events` against the import's own `/aws-dynamodb/imports` error stream named the exact cause (`"Unexpected token"` / `"Expected 'Item' top level container"`) rather than being guessed at. Fixed by pointing `S3KeyPrefix` at the export's `data/` subfolder alone and adding `--input-compression-type GZIP`; the empty, failed table was deleted before retrying — never left as an orphan.
+
+Retried into a new, isolated table (`NdnBackupImportDrill20260829`, the same "never touch the live table, never reuse a target" discipline §3 above already used): **`ImportedItemCount: 6`, `ErrorCount: 0`**. Verified the same way the PITR restore was — `Select: COUNT` scan (6/6) and `GetItem` on two of the same known rows (`CLI#a6423204.../META`, `CLI#PRINCIPAL_MARKER/MARKER`), both present by exact key. **Import-side RTO: 5 minutes 4 seconds**, decision-to-verified-usable (08:01:35 → 08:06:39 UTC, including the failed first attempt and its diagnosis).
+
+**Cleanup, asymmetric on purpose.** The scratch import table was deleted immediately after verification, the same as every drilled table in this runbook. **The S3 export itself was not deleted, and was never going to be** — unlike the PITR restore's own disposable copy, this export is D-22's real, first, intended backup artifact, not test scaffolding; its whole purpose is to still exist in a year. It is also Object-Locked in GOVERNANCE mode specifically so that deleting it isn't a plain API call — doing so would mean invoking `ndn-break-glass`'s own MFA-gated procedure to grant a temporary `s3:BypassGovernanceRetention` policy, exactly the friction that mode exists to add, and not something to spend on a drill that has no reason to remove a real backup.
 
 ### 6. Torn down
 
@@ -72,14 +80,16 @@ Confirmed fully gone via `describe-table` returning `ResourceNotFoundException` 
 
 ## Measured RTO
 
-**Decision to verified-usable: 4 minutes 12 seconds** (22:09:40 → 22:13:52+01:00), against D-21's ≤4-**working-hours** target — a measured fact now, not a belief resting on "PITR is enabled." `RESTORE_IN_PROGRESS → ACTIVE` alone took 3m43s of that; verification (a COUNT scan plus six `GetItem` calls) added 29s.
+**PITR half — decision to verified-usable: 4 minutes 12 seconds** (2026-08-28, 22:09:40 → 22:13:52+01:00), against D-21's ≤4-**working-hours** target. `RESTORE_IN_PROGRESS → ACTIVE` alone took 3m43s of that; verification (a COUNT scan plus six `GetItem` calls) added 29s.
 
-**This number is not the number a real incident would produce.** The live table holds 6 items today; a restore's wall-clock time on a multi-gigabyte table with real patient/appointment/clinical-record volume will be materially longer (DynamoDB's own PITR restore duration scales with table size, not a fixed constant), and a real incident adds decision-making and communication time this drill's own single-operator, pre-planned run does not include. What this number *does* establish: the **mechanism** — API call, wait, verify, tear down — works, is fast at today's data volume, and leaves the live table untouched throughout. Re-run this drill periodically as real data volume grows, per `05-execution-plan.md`'s own "a backup nobody has restored from is a belief, not a fact" reasoning — the same belief now applies to "restore time scales acceptably," unproven at real volume.
+**Export/import half — decision to verified-usable: 5 minutes 4 seconds** (2026-08-29, 08:01:35 → 08:06:39 UTC), including the failed first import attempt, its diagnosis via CloudWatch, and a corrected retry — the real number a real operator following this exact runbook would hit, not an idealised one.
+
+Both are measured facts now, not a belief resting on "PITR is enabled" or "the export pipeline exists." **Neither number is the number a real incident would produce.** The live table holds 6 items today; both PITR's own restore duration and DynamoDB's own export/import duration scale with table size, not a fixed constant, and a real incident adds decision-making and communication time this drill's own single-operator, pre-planned runs don't include. What these numbers *do* establish: both **mechanisms** — API call, wait, verify, tear down — work, are fast at today's data volume, and leave the live table untouched throughout. Re-run this drill periodically as real data volume grows, per `05-execution-plan.md`'s own "a backup nobody has restored from is a belief, not a fact" reasoning — the same belief now applies to "restore/import time scales acceptably," unproven at real volume.
 
 ## Cost
 
-Transient, sub-cent: the restored table's own `PAY_PER_REQUEST` billing for ~5 minutes of existence, 6 items, one `Select: COUNT` scan and six `GetItem` calls, then deleted. No recurring line — `03-cost-model.md` needs no change.
+Transient, sub-cent for both halves: each scratch table's own `PAY_PER_REQUEST` billing for a few minutes of existence (6 items, a handful of reads), then deleted — no recurring line, `03-cost-model.md` needs no change. The one non-transient artefact is the real S3 export itself (§5), already priced in `backup-export.md`'s own Cost section as part of the pipeline's ordinary operation, not this drill's.
 
 ## Do NOT
 
-Restore into or over the live table (this drill never did — a new, uniquely-named target every time). Leave a drill's restored table running after verification (this one existed 5 minutes, start to delete). Treat this runbook as closing D-22 on its own — the export pipeline is built ([backup-export.md](backup-export.md)), but the restore-side check (item 2 there) is still open.
+Restore or import into or over the live table (this drill never did either — a new, uniquely-named target every time, for both the PITR restore and the export import). Leave a drill's scratch table running after verification (both existed only a few minutes, start to delete). Delete the real S3 export itself to "clean up" — it isn't drill scaffolding, it's D-22's own first real backup, and its Object Lock is what stops exactly that kind of casual deletion.
