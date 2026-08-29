@@ -1,12 +1,12 @@
 # D-22's periodic export layer: a daily, object-locked DynamoDB backup
 
-**Date:** 2026-08-28 · **Decisions:** [D-22](../plan/01-decisions.md) · **Depends on:** 1.3.1 (the table, PITR)
+**Date:** 2026-08-28, live and verified 2026-08-29 · **Decisions:** [D-22](../plan/01-decisions.md) · **Depends on:** 1.3.1 (the table, PITR)
 
-## Status: built, live-diffed against production, deploy pending merge
+## Status: built, deployed, and exercised for real — D-22 closed in full
 
-D-22 named this since before Phase 0 — "PITR **plus** periodic export to a separate object-locked prefix." Nothing built it until TASK 5.4.1's own restore drill found the gap live, 2026-08-28 (`restore-drill.md`): no matching S3 bucket, no `AWS Backup` plan, no EventBridge export rule existed anywhere in `ndn-prod`. This closes it.
+D-22 named this since before Phase 0 — "PITR **plus** periodic export to a separate object-locked prefix." Nothing built it until TASK 5.4.1's own restore drill found the gap live, 2026-08-28 (`restore-drill.md`): no matching S3 bucket, no `AWS Backup` plan, no EventBridge export rule existed anywhere in `ndn-prod`. Built the same day, deployed via [#122](https://github.com/nourishthenerve/ndn-monolithic/pull/122) on merge, and exercised for real (a live export, a live import-and-verify restore) the next day — see "Status update, 2026-08-29" below.
 
-**Not yet live in production** — this deploys via the ordinary `deploy` job (`ci.yml`, OIDC via `ndn-deploy`) once merged to `main`, the same path every other change in this codebase takes. `aws cdk diff NdnDataStack` (admin profile, read-only, no state mutated) confirms the change is purely additive — no `[-]`, no replacement of any existing resource, including `DataTable` itself:
+`aws cdk diff NdnDataStack` (admin profile, read-only, no state mutated), taken before this PR merged, confirmed the change was purely additive — no `[-]`, no replacement of any existing resource, including `DataTable` itself:
 
 ```text
 Resources
@@ -44,10 +44,18 @@ The pre-existing structural guard from [log-retention-volume-control.md](log-ret
 
 Live-verified, read-only, against production before this PR: `aws cdk synth NdnDataStack` succeeds; `aws cdk diff NdnDataStack` shown above, purely additive.
 
-## What is still needed — owner action, once this deploys
+## Status update, 2026-08-29 — items 1 and 2 below done for real
 
-1. **Confirm the first scheduled run.** `EXPORT_SCHEDULE` fires once daily; the first real export can also be triggered on demand via `aws lambda invoke --function-name <BackupExportFunction>`. Confirm a real object lands under `s3://ndn-prod-backup-exports-357601815388/exports/<date>/` and carries Object Lock metadata (`aws s3api get-object-retention`).
-2. **Close TASK 5.4.1's own remaining gap.** `restore-drill.md`'s own step 5 — "restore D-22's periodic export into a scratch location and confirm it is readable" — was blocked because this pipeline didn't exist. Once a real export has run at least once, re-run that half of the drill: import the exported data into a scratch DynamoDB table (`ImportTableCommand`, the import-side twin of the export this task built) and verify it against known rows, the same discipline the PITR half of that drill already used.
+**Deployed via [#122](https://github.com/nourishthenerve/ndn-monolithic/pull/122), then exercised for real the same day** — triggered on demand (`aws lambda invoke`, ahead of the first scheduled tick) rather than waiting for `rate(1 day)` to fire on its own:
+
+- A real export completed: **6 items, 1,560 bytes — an exact match to the live table**, landing at `s3://ndn-prod-backup-exports-357601815388/exports/2026-08-29/AWSDynamoDB/01787990334662-cdf7a008/`.
+- `aws s3api get-object-retention` on a real exported object confirmed Object Lock working end to end, not just configured: `Mode: GOVERNANCE`, `RetainUntilDate: 2027-08-29` — exactly 365 days out.
+- `restore-drill.md`'s own remaining item closed the same day: the export was imported into a scratch table (`ImportTableCommand`) and verified against known rows — full account, including a real usage mistake found and fixed live (a wrong `S3KeyPrefix` and a missing `InputCompressionType`), in [restore-drill.md § "D-22's export restore"](restore-drill.md).
+
+## What is still needed — owner action
+
+1. ~~Confirm the first scheduled run~~ — done, see above. The `rate(1 day)` schedule's own first *unattended* firing has not yet been separately observed, the same "manually verified, not yet seen fire on its own timer" gap `live-session-accessibility.md` named for its own cron trigger.
+2. ~~Close TASK 5.4.1's own remaining gap~~ — done, see above and `restore-drill.md`.
 3. **A CloudWatch alarm on export failure** was deliberately not built here — this task's own scope is the pipeline existing and running, not yet its own failure-alerting layer. A missed or failed daily export degrades silently until someone checks, the same honestly-named gap this codebase names elsewhere rather than leaves undiscussed. Worth its own small follow-up once the pipeline has a real run history to alarm against.
 
 ## Cost
