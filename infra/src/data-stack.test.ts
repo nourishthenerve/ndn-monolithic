@@ -466,11 +466,12 @@ describe('DataStack — feature-flag reads', () => {
     // TASK 2.1.3: GET /audit is flag-gated too (audit.readApi.enabled,
     // default off — the read API is flagged, the writer deliberately is not).
     'audit-read-handler',
-    // TASK 2.2.3: auth.patientRegistration.enabled, default off until
-    // TASK 2.5.1 can approve anyone.
-    'registration-handler',
     // TASK 2.4.1: clinicians.administration.enabled, default off.
     'clinician-admin-handler',
+    // D-29 (2026-08-29): patients.administration.enabled, default off
+    // until TASK 2.5.1's approval route exists to give a created account
+    // somewhere to go. Replaces the retired registration-handler.
+    'patient-admin-handler',
     // TASK 2.5.1: assignment.enabled, default off.
     'assignment-handler',
     // TASK 2.5.3: caseload.view.enabled, default off.
@@ -603,9 +604,11 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     );
 
     // Every Lambda in this stack that goes through a repository: the seven
-    // that existed before TASK 2.1.3, the audit reader itself, TASK 2.2.3's
-    // two registration functions, TASK 2.4.1's clinician-admin function,
-    // TASK 2.5.1's assignment function, TASK 2.5.3's caseload function (it
+    // that existed before TASK 2.1.3, the audit reader itself, D-29's
+    // patient-admin function (replacing TASK 2.2.3's two now-deleted
+    // registration functions with one), TASK 2.4.1's clinician-admin
+    // function, TASK 2.5.1's assignment function, TASK 2.5.3's caseload
+    // function (it
     // never writes an audit row — `ClinicianRepository`'s read-only
     // `findById` never reaches one — but its constructor still takes an
     // `AuditWriter`, so the env var is present regardless), TASK 3.1.1's
@@ -623,7 +626,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // never writes through the audit log either, only ever reads).
     // The two authorizers are deliberately absent — both read a status
     // and write nothing.
-    expect(withAuditTable).toHaveLength(22);
+    expect(withAuditTable).toHaveLength(21);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -669,8 +672,9 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('denies every other role in the stack any read of the AUDIT# partition', () => {
     const denials = statementsWithSid('DenyAuditPartitionReads');
 
-    // The seven pre-existing functions, TASK 2.2.2's authorizer, TASK
-    // 2.2.3's two registration roles, TASK 2.4.1's clinician-admin role,
+    // The seven pre-existing functions, TASK 2.2.2's authorizer, D-29's
+    // patient-admin role (replacing TASK 2.2.3's two now-deleted
+    // registration roles with one), TASK 2.4.1's clinician-admin role,
     // TASK 2.5.1's assignment role, TASK 2.5.3's caseload role, TASK
     // 3.1.1's patient role, TASK 3.2.1's clinical-record role, TASK
     // 3.3.1's assessment role, TASK 3.4.1's appointment role, TASK
@@ -680,7 +684,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // 4.4.1's turn-credentials role; the audit reader is deliberately not
     // among them, being the one role that is supposed to read that
     // partition.
-    expect(denials).toHaveLength(25);
+    expect(denials).toHaveLength(24);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -697,7 +701,7 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
   it('closes the keyless read that the LeadingKeys condition cannot see', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
-    expect(denials).toHaveLength(25);
+    expect(denials).toHaveLength(24);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -769,7 +773,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys('NONE')).toEqual(declared);
   });
 
-  it('puts the clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1/3.1.2)/clinical-record (3.2.1/3.2.2)/assessment (3.3.1/3.3.2)/appointment (3.4.1)/content-assignment (3.5.1)/message (3.6.1) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
+  it('puts the patient-admin (D-29)/clinician-admin (2.4.1)/assignment (2.5.1/2.5.2)/caseload (2.5.3)/patient (3.1.1/3.1.2)/clinical-record (3.2.1/3.2.2)/assessment (3.3.1/3.3.2)/appointment (3.4.1)/content-assignment (3.5.1)/message (3.6.1) routes, and TASK 2.5.4\'s retired-admin-token routes, behind the real authorizer', () => {
     // The first seven took no `authorizer:` override at all, ahead of
     // ADMIN_TOKEN_ROUTE's own retirement — every route before them opted
     // out with `PUBLIC_ROUTE` or the now-deleted `ADMIN_TOKEN_ROUTE`
@@ -793,7 +797,10 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // TASK 3.6.1 added `POST`/`GET /patients/{id}/messages`, served by a
     // new `MessageFunction`. TASK 4.4.1 added
     // `POST /calls/{appointmentId}/turn-credentials`, served by a new
-    // `TurnCredentialsFunction`.
+    // `TurnCredentialsFunction`. D-29 (2026-08-29) added `POST /patients`
+    // and `POST /patients/{id}/reset-password`, served by a new
+    // `PatientAdminFunction`, replacing TASK 2.2.3's public
+    // `POST /registrations` (route-protection.ts's own PUBLIC_ROUTE_KEYS).
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
@@ -818,6 +825,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /content',
         'POST /content/{id}/publish',
         'POST /content/{id}/unpublish',
+        'POST /patients',
         'POST /patients/{id}/appointments',
         'POST /patients/{id}/appointments/{apptId}/cancel',
         'POST /patients/{id}/approve',
@@ -828,6 +836,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /patients/{id}/diagnosis',
         'POST /patients/{id}/messages',
         'POST /patients/{id}/reassign',
+        'POST /patients/{id}/reset-password',
         'POST /testimonials/{id}/publish',
         'POST /testimonials/{id}/reject',
         'POST /workshops',
@@ -905,9 +914,11 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
   });
 });
 
-// TASK 2.2.3: the front door — an unauthenticated endpoint that creates a
-// Cognito account, and a trigger that turns a confirmed one into a record.
-describe('DataStack — patient registration (TASK 2.2.3)', () => {
+// D-29 (2026-08-29): the front door — staff create a patient account and
+// reset a patient's password, both via a real, authenticated principal.
+// Replaces TASK 2.2.3's public, unauthenticated `RegistrationFunction`/
+// `PostConfirmationFunction` pair.
+describe('DataStack — patient administration (D-29)', () => {
   function statementsWithSid(sid: string): Record<string, unknown>[] {
     return Object.values(synth().findResources('AWS::IAM::Policy'))
       .flatMap(
@@ -918,98 +929,85 @@ describe('DataStack — patient registration (TASK 2.2.3)', () => {
       .filter((statement) => statement.Sid === sid);
   }
 
-  it('routes POST /registrations to a function with its own 14-day log group', () => {
+  it('routes both patient-admin endpoints behind the real authorizer, with their own 14-day log group', () => {
     const template = synth();
     template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
-      RouteKey: 'POST /registrations',
-      AuthorizationType: 'NONE',
+      RouteKey: 'POST /patients',
+      AuthorizationType: 'CUSTOM',
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'POST /patients/{id}/reset-password',
+      AuthorizationType: 'CUSTOM',
     });
     template.hasResourceProperties('AWS::Logs::LogGroup', {
-      LogGroupName: '/ndn/registration-function',
+      LogGroupName: '/ndn/patient-admin-function',
       RetentionInDays: 14,
     });
-    template.hasResourceProperties('AWS::Logs::LogGroup', {
-      LogGroupName: '/ndn/post-confirmation-function',
-      RetentionInDays: 14,
-    });
-    expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/registration-function');
-    expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/post-confirmation-function');
+    expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/patient-admin-function');
+    // TASK 2.2.3's own log groups are gone, not merely unreferenced.
+    expect(UNMONITORED_LOG_GROUP_NAMES).not.toContain('/ndn/registration-function');
+    expect(UNMONITORED_LOG_GROUP_NAMES).not.toContain('/ndn/post-confirmation-function');
   });
 
-  it('gives the registration endpoint no cognito-idp permission at all', () => {
-    // SignUp is an unauthenticated Cognito operation — AWS's own reference
-    // says it "doesn't evaluate IAM policies". A grant here would be
-    // permission that does nothing while reading as admin reach into the
-    // directory.
-    //
-    // Scoped to the registration function's *own* policy, not the whole
-    // template — TASK 2.4.1's clinician-admin function legitimately holds
-    // `cognito-idp:Admin*` grants (AdminCreateUser is authenticated,
-    // unlike SignUp), so a stack-wide string search would now be a false
-    // positive against the wrong role.
+  it('scopes the profile read/write to PAT#* only — the same shape PatientFunction already carries', () => {
+    // Two roles now hold a `ReadWritePatientProfile` statement of this
+    // exact shape: `PatientFunction` (TASK 3.1.1) and `PatientAdminFunction`
+    // (this task). Both, not one, are asserted below.
+    const statements = statementsWithSid('ReadWritePatientProfile');
+    expect(statements).toHaveLength(2);
+    for (const statement of statements) {
+      expect(statement.Action).toEqual(['dynamodb:GetItem', 'dynamodb:PutItem']);
+      expect(statement.Condition).toEqual({
+        'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] },
+      });
+    }
+  });
+
+  it('grants AdminCreateUser and AdminSetUserPassword on the patient pool only — never AdminDeleteUser, never the clinician pool', () => {
     const template = synth();
-    const [registrationRoleId] = Object.entries(template.findResources('AWS::IAM::Role')).find(
-      ([logicalId]) => logicalId.startsWith('RegistrationFunctionRole'),
+    const [patientAdminRoleId] = Object.entries(template.findResources('AWS::IAM::Role')).find(
+      ([logicalId]) => logicalId.startsWith('PatientAdminFunctionRole'),
     ) ?? [undefined];
-    expect(registrationRoleId).toBeDefined();
+    expect(patientAdminRoleId).toBeDefined();
 
-    const registrationPolicies = Object.values(template.findResources('AWS::IAM::Policy')).filter(
+    const patientAdminPolicies = Object.values(template.findResources('AWS::IAM::Policy')).filter(
       (policy) =>
-        JSON.stringify(
-          (policy as { Properties: { Roles?: unknown } }).Properties.Roles ?? [],
-        ).includes(registrationRoleId as string),
+        JSON.stringify((policy as { Properties: { Roles?: unknown } }).Properties.Roles ?? []).includes(
+          patientAdminRoleId as string,
+        ),
     );
-    expect(JSON.stringify(registrationPolicies)).not.toContain('cognito-idp:');
+    const serialised = JSON.stringify(patientAdminPolicies);
+    expect(serialised).toContain('cognito-idp:AdminCreateUser');
+    expect(serialised).toContain('cognito-idp:AdminSetUserPassword');
+    expect(serialised).not.toContain('cognito-idp:AdminDeleteUser');
+    expect(serialised).not.toContain(CLINICIAN_USER_POOL_ID);
+    expect(serialised).toContain(PATIENT_USER_POOL_ID);
   });
 
-  it('lets the registration endpoint write only the intake partition', () => {
-    const statements = statementsWithSid('WriteRegistrationIntake');
-
-    expect(statements).toHaveLength(1);
-    expect(statements[0]?.Action).toEqual('dynamodb:PutItem');
-    expect(statements[0]?.Condition).toEqual({
-      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['REG#*'] },
-    });
-  });
-
-  it('scopes the trigger to the three partitions it touches, and no others', () => {
-    // The one function Cognito can invoke. A table-wide grant would let it
-    // reach every record in the estate.
-    const statements = statementsWithSid('WritePatientProfile');
-
-    expect(statements).toHaveLength(1);
-    expect(statements[0]?.Action).toEqual([
-      'dynamodb:GetItem',
-      'dynamodb:PutItem',
-      'dynamodb:UpdateItem',
-    ]);
-    expect(statements[0]?.Condition).toEqual({
-      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*', 'REG#*', 'AUDIT#*'] },
-    });
-  });
-
-  it('lets the trigger append audit rows but never read them back', () => {
-    // It writes through a repository, so 2.1.3's separation applies: the
-    // PutItem above is what lets it append, and the audit-partition denial
-    // is what stops it reading.
-    const policy = Object.values(synth().findResources('AWS::IAM::Policy')).find((candidate) =>
-      JSON.stringify(candidate.Properties?.PolicyDocument ?? {}).includes('WritePatientProfile'),
+  it('writes audit rows through its own scoped statement, and cannot read them back', () => {
+    const template = synth();
+    const [patientAdminRoleId] = Object.entries(template.findResources('AWS::IAM::Role')).find(
+      ([logicalId]) => logicalId.startsWith('PatientAdminFunctionRole'),
+    ) ?? [undefined];
+    const policy = Object.values(template.findResources('AWS::IAM::Policy')).find(
+      (candidate) =>
+        JSON.stringify(
+          (candidate as { Properties: { Roles?: unknown } }).Properties.Roles ?? [],
+        ).includes(patientAdminRoleId as string) &&
+        JSON.stringify(candidate.Properties?.PolicyDocument ?? {}).includes('WriteAuditRows'),
     );
     const statements = policy?.Properties?.PolicyDocument?.Statement as {
       Sid?: string;
       Effect: string;
+      Condition?: unknown;
     }[];
 
+    const auditWrite = statements.find((statement) => statement.Sid === 'WriteAuditRows');
+    expect(auditWrite?.Condition).toEqual({
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['AUDIT#*'] },
+    });
     expect(statements.some((statement) => statement.Sid === 'DenyAuditPartitionReads')).toBe(true);
     expect(statements.some((statement) => statement.Sid === 'DenyKeylessTableReads')).toBe(true);
-  });
-
-  it('scopes the confirmation email to the verified identity and the configuration set', () => {
-    const statements = statementsWithSid('SendRegistrationEmail');
-
-    expect(statements).toHaveLength(1);
-    expect(statements[0]?.Action).toEqual('ses:SendEmail');
-    expect(JSON.stringify(statements[0]?.Resource)).toContain('identity/nourishthenerve.com');
   });
 });
 

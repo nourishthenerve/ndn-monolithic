@@ -35,10 +35,11 @@ This directory holds one runbook per task, or per closely-related task cluster �
 
 ## Auth and identity
 
-- [cognito-user-pools.md](cognito-user-pools.md) — the two Cognito user pools, one per role, and why not one pool with groups (TASK 2.2.1)
+- [cognito-user-pools.md](cognito-user-pools.md) — the two Cognito user pools, one per role, and why not one pool with groups (TASK 2.2.1); amended by D-29 — the patient pool's own amendment section
 - [lambda-authorizer.md](lambda-authorizer.md) — the shared Lambda authorizer verifying tokens from either pool (TASK 2.2.2)
-- [patient-registration.md](patient-registration.md) — patient self-registration and the clinician approval lifecycle (TASK 2.2.3)
-- [web-authentication.md](web-authentication.md) — the authenticated account shell: sign-in, the session, sign-out (TASK 2.2.4)
+- [patient-registration.md](patient-registration.md) — **superseded by D-29** — patient self-registration and the clinician approval lifecycle (TASK 2.2.3); the approval lifecycle itself is still current, the self-registration creation path is not
+- [patient-account-provisioning.md](patient-account-provisioning.md) — D-29: staff-mediated patient account creation and password reset over WhatsApp, replacing self-registration; the approval step is unchanged
+- [web-authentication.md](web-authentication.md) — the authenticated account shell: sign-in, the session, sign-out (TASK 2.2.4); amended by D-29 (a password on Cognito's page, not a one-time code)
 - [clinician-accounts.md](clinician-accounts.md) — clinician account provisioning, and the two live bugs found provisioning the first real principal (TASK 2.4.1)
 - [admin-token-retirement.md](admin-token-retirement.md) — retiring the shared `ADMIN_API_TOKEN` bearer gate once the real authorizer covers everything it did (TASK 2.5.4)
 
@@ -83,7 +84,8 @@ A spot-check pass (not exhaustive — 51 files) found and closed three stale ite
 
 Genuinely still open, owner-side, as of this pass (2026-08-28) — not stale, not this task's to close:
 
-- **LL-01 (SES production access)** — denied 2026-08-21, [ses-production-access.md](ses-production-access.md). Blocks the real end-to-end checks named in [patient-registration.md](patient-registration.md) and [web-authentication.md](web-authentication.md).
+- **LL-01 (SES production access)** — denied 2026-08-21, [ses-production-access.md](ses-production-access.md). Blocks the clinician-invite-email check named in [web-authentication.md](web-authentication.md); no longer blocks a patient check — D-29 (2026-08-29) removed patient sign-in's own dependency on it, see [patient-account-provisioning.md](patient-account-provisioning.md).
+- **D-29's staff-facing UI, staff identity-verification training, and DPIA update** — all named explicitly as not built/not done in [patient-account-provisioning.md](patient-account-provisioning.md), by the owner's own deliberate choice: prove the technical mechanism with synthetic test patients first, defer legal/DPIA review and a real UI until then. Not this index's job to close.
 - **LL-02 (UK SMS long code)** — not leased; AWS End User Messaging account confirmed still `SANDBOX` tier, 0 phone numbers, live-checked this pass. Blocks [sms-provider.md](sms-provider.md)'s real-account proof and [workshop-confirmation-sms.md](workshop-confirmation-sms.md).
 - **Cloudflare Realtime/Calls TURN key** — not provisioned; `/ndn/cloudflare-turn-api-token` confirmed absent from SSM, live-checked this pass. Named since Gate G4 as the one blocking action item for a real cross-network video call, [video-calls.md](video-calls.md).
 - **Real Turnstile widget + secret** — `contact-form.md` still runs Cloudflare's public test key; the real SSM SecureString parameter confirmed absent, live-checked this pass.

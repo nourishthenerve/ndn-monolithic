@@ -12,6 +12,10 @@ D-08 and ADR-0017 put the site on S3 + CloudFront with **no server runtime**, wh
 
 **Resolution: a token-exchange endpoint on the existing HTTP API, proxied same-origin through CloudFront** — the identical shape `/health` and `/contact` already use. The browser gets an authorization code, posts it to `/auth/token` on its own origin, and a Lambda performs the PKCE exchange and answers with `Set-Cookie: HttpOnly; Secure; SameSite=Lax`.
 
+## Amendment, D-29 (2026-08-29) — a password, not a one-time code, on Cognito's own page
+
+Everything in this file is otherwise unchanged and current: the authorization-code-plus-PKCE flow, every cookie and its attributes, the closure-held access token, sign-out's revocation call, all of it is indifferent to *what* a patient enters on Cognito's hosted page — only that Cognito issues a code back to `/en/account/callback` afterwards. What changed is what that page asks for: a patient now signs in with the permanent password staff set for them (`docs/runbooks/patient-account-provisioning.md`), not a one-time code emailed to them, because self-registration and email-OTP sign-in are both retired (D-29, `infra/src/auth-stack.ts`'s own header amendment). "Where the one-time code is entered" below describes the retired flow — kept as history, not current behaviour; a patient's password is entered on the identical Cognito-hosted page a clinician's always has been, subject to the identical a11y caveat (AWS's own domain, outside this repository's test suites).
+
 ## The flow
 
 ```text
@@ -19,7 +23,7 @@ D-08 and ADR-0017 put the site on S3 + CloudFront with **no server runtime**, wh
                                Set-Cookie ndn_pkce, ndn_state (HttpOnly)
                                302 ─▶ <pool>.auth.eu-west-2.amazoncognito.com/oauth2/authorize
 
-                       patient enters their one-time code on Cognito's page
+                       patient enters their password on Cognito's page (D-29 — see amendment above)
 
   ─302 back to /en/account/callback?code=…&state=… ─▶ island posts to /auth/token
                                Lambda: check state cookie, exchange code + verifier
@@ -72,13 +76,15 @@ While resolving, the island renders a `role="status" aria-live="polite"` line, s
 
 ## Where the one-time code is entered, and what that costs
 
+**Historical — describes the email-OTP flow D-29 retired (2026-08-29); kept as the record of TASK 2.2.4's original design.** A patient's password is entered on the same Cognito-hosted page described below; everything this section says about the credential entry happening on AWS's origin, outside this repository's test reach, still holds for a password field exactly as it held for an OTP field.
+
 **On Cognito's managed-login page, not ours.** That is a direct consequence of the authorization-code flow this task's Resolution chose: the browser must arrive at `/oauth2/authorize` and come back with a `code`, and the credential entry happens in between, on Cognito's origin.
 
-The honest consequence: **the OTP field is outside our axe and keyboard suites.** The plan's step 8 asks for a test on it; what we can test is every state we own — the sign-in link, the callback's exchanging/failed states, sign-out, and the loading and signed-out states of `RequireAuth`. The OTP page itself is AWS's, on AWS's domain, and no test in this repository can reach it.
+The honest consequence: **the credential field is outside our axe and keyboard suites.** The plan's step 8 asks for a test on it; what we can test is every state we own — the sign-in link, the callback's exchanging/failed states, sign-out, and the loading and signed-out states of `RequireAuth`. The credential-entry page itself is AWS's, on AWS's domain, and no test in this repository can reach it.
 
-The alternative — proxying Cognito's challenge flow through our own Lambda so we could render our own OTP field — was not taken, because it means reimplementing sign-in as a bespoke challenge state machine against `InitiateAuth`/`RespondToAuthChallenge`, which is precisely the "self-rolled auth on health data" ADR-0004 rejected in its first line. If the managed login page proves inaccessible in practice, that is the trade to revisit, deliberately, with the a11y finding in hand.
+The alternative — proxying Cognito's challenge flow through our own Lambda so we could render our own credential field — was not taken, because it means reimplementing sign-in as a bespoke challenge state machine against `InitiateAuth`/`RespondToAuthChallenge`, which is precisely the "self-rolled auth on health data" ADR-0004 rejected in its first line. If the managed login page proves inaccessible in practice, that is the trade to revisit, deliberately, with the a11y finding in hand.
 
-`ManagedLoginVersion.NEWER_MANAGED_LOGIN` is required, not preferred: passwordless email OTP is only offered by the newer pages, so the classic hosted UI would show a patient a password box for an account that has no password.
+`ManagedLoginVersion.NEWER_MANAGED_LOGIN` was originally required rather than preferred because passwordless email OTP was only offered by the newer pages; kept unchanged since (auth-stack.ts's own D-29 amendment) — both hosted-UI versions are free at the Essentials tier and a second migration has nothing D-29 needs it for.
 
 ## The hosted domains, deferred from 2.2.1 and taken here
 
@@ -113,7 +119,7 @@ Rollback is the same command with `false`. Sign-in disappears; the static site i
 
 - `pnpm -r lint && pnpm -r typecheck && pnpm test` — green. `services/api` 699 → **734**; `infra` 183 → **188**; `apps/web` 52 → **66**.
 - `pnpm --filter @ndn/web run build` — 18 pages, including `/en/account` and `/en/account/callback`; a grep of `dist/` finds no `localStorage` or `sessionStorage` anywhere.
-- **Not yet run**, and named rather than reported as done: the plan's browser check (a full sign-in leaves no token in `localStorage`/`sessionStorage`, checked in the browser rather than inferred; a captured cookie stops refreshing after sign-out) needs the flag on, a deployed pool domain, and mail that can leave the account — SES production access was denied on 2026-08-21 ([ses-production-access.md](ses-production-access.md)), so no patient can receive a sign-in code yet. The same gate as [patient-registration.md](patient-registration.md).
+- **Not yet run**, and named rather than reported as done: the plan's browser check (a full sign-in leaves no token in `localStorage`/`sessionStorage`, checked in the browser rather than inferred; a captured cookie stops refreshing after sign-out) needs the flag on and a deployed pool domain. D-29 (2026-08-29) removes the SES/mail blocker this line originally named for patients — a patient's password is created and relayed over WhatsApp, never emailed (`docs/runbooks/patient-account-provisioning.md`), so SES production access no longer gates a patient sign-in check the way it still gates a clinician one (clinician invites still go through Cognito's own default sender).
 - The pr-env a11y suite covers the new routes' loading, signed-out, callback and error states. The OTP field is Cognito's page and is out of its reach — see above.
 - **`/en/account`'s own signed-in state, added by TASK 5.3.1** ([live-session-accessibility.md](live-session-accessibility.md)): registered in `account-routes.ts`, axe-scanned in a real, signed-in session on a nightly schedule against production — the state this task's own Verification line above could not reach without a real Cognito sign-in, closed the same way every later account-shell page's construction-time-only gap is.
 

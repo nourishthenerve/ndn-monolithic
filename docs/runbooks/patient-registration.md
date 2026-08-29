@@ -2,6 +2,12 @@
 
 **Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.2.3](../plan/05-execution-plan.md) · **Milestone:** M2.2 · **Requirements:** §5 · **Decisions:** D-03, D-09 · **Risks:** R-04 · **Depends on:** 2.2.2, 2.1.3, 0.3.4
 
+## Superseded, D-29 (2026-08-29) — self-registration is retired
+
+**The entire flow this runbook describes is deleted, not merely disabled.** The owner's own decision: a patient never registers themselves, with or without a flag — they contact the clinic's WhatsApp Business number, a human verifies who they are, and staff create the account on their behalf. `RegistrationFunction`, `PostConfirmationFunction`, `registration.ts`, `post-confirmation.ts`, `dynamo-intake-store.ts`, `ses-registration.ts` and the `auth.patientRegistration.enabled` flag are all gone from the codebase; `POST /registrations` no longer exists at any status code. **Current behaviour is documented in [patient-account-provisioning.md](patient-account-provisioning.md).**
+
+**What survives unchanged, and why this file is kept rather than deleted:** the approval lifecycle below — `pending` → `approved`/`declined`/`suspended`, `PatientRepository`'s closed transition set, the two-statuses-two-facts distinction, the "no path deletes a person" invariant — is exactly as true today as it was on 2026-08-22. D-29 replaced *how a `pending` record comes to exist*; it did not touch what happens to one afterwards. Every section from "Why registration goes through us" through "The confirmation email says almost nothing" describes the retired creation path specifically and should be read as history, not current behaviour.
+
 ## The invariant
 
 > A patient can create an account. The account grants nothing until a clinician approves it. Every transition is audited with the clinician who made it. No path deletes a person.

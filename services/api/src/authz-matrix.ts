@@ -64,13 +64,17 @@ export const RBAC_MATRIX: RbacMatrix = {
     'Sub-clinician (unassigned)': DENIED,
     Principal: ['read', 'update'],
   },
-  // | Patient profile | R U (self) | — | R U | — | R U |
+  // D-29 (2026-08-29): `C` and `P` added to Principal — see this row's own
+  // note in docs/plan/04-data-model-rbac.md. Self-registration is retired;
+  // a patient account is now created, and its password reset, by a
+  // principal only.
+  // | Patient profile | R U (self) | — | R U | — | C R U P |
   'Patient profile': {
     'Patient (own)': ['read', 'update'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
-    Principal: ['read', 'update'],
+    Principal: ['create', 'read', 'update', 'reset-password'],
   },
   // | Patient assignment | — | — | — | — | C R U |
   // TASK 2.5.1: the doc was silent on this row — no cell governed

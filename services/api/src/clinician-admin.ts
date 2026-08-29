@@ -56,11 +56,12 @@ const createClinicianBodySchema = z.object({
 });
 
 /**
- * The Cognito call, as a port — same shape registration.ts's `SignUpPort`
- * takes, for the same reason: keeping AWS behind an interface is what lets
- * every test below run without it. Returns the `sub` `AdminCreateUser`
- * minted, so the caller can write `CLI#<sub>` — see clinician-repository.ts's
- * header for why this ordering, not the reverse the task text states.
+ * The Cognito call, as a port — same shape patient-admin.ts's
+ * `AdminCreatePatientPort` takes, for the same reason: keeping AWS behind
+ * an interface is what lets every test below run without it. Returns the
+ * `sub` `AdminCreateUser` minted, so the caller can write `CLI#<sub>` —
+ * see clinician-repository.ts's header for why this ordering, not the
+ * reverse the task text states.
  */
 export interface AdminCreateClinicianPort {
   createUser(email: string): Promise<string>;

@@ -26,8 +26,9 @@ export interface PatientPersonal {
 }
 
 /**
- * Held on a clinical retention basis. Self-registration writes at most the
- * two fields below and never anything else — a patient does not get to
+ * Held on a clinical retention basis. Account creation (D-29: staff,
+ * relaying what a patient gave over WhatsApp) writes at most the two
+ * fields below and never anything else — a patient does not get to
  * declare their own diagnosis, and the assessment/care-plan entities that
  * do carry clinical content are Phase 3's.
  */
@@ -57,7 +58,7 @@ export interface Patient extends BaseRecord {
   account_status: PatientAccountStatus;
   /** Set by TASK 2.5.1's assignment, absent until then. Every relationship check in `can()` tests against it. */
   assigned_clinician_id?: string;
-  /** Reserved for the caseload search TASK 2.5.3 builds. Empty on a self-registered record. */
+  /** Reserved for the caseload search TASK 2.5.3 builds. Empty on a newly-created record. */
   keywords: string[];
 }
 

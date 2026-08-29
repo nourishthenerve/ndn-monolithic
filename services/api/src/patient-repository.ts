@@ -36,7 +36,7 @@ import type { KeyValueStore } from './store.js';
 
 export const PATIENT_ENTITY_TYPE = 'patient';
 
-/** What self-registration is allowed to write. Nothing clinical beyond the two declared fields. */
+/** What account creation is allowed to write. Nothing clinical beyond the two declared fields. */
 export interface PatientRegistration {
   /** The Cognito `sub`. The record's own id, so the authorizer's lookup is one keyed read. */
   readonly subjectId: string;
@@ -89,13 +89,15 @@ export class PatientRepository {
   }
 
   /**
-   * **Idempotent, because Cognito retries.** A Post-Confirmation trigger
-   * that throws is invoked again with the same event, and a second
-   * `create` would either overwrite a record a clinician has already
-   * approved or throw `RECORD_ALREADY_EXISTS` into Cognito's face forever.
-   * Returning the existing record is the only correct answer to "this
-   * subject is already registered", and it writes no second audit row —
-   * one registration, one row, however many times Cognito asks.
+   * **Idempotent.** Originally written for TASK 2.2.3's Post-Confirmation
+   * trigger, whose own retry-on-throw behaviour a second `create` would
+   * have either overwritten a record a clinician had already approved or
+   * turned into a permanent `RECORD_ALREADY_EXISTS`. D-29's
+   * `patient-admin.ts` is the only caller now, but the property still
+   * matters: a Lambda invocation itself can be retried, and returning the
+   * existing record is the correct answer to "this subject already has a
+   * profile" either way — it writes no second audit row, one account, one
+   * row, however many times the call lands.
    */
   async register(
     registration: PatientRegistration,

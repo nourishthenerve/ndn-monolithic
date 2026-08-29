@@ -24,21 +24,23 @@ export type FlagName =
   // There is deliberately no flag for the audit *writer*: a log that can
   // be switched off is not an audit log.
   | 'audit.readApi.enabled'
-  // TASK 2.2.3: default off until TASK 2.5.1 exists to approve anyone.
-  // Registering into a system with no route out of `pending` is not a
-  // smaller feature, it is a worse one.
-  | 'auth.patientRegistration.enabled'
   // TASK 2.2.4: the whole `/auth/*` surface and the account pages. Off
   // means the site is exactly the brochure it is today.
   | 'auth.webSignIn.enabled'
   // TASK 2.4.1: create/deactivate/reactivate clinician accounts. Default
-  // off until a principal clinician exists to operate it — the same
-  // "flag is not a convenience" reasoning auth.patientRegistration.enabled
-  // documents.
+  // off until a principal clinician exists to operate it.
   | 'clinicians.administration.enabled'
-  // TASK 2.5.1: turned on together with auth.patientRegistration.enabled
-  // — registering into a system with no route out of `pending` strands
-  // people there, which is this flag's own DoD line.
+  // D-29 (2026-08-29): create a patient account and reset a patient's
+  // password, both staff-initiated via WhatsApp — see
+  // docs/runbooks/patient-account-provisioning.md. Replaces
+  // `auth.patientRegistration.enabled`, which gated TASK 2.2.3's retired
+  // self-registration route; default off until TASK 2.5.1's approval
+  // route exists to give a created account somewhere to go, the same
+  // "flag is not a convenience" reasoning that flag documented.
+  | 'patients.administration.enabled'
+  // TASK 2.5.1: turned on together with patients.administration.enabled
+  // — creating an account into a system with no route out of `pending`
+  // strands people there, which is this flag's own DoD line.
   | 'assignment.enabled'
   // TASK 2.5.3: the cross-caseload admin view. Default off.
   | 'caseload.view.enabled'

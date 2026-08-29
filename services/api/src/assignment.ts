@@ -92,9 +92,9 @@ export function createAssignmentHandler(
     };
 
     // Off means "this route does not exist" — turned on together with
-    // auth.patientRegistration.enabled, per this task's own Flag line:
-    // registering into a system with no route out of `pending` strands
-    // people there.
+    // patients.administration.enabled (D-29), per this task's own Flag
+    // line: creating an account into a system with no route out of
+    // `pending` strands people there.
     if (!(await deps.flags.isEnabled(ASSIGNMENT_FLAG))) {
       return respond(404, { error: 'NOT_FOUND' });
     }

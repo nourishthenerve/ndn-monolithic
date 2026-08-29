@@ -45,10 +45,14 @@ export const PUBLIC_ROUTE = new HttpNoneAuthorizer();
  * putting it behind a bearer authorizer would break it, and Stripe has no
  * Cognito account.
  *
- * `POST /registrations` (TASK 2.2.3) is here by necessity: the caller has
- * no account, because an account is what they are asking for. Turnstile
- * and a per-IP rate limit are its gate, and its flag is default-off until
- * TASK 2.5.1 can approve anyone.
+ * `POST /registrations` (TASK 2.2.3) stood here by necessity — the caller
+ * had no account, because an account was what they were asking for.
+ * Retired by D-29 (2026-08-29): a patient no longer registers themselves
+ * at all, so there is no public front door left to name. `POST /patients`
+ * (patient-admin.ts) is its replacement and takes no `authorizer:`
+ * override — it is not in this list, and is behind the real authorizer
+ * for exactly the reason `clinician-admin.ts`'s `POST /clinicians` is:
+ * the caller is a real, authenticated principal, never an anonymous one.
  *
  * The four `/auth/*` routes (TASK 2.2.4) are here by definition: they are
  * what a caller uses when they have no token yet or are giving one up.
@@ -76,7 +80,6 @@ export const PUBLIC_ROUTE_KEYS: readonly string[] = [
   'POST /auth/refresh',
   'POST /auth/signout',
   'POST /auth/token',
-  'POST /registrations',
   'POST /testimonials',
   'POST /workshops/{id}/checkout',
 ];

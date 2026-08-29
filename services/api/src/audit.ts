@@ -68,6 +68,15 @@ export const AUDIT_ACTIONS = [
   // attempt was made and refused" is the fact worth keeping.
   'join',
   'join-denied',
+  // D-29 (2026-08-29): a principal issuing a patient a new Cognito
+  // password. Recorded under its own name rather than folded into
+  // 'update': nothing about the `PAT#` record changes when this happens —
+  // only the directory does — so there is no repository write for a
+  // generic 'update' row to attach to. `patient-admin.ts` writes this
+  // event directly through the same `AuditWriter` every repository uses.
+  // A credential handout is exactly the kind of act a reviewer most needs
+  // this log to be able to answer "who, and when" about.
+  'reset-password',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

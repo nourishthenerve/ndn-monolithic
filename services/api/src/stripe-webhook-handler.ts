@@ -147,7 +147,7 @@ function getStripeClient(): Promise<Stripe> {
 // follows); a rejection here (e.g. a transient SSM blip) propagates as the
 // pure handler's own generic "couldn't verify" -> 400 path — this repo's
 // existing handlers don't hand-distinguish an infra failure from a genuine
-// rejection either (e.g. registration-handler.ts's Turnstile-secret
+// rejection either (e.g. contact-form-handler.ts's Turnstile-secret
 // resolution failure crashes the same way an actually-failed siteverify
 // call doesn't).
 async function verifySignature(rawBody: string, signatureHeader: string): Promise<StripeEvent> {
