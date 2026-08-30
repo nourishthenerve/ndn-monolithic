@@ -1,10 +1,16 @@
-# DPIA skeleton
+# DPIA skeleton — generic placeholder, reframed for India (D-33)
 
-This is a skeleton, not a completed Data Protection Impact Assessment. Full completion is **LL-05** (owner: you, with a DPO, lead time weeks, blocks launch, starts Phase 1) and is out of scope for the executor to fill in — see `docs/plan/08-long-lead.md`.
+## Reframe, D-33 (2026-08-30) — read this section first
+
+**This document was originally written assuming a UK DPO would complete a UK-GDPR DPIA. That framework doesn't apply**: this business has no UK establishment, and every customer and clinician is India-based (the same facts that closed LL-04 — see `docs/plan/08-long-lead.md`). **India's own Digital Personal Data Protection Act, 2023 (DPDPA)** — and whatever telemedicine/professional-conduct rules apply to the clinicians using this platform — is the framework that actually governs this system, and **neither has been assessed by anyone qualified as of this reframe.**
+
+**The owner's own words, asked directly whether this could wait:** *"I will get it done legally later on but I want to go live now for real patients. go with it."* Track B (the patient-facing platform — profiles, clinical records, appointments, messaging, video) went live for real patients on 2026-08-30 on that explicit instruction, **before** this document represents anything a qualified Indian data-protection/health-law professional has reviewed. That is a conscious, informed decision to accept real, unresolved legal exposure temporarily — not a claim that the exposure doesn't exist, and not something this codebase, or the assistant that reframed this document, is qualified to resolve on its own.
+
+**This remains a generic placeholder, not a completed assessment, and not legal advice.** Everything below this section was written to track *technical* design decisions that happen to be jurisdiction-agnostic (they describe what the system does, not which law applies to it) — it is not a substitute for LL-05/LL-06 actually closing with real Indian counsel. Do not present this document, to a regulator, an auditor, a patient, or anyone else, as evidence that a completed DPIA or legal sign-off exists. It does not.
 
 ## Purpose
 
-Tracks the data-protection design decisions the plan has already made so the DPO completing the full DPIA is working from an accurate starting point, not a blank page.
+Tracks the data-protection *design* decisions the plan has already made — true regardless of which jurisdiction's law ends up applying — so whoever eventually completes the real assessment (LL-05/LL-06, `08-long-lead.md`) is working from an accurate starting point, not a blank page.
 
 ## Schema separation (TASK 0.3.4) — implemented 2026-08-09
 
@@ -50,7 +56,7 @@ The one Phase 4 area a DPO reviewing "what does this system process" needs named
 
 ## Patient account creation moves to a human channel (D-29) — implemented 2026-08-29, DPIA review explicitly deferred
 
-**Self-registration (email-OTP sign-up, TASK 2.2.3) is retired.** A patient now contacts the clinic's WhatsApp Business number; a human member of staff verifies their identity and creates their account (`docs/runbooks/patient-account-provisioning.md`). This is a genuine, new data-processing question a completed DPIA needs to cover, and it is recorded here as a placeholder rather than assessed — **the owner has explicitly deferred DPIA/solicitor review (LL-05/LL-06) until the technical system is proven working end-to-end against synthetic test patients**, a deliberate, informed sequencing decision, not an oversight this skeleton is papering over.
+**Self-registration (email-OTP sign-up, TASK 2.2.3) is retired.** A patient now contacts the clinic's WhatsApp Business number; a human member of staff verifies their identity and creates their account (`docs/runbooks/patient-account-provisioning.md`). This is a genuine, new data-processing question a completed DPIA needs to cover, and it is recorded here as a placeholder rather than assessed. **Originally, the owner deferred DPIA/legal review (LL-05/LL-06) only until the mechanism was proven end-to-end against synthetic test patients** — proven, per the status update below. **D-33 (2026-08-30) extended that deferral further, by the owner's own explicit direction, to cover real patients too**, before the review itself has happened at all. Both are deliberate, informed sequencing decisions, not oversights this skeleton is papering over — but D-33's own extension carries materially more real-world exposure than the original synthetic-only deferral did, since real patient data is now genuinely at stake.
 
 What a completed DPIA will need to weigh, named here so the DPO is not starting from nothing:
 
@@ -59,15 +65,16 @@ What a completed DPIA will need to weigh, named here so the DPO is not starting 
 - **Identity verification is now a human judgement call, not a code path.** `docs/plan/02-risk-register.md`'s new R-16 names the resulting risk (social engineering) and its mitigation (staff training) as explicitly outside what this codebase can build or audit beyond recording *which* principal acted, and *when*.
 - **No new field, table, or retention basis.** The `PAT#`/`PROFILE` record this flow writes is byte-for-byte the same shape self-registration wrote — same `personal{}`/`clinical{}` split, same `pending` starting status, same append-only audit trail. Nothing about the schema-separation or audit-log sections above changes.
 
-## Open tension — R-04
+## Open tension — R-04 (reframed for India, D-33)
 
-**GDPR erasure vs C-03 (never delete patient/clinical/content/media data) is unresolved by design.** This is a decision for your DPO/solicitor (**LL-06**), not a decision the executor makes unilaterally. See `docs/plan/02-risk-register.md` (R-04).
+**Erasure vs C-03 (never delete patient/clinical/content/media data) is unresolved by design.** Originally framed as a GDPR erasure right; reframed by D-33 (2026-08-30) since GDPR doesn't apply here (no UK establishment). **DPDPA 2023 gives its own data-principal correction/erasure rights**, so the identical tension almost certainly recurs under Indian law instead — this has not been checked against the actual statute or its rules by anyone qualified. This is, and remains, a decision for Indian data-protection/health-law counsel (**LL-06**), not a decision the executor makes unilaterally. See `docs/plan/02-risk-register.md` (R-04).
 
-## What the DPO still needs to complete
+## What real Indian counsel still needs to complete
 
-- Lawful basis per processing activity.
+- Confirm DPDPA 2023 (and its rules, as notified) is in fact the operative framework, and name any other Indian statute or professional-conduct rule that also applies (telemedicine practice guidelines, state medical council rules for the clinicians involved, etc.) — not assumed, not checked here.
+- Lawful basis per processing activity, under whichever Indian framework applies.
 - Necessity/proportionality assessment.
-- The actual erasure policy that resolves R-04 within C-03's constraints.
-- Sign-off recorded here once complete.
+- The actual erasure/correction policy that resolves R-04 within C-03's constraints.
+- Sign-off recorded here once complete — at which point LL-05/LL-06 in `08-long-lead.md` should be updated from "deferred by owner override" to genuinely closed.
 
-**Do NOT** treat this skeleton as a completed DPIA. **Do NOT** implement any erasure code path against this skeleton alone — that requires the sign-off above.
+**Do NOT** treat this skeleton as a completed DPIA or as legal advice, in any jurisdiction. **Do NOT** implement any erasure code path against this skeleton alone — that requires the sign-off above. **Do NOT** present this document to a regulator, auditor, or any third party as evidence that a completed legal review occurred — as of D-33, real patients are live on this platform with this review still outstanding, by the owner's own explicit, informed choice (`docs/plan/01-decisions.md`'s D-33).
