@@ -95,8 +95,6 @@
   "workshops.index.viewDetails": "View details",
   "workshops.index.posterAlt": "Poster for {title}",
   "workshops.detail.dateLabel": "Date and time",
-  "workshops.detail.priceLabel": "Price",
-  "workshops.detail.capacityLabel": "Places available",
   "account.heading": "Your account",
   "account.description": "Sign in to see your care plan, appointments and messages.",
   "account.loading": "Checking your session…",

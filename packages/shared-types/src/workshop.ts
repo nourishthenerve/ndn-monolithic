@@ -17,9 +17,23 @@ export interface Workshop extends BaseRecord<WorkshopStatus> {
   /** Never 'deleted' — cancel (TASK 1.5.1) only ever transitions status, same discipline as ContentItem/Testimonial. */
   status: WorkshopStatus;
   dateTimeUtc: string;
-  capacity: number;
-  /** GBP pence, per D-13 — never a float. */
-  priceMinorUnits: number;
+  /**
+   * D-31 (2026-08-30): optional, not required, and never displayed on the
+   * public site. Workshops are announcement-only — no online registration
+   * exists to enforce a capacity limit against, so a number here would be
+   * decorative at best and misleading at worst (implying a cap nothing
+   * checks). Kept on the type only because TASK 1.5.2's own (built, never
+   * wired, never to be turned on — see stripe-checkout-registration.md)
+   * capacity-reservation logic still reads it if that code ever ran.
+   */
+  capacity?: number;
+  /**
+   * D-31 (2026-08-30): optional, not required, and never displayed on the
+   * public site — no online payment exists to charge it. GBP pence, per
+   * D-13, never a float, if ever set. Kept on the type for the same reason
+   * `capacity` is: TASK 1.5.2's own dead Stripe Checkout code still reads it.
+   */
+  priceMinorUnits?: number;
   posterKey?: string;
   details: Record<Locale, { title: string; description: string }>;
 }

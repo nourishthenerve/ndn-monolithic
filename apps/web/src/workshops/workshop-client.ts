@@ -14,11 +14,16 @@ const workshopDetailSchema = z.object({
   description: z.string(),
 });
 
+// D-31 (2026-08-30): `capacity`/`priceMinorUnits` deliberately not parsed
+// here — workshops are announcement-only, no registration or payment
+// exists on the public site, so this client has no use for either even
+// though the API response may still carry them (both are optional on
+// `Workshop` now, kept only for TASK 1.5.2's own dead Stripe code). A Zod
+// object schema without `.strict()` already ignores extra response fields,
+// so this is a genuine "don't need it" omission, not a shape mismatch.
 const workshopSchema = z.object({
   id: z.string(),
   dateTimeUtc: z.string(),
-  capacity: z.number(),
-  priceMinorUnits: z.number(),
   posterKey: z.string().optional(),
   details: z.record(z.string(), workshopDetailSchema),
 });
