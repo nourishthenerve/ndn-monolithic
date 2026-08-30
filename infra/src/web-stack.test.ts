@@ -276,21 +276,6 @@ describe('WebStack — CloudFront distribution', () => {
     });
   });
 
-  it('proxies /contact to the HTTP API same-origin, with caching disabled and all methods allowed', () => {
-    const template = synth();
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({
-        CacheBehaviors: Match.arrayWith([
-          Match.objectLike({
-            PathPattern: '/contact',
-            CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad',
-            ViewerProtocolPolicy: 'redirect-to-https',
-          }),
-        ]),
-      }),
-    });
-  });
-
   it('proxies /media/* to the media bucket via a second OAC origin, over TLS', () => {
     const template = synth();
     template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 2);
@@ -440,81 +425,11 @@ describe('WebStack — security headers policy', () => {
   });
 });
 
-describe('WebStack — contact form Lambda (TASK 1.4.1)', () => {
-  it('is reachable via a POST /contact route on the HTTP API', () => {
-    const template = synth();
-    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
-      RouteKey: 'POST /contact',
-    });
-  });
-
-  it('runs on arm64 / Node 22, with the Turnstile parameter name and From/To addresses wired through', () => {
-    const template = synth();
-    template.hasResourceProperties('AWS::Lambda::Function', {
-      Architectures: ['arm64'],
-      Runtime: 'nodejs22.x',
-      Environment: {
-        Variables: Match.objectLike({
-          TURNSTILE_SECRET_PARAMETER_NAME: '/ndn/turnstile-secret-key',
-          CONTACT_FORM_FROM_EMAIL: 'noreply@nourishthenerve.com',
-          CONTACT_FORM_TO_EMAIL: 'contact@nourishthenerve.com',
-        }),
-      },
-    });
-  });
-
-  it('grants exactly ssm:GetParameter on the Turnstile secret parameter, and ses:SendEmail scoped to the one verified identity', () => {
-    const template = synth();
-    template.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Effect: 'Allow',
-            Action: 'ssm:GetParameter',
-            Resource: Match.objectLike({
-              'Fn::Join': Match.arrayWith([
-                Match.arrayWith([Match.stringLikeRegexp('parameter/ndn/turnstile-secret-key')]),
-              ]),
-            }),
-          }),
-        ]),
-      }),
-    });
-    template.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({
-            Effect: 'Allow',
-            Action: 'ses:SendEmail',
-            // Two resources since the bounce/complaint follow-up: the
-            // identity *and* the configuration set the send names. Naming a
-            // set the role cannot use is an AccessDenied on every send.
-            Resource: Match.arrayWith([
-              Match.objectLike({
-                'Fn::Join': Match.arrayWith([
-                  Match.arrayWith([Match.stringLikeRegexp('identity/nourishthenerve.com')]),
-                ]),
-              }),
-              Match.objectLike({
-                'Fn::Join': Match.arrayWith([
-                  Match.arrayWith([Match.stringLikeRegexp('configuration-set/ndn-email')]),
-                ]),
-              }),
-            ]),
-          }),
-        ]),
-      }),
-    });
-  });
-
-  it('sends logs to an explicit log group with 14-day retention', () => {
-    const template = synth();
-    template.hasResourceProperties('AWS::Logs::LogGroup', {
-      LogGroupName: '/ndn/contact-form-function',
-      RetentionInDays: 14,
-    });
-  });
-});
+// D-32 (2026-08-30): the contact form Lambda/route/CloudFront-behavior
+// this describe block covered is deleted outright, not darkened — see
+// docs/runbooks/contact-form.md. `WebStack — Stripe webhook Lambda`
+// below already covers the one remaining ses:SendEmail grant in this
+// stack (D-31's own dark, unwired code).
 
 describe('WebStack — media upload Lambda (TASK 1.5.1 / 2.5.4)', () => {
   // TASK 2.5.4: this function now authenticates with the real Lambda
@@ -667,7 +582,7 @@ describe('WebStack — Stripe webhook Lambda (TASK 1.5.2)', () => {
     });
   });
 
-  it('grants ses:SendEmail scoped to the one verified identity, same as the contact form', () => {
+  it('grants ses:SendEmail scoped to the one verified identity', () => {
     const template = synthWithTable();
     const policies = template.findResources('AWS::IAM::Policy');
     const webhookPolicy = Object.values(policies).find((policy) =>
@@ -1087,16 +1002,13 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
     expect(alarmNames.filter((name) => name?.startsWith('ndn-email'))).toEqual([]);
   });
 
-  it('still sends through production’s configuration set, so the sender wiring stays identical', () => {
-    const template = synthEphemeral();
-    const senders = Object.values(template.findResources('AWS::Lambda::Function')).filter(
-      (fn) =>
-        (fn as { Properties?: { Environment?: { Variables?: Record<string, unknown> } } })
-          .Properties?.Environment?.Variables?.SES_CONFIGURATION_SET_NAME ===
-        SES_CONFIGURATION_SET_NAME,
-    );
-    expect(senders.length).toBeGreaterThan(0);
-  });
+  // D-32 (2026-08-30): this used to assert the contact form's sender kept
+  // pointing at production's configuration set even in an ephemeral
+  // stack. The contact form is deleted, and the one remaining sender
+  // (StripeWebhookFunction) only builds when `props.table` is given —
+  // never true for an ephemeral per-PR stack (no DataStack, see this
+  // describe block's own header). There is no sender left to assert
+  // against here.
 
   it('production mode is unaffected — still the fixed domains, certificate, and log group names', () => {
     const template = synth();
@@ -1118,13 +1030,14 @@ describe('WebStack — ephemeral per-PR mode (TASK 0.6.3)', () => {
   });
 });
 
-// TASK 1.6.2: this stack's flag-reading functions (contact-form-handler,
-// media-upload-handler, TASK 2.2.4's auth-token function, and (TASK
-// workshop-confirmation-sms) the Stripe webhook function — its Notifier's
-// SMS guard chain reads feature flags the same way reminder-sweep's does).
-// data-stack.test.ts carries the fuller assertions for the rest and for
-// the prefix's scoping; these prove the wiring reached this stack too,
-// rather than only the one it was written against.
+// TASK 1.6.2: this stack's flag-reading functions (media-upload-handler,
+// TASK 2.2.4's auth-token function, and (TASK workshop-confirmation-sms)
+// the Stripe webhook function — its Notifier's SMS guard chain reads
+// feature flags the same way reminder-sweep's does). data-stack.test.ts
+// carries the fuller assertions for the rest and for the prefix's
+// scoping; these prove the wiring reached this stack too, rather than
+// only the one it was written against. D-32 (2026-08-30): contact-form-
+// handler, formerly a fourth member of this list, is deleted.
 describe('WebStack — feature-flag reads', () => {
   it('gives every flag-reading function in this stack the prefix and a scoped read grant', () => {
     // TASK 2.5.4: media-upload only builds with an authorizer function
@@ -1138,10 +1051,10 @@ describe('WebStack — feature-flag reads', () => {
           .Properties?.Environment?.Variables?.FLAG_PARAMETER_NAME_PREFIX ===
         FLAG_PARAMETER_NAME_PREFIX,
     );
-    // contact-form, media-upload, TASK 2.2.4's auth-token function (whose
-    // flag is `auth.webSignIn.enabled`, the outermost gate on all four
-    // `/auth/*` routes), and the Stripe webhook function.
-    expect(withPrefix).toHaveLength(4);
+    // media-upload, TASK 2.2.4's auth-token function (whose flag is
+    // `auth.webSignIn.enabled`, the outermost gate on all four `/auth/*`
+    // routes), and the Stripe webhook function.
+    expect(withPrefix).toHaveLength(3);
 
     const grants = Object.values(template.findResources('AWS::IAM::Policy'))
       .flatMap(
@@ -1154,7 +1067,7 @@ describe('WebStack — feature-flag reads', () => {
       )
       .filter((s) => s.Sid === 'ReadFeatureFlags');
 
-    expect(grants).toHaveLength(4);
+    expect(grants).toHaveLength(3);
     for (const grant of grants) {
       expect(grant.Action).toBe('ssm:GetParameter');
       expect(JSON.stringify(grant.Resource)).toContain('parameter/ndn/flags/*');
@@ -1239,7 +1152,10 @@ describe('WebStack — SES bounce/complaint events', () => {
     }
   });
 
-  it('lets both senders name the configuration set, and authorises them to', () => {
+  // D-32 (2026-08-30): this stack had two SES senders (contact form,
+  // Stripe webhook); the contact form is deleted, leaving the one dark,
+  // never-wired sender D-31 already established for Stripe.
+  it('lets the remaining sender name the configuration set, and authorises it to', () => {
     const template = synthWithTable();
 
     const withConfigSet = Object.values(template.findResources('AWS::Lambda::Function')).filter(
@@ -1248,7 +1164,7 @@ describe('WebStack — SES bounce/complaint events', () => {
           .Properties?.Environment?.Variables?.SES_CONFIGURATION_SET_NAME ===
         SES_CONFIGURATION_SET_NAME,
     );
-    expect(withConfigSet).toHaveLength(2);
+    expect(withConfigSet).toHaveLength(1);
 
     // Naming a configuration set the role has no permission on turns every
     // send into an AccessDenied, so the grant must cover both resources.
@@ -1263,7 +1179,7 @@ describe('WebStack — SES bounce/complaint events', () => {
       )
       .filter((s) => s.Action === 'ses:SendEmail');
 
-    expect(sendStatements).toHaveLength(2);
+    expect(sendStatements).toHaveLength(1);
     for (const statement of sendStatements) {
       const resources = JSON.stringify(statement.Resource);
       expect(resources).toContain('identity/nourishthenerve.com');
@@ -1288,16 +1204,17 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
     const open = routeKeys(template, 'NONE');
 
     expect(open).toEqual(UNAUTHENTICATED_ROUTE_KEYS.filter((key) => open.includes(key)).sort());
-    // The site API's seven, named so a diff shows which one moved.
+    // The site API's six, named so a diff shows which one moved.
     // `POST /workshops/media-upload-url` left this list in TASK 2.5.4 — it
-    // sits behind the real authorizer now (see the CUSTOM assertion below).
+    // sits behind the real authorizer now (see the CUSTOM assertion
+    // below). `POST /contact` left it for good in D-32 — the contact
+    // form is deleted, not merely re-gated.
     expect(open).toEqual([
       'GET /auth/signin',
       'GET /health',
       'POST /auth/refresh',
       'POST /auth/signout',
       'POST /auth/token',
-      'POST /contact',
       'POST /stripe/webhook',
     ]);
   });
@@ -1326,7 +1243,6 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
       'POST /auth/refresh',
       'POST /auth/signout',
       'POST /auth/token',
-      'POST /contact',
     ]);
   });
 });

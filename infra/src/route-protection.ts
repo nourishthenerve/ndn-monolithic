@@ -75,7 +75,6 @@ export const PUBLIC_ROUTE_KEYS: readonly string[] = [
   'GET /health',
   'GET /testimonials',
   'GET /workshops',
-  'POST /contact',
   'POST /stripe/webhook',
   'POST /auth/refresh',
   'POST /auth/signout',

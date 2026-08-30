@@ -1,8 +1,14 @@
 # Contact form: SES relay, Turnstile, rate limiting (TASK 1.4.1)
 
-**Date:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.4.1](../plan/05-execution-plan.md) · **Requirements:** FR-WEB-04, C-11 · **Decisions:** ADR-0009 · **Depends on:** 1.2.1, 1.1.2, 0.6.1
+**Date:** 2026-08-14 · **Task:** [05-execution-plan.md § TASK 1.4.1](../plan/05-execution-plan.md) · **Requirements:** FR-WEB-04, C-11 · **Decisions:** ADR-0009, **superseded by D-32** · **Depends on:** 1.2.1, 1.1.2, 0.6.1
 
-## What this covers
+## Deleted, D-32 (2026-08-30) — WhatsApp replaces the form
+
+**The entire flow this runbook describes is deleted, not merely disabled.** The owner's own words: "remove this form, the patient/visit will contact to the whatsapp business account." `contact-form.ts`, `contact-form-handler.ts`, `ses.ts`'s `createSesContactEmailSender`, `apps/web/src/scripts/contact-form.ts`, the `contact.form.enabled` flag, `ContactFormFunction`/its role/its `/contact` route and CloudFront behavior — all gone from the codebase, along with every test that covered them. `POST /contact` no longer exists at any status code. `apps/web/src/pages/[locale]/contact.astro` is now a static link to the clinic's WhatsApp Business number (`apps/web/src/site-config.ts`'s `whatsappBusinessNumber`/`whatsappChatUrl`) — the identical human-staffed channel D-29 already established for patient account creation ([patient-account-provisioning.md](patient-account-provisioning.md)). Turnstile (`turnstile.ts`) and `rate-limiter.ts` are **not** deleted — testimonial submission (TASK 1.4.2) is their other, still-live caller.
+
+**What survives unchanged:** nothing operational — this was a single-purpose relay with no shared state for anything downstream to depend on, unlike `patient-registration.md`'s approval lifecycle. This file is kept as a historical record of what TASK 1.4.1 built and why, per this codebase's own "amend, don't delete" convention for runbooks. Everything from "What this covers" onward describes the retired mechanism and should be read as history, not current behaviour.
+
+## What this covers (as originally built — see the note above for its current status)
 
 The first working contact form this platform has ever had — the legacy site's own `POST /form` 404s (`legacy-estate.md`). A visitor's message is Turnstile-verified, rate-limited (3/hour per hashed source IP), then relayed by SES to the clinic's existing Zoho inbox, with `ReplyTo` set to the visitor's own address so a normal "Reply" reaches them directly.
 

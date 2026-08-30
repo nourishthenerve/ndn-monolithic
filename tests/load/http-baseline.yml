@@ -8,11 +8,12 @@
 #
 # Scoped to routes with no side effect worth worrying about at 10x volume:
 # a health check and a public content read. Deliberately excludes
-# /contact (sends a real email), /auth/* (real Cognito calls against a
-# shared account-wide rate limit — see load-testing.md's own note on this),
-# and anything that writes an appointment/message/SMS-triggering row — a
-# full authenticated-write load pass is out of this scenario's scope, named
-# honestly rather than silently attempted and mis-scaled.
+# /auth/* (real Cognito calls against a shared account-wide rate limit —
+# see load-testing.md's own note on this), and anything that writes an
+# appointment/message row — a full authenticated-write load pass is out
+# of this scenario's scope, named honestly rather than silently attempted
+# and mis-scaled. (/contact, excluded for the same "real send" reason
+# when this file was written, no longer exists at all — D-32, 2026-08-30.)
 #
 # Run against the disposable load-test stack (docs/runbooks/
 # load-testing.md) — never production. Two different hosts are involved:

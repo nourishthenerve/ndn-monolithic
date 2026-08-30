@@ -50,7 +50,6 @@ import {
   CLINICIAN_USER_POOL_DOMAIN_PREFIX,
   CERTIFICATE_ARN,
   CONTACT_FORM_FROM_EMAIL,
-  CONTACT_FORM_TO_EMAIL,
   DOMAIN_NAME,
   PATIENT_USER_POOL_CLIENT_ID,
   PATIENT_USER_POOL_DOMAIN_PREFIX,
@@ -61,7 +60,6 @@ import {
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   SITE_ORIGIN,
   STRIPE_WEBHOOK_SECRET_PARAMETER_NAME,
-  TURNSTILE_SECRET_PARAMETER_NAME,
   userPoolOAuthBaseUrl,
   WWW_DOMAIN_NAME,
 } from './config.js';
@@ -245,7 +243,7 @@ export class WebStack extends Stack {
       integration: new HttpLambdaIntegration('HealthIntegration', healthAlias),
     });
 
-    // Both SES senders below attach every message to this configuration
+    // Any SES sender below attaches every message to this configuration
     // set, so bounces and complaints become events and metrics rather than
     // only a silent suppression-list side effect. See email-events.ts.
     //
@@ -269,91 +267,15 @@ export class WebStack extends Stack {
     // nothing. The three loud failures aborted the deploy before that
     // could happen.
     //
-    // The two sender functions keep SES_CONFIGURATION_SET_NAME and its
-    // IAM grant in ephemeral stacks: the name resolves to production's
-    // set, which exists in the same account, and nothing in a PR
-    // environment sends mail (both senders are flag-gated off, and the
-    // account is still in the SES sandbox).
+    // D-32 (2026-08-30): the contact form's own sender is deleted; only
+    // StripeWebhookFunction's (D-31, dark, never wired) remains below. It
+    // keeps SES_CONFIGURATION_SET_NAME and its IAM grant in ephemeral
+    // stacks anyway: the name resolves to production's set, which exists
+    // in the same account, and nothing in a PR environment sends mail
+    // (flag-gated off, and the account is still in the SES sandbox).
     if (!props.ephemeral) {
       createEmailEventPipeline(this);
     }
-
-    // TASK 1.4.1: the contact form's Lambda + route. A separate function
-    // and role from HealthFunction — this one needs ssm:GetParameter (the
-    // Turnstile secret, D-14) and ses:SendEmail, neither of which the
-    // health check should ever hold. No DynamoDB/S3 access at all, so
-    // guardrails.ts's destructive-action guardrail (scoped to buckets/
-    // tables) doesn't apply here — see data-stack.ts for where it does.
-    const contactFormRole = new Role(this, 'ContactFormFunctionRole', {
-      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-    });
-
-    const contactFormFunction = new NodejsFunction(this, 'ContactFormFunction', {
-      entry: `${moduleDir}../../services/api/src/contact-form-handler.ts`,
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
-      memorySize: 128,
-      timeout: Duration.seconds(10),
-      role: contactFormRole,
-      environment: {
-        TURNSTILE_SECRET_PARAMETER_NAME,
-        CONTACT_FORM_FROM_EMAIL,
-        CONTACT_FORM_TO_EMAIL,
-        SES_CONFIGURATION_SET_NAME,
-        ...FLAG_ENVIRONMENT,
-      },
-      logGroup: createLogGroup(
-        this,
-        'ContactFormFunctionLogGroup',
-        logGroupName('contact-form-function'),
-        contactFormRole,
-      ),
-    });
-    grantFlagReads(this, contactFormRole);
-
-    contactFormRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadTurnstileSecret',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: TURNSTILE_SECRET_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
-
-    // Scoped to exactly the one verified sending identity (SES supports
-    // resource-level permissions on `identity/*` ARNs) — ses:SendEmail is
-    // also the narrowest action this function needs, nothing broader (no
-    // SendRawEmail, no template management).
-    contactFormRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'SendContactFormEmail',
-        effect: Effect.ALLOW,
-        actions: ['ses:SendEmail'],
-        // Both the identity and the configuration set: SESv2 authorises
-        // SendEmail against each resource the call names, so omitting the
-        // configuration set turns every send into an AccessDenied the
-        // moment ConfigurationSetName is set.
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'identity',
-            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
-          }),
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'configuration-set',
-            resourceName: SES_CONFIGURATION_SET_NAME,
-          }),
-        ],
-      }),
-    );
 
     // TASK 2.2.4: the token exchange. In this stack rather than
     // data-stack.ts because it belongs to the site's own API — the one
@@ -411,13 +333,6 @@ export class WebStack extends Stack {
         integration: authIntegration,
       });
     }
-
-    httpApi.addRoutes({
-      path: '/contact',
-      methods: [HttpMethod.POST],
-      authorizer: PUBLIC_ROUTE,
-      integration: new HttpLambdaIntegration('ContactFormIntegration', contactFormFunction),
-    });
 
     // TASK 1.5.1 step 3: the presigned-upload endpoint for workshop
     // posters — co-located with MediaBucket (rather than in
@@ -502,8 +417,9 @@ export class WebStack extends Stack {
     // TASK 1.5.2 (ADR-0010): the Stripe webhook function/route — placed
     // here (not alongside the checkout function in data-stack.ts) so it's
     // reachable at a stable custom-domain URL (`https://next.nourishthenerve.com/stripe/webhook`,
-    // proxied through this distribution below, same shape as `/contact`)
-    // for registering in the Stripe dashboard — a raw
+    // proxied through this distribution below, same same-origin shape
+    // `/health` above already uses) for registering in the Stripe
+    // dashboard — a raw
     // `execute-api.amazonaws.com` URL is fine functionally but isn't
     // guaranteed stable if `NdnDataStack`'s HttpApi is ever recreated. This
     // is the one function in this stack that needs `NdnDataStack`'s table
@@ -599,8 +515,8 @@ export class WebStack extends Stack {
         }),
       );
       // Scoped to exactly the one verified sending identity and the one
-      // configuration set, same shape SendContactFormEmail above — the
-      // registration-confirmation email reuses both, not a second of either.
+      // configuration set — the registration-confirmation email reuses
+      // both, not a second of either.
       stripeWebhookRole.addToPrincipalPolicy(
         new PolicyStatement({
           sid: 'SendRegistrationConfirmationEmail',
@@ -796,19 +712,6 @@ function handler(event) {
           cachePolicy: CachePolicy.CACHING_DISABLED,
           responseHeadersPolicy: securityHeaders,
         },
-        // TASK 1.4.1: same same-origin proxy shape as /health — the browser
-        // posts to this domain's own /contact path, so the submission is
-        // same-origin (no CORS needed) and covered by the CSP above. Shares
-        // the /health origin (same HttpApi, both routes on it).
-        '/contact': {
-          origin: new HttpOrigin(
-            `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
-          ),
-          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          allowedMethods: AllowedMethods.ALLOW_ALL,
-          cachePolicy: CachePolicy.CACHING_DISABLED,
-          responseHeadersPolicy: securityHeaders,
-        },
         // TASK 2.2.4: `/auth/*` on the same origin as the site, which is
         // what makes the whole flow same-origin and lets 1.2.3's CSP cover
         // it with no `connect-src` exception. `ALLOW_ALL` because three of
@@ -854,16 +757,16 @@ function handler(event) {
         // URLs (ADR-0005 note above), no cachePolicy override (defaults to
         // CACHING_OPTIMIZED, same as the default S3 behavior: these are
         // public, content-hashed-by-key static images, safe to cache at
-        // the edge, unlike /health and /contact which must never cache).
+        // the edge, unlike /health which must never cache).
         '/media/*': {
           origin: S3BucketOrigin.withOriginAccessControl(mediaBucket),
           viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           responseHeadersPolicy: securityHeaders,
         },
-        // TASK 1.5.2: same same-origin proxy shape as /health and
-        // /contact — Stripe posts to this domain's own /stripe/webhook
-        // path. Only present when `props.table` was given (see this
-        // constructor's own TASK 1.5.2 comment further up).
+        // TASK 1.5.2: same same-origin proxy shape as /health — Stripe
+        // posts to this domain's own /stripe/webhook path. Only present
+        // when `props.table` was given (see this constructor's own
+        // TASK 1.5.2 comment further up).
         ...(stripeWebhookFunction
           ? {
               '/stripe/webhook': {

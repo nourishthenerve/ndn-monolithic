@@ -33,11 +33,11 @@ describe('SsmFlagSource', () => {
   it('reads the flag name appended to the prefix, as a plain (undecrypted) parameter', async () => {
     ssmMock.on(GetParameterCommand).resolves({ Parameter: { Value: 'true' } });
 
-    await source().read('contact.form.enabled');
+    await source().read('content.authoring.enabled');
 
     const calls = ssmMock.commandCalls(GetParameterCommand);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.args[0].input).toEqual({ Name: '/ndn/flags/contact.form.enabled' });
+    expect(calls[0]?.args[0].input).toEqual({ Name: '/ndn/flags/content.authoring.enabled' });
     // A flag's state is not a secret — asking for decryption would need a
     // KMS grant these roles deliberately do not have.
     expect(calls[0]?.args[0].input).not.toHaveProperty('WithDecryption');
@@ -78,10 +78,10 @@ describe('SsmFlagSource', () => {
     error.name = 'ThrottlingException';
     ssmMock.on(GetParameterCommand).rejects(error);
 
-    expect(await source().read('contact.form.enabled')).toBeUndefined();
+    expect(await source().read('content.authoring.enabled')).toBeUndefined();
     expect(JSON.parse(String(warnSpy.mock.calls[0]?.[0]))).toEqual({
       msg: 'flags.ssm_read_failed',
-      parameterName: '/ndn/flags/contact.form.enabled',
+      parameterName: '/ndn/flags/content.authoring.enabled',
       reason: 'ThrottlingException',
     });
   });

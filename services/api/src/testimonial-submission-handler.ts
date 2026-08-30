@@ -112,7 +112,7 @@ export function createTestimonialSubmissionHttpHandler(
     };
 
     // Flag: testimonials.submission.enabled — default off, same
-    // "invisible until ready" convention as contact.form.enabled.
+    // "invisible until ready" convention as content.authoring.enabled.
     if (!(await deps.flags.isEnabled('testimonials.submission.enabled'))) {
       return respond(404, { error: 'NOT_FOUND' });
     }
