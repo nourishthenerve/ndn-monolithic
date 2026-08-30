@@ -14,9 +14,9 @@
 - **Track B — the patient-facing platform.** `patients.administration.enabled`, `assignment.enabled`, `patients.profile.enabled`, `clinicalRecords.enabled`, `assessments.enabled`, `appointments.enabled`, `contentAssignment.enabled`, `messaging.enabled`, `caseload.view.enabled`, `video.signalling.enabled`, `video.callAuthz.enabled`, `video.turn.enabled`. Every one of these either creates or exposes a real patient's data. **Gated by LL-05/LL-06 for a real patient** — D-29's own words: "TASK 5.5.3's own go-live gate for real patient data is unaffected" by the synthetic-patient proof already run. `auth.webSignIn.enabled` and `clinicians.administration.enabled` sit outside both tracks: they authenticate *staff and clinicians*, not patients, and R-04/LL-05/LL-06 are about patient erasure, not clinician accounts — both are already on, for real clinicians, since Phase 2 (below). **`appointments.reminders.enabled` removed from this track, permanently — D-32 (2026-08-30):** the flag itself no longer exists; a clinician reminds a patient over WhatsApp, by hand.
 - **`audit.readApi.enabled`** reads audit rows; per TASK 2.1.3's own design no row ever carries a `personal{}`/`clinical{}` value (repo-wide assertion, `dynamo-audit-log.test.ts`), so turning it on creates no new patient-data exposure regardless of which track's flags are already live. It can go on whenever a principal clinician needs the read, independent of the sequence below.
 
-## Current live state, verified 2026-08-29
+## Current live state, verified 2026-08-30
 
-`aws --profile ndn-prod ssm describe-parameters --region eu-west-2 --parameter-filters Key=Name,Option=BeginsWith,Values=/ndn/flags/` — **4 parameters exist, all `true`; every other flag in `flags.ts`'s `FlagName` union has never been set and therefore reads `false` (D-23's "unset means off" default, `CachedFlagReader.isEnabled`):**
+`aws --profile ndn-prod ssm describe-parameters --region eu-west-2 --parameter-filters Key=Name,Option=BeginsWith,Values=/ndn/flags/` — **9 parameters exist, all `true`; every other flag in `flags.ts`'s `FlagName` union has never been set and therefore reads `false` (D-23's "unset means off" default, `CachedFlagReader.isEnabled`):**
 
 | Flag | Value | Why it's already on |
 |---|---|---|
@@ -24,16 +24,23 @@
 | `clinicians.administration.enabled` | `true` | Needed to create/manage clinician accounts — same reasoning, not patient data. |
 | `patients.administration.enabled` | `true` | Turned on 2026-08-29 for D-29's synthetic-patient verification (`patient-account-provisioning.md`); **one real synthetic patient exists in production today** (`synthetic.test.patient1+ndn@example.com`), left on deliberately for continued synthetic testing, not for a real patient. |
 | `assignment.enabled` | `true` | Paired with `patients.administration.enabled` per that flag's own comment ("creating an account into a system with no route out of `pending` strands people there") — same synthetic-only status. |
+| `content.readApi.enabled` | `true` | **Track A, turned on 2026-08-30** — the owner's own explicit go-ahead, once every "human item" (Turnstile, TURN key, WhatsApp number, LL-04) was closed. `GET /content?keyword=blog` confirmed live (`{"items":[]}` — no posts authored yet). |
+| `content.authoring.enabled` | `true` | Track A, same pass — the blog is now editable, not just readable. |
+| `testimonials.submission.enabled` | `true` | Track A, same pass — real Turnstile (provisioned same day) now backs it, not the public test key. |
+| `testimonials.moderationQueue.enabled` | `true` | Track A, same pass — turned on together with submission per this document's own step 2 ordering. |
+| `workshops.enabled` | `true` | Track A, same pass — poster/detail pages are live, announcement-only (D-31). |
 
-Every other Track A and Track B flag is off. Nothing in this document changes that; it is a snapshot, re-checked at execution time, not assumed to still hold by the time any step below actually runs.
+Every Track B flag is still off. Nothing in this document changes that; it is a snapshot, re-checked at execution time, not assumed to still hold by the time any step below actually runs.
 
-## Track A — sequence (no LL-05/LL-06 dependency; an owner content/business decision)
+**Track A is flags-on, not content-on.** Turning these five flags on makes the routes/pages reachable; it does not create a single blog post, workshop, or testimonial. `GET /content?keyword=blog` returning `{"items":[]}` above is the proof — the blog, testimonials and workshops pages will keep showing their empty states until a clinician actually authors something or a real testimonial is submitted and approved.
+
+## Track A — sequence (no LL-05/LL-06 dependency; an owner content/business decision) — done, 2026-08-30
 
 Ordered by what each later step displays or links to, not by any code dependency — nothing here technically requires the step before it.
 
-1. `content.readApi.enabled`, `content.authoring.enabled` — the blog becomes real and editable.
-2. `testimonials.submission.enabled`, then `testimonials.moderationQueue.enabled` — a queue with nothing in it is a safe intermediate state; open submission before the moderation UI is live only if that ordering is deliberately accepted.
-3. `workshops.enabled` — poster/detail pages become real, announcement-only (D-31) — no capacity/price registration flow to sequence after it.
+1. ~~`content.readApi.enabled`, `content.authoring.enabled` — the blog becomes real and editable.~~ **Done.**
+2. ~~`testimonials.submission.enabled`, then `testimonials.moderationQueue.enabled` — a queue with nothing in it is a safe intermediate state; open submission before the moderation UI is live only if that ordering is deliberately accepted.~~ **Done, in that order.**
+3. ~~`workshops.enabled` — poster/detail pages become real, announcement-only (D-31) — no capacity/price registration flow to sequence after it.~~ **Done.**
 
 **`payments.stripeCheckout.enabled` is not step 4, or any step — it is never flipped, per D-31. `contact.form.enabled` is not a step either — the flag itself no longer exists, per D-32.** Both removed from this sequence rather than left as a step nobody runs, the same "named, not silently dropped" discipline this document already applies to `video.turn.enabled`'s own separate blocker.
 
