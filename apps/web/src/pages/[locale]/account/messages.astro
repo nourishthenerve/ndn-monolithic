@@ -39,16 +39,15 @@ const heading = t('messageThread.heading', undefined, locale);
 >
   <Heading level={1}>{heading}</Heading>
 
-  <RequireAuth
-    client:only="react"
-    loadingLabel={t('account.loading', undefined, locale)}
-    signedOut={
+  <RequireAuth client:only="react" loadingLabel={t('account.loading', undefined, locale)}>
+    <Fragment slot="signedOut">
       <p>
         {t('account.signedOut', undefined, locale)}{' '}
-        <SignInLink label={t('account.signIn', undefined, locale)} />
+        <SignInLink label={t('account.signInPatient', undefined, locale)} pool="patient" />
+        {' · '}
+        <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
       </p>
-    }
-  >
+    </Fragment>
     <MessageThread
       client:only="react"
       strings={{
