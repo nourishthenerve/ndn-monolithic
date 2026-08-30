@@ -88,10 +88,13 @@ export const LOG_INGESTION_ALARM_THRESHOLD_BYTES = 350_000_000;
 // same reason: CDK synth is happy with either. An eleventh entry here
 // breaks every deploy, so adding a log group means choosing which one it
 // displaces and recording the swap in UNMONITORED_LOG_GROUP_NAMES below.
+// D-32 (2026-08-30) removes `/ndn/contact-form-function` from this list —
+// the contact form is deleted, not displaced — leaving nine of the ten
+// slots this file's own comment above bounds the list to, not a tenth to
+// backfill.
 export const MONITORED_LOG_GROUP_NAMES = [
   '/ndn/health-function',
   '/ndn/smoke-test-function',
-  '/ndn/contact-form-function',
   '/ndn/testimonial-submission-function',
   '/ndn/testimonial-moderation-function',
   '/ndn/workshop-checkout-function',
@@ -294,13 +297,17 @@ export const TURN_RELAY_METRIC_NAME = 'EstimatedTurnRelayGB';
 // warning margin, well ahead of the real 1,000 GB ceiling.
 export const TURN_RELAY_ALARM_THRESHOLD_GB_PER_DAY = 17;
 
-// TASK 1.4.1 (ADR-0009): the contact-form relay's From/To addresses. From
-// is under the verified `nourishthenerve.com` domain identity (docs/
-// runbooks/ses-production-access.md); To is the existing Zoho inbox staff
-// already read. Not secret — plain deployment constants, same as
-// ALERT_EMAIL above.
+// TASK 1.4.1 (ADR-0009): originally the contact form's own From address;
+// D-32 (2026-08-30) deletes that form, but every SES sender this codebase
+// still wires (stripe-webhook-handler.ts, and — until D-32's own
+// notification-stripping lands — assignment/message/clinician-admin's
+// `Notifier`) shares this one verified `nourishthenerve.com` domain
+// identity (docs/runbooks/ses-production-access.md), so the constant
+// stays under its original name rather than being renamed mid-removal.
+// Not secret — a plain deployment constant, same as ALERT_EMAIL above.
+// The matching `CONTACT_FORM_TO_EMAIL` (the Zoho inbox the form relayed
+// to) had no other caller and is deleted with the form.
 export const CONTACT_FORM_FROM_EMAIL = 'noreply@nourishthenerve.com';
-export const CONTACT_FORM_TO_EMAIL = 'contact@nourishthenerve.com';
 
 // TASK 1.4.1: the SES domain identity verified in docs/runbooks/
 // ses-production-access.md — deliberately the apex `nourishthenerve.com`,
@@ -370,7 +377,7 @@ export const STRIPE_WEBHOOK_SECRET_PARAMETER_NAME = '/ndn/stripe-webhook-secret'
 
 // TASK 1.6.2: the SSM prefix every feature flag lives under — one plain
 // `String` parameter per flag, named `<prefix><FlagName>` (so
-// `/ndn/flags/contact.form.enabled`), holding exactly `true` or `false`.
+// `/ndn/flags/content.authoring.enabled`), holding exactly `true` or `false`.
 // Not SecureString: a flag's state is not a secret, and WithDecryption
 // would need a KMS grant for nothing. Shared by web-stack.ts/data-stack.ts
 // (grant ssm:GetParameter on the whole prefix and set the Lambda's

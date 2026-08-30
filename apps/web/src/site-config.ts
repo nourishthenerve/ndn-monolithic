@@ -44,10 +44,27 @@ export const blogContentType = 'blog';
 // "always passes" test site key — not secret, safe to build into static
 // HTML. [Owner action] Replace with the real site key from a Turnstile
 // widget created in the Cloudflare dashboard before flipping
-// `contact.form.enabled` on for real; see docs/runbooks/contact-form.md.
-// The matching secret key lives server-side only (SSM SecureString,
-// infra/src/config.ts's TURNSTILE_SECRET_PARAMETER_NAME), never here.
+// `testimonials.submission.enabled` on for real; see
+// docs/runbooks/testimonials.md. D-32 (2026-08-30): the contact form this
+// key was originally built for is deleted; testimonial submission is now
+// its only caller. The matching secret key lives server-side only (SSM
+// SecureString, infra/src/config.ts's TURNSTILE_SECRET_PARAMETER_NAME),
+// never here.
 export const turnstileSiteKey = '1x00000000000000000000AA';
+
+// D-32 (2026-08-30): the contact page's replacement for the deleted form —
+// a direct link to the clinic's WhatsApp Business number, the same
+// human-staffed channel D-29 already established for patient account
+// creation (docs/runbooks/patient-account-provisioning.md). [Owner action]
+// Replace with the real WhatsApp Business number before go-live; publishing
+// it is a content change, not an engineering one (the identical scoping
+// patient-account-provisioning.md already draws for this same number).
+export const whatsappBusinessNumber = '+44 00 0000 0000';
+
+/** `https://wa.me/<digits>` — wa.me accepts digits only, no `+`/spaces/hyphens. */
+export function whatsappChatUrl(number: string): string {
+  return `https://wa.me/${number.replace(/\D/g, '')}`;
+}
 
 // TASK 1.5.1: workshop posters are served same-origin, via
 // web-stack.ts's `/media/*` CloudFront behavior (Origin Access Control,

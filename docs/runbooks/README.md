@@ -24,7 +24,7 @@ This directory holds one runbook per task, or per closely-related task cluster �
 
 ## Public site, content, and commerce
 
-- [contact-form.md](contact-form.md) — SES relay, Turnstile, rate limiting (TASK 1.4.1)
+- [contact-form.md](contact-form.md) — SES relay, Turnstile, rate limiting (TASK 1.4.1); **deleted, not merely disabled, D-32 (2026-08-30)** — the form, its route, and its Lambda are gone from the codebase; the contact page links to WhatsApp instead
 - [content-authoring.md](content-authoring.md) — blog authoring, publish/unpublish, SEO (TASK 1.3.2)
 - [testimonials.md](testimonials.md) — moderation queue and consent record for published testimonials (TASK 1.4.2)
 - [workshops.md](workshops.md) — the workshop model, poster images, per-language detail pages (TASK 1.5.1)
@@ -89,7 +89,7 @@ Genuinely still open, owner-side, as of this pass (2026-08-28), **updated 2026-0
 - **D-29's staff-facing UI — built same day, 2026-08-29,** the day after this bullet first named it missing; corrected here rather than left stale. **Staff identity-verification training and the DPIA update remain not done**, by the owner's own deliberate choice named in [patient-account-provisioning.md](patient-account-provisioning.md): prove the technical mechanism with synthetic test patients first (now proven, live, end to end), defer legal/DPIA review until then. Not this index's job to close.
 - **LL-02 (UK SMS long code)** — not leased; AWS End User Messaging account confirmed still `SANDBOX` tier, 0 phone numbers, live-checked this pass. Blocks [sms-provider.md](sms-provider.md)'s real-account proof and [workshop-confirmation-sms.md](workshop-confirmation-sms.md).
 - **Cloudflare Realtime/Calls TURN key** — not provisioned; `/ndn/cloudflare-turn-api-token` confirmed absent from SSM, live-checked this pass. Named since Gate G4 as the one blocking action item for a real cross-network video call, [video-calls.md](video-calls.md); also the one flag in [go-live.md](go-live.md)'s own sequence with a non-LL blocker of its own.
-- **Real Turnstile widget + secret** — `contact-form.md` still runs Cloudflare's public test key; the real SSM SecureString parameter confirmed absent, live-checked this pass.
+- **Real Turnstile widget + secret** — `site-config.ts` still runs Cloudflare's public test key; the real SSM SecureString parameter confirmed absent, live-checked this pass. D-32 (2026-08-30) deletes the contact form this was originally built for — [testimonials.md](testimonials.md) is now its only live caller.
 - **The cold-start / feature-flag SSM latency finding** — priced, not fixed, [load-testing.md](load-testing.md)'s TASK 5.1.2 section. Owner decision named there.
 - **LL-05 (DPIA) and LL-06 (solicitor sign-off, R-04)** — deliberately deferred by the owner until proven with synthetic patients (now proven, per D-29's 2026-08-29 status update); still open, and the standing gate on every patient-facing flag beyond the four already on for synthetic testing. The sequence itself — mechanism-proven and ready — is now documented in [go-live.md](go-live.md) (TASK 5.5.3); flipping any of it for a real patient still waits on these two.
 

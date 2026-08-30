@@ -898,8 +898,10 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     expect(MONITORED_LOG_GROUP_NAMES).toContain('/ndn/authorizer-function');
     expect(MONITORED_LOG_GROUP_NAMES).not.toContain('/ndn/media-upload-function');
     expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/media-upload-function');
-    // The ten-slot ceiling budget-stack.ts's alarm cannot exceed.
-    expect(MONITORED_LOG_GROUP_NAMES).toHaveLength(10);
+    // The ten-slot ceiling budget-stack.ts's alarm cannot exceed — nine
+    // filled since D-32 (2026-08-30) removed contact-form-function and
+    // nothing has backfilled the freed slot.
+    expect(MONITORED_LOG_GROUP_NAMES).toHaveLength(9);
   });
 
   it('passes both pools and both clients to the authorizer, and no secret', () => {

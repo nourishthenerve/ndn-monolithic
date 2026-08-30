@@ -46,7 +46,7 @@ One SSM parameter per flag, named `/ndn/flags/<FlagName>`, holding exactly `true
 
 ```bash
 aws --profile ndn-prod ssm put-parameter \
-  --name /ndn/flags/contact.form.enabled \
+  --name /ndn/flags/content.authoring.enabled \
   --type String --value true --overwrite
 ```
 
@@ -62,7 +62,6 @@ Every name in `FlagName` (`services/api/src/flags.ts`) is a valid parameter suff
 |---|---|
 | `content.readApi.enabled` | `GET /content` — the public blog read API |
 | `content.authoring.enabled` | blog authoring/publish/unpublish |
-| `contact.form.enabled` | `POST /contact` |
 | `testimonials.submission.enabled` | public testimonial submission |
 | `testimonials.moderationQueue.enabled` | the admin moderation queue |
 | `workshops.enabled` | workshop read + authoring |

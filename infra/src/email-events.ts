@@ -1,5 +1,7 @@
-// Bounce/complaint/reject observability for the two SES senders in
-// web-stack.ts (contact-form relay, workshop registration confirmation).
+// Bounce/complaint/reject observability for web-stack.ts's SES sender(s).
+// D-32 (2026-08-30): the contact-form relay this originally covered
+// alongside the workshop registration confirmation is deleted; only the
+// dark, never-wired Stripe webhook sender (D-31) remains.
 //
 // What existed before this: SES's account-level suppression list (on, for
 // BOUNCE and COMPLAINT) and default feedback forwarding. Those are real,
