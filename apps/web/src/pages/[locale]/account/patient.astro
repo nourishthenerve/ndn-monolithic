@@ -121,6 +121,6 @@ const heading = t('patientProfile.heading', undefined, locale);
         versionLabel: t('clinicalRecordTimeline.version', undefined, locale),
       }}
     />
-    <SignOutButton label={t('account.signOut', undefined, locale)} />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

@@ -86,6 +86,6 @@ const heading = t('patientAdmin.heading', undefined, locale);
         resetError: t('patientAdmin.resetError', undefined, locale),
       }}
     />
-    <SignOutButton label={t('account.signOut', undefined, locale)} />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>
