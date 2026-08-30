@@ -35,8 +35,17 @@ export interface SignInPanelProps {
 
 const defaultClient = createSessionClient();
 
-export function SignInLink({ label }: { readonly label: string }): ReactNode {
-  return <Link href="/auth/signin">{label}</Link>;
+// `pool` mirrors `auth-routes.ts`'s own `poolFrom()` convention exactly:
+// anything that isn't `'clinician'` is the patient pool, so omitting the
+// prop (every call site before this one) is unchanged behaviour.
+export function SignInLink({
+  label,
+  pool,
+}: {
+  readonly label: string;
+  readonly pool?: 'patient' | 'clinician';
+}): ReactNode {
+  return <Link href={pool === 'clinician' ? '/auth/signin?pool=clinician' : '/auth/signin'}>{label}</Link>;
 }
 
 export function SignOutButton({
