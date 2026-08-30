@@ -32,7 +32,9 @@ Deliberately **one fixed partition value**, the same "`_all`" shape `TESTIMONIAL
 
 No `Scan` anywhere in this pattern.
 
-## GSI4, proved before code (TASK 3.4.3)
+## GSI4, proved before code (TASK 3.4.3) — removed, D-32 (2026-08-30)
+
+**GSI4 no longer exists.** The reminder sweep it existed for is deleted outright — the owner's own words: "remove this reminder thing, the clinician handling whatsapp will send a reminder manually." This section's proof is kept, unedited, as the historical record of why the index looked the way it did while it existed; `infra/src/data-stack.ts` no longer calls `addGlobalSecondaryIndex` for it, `Appointment.reminder_sent_at` no longer exists on the type, and this table now has three GSIs, not four. Full reasoning: [01-decisions.md](../plan/01-decisions.md)'s D-32, [docs/runbooks/appointment-reminders.md](../runbooks/appointment-reminders.md).
 
 `04-data-model-rbac.md`: "GSI4 appointment-window lookups for reminders" — named since the plan's first draft, never built until now. One access pattern, with no natural per-clinician or per-patient partition (unlike GSI1/GSI3's fixed-actor patterns): "every scheduled, not-yet-reminded appointment starting in roughly the next hour, across every clinician and patient."
 

@@ -40,8 +40,6 @@ import {
   WebSocketLambdaIntegration,
 } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AttributeType, BillingMode, ProjectionType, Table } from 'aws-cdk-lib/aws-dynamodb';
-import { Rule, Schedule } from 'aws-cdk-lib/aws-events';
-import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Architecture, Runtime, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -61,7 +59,6 @@ import {
   SES_CONFIGURATION_SET_NAME,
   SES_EMAIL_IDENTITY_DOMAIN,
   SITE_ORIGIN,
-  SMS_ORIGINATION_IDENTITY,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
   WWW_DOMAIN_NAME,
@@ -81,7 +78,6 @@ const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 const GSI1_INDEX_NAME = 'GSI1';
 const GSI2_INDEX_NAME = 'GSI2';
 const GSI3_INDEX_NAME = 'GSI3';
-const GSI4_INDEX_NAME = 'GSI4';
 
 
 export interface DataStackProps extends StackProps {
@@ -204,27 +200,11 @@ export class DataStack extends Stack {
       projectionType: ProjectionType.KEYS_ONLY,
     });
 
-    // TASK 3.4.3: appointment-window lookups for reminders, proved
-    // against this shape in docs/adr/0002-database.md before this index
-    // was added — named in 04-data-model-rbac.md since the plan's first
-    // draft, built only now that a real caller (the reminder sweep)
-    // exists. Sparse: only an appointment row carries gsi4pk/gsi4sk, and
-    // only while it was scheduled for the future at the moment it was
-    // created (dynamo-store.ts's DynamoAppointmentStore.create) —
-    // TASK 3.4.2's own cancel never removes either attribute, so a
-    // cancelled appointment stays a real GSI4 row; excluding it from a
-    // live sweep is the read's own job (the same "index gives
-    // candidates, the read confirms them" split GSI1's own cancelled-row
-    // exclusion already established for the calendar read). KEYS_ONLY,
-    // the same reasoning GSI1/GSI3 both state — the sweep's own read
-    // follows up with one GetItem per candidate regardless of what this
-    // index projects.
-    this.table.addGlobalSecondaryIndex({
-      indexName: GSI4_INDEX_NAME,
-      partitionKey: { name: 'gsi4pk', type: AttributeType.STRING },
-      sortKey: { name: 'gsi4sk', type: AttributeType.STRING },
-      projectionType: ProjectionType.KEYS_ONLY,
-    });
+    // TASK 3.4.3 added GSI4 here for appointment-window lookups feeding
+    // the reminder sweep — D-32 (2026-08-30) deletes the sweep outright
+    // (a clinician now reminds a patient over WhatsApp, by hand), and
+    // GSI4 was its only caller (docs/adr/0002-database.md's own proof),
+    // so this index is removed with it rather than left querying nothing.
 
     const logGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-read-function`
@@ -256,9 +236,6 @@ export class DataStack extends Stack {
     const appointmentLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/appointment-function`
       : '/ndn/appointment-function';
-    const reminderSweepLogGroupName = props.prLabel
-      ? `/ndn/${props.prLabel}/reminder-sweep-function`
-      : '/ndn/reminder-sweep-function';
     const contentAssignmentLogGroupName = props.prLabel
       ? `/ndn/${props.prLabel}/content-assignment-function`
       : '/ndn/content-assignment-function';
@@ -1762,139 +1739,11 @@ export class DataStack extends Stack {
       integration: appointmentIntegration,
     });
 
-    // TASK 3.4.3: the 1-hour reminder sweep — no HTTP route, no
-    // `authorizer:`/`can()` gate (there is no caller to authorise; an
-    // EventBridge scheduled rule invokes this directly), and its own
-    // least-privilege role, separate from `AppointmentFunction`'s: this
-    // is the one function in this stack that reaches a real SMS provider
-    // send and a real SES send, and keeping those grants off every
-    // other role means a future change to this function's own policy can
-    // never silently widen theirs.
-    const reminderSweepRole = new Role(this, 'ReminderSweepFunctionRole', {
-      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
-    });
-
-    const reminderSweepFunction = new NodejsFunction(this, 'ReminderSweepFunction', {
-      entry: `${moduleDir}../../services/api/src/reminder-sweep-handler.ts`,
-      handler: 'handler',
-      runtime: Runtime.NODEJS_22_X,
-      architecture: Architecture.ARM_64,
-      memorySize: 128,
-      timeout: Duration.seconds(30),
-      role: reminderSweepRole,
-      environment: {
-        PRINCIPAL_TABLE_NAME: this.table.tableName,
-        AUDIT_TABLE_NAME: this.table.tableName,
-        NOTIFICATION_TABLE_NAME: this.table.tableName,
-        REMINDER_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
-        SES_CONFIGURATION_SET_NAME,
-        SMS_ORIGINATION_IDENTITY,
-        ...FLAG_ENVIRONMENT,
-      },
-      logGroup: createLogGroup(this, 'ReminderSweepFunctionLogGroup', reminderSweepLogGroupName, reminderSweepRole),
-    });
-    grantFlagReads(this, reminderSweepRole);
-
-    // `GetItem` (the follow-up read GSI4's own `KEYS_ONLY` projection
-    // requires) and `UpdateItem` (`claimForReminder`'s atomic claim) —
-    // both on `PAT#*` alone. Deliberately no `PutItem`/audit-partition
-    // grant here: `reminder-sweep.ts`'s own header explains why this
-    // function never writes an audit row (no principal acted), so the
-    // `DynamoAuditLog`/`AuditWriter` this role's repositories are
-    // constructed with — required only to satisfy `AppointmentRepository`/
-    // `PatientRepository`'s own constructors — is wired but genuinely
-    // unreachable code, the identical "grant matches what the code can
-    // reach, not what the type merely requires" discipline
-    // `assignmentRole`'s own `ReadClinicianAccounts` statement (read-only,
-    // narrower than `ClinicianAdminFunction`'s own write grant) already
-    // establishes.
-    reminderSweepRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadAndClaimPatientAppointments',
-        effect: Effect.ALLOW,
-        actions: ['dynamodb:GetItem', 'dynamodb:UpdateItem'],
-        resources: [this.table.tableArn],
-        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
-      }),
-    );
-    // GSI4's own index ARN, `dynamodb:Query` only (never `Scan`) — the
-    // identical shape `patientRole`'s own `QueryOwnCaseloadIndex` and
-    // `appointmentRole`'s own `QueryClinicianCalendarIndex` statements
-    // already use for GSI1.
-    reminderSweepRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'QueryReminderWindowIndex',
-        effect: Effect.ALLOW,
-        actions: ['dynamodb:Query'],
-        resources: [`${this.table.tableArn}/index/${GSI4_INDEX_NAME}`],
-      }),
-    );
-    // The delivery log (`notification-log.ts`'s durable record — this
-    // flow's own audit trail, per the comment above) and the real
-    // monthly SMS spend counter (`dynamo-sms-spend-cap.ts`) — both
-    // `PutItem`/`UpdateItem` on their own partition prefixes alone.
-    reminderSweepRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'WriteDeliveryLog',
-        effect: Effect.ALLOW,
-        actions: ['dynamodb:PutItem'],
-        resources: [this.table.tableArn],
-        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['NOTIFICATION#*'] } },
-      }),
-    );
-    reminderSweepRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'WriteSmsSpendCounter',
-        effect: Effect.ALLOW,
-        actions: ['dynamodb:UpdateItem'],
-        resources: [this.table.tableArn],
-        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['SMS_SPEND#*'] } },
-      }),
-    );
-    attachDestructiveActionGuardrail(reminderSweepRole, { buckets: [], tables: [this.table] });
-    attachAuditPartitionReadGuardrail(reminderSweepRole, this.table);
-    reminderSweepRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'SendReminderEmail',
-        effect: Effect.ALLOW,
-        actions: ['ses:SendEmail'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'identity',
-            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
-          }),
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'configuration-set',
-            resourceName: SES_CONFIGURATION_SET_NAME,
-          }),
-        ],
-      }),
-    );
-    // Resource-unscoped, deliberately and temporarily: `SMS_ORIGINATION_
-    // IDENTITY` (config.ts) is empty until a real phone number/sender ID
-    // is leased in AWS End User Messaging (a manual, out-of-band AWS
-    // step — docs/runbooks/appointment-reminders.md), so there is no real
-    // resource ARN yet to scope this to. The action itself stays tightly
-    // scoped to the one API call `sms-provider.ts` ever issues; narrow
-    // this statement's `resources` to the leased identity's own ARN the
-    // same day it's provisioned.
-    reminderSweepRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'SendReminderSms',
-        effect: Effect.ALLOW,
-        actions: ['sms-voice:SendTextMessage'],
-        resources: ['*'],
-      }),
-    );
-
-    // rate(15 minutes): comfortably inside the 1-hour reminder window
-    // with margin for a missed tick — this task's own step 3.
-    new Rule(this, 'ReminderSweepSchedule', {
-      schedule: Schedule.rate(Duration.minutes(15)),
-      targets: [new LambdaFunction(reminderSweepFunction)],
-    });
+    // TASK 3.4.3 built the 1-hour reminder sweep here — its own Lambda,
+    // role, and `rate(15 minutes)` EventBridge rule, reaching a real SMS
+    // provider send and a real SES send. D-32 (2026-08-30) deletes all of
+    // it: a clinician now reminds a patient over WhatsApp, by hand — see
+    // docs/runbooks/appointment-reminders.md.
 
     // TASK 3.5.1: content assignment — a clinician linking existing,
     // published content to a patient, and the patient's own hydrated

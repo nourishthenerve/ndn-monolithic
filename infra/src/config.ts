@@ -190,11 +190,6 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // flag. The same bounded-by-patient-count reasoning as
   // assessment-function above. Displacing nothing.
   '/ndn/appointment-function',
-  // TASK 3.4.3: a scheduled sweep, not a per-request function — volume is
-  // bounded by appointment count and a fixed rate(15 minutes) cadence,
-  // not traffic, the same reasoning every low-volume function above
-  // carries. Displacing nothing.
-  '/ndn/reminder-sweep-function',
   // TASK 3.5.1: assigning content to a patient and reading the assigned
   // list, behind a default-off flag. The same bounded-by-patient-count
   // reasoning as appointment-function above. Displacing nothing.
@@ -224,8 +219,9 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   '/ndn/turn-credentials-function',
   // D-22: a fixed rate(1 day) schedule — one invocation, one log line, per
   // day, the lowest and most predictable volume of any function in the
-  // estate. The same "scheduled, not traffic-driven" reasoning
-  // reminder-sweep-function above already carries. Displacing nothing.
+  // estate — the same "scheduled, not traffic-driven" reasoning D-32
+  // (2026-08-30) deleted `/ndn/reminder-sweep-function` alongside.
+  // Displacing nothing.
   '/ndn/backup-export-function',
 ];
 

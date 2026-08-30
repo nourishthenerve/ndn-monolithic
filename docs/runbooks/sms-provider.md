@@ -1,8 +1,12 @@
 # SMS provider: AWS End User Messaging (TASK 2.3.2)
 
-**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.3.2](../plan/05-execution-plan.md) · **Requirements:** C-02, NFR-09 · **Decisions:** ADR-0008 (resolved by this task), D-11 · **Risks:** [R-01, R-02](../plan/02-risk-register.md) · **Long-lead:** LL-02 · **Depends on:** 2.3.1, 0.5.3, 0.5.1
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.3.2](../plan/05-execution-plan.md) · **Requirements:** C-02, NFR-09 · **Decisions:** ADR-0008 (resolved by this task), D-11, **amended by D-32** · **Risks:** [R-01, R-02](../plan/02-risk-register.md) · **Long-lead:** LL-02 (closed as moot) · **Depends on:** 2.3.1, 0.5.3, 0.5.1
 
-## What this covers
+## Amendment, D-32 (2026-08-30) — unreachable, not deleted
+
+This platform's only SMS template, named throughout this file — the appointment reminder — is deleted along with the sweep that sent it (TASK 3.4.3, D-32). No code path calls `SmsProvider`/`createAwsEndUserMessagingSmsProvider` any more. Everything below is kept as the historical record of the real provider decision and its live pricing proof; nothing here is wrong, it is simply unreachable — the same "dark, unreachable, not removed" posture D-31 already holds for Stripe. LL-02 (leasing a real UK SMS identity) is closed as moot for the same reason.
+
+## What this covers (as originally built — see the amendment above for its current status)
 
 [`sms-hard-cap.md`](sms-hard-cap.md) (TASK 0.5.3) built every guard an SMS send has to pass and proved, by construction, that "there is no code path here, in a test or otherwise, that can send a real SMS." This task is the one that changes that sentence: it re-verifies both candidate providers' live UK prices, chooses one, and wires it in behind those same guards, in the same order, adding one call at the end of the chain rather than moving anything that was already there.
 

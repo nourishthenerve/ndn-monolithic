@@ -15,7 +15,7 @@ This directory holds one runbook per task, or per closely-related task cluster �
 - [iac-baseline.md](iac-baseline.md) — DNS, ACM certificate, CloudFront, S3, the health-check Lambda (TASK 0.4.1)
 - [budgets-cost-alarms.md](budgets-cost-alarms.md) — the `£20` budget, alert thresholds, anomaly detection (TASK 0.5.1)
 - [log-retention-volume-control.md](log-retention-volume-control.md) — 14-day log retention, sampled logging, the log-volume alarm, and the TASK 5.1.2-era finding that every hand-rolled Lambda role had never been granted permission to write its own logs (TASK 0.5.2)
-- [sms-hard-cap.md](sms-hard-cap.md) — the atomic monthly SMS spend cap, built before any SMS could be sent (TASK 0.5.3)
+- [sms-hard-cap.md](sms-hard-cap.md) — the atomic monthly SMS spend cap, built before any SMS could be sent (TASK 0.5.3); **unreachable since D-32 (2026-08-30)** — the reminder sweep, deleted, was the only caller that could ever have exercised it; kept in place, unused, not deleted
 - [feature-flags.md](feature-flags.md) — the SSM-backed, cached, default-off flag store (TASK 0.6.1)
 - [rollback.md](rollback.md) — canary alias deploy, smoke test, automatic rollback (TASK 0.6.2)
 - [ephemeral-pr-environments.md](ephemeral-pr-environments.md) — a disposable `WebStack` copy per open PR, destroyed in the same CI run (TASK 0.6.3)
@@ -53,14 +53,14 @@ This directory holds one runbook per task, or per closely-related task cluster �
 - [clinical-record.md](clinical-record.md) — diagnosis and care plan, versioned, clinician-authored, with private notes (TASK 3.2.1)
 - [assessment-forms.md](assessment-forms.md) — assessment forms, the `visible{}`/`private{}` two-row split (TASK 3.3.1)
 - [appointments.md](appointments.md) — appointment scheduling and the clinician calendar, GSI1's second half (TASK 3.4.1)
-- [appointment-reminders.md](appointment-reminders.md) — the 1-hour reminder sweep, GSI4, and the first real SMS send (TASK 3.4.3)
+- [appointment-reminders.md](appointment-reminders.md) — the 1-hour reminder sweep, GSI4, and the first real SMS send (TASK 3.4.3); **deleted, not merely disabled, D-32 (2026-08-30)** — a clinician now reminds a patient over WhatsApp, by hand
 - [content-assignment.md](content-assignment.md) — a clinician assigning existing content to a patient (TASK 3.5.1)
 - [messaging.md](messaging.md) — rate-limited patient↔clinician messaging (TASK 3.6.1)
 
 ## Notifications
 
 - [notifications.md](notifications.md) — the notification abstraction: email/SMS, defined degradation, never a silent drop (TASK 2.3.1)
-- [sms-provider.md](sms-provider.md) — AWS End User Messaging as the real SMS provider, ADR-0008's rate correction (TASK 2.3.2)
+- [sms-provider.md](sms-provider.md) — AWS End User Messaging as the real SMS provider, ADR-0008's rate correction (TASK 2.3.2); **unreachable since D-32 (2026-08-30)** — its one real caller (the reminder sweep) is deleted; kept in place, unused, not deleted
 - [email-events.md](email-events.md) — SES bounce/complaint handling, the SNS event pipeline, its own confirmed subscription
 - [workshop-confirmation-sms.md](workshop-confirmation-sms.md) — see Public site section above (also a notifications task)
 
@@ -87,7 +87,7 @@ Genuinely still open, owner-side, as of this pass (2026-08-28), **updated 2026-0
 
 - **LL-01 (SES production access)** — denied 2026-08-21, [ses-production-access.md](ses-production-access.md). Blocks the clinician-invite-email check named in [web-authentication.md](web-authentication.md); no longer blocks a patient check — D-29 (2026-08-29) removed patient sign-in's own dependency on it, see [patient-account-provisioning.md](patient-account-provisioning.md).
 - **D-29's staff-facing UI — built same day, 2026-08-29,** the day after this bullet first named it missing; corrected here rather than left stale. **Staff identity-verification training and the DPIA update remain not done**, by the owner's own deliberate choice named in [patient-account-provisioning.md](patient-account-provisioning.md): prove the technical mechanism with synthetic test patients first (now proven, live, end to end), defer legal/DPIA review until then. Not this index's job to close.
-- **LL-02 (UK SMS long code)** — not leased; AWS End User Messaging account confirmed still `SANDBOX` tier, 0 phone numbers, live-checked this pass. Blocks [sms-provider.md](sms-provider.md)'s real-account proof and [workshop-confirmation-sms.md](workshop-confirmation-sms.md).
+- ~~**LL-02 (UK SMS long code)** — not leased; AWS End User Messaging account confirmed still `SANDBOX` tier, 0 phone numbers, live-checked this pass. Blocks [sms-provider.md](sms-provider.md)'s real-account proof and [workshop-confirmation-sms.md](workshop-confirmation-sms.md).~~ **Closed as moot, D-32 (2026-08-30)** — the appointment reminder sweep, the only real caller SMS sending could ever have had, is deleted; there is nothing left for a leased number to serve. Corrected here rather than left stale.
 - **Cloudflare Realtime/Calls TURN key** — not provisioned; `/ndn/cloudflare-turn-api-token` confirmed absent from SSM, live-checked this pass. Named since Gate G4 as the one blocking action item for a real cross-network video call, [video-calls.md](video-calls.md); also the one flag in [go-live.md](go-live.md)'s own sequence with a non-LL blocker of its own.
 - **Real Turnstile widget + secret** — `site-config.ts` still runs Cloudflare's public test key; the real SSM SecureString parameter confirmed absent, live-checked this pass. D-32 (2026-08-30) deletes the contact form this was originally built for — [testimonials.md](testimonials.md) is now its only live caller.
 - **The cold-start / feature-flag SSM latency finding** — priced, not fixed, [load-testing.md](load-testing.md)'s TASK 5.1.2 section. Owner decision named there.
