@@ -108,6 +108,6 @@ const heading = t('videoCall.heading', undefined, locale);
         leaveLabel: t('videoCall.leave', undefined, locale),
       }}
     />
-    <SignOutButton label={t('account.signOut', undefined, locale)} />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

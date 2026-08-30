@@ -38,6 +38,6 @@ const heading = t('account.heading', undefined, locale);
       </p>
     </Fragment>
     <p>{t('account.signedInIntro', undefined, locale)}</p>
-    <SignOutButton label={t('account.signOut', undefined, locale)} />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

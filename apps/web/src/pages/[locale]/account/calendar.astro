@@ -71,6 +71,6 @@ const heading = t('calendar.heading', undefined, locale);
         caption: heading,
       }}
     />
-    <SignOutButton label={t('account.signOut', undefined, locale)} />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

@@ -62,6 +62,6 @@ const heading = t('messageThread.heading', undefined, locale);
         rateLimitedLabel: t('messageThread.rateLimited', undefined, locale),
       }}
     />
-    <SignOutButton label={t('account.signOut', undefined, locale)} />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>
