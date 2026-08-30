@@ -63,6 +63,9 @@
 // see `patient-admin-handler.ts`'s own header for why `email_verified` is
 // still set `true` regardless.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import {
@@ -90,6 +93,36 @@ import {
   PATIENT_LOGIN_DOMAIN_NAME,
   PATIENT_USER_POOL_NAME,
 } from './config.js';
+
+const moduleDir = fileURLToPath(new URL('.', import.meta.url));
+
+// Amendment, 2026-08-30 — a favicon, the one piece of branding asked for.
+// `managed-login-branding-settings.json` is not hand-written: it is
+// Cognito's own live default rendering, captured verbatim via
+// `describe-managed-login-branding-by-client --return-merged-resources`
+// against the deployed patient pool the same day, then re-applied as an
+// explicit `settings` object. That capture-and-replay is why this exists
+// at all — `useCognitoProvidedValues: true` (below, until this
+// amendment) accepts and stores a custom `assets` array without error,
+// but confirmed live, the rendered page never uses it; supplying the
+// real defaults back as `settings` is the only way found to keep every
+// other pixel unchanged while adding one. `favicon.svg`/`favicon.ico`
+// are the same files `apps/web/public` serves for the site itself, read
+// from there rather than duplicated, the same cross-package `moduleDir`
+// reach `web-stack.ts`'s own Lambda `entry` paths already use.
+const managedLoginBrandingSettings: unknown = JSON.parse(
+  readFileSync(`${moduleDir}managed-login-branding-settings.json`, 'utf-8'),
+);
+const managedLoginBrandingAssets = (() => {
+  const svg = readFileSync(`${moduleDir}../../apps/web/public/favicon.svg`).toString('base64');
+  const ico = readFileSync(`${moduleDir}../../apps/web/public/favicon.ico`).toString('base64');
+  return [
+    { category: 'FAVICON_SVG', colorMode: 'LIGHT', extension: 'SVG', bytes: svg },
+    { category: 'FAVICON_SVG', colorMode: 'DARK', extension: 'SVG', bytes: svg },
+    { category: 'FAVICON_ICO', colorMode: 'LIGHT', extension: 'ICO', bytes: ico },
+    { category: 'FAVICON_ICO', colorMode: 'DARK', extension: 'ICO', bytes: ico },
+  ];
+})();
 
 // 60 minutes for the short-lived tokens and 30 days for the refresh token
 // (TASK 2.2.1 step 6). The refresh token's life is what 2.2.4's cookie
@@ -401,19 +434,23 @@ export class AuthStack extends Stack {
     // Cognito returns "Login pages unavailable. Please contact an
     // administrator." (403) — until a branding style is explicitly
     // assigned to the app client. This is not optional configuration on
-    // top of a working page; without it, the page does not exist. AWS's
-    // own default branding is enough (`useCognitoProvidedValues: true`) —
-    // this stack has no custom visual identity to apply, only a working
-    // login page to have at all.
+    // top of a working page; without it, the page does not exist.
+    //
+    // `settings`/`assets`, not `useCognitoProvidedValues: true` any more
+    // — this amendment's own header above explains why the favicon
+    // needed the switch. `managedLoginBrandingSettings` is Cognito's own
+    // captured defaults, so this is otherwise a no-visual-change deploy.
     new CfnManagedLoginBranding(this, 'PatientManagedLoginBranding', {
       userPoolId: this.patientUserPool.userPoolId,
       clientId: this.patientUserPoolClient.userPoolClientId,
-      useCognitoProvidedValues: true,
+      settings: managedLoginBrandingSettings,
+      assets: managedLoginBrandingAssets,
     });
     new CfnManagedLoginBranding(this, 'ClinicianManagedLoginBranding', {
       userPoolId: this.clinicianUserPool.userPoolId,
       clientId: this.clinicianUserPoolClient.userPoolClientId,
-      useCognitoProvidedValues: true,
+      settings: managedLoginBrandingSettings,
+      assets: managedLoginBrandingAssets,
     });
 
     // The one value the custom-domain amendment above still needs a human
