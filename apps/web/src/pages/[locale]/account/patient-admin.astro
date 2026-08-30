@@ -19,7 +19,7 @@ import { Heading } from '@ndn/ui';
 
 import { PatientAdminPanel } from '../../../account/PatientAdminPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink } from '../../../auth/SignInPanel.js';
+import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -86,5 +86,6 @@ const heading = t('patientAdmin.heading', undefined, locale);
         resetError: t('patientAdmin.resetError', undefined, locale),
       }}
     />
+    <SignOutButton label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

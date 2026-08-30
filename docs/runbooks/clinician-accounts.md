@@ -27,6 +27,10 @@ Both steps deployed and exercised for real against `ndn-prod` — not simulated,
 
 **Left deactivated afterward, deliberately** — unlike D-29's own synthetic patient (left active, for the owner's own stated continued-testing intent), a synthetic clinician has no "pending" state to hide behind in the real clinician roster, so this one is disabled rather than left as a second, indefinitely-visible entry alongside the one real sub-clinician. The mechanism is proven; nothing about leaving it deactivated risks anything, since re-running this same verification at any time reproduces the identical result. No plaintext password or TOTP secret persisted anywhere — both existed only in the Lambda response and the scratch verification script's own arguments, neither retained after this pass.
 
+## Status update, 2026-08-30 — the staff-facing UI, built
+
+The previous status update's own words — "no staff-facing UI exists yet for clinician creation" — no longer hold. `apps/web/src/pages/[locale]/account/clinician-admin.astro` and `apps/web/src/account/ClinicianAdminPanel.tsx` are the same "principal signs in, fills a form, gets a one-time password/TOTP secret back" shape `PatientAdminPanel.tsx` already built for D-29, calling the same `POST /clinicians` this file documents — no new API, no behaviour change, only the browser surface that was missing. Deactivate/reactivate have no panel of their own yet; `POST /clinicians/{id}/deactivate|reactivate` remain API-only, same gap this file's own "what was deliberately not built here" section names for role transfer.
+
 ## What this covers (TASK 2.4.1, as originally built — see the status note above for what D-30 changes)
 
 `04-data-model-rbac.md`'s "Clinician accounts: C R U (deactivate only), principal alone" row becomes real: the principal clinician can invite a colleague (TOTP enrolment unavoidable, per 2.2.1's pool policy), deactivate one (record, Cognito disable and token revocation, together), and reactivate one. Nobody is ever deleted — deactivation is the only lifecycle this identity layer has, and `AdminDeleteUser` is now a repo-wide lint ban, not a habit to remember.

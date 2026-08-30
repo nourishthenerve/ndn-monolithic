@@ -69,6 +69,10 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // own `can()` check), the same "no finer role than 'clinician' in this
   // enum" reasoning `caseload` above already accepts.
   { segment: 'patient-admin', ownerRole: 'clinician' },
+  // D-30: the principal clinician's own colleague-account creation form.
+  // Principal-only in practice (services/api/src/clinician-admin.ts's own
+  // `can()` check), same reasoning as `patient-admin` above.
+  { segment: 'clinician-admin', ownerRole: 'clinician' },
   // TASK 5.5.3 step 1: any clinician's own upcoming appointments, and the
   // first real inbound link to call.astro from a page other than itself.
   { segment: 'calendar', ownerRole: 'clinician' },
