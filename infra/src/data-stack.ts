@@ -51,13 +51,10 @@ import {
   CLINICIAN_USER_POOL_CLIENT_ID,
   CLOUDFLARE_TURN_API_TOKEN_PARAMETER_NAME,
   CLOUDFLARE_TURN_KEY_ID,
-  CONTACT_FORM_FROM_EMAIL,
   CLINICIAN_USER_POOL_ID,
   DOMAIN_NAME,
   PATIENT_USER_POOL_CLIENT_ID,
   PATIENT_USER_POOL_ID,
-  SES_CONFIGURATION_SET_NAME,
-  SES_EMAIL_IDENTITY_DOMAIN,
   SITE_ORIGIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
   TURNSTILE_SECRET_PARAMETER_NAME,
@@ -1048,23 +1045,22 @@ export class DataStack extends Stack {
       runtime: Runtime.NODEJS_22_X,
       architecture: Architecture.ARM_64,
       memorySize: 128,
-      // Up to four sequential Cognito Admin* calls on the deactivate path
-      // (disable, global sign-out, get-user, then the SES send), each its
-      // own HTTPS round trip.
+      // Up to six sequential Cognito Admin* calls on the create path
+      // (create user, set password, then provisionTotp's own
+      // AdminInitiateAuth/AssociateSoftwareToken/VerifySoftwareToken/
+      // AdminRespondToAuthChallenge/AdminUserGlobalSignOut round trip),
+      // each its own HTTPS round trip.
       timeout: Duration.seconds(15),
       role: clinicianAdminRole,
       environment: {
         CLINICIAN_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
-        NOTIFICATION_TABLE_NAME: this.table.tableName,
         CLINICIAN_USER_POOL_ID,
         // D-30: the server-side-only client `AdminInitiateAuth` runs
         // against to complete the new clinician's `MFA_SETUP` challenge —
         // never `CLINICIAN_USER_POOL_CLIENT_ID` above, which is the
         // browser's.
         CLINICIAN_ADMIN_AUTH_CLIENT_ID,
-        CLINICIAN_ADMIN_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
-        SES_CONFIGURATION_SET_NAME,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'ClinicianAdminFunctionLogGroup', clinicianAdminLogGroupName, clinicianAdminRole),
@@ -1082,30 +1078,27 @@ export class DataStack extends Stack {
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
       }),
     );
-    // The audit and delivery-log rows this function writes — `PutItem`
-    // only, on both prefixes: it writes audit rows and delivery records,
-    // never queries either back (attachAuditPartitionReadGuardrail below
-    // closes the audit half of that; the delivery log has no reader at
-    // all yet — dynamo-notification-log.ts's own header).
+    // The audit rows this function writes — `PutItem` only, never queried
+    // back (attachAuditPartitionReadGuardrail below closes that).
     clinicianAdminRole.addToPrincipalPolicy(
       new PolicyStatement({
-        sid: 'WriteAuditAndDeliveryRows',
+        sid: 'WriteAuditRows',
         effect: Effect.ALLOW,
         actions: ['dynamodb:PutItem'],
         resources: [this.table.tableArn],
         conditions: {
-          'ForAllValues:StringLike': {
-            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
-          },
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] },
         },
       }),
     );
     attachDestructiveActionGuardrail(clinicianAdminRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(clinicianAdminRole, this.table);
 
-    // The four Admin* calls clinician-admin-handler.ts's ports use —
-    // create, disable, enable, global-sign-out, get-user — and nothing
-    // wider. No `AdminDeleteUser` here or anywhere: `AdminDeleteUserCommand`
+    // The Admin* calls clinician-admin-handler.ts's ports use — create,
+    // disable, enable, global-sign-out — and nothing wider. D-32
+    // (2026-08-30): `AdminGetUser` is removed — it existed only to
+    // resolve an email for the now-deleted deactivation notice. No
+    // `AdminDeleteUser` here or anywhere: `AdminDeleteUserCommand`
     // is a banned identifier repo-wide (packages/eslint-plugin-no-destructive),
     // so a future addition of it to this policy's own action list would
     // still leave no *code path* able to call it — the IAM grant and the
@@ -1124,7 +1117,6 @@ export class DataStack extends Stack {
           'cognito-idp:AdminDisableUser',
           'cognito-idp:AdminEnableUser',
           'cognito-idp:AdminUserGlobalSignOut',
-          'cognito-idp:AdminGetUser',
           // Found missing live, 2026-08-28 — see clinician-admin.ts's
           // AdminCreateClinicianPort header. Without this, a "principal"
           // clinician's own DynamoDB record was never reachable through
@@ -1160,28 +1152,6 @@ export class DataStack extends Stack {
         resources: ['*'],
       }),
     );
-    // The deactivation notice, sent through 2.3.1's Notifier — same
-    // verified identity every other SES sender in this stack uses.
-    clinicianAdminRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'SendClinicianDeactivationEmail',
-        effect: Effect.ALLOW,
-        actions: ['ses:SendEmail'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'identity',
-            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
-          }),
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'configuration-set',
-            resourceName: SES_CONFIGURATION_SET_NAME,
-          }),
-        ],
-      }),
-    );
-
     const clinicianAdminIntegration = new HttpLambdaIntegration(
       'ClinicianAdminIntegration',
       clinicianAdminFunction,
@@ -1207,6 +1177,11 @@ export class DataStack extends Stack {
     // only the principal ever passes `can()` on this row
     // (authz-matrix.ts's 'Patient assignment'), so the real authorizer is
     // exactly the gate this needs.
+    //
+    // D-32 (2026-08-30): TASK 2.5.2's own reassignment-notice grants
+    // (`AdminGetUser` to resolve a clinician's email, `ses:SendEmail` to
+    // notify) are deleted along with the notice itself — this role now
+    // touches only DynamoDB.
     const assignmentRole = new Role(this, 'AssignmentFunctionRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
     });
@@ -1223,13 +1198,6 @@ export class DataStack extends Stack {
         PRINCIPAL_TABLE_NAME: this.table.tableName,
         CLINICIAN_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
-        NOTIFICATION_TABLE_NAME: this.table.tableName,
-        ASSIGNMENT_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
-        SES_CONFIGURATION_SET_NAME,
-        // TASK 2.5.2: resolves a clinician's email for the reassignment
-        // notice (AdminGetUser) — see this file's own comment on the
-        // AssignmentFunctionRole IAM grant below.
-        CLINICIAN_USER_POOL_ID,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'AssignmentFunctionLogGroup', assignmentLogGroupName, assignmentRole),
@@ -1263,49 +1231,17 @@ export class DataStack extends Stack {
     );
     assignmentRole.addToPrincipalPolicy(
       new PolicyStatement({
-        sid: 'WriteAuditAndDeliveryRows',
+        sid: 'WriteAuditRows',
         effect: Effect.ALLOW,
         actions: ['dynamodb:PutItem'],
         resources: [this.table.tableArn],
         conditions: {
-          'ForAllValues:StringLike': {
-            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
-          },
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] },
         },
       }),
     );
     attachDestructiveActionGuardrail(assignmentRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(assignmentRole, this.table);
-    // TASK 2.5.2: `AdminGetUser` only, on the same clinician pool ARN
-    // ClinicianAdminFunction's own grant uses — resolving an email to
-    // notify, never a create/disable/enable action.
-    assignmentRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadClinicianEmailForReassignmentNotice',
-        effect: Effect.ALLOW,
-        actions: ['cognito-idp:AdminGetUser'],
-        resources: [clinicianUserPoolArn],
-      }),
-    );
-    assignmentRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'SendAssignmentDecisionEmail',
-        effect: Effect.ALLOW,
-        actions: ['ses:SendEmail'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'identity',
-            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
-          }),
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'configuration-set',
-            resourceName: SES_CONFIGURATION_SET_NAME,
-          }),
-        ],
-      }),
-    );
 
     const assignmentIntegration = new HttpLambdaIntegration('AssignmentIntegration', assignmentFunction);
     httpApi.addRoutes({
@@ -1840,6 +1776,11 @@ export class DataStack extends Stack {
     // own header for the doc-first correction and the real finding
     // against this task's own prose (the principal's cell was never
     // touched by the correction and stays read-only).
+    //
+    // D-32 (2026-08-30): the "new message" notice's own grants
+    // (`AdminGetUser` to resolve an email, `ses:SendEmail` to notify) are
+    // deleted along with the notice itself — this role now touches only
+    // DynamoDB.
     const messageRole = new Role(this, 'MessageFunctionRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
     });
@@ -1855,12 +1796,6 @@ export class DataStack extends Stack {
       environment: {
         PRINCIPAL_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
-        NOTIFICATION_TABLE_NAME: this.table.tableName,
-        MESSAGE_FROM_EMAIL: CONTACT_FORM_FROM_EMAIL,
-        SES_CONFIGURATION_SET_NAME,
-        // Resolves the assigned sub-clinician's email for a patient-sent
-        // message's notification (AdminGetUser) — see the IAM grant below.
-        CLINICIAN_USER_POOL_ID,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'MessageFunctionLogGroup', messageLogGroupName, messageRole),
@@ -1882,49 +1817,17 @@ export class DataStack extends Stack {
     );
     messageRole.addToPrincipalPolicy(
       new PolicyStatement({
-        sid: 'WriteAuditAndDeliveryRows',
+        sid: 'WriteAuditRows',
         effect: Effect.ALLOW,
         actions: ['dynamodb:PutItem'],
         resources: [this.table.tableArn],
         conditions: {
-          'ForAllValues:StringLike': {
-            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`, 'NOTIFICATION#*'],
-          },
+          'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`] },
         },
       }),
     );
     attachDestructiveActionGuardrail(messageRole, { buckets: [], tables: [this.table] });
     attachAuditPartitionReadGuardrail(messageRole, this.table);
-    // `AdminGetUser` only, on the same clinician pool ARN
-    // AssignmentFunction's own grant uses — resolving an email to notify,
-    // never a create/disable/enable action.
-    messageRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadClinicianEmailForMessageNotice',
-        effect: Effect.ALLOW,
-        actions: ['cognito-idp:AdminGetUser'],
-        resources: [clinicianUserPoolArn],
-      }),
-    );
-    messageRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'SendMessageNotificationEmail',
-        effect: Effect.ALLOW,
-        actions: ['ses:SendEmail'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'identity',
-            resourceName: SES_EMAIL_IDENTITY_DOMAIN,
-          }),
-          Stack.of(this).formatArn({
-            service: 'ses',
-            resource: 'configuration-set',
-            resourceName: SES_CONFIGURATION_SET_NAME,
-          }),
-        ],
-      }),
-    );
 
     const messageIntegration = new HttpLambdaIntegration('MessageIntegration', messageFunction);
     httpApi.addRoutes({

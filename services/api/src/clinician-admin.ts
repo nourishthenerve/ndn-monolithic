@@ -33,9 +33,15 @@
 // clinician side too. See `docs/plan/01-decisions.md`'s D-30 and
 // `docs/plan/02-risk-register.md`'s R-17 for the trade-off this accepts.
 //
-// **Deactivation notice still goes through the Notifier**, unchanged — no
-// credential involved, and it is exactly the kind of "closes the loop"
-// message the abstraction exists for.
+// ## Amendment, D-32 (2026-08-30) — no deactivation notice, ever
+//
+// The deactivation notice this file's own header used to describe as
+// "still goes through the Notifier, unchanged" is deleted, not darkened
+// — the owner's own words, "any notification will go via whatsapp." The
+// deactivate/reactivate mechanics below (`disable`/`revokeTokens`,
+// `enable`, the audit row each writes) are entirely unchanged; only the
+// "then tell the clinician by email" step is gone. `AdminDeactivateClinicianPort`
+// no longer needs to resolve an email at all.
 import type { Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
@@ -50,7 +56,6 @@ import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
-import type { Notifier } from './notifications.js';
 import { generatePassword } from './password-generator.js';
 import { requirePrincipal } from './request-principal.js';
 
@@ -122,8 +127,6 @@ export interface AdminCreateClinicianPort {
 export interface AdminDeactivateClinicianPort {
   disable(subjectId: string): Promise<void>;
   revokeTokens(subjectId: string): Promise<void>;
-  /** Best-effort only — see this file's header on the deactivation notice. Undefined if it can't be resolved. */
-  getEmail(subjectId: string): Promise<string | undefined>;
 }
 
 export interface AdminReactivateClinicianPort {
@@ -136,10 +139,8 @@ export interface ClinicianAdminDeps {
   readonly createClinicianUser: AdminCreateClinicianPort;
   readonly deactivateClinicianUser: AdminDeactivateClinicianPort;
   readonly reactivateClinicianUser: AdminReactivateClinicianPort;
-  readonly notifier: Notifier;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
-  readonly log?: (line: Record<string, unknown>) => void;
   /** Overridable for test determinism only — `patient-admin.ts`'s own identical seam for D-29. */
   readonly generatePassword?: () => string;
 }
@@ -162,7 +163,6 @@ export function createClinicianAdminHandler(
   const clock = deps.clock ?? systemClock;
   const logger =
     deps.logger ?? createSampledLogger({ clock, sampleRate: CLINICIAN_ADMIN_LOG_SAMPLE_RATE });
-  const log = deps.log ?? ((line) => process.stdout.write(`${JSON.stringify(line)}\n`));
   const makePassword = deps.generatePassword ?? generatePassword;
 
   return async (event) => {
@@ -266,18 +266,6 @@ export function createClinicianAdminHandler(
           // live) must surface loudly, not be swallowed as a success.
           await deps.deactivateClinicianUser.disable(id);
           await deps.deactivateClinicianUser.revokeTokens(id);
-          try {
-            const email = await deps.deactivateClinicianUser.getEmail(id);
-            if (email) {
-              await deps.notifier.send({ id, email }, 'clinicianDeactivated', {});
-            }
-          } catch {
-            // Best-effort, same posture post-confirmation.ts takes on its
-            // own confirmation email: the deactivation is already real and
-            // already audited: a notice that fails to send must not undo
-            // either.
-            log({ event: 'clinician-deactivated-email-failed', subjectId: id });
-          }
           return respond(200, { item: clinician });
         }
         case 'POST /clinicians/{id}/reactivate': {

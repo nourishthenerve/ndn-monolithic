@@ -1,6 +1,10 @@
 # Messages: patient↔clinician, rate-limited, the matrix corrected (TASK 3.6.1)
 
-**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.6.1](../plan/05-execution-plan.md) · **Decisions:** D-07 · **Depends on:** 3.1.1, 0.5.x (`rate-limiter.ts`)
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.6.1](../plan/05-execution-plan.md) · **Decisions:** D-07, **amended by D-32** · **Depends on:** 3.1.1, 0.5.x (`rate-limiter.ts`)
+
+## Amendment, D-32 (2026-08-30) — step 5's own notification side-effect is deleted
+
+The owner's own words: "any notification will go via whatsapp." The `newMessage` notice this task originally built ("Notification" section below) no longer fires. Sending and reading a message are entirely unchanged — the same routes, the same rate limit, the same matrix enforcement described throughout this file. Only "then tell the other party by email" is gone. `MessageFunction`'s Cognito `AdminGetUser` grant (resolving an assigned clinician's email) and its `ses:SendEmail` grant are both removed — the role now touches only DynamoDB. Read "Notification" and everything below about `notifyOtherParty`/`AdminGetClinicianEmailPort` as history.
 
 ## What this covers
 

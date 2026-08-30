@@ -11,9 +11,6 @@ import {
 import { ClinicianRepository, InMemoryClinicianStore } from './clinician-repository.js';
 import type { Clock } from './clock.js';
 import { InMemoryFlagSource, CachedFlagReader, FLAG_CACHE_TTL_MS } from './flags.js';
-import { InMemoryDeliveryLog } from './notification-log.js';
-import { createNotifier, type EmailSend } from './notifications.js';
-import type { SendSms } from './sms.js';
 
 const clock: Clock = { now: () => new Date('2026-08-22T09:00:00.000Z') };
 
@@ -98,17 +95,11 @@ function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
   const deactivateClinicianUser: AdminDeactivateClinicianPort = {
     disable: vi.fn(async () => {}),
     revokeTokens: vi.fn(async () => {}),
-    getEmail: vi.fn(async () => 'clinician@example.com'),
   };
 
   const reactivateClinicianUser: AdminReactivateClinicianPort = {
     enable: vi.fn(async () => {}),
   };
-
-  const sendEmail: EmailSend = vi.fn(async () => {});
-  const sendSms: SendSms = vi.fn(async () => ({ ok: true, status: 'Sent' }) as const);
-  const deliveryLog = new InMemoryDeliveryLog();
-  const notifier = createNotifier({ sendEmail, sendSms, log: deliveryLog, clock });
 
   const handler = createClinicianAdminHandler({
     repository,
@@ -116,9 +107,7 @@ function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
     createClinicianUser,
     deactivateClinicianUser,
     reactivateClinicianUser,
-    notifier,
     clock,
-    log: vi.fn(),
     generatePassword: vi.fn(() => overrides.password ?? 'Gen3rat3d!Pass'),
   });
 
@@ -129,8 +118,6 @@ function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
     createClinicianUser,
     deactivateClinicianUser,
     reactivateClinicianUser,
-    sendEmail,
-    deliveryLog,
   };
 }
 
@@ -400,51 +387,6 @@ describe('POST /clinicians/{id}/deactivate', () => {
     expect((await repository.findById('sub-1'))?.account_status).toBe('deactivated');
     expect(deactivateClinicianUser.disable).toHaveBeenCalledWith('sub-1');
     expect(deactivateClinicianUser.revokeTokens).toHaveBeenCalledWith('sub-1');
-  });
-
-  it('sends a deactivation notice through the Notifier when an email can be resolved', async () => {
-    const { handler, repository, sendEmail, deliveryLog } = build();
-    await repository.create(
-      'sub-1',
-      { displayName: 'A', role: 'sub' },
-      { subjectId: 'principal-sub', role: 'principal-clinician', requestId: 'r', sourceIpHash: 'h' },
-    );
-
-    await invoke(
-      handler,
-      eventFor('POST /clinicians/{id}/deactivate', {
-        principal: PRINCIPAL_CONTEXT,
-        pathParameters: { id: 'sub-1' },
-      }),
-    );
-
-    expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(deliveryLog.list()).toEqual([
-      expect.objectContaining({ recipientId: 'sub-1', template: 'clinicianDeactivated', outcome: 'sent' }),
-    ]);
-  });
-
-  it('still returns 200 when the deactivation notice cannot be sent — best-effort only', async () => {
-    const { handler, repository, deactivateClinicianUser } = build();
-    await repository.create(
-      'sub-1',
-      { displayName: 'A', role: 'sub' },
-      { subjectId: 'principal-sub', role: 'principal-clinician', requestId: 'r', sourceIpHash: 'h' },
-    );
-    (deactivateClinicianUser.getEmail as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('AdminGetUser failed'),
-    );
-
-    const response = await invoke(
-      handler,
-      eventFor('POST /clinicians/{id}/deactivate', {
-        principal: PRINCIPAL_CONTEXT,
-        pathParameters: { id: 'sub-1' },
-      }),
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect((await repository.findById('sub-1'))?.account_status).toBe('deactivated');
   });
 
   it('is 403 for a sub-clinician caller', async () => {

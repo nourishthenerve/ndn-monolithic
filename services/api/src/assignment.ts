@@ -1,7 +1,7 @@
 // TASK 2.5.1: `POST /patients/{id}/approve`, `POST /patients/{id}/decline`
 // — SDK-free and unit-testable, the same split every other endpoint uses
-// (assignment-handler.ts wires the real DynamoDB-backed store, the real
-// Notifier and the real Lambda authorizer's principal). TASK 2.5.2 adds
+// (assignment-handler.ts wires the real DynamoDB-backed store and the
+// real Lambda authorizer's principal). TASK 2.5.2 adds
 // `POST /patients/{id}/reassign`, same body shape, same route family.
 //
 // Only the `Principal` column ever passes `can()` on `'Patient assignment'`
@@ -9,7 +9,15 @@
 // that file's own comment on the row). So this handler checks `can()`
 // once per route and trusts the matrix's own verdict completely; it does
 // not re-derive "only the principal" as a second, redundant check.
-import type { Patient, Principal } from '@ndn/shared-types';
+//
+// D-32 (2026-08-30): step 6's own notification side-effect (patient
+// approve/decline/reassign notices, clinician caseload add/remove
+// notices) is deleted, not darkened — the owner's own words, "any
+// notification will go via whatsapp." The decision itself, its audit
+// row, and every state transition below are entirely unchanged; only
+// the "then tell someone by email/SMS" step is gone. See
+// docs/runbooks/patient-assignment.md.
+import type { Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyHandlerV2WithLambdaAuthorizer,
@@ -23,9 +31,6 @@ import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
-import type { Notifier } from './notifications.js';
-import { notificationRecipientFor } from './patient-repository.js';
-import type { Unprojected } from './projection.js';
 import { requirePrincipal } from './request-principal.js';
 
 const ASSIGNMENT_FLAG = 'assignment.enabled';
@@ -38,20 +43,11 @@ const ASSIGNMENT_RESOURCE = { entityType: 'patient-assignment' } as const;
 // by a runtime check.
 const assignedClinicianBodySchema = z.object({ assignedClinicianId: z.string().min(1) });
 
-/** Resolves a clinician's email for a notification — TASK 2.5.2's reassignment notice to both clinicians. Undefined if it can't be resolved; the caller degrades to "don't send", never to a thrown error. */
-export interface AdminGetClinicianEmailPort {
-  getEmail(clinicianId: string): Promise<string | undefined>;
-}
-
 export interface AssignmentDeps {
   readonly repository: AssignmentRepository;
   readonly flags: FlagReader;
-  /** Content-free — step 6. Best-effort: a notification failing to send never fails the decision it describes. */
-  readonly notifier: Notifier;
-  readonly getClinicianEmail: AdminGetClinicianEmailPort;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
-  readonly log?: (line: Record<string, unknown>) => void;
 }
 
 function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
@@ -71,7 +67,6 @@ export function createAssignmentHandler(
 ): APIGatewayProxyHandlerV2WithLambdaAuthorizer<Record<string, unknown> | undefined> {
   const clock = deps.clock ?? systemClock;
   const logger = deps.logger ?? createSampledLogger({ clock, sampleRate: 1 });
-  const log = deps.log ?? ((line) => process.stdout.write(`${JSON.stringify(line)}\n`));
 
   return async (event) => {
     const start = clock.now();
@@ -132,12 +127,10 @@ export function createAssignmentHandler(
             parsed.data.assignedClinicianId,
             actor,
           );
-          await notifyBestEffort(deps, log, decision.patient, 'patientApproved');
           return respond(200, { item: decision.request });
         }
         case 'POST /patients/{id}/decline': {
           const decision = await deps.repository.decline(id, actor);
-          await notifyBestEffort(deps, log, decision.patient, 'patientDeclined');
           return respond(200, { item: decision.request });
         }
         case 'POST /patients/{id}/reassign': {
@@ -149,21 +142,6 @@ export function createAssignmentHandler(
             id,
             parsed.data.assignedClinicianId,
             actor,
-          );
-          await notifyBestEffort(deps, log, decision.patient, 'patientReassigned');
-          await notifyClinicianBestEffort(
-            deps,
-            log,
-            decision.patient.id,
-            parsed.data.assignedClinicianId,
-            'clinicianCaseloadPatientAdded',
-          );
-          await notifyClinicianBestEffort(
-            deps,
-            log,
-            decision.patient.id,
-            decision.previousClinicianId,
-            'clinicianCaseloadPatientRemoved',
           );
           return respond(200, { item: decision.request });
         }
@@ -185,49 +163,4 @@ export function createAssignmentHandler(
       throw error;
     }
   };
-}
-
-/**
- * Step 6: content-free. `decision.patient` is the record `approve`/
- * `decline` already wrote — no second read needed to notify. Best-effort:
- * a failed send is logged and never fails the decision, which is already
- * real and already audited by the time this runs.
- */
-async function notifyBestEffort(
-  deps: AssignmentDeps,
-  log: (line: Record<string, unknown>) => void,
-  patient: Unprojected<Patient>,
-  template: 'patientApproved' | 'patientDeclined' | 'patientReassigned',
-): Promise<void> {
-  try {
-    await deps.notifier.send(notificationRecipientFor(patient), template, {});
-  } catch {
-    log({ event: 'assignment-decision-notification-failed', patientId: patient.id, template });
-  }
-}
-
-/**
- * Step 5's other half: reassignment notifies both clinicians, not only the
- * patient. Resolving an email is itself best-effort (`getClinicianEmail`
- * returns `undefined` rather than throwing when it can't) — a clinician
- * whose email can't be resolved just doesn't get a notice, the same
- * "content-free, never fails the decision" posture `notifyBestEffort`
- * keeps for the patient half.
- */
-async function notifyClinicianBestEffort(
-  deps: AssignmentDeps,
-  log: (line: Record<string, unknown>) => void,
-  patientId: string,
-  clinicianId: string,
-  template: 'clinicianCaseloadPatientAdded' | 'clinicianCaseloadPatientRemoved',
-): Promise<void> {
-  try {
-    const email = await deps.getClinicianEmail.getEmail(clinicianId);
-    if (!email) {
-      return;
-    }
-    await deps.notifier.send({ id: clinicianId, email }, template, {});
-  } catch {
-    log({ event: 'assignment-decision-clinician-notification-failed', patientId, clinicianId, template });
-  }
 }

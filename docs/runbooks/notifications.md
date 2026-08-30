@@ -1,6 +1,10 @@
 # Notification abstraction (TASK 2.3.1)
 
-**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.3.1](../plan/05-execution-plan.md) · **Requirements:** §5 (notifications), C-02 · **Decisions:** D-10, ADR-0009 · **Risks:** [R-01](../plan/02-risk-register.md) · **Depends on:** 2.2.3, 1.4.1
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.3.1](../plan/05-execution-plan.md) · **Requirements:** §5 (notifications), C-02 · **Decisions:** D-10, ADR-0009, **amended by D-32** · **Risks:** [R-01](../plan/02-risk-register.md) · **Depends on:** 2.2.3, 1.4.1
+
+## Amendment, D-32 (2026-08-30) — every live caller is gone
+
+The owner's own words: "any notification will go via whatsapp." Every real caller this abstraction ever had — the appointment reminder (D-32's own reminder-sweep removal), assignment's approve/decline/reassign notices, message's new-message notice, clinician-admin's deactivation notice — is deleted. `Notifier`/`createNotifier`, the template registry, `notification-log.ts`, and `ses.ts`'s generic sender are **not** deleted: `stripe-webhook-handler.ts` (D-31's own dark, never-wired Stripe code) still constructs a real `Notifier` for its registration-confirmation email, so the abstraction stays in place as generic, currently-uncalled infrastructure — the same posture this codebase already holds for Stripe itself. Everything below describes the mechanism as built; it is accurate to the code, just not to who calls it any more.
 
 ## What this covers
 

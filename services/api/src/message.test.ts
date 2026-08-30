@@ -1,6 +1,6 @@
 import type { Message, Patient } from '@ndn/shared-types';
 import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { actorContext, InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
@@ -8,8 +8,6 @@ import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags
 import type { MessagePage, MessageStore } from './message-repository.js';
 import { MessageRepository } from './message-repository.js';
 import { createMessageHandler } from './message.js';
-import { InMemoryDeliveryLog } from './notification-log.js';
-import { createNotifier, type EmailSend } from './notifications.js';
 import { PatientRepository } from './patient-repository.js';
 import { InMemoryRateLimiter, type RateLimiter } from './rate-limiter.js';
 import { InMemoryStore } from './store.js';
@@ -120,26 +118,14 @@ async function build(overrides: { flagEnabled?: boolean; rateLimit?: number } = 
     windowMs: 60 * 60 * 1000,
   });
 
-  const sendEmail: EmailSend = vi.fn(async () => {});
-  const deliveryLog = new InMemoryDeliveryLog();
-  const notifier = createNotifier({
-    sendEmail,
-    sendSms: vi.fn(async () => ({ ok: true, status: 'Sent' }) as const),
-    log: deliveryLog,
-    clock,
-  });
-  const getClinicianEmail = { getEmail: vi.fn(async () => 'clinician@example.com') };
-
   const handler = createMessageHandler({
     patients,
     messages,
     flags,
     rateLimiter,
-    notifier,
-    getClinicianEmail,
     clock,
   });
-  return { handler, patients, messages, sendEmail, getClinicianEmail };
+  return { handler, patients, messages };
 }
 
 async function invoke(handler: ReturnType<typeof createMessageHandler>, event: LambdaAuthorizerEvent) {
@@ -181,41 +167,6 @@ describe('POST /patients/{id}/messages', () => {
     expect(response.statusCode).toBe(201);
     const body = JSON.parse(response.body) as { item: { senderRole: string } };
     expect(body.item.senderRole).toBe('sub-clinician');
-  });
-
-  it('notifies the assigned clinician when the patient sends', async () => {
-    const { handler, getClinicianEmail, sendEmail } = await build();
-    await invoke(
-      handler,
-      fakeEvent({
-        routeKey: SEND_ROUTE,
-        pathParameters: { id: 'pat-1' },
-        body: { body: 'Hello' },
-        principal: OWNING_PATIENT_CONTEXT,
-      }),
-    );
-    expect(getClinicianEmail.getEmail).toHaveBeenCalledWith('cli-1');
-    expect(sendEmail).toHaveBeenCalledOnce();
-    const [emailCall] = (sendEmail as ReturnType<typeof vi.fn>).mock.calls[0] as [{ body: string }];
-    expect(emailCall.body).not.toContain('Hello');
-  });
-
-  it('notifies the patient when the assigned sub-clinician sends, content-free', async () => {
-    const { handler, sendEmail } = await build();
-    await invoke(
-      handler,
-      fakeEvent({
-        routeKey: SEND_ROUTE,
-        pathParameters: { id: 'pat-1' },
-        body: { body: 'Hi, checking in' },
-      }),
-    );
-    expect(sendEmail).toHaveBeenCalledOnce();
-    const [emailCall] = (sendEmail as ReturnType<typeof vi.fn>).mock.calls[0] as [
-      { to: string; body: string },
-    ];
-    expect(emailCall.to).toBe('patient@example.com');
-    expect(emailCall.body).not.toContain('Hi, checking in');
   });
 
   it("is 403 for the principal — a real finding: this task's own step 2 claims the principal can send, but authz-matrix.ts's Messages row Principal cell stays bare R", async () => {

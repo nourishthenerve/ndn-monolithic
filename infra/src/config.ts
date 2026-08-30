@@ -293,13 +293,14 @@ export const TURN_RELAY_METRIC_NAME = 'EstimatedTurnRelayGB';
 // warning margin, well ahead of the real 1,000 GB ceiling.
 export const TURN_RELAY_ALARM_THRESHOLD_GB_PER_DAY = 17;
 
-// TASK 1.4.1 (ADR-0009): originally the contact form's own From address;
-// D-32 (2026-08-30) deletes that form, but every SES sender this codebase
-// still wires (stripe-webhook-handler.ts, and — until D-32's own
-// notification-stripping lands — assignment/message/clinician-admin's
-// `Notifier`) shares this one verified `nourishthenerve.com` domain
-// identity (docs/runbooks/ses-production-access.md), so the constant
-// stays under its original name rather than being renamed mid-removal.
+// TASK 1.4.1 (ADR-0009): originally the contact form's own From address.
+// D-32 (2026-08-30) deletes that form and every other live SES sender
+// this codebase had (assignment/message/clinician-admin's own
+// notification side-effects) — `stripe-webhook-handler.ts`'s dark,
+// never-wired sender (D-31) is this constant's only caller now, still
+// sharing the one verified `nourishthenerve.com` domain identity
+// (docs/runbooks/ses-production-access.md), so it stays under its
+// original name rather than being renamed for a caller count of one.
 // Not secret — a plain deployment constant, same as ALERT_EMAIL above.
 // The matching `CONTACT_FORM_TO_EMAIL` (the Zoho inbox the form relayed
 // to) had no other caller and is deleted with the form.

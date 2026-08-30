@@ -21,6 +21,12 @@
 //
 // Two routes: `POST /patients/{id}/messages` (send), `GET
 // /patients/{id}/messages?cursor=` (the thread, chronological, paginated).
+//
+// D-32 (2026-08-30): step 5's own notification side-effect ("you have a
+// new message") is deleted, not darkened — the owner's own words, "any
+// notification will go via whatsapp." Sending and reading a message are
+// entirely unchanged; only the "then tell the other party by email" step
+// is gone. See docs/runbooks/messaging.md.
 import type { Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
@@ -28,16 +34,13 @@ import type {
 } from 'aws-lambda';
 import { z } from 'zod';
 
-import type { AdminGetClinicianEmailPort } from './assignment.js';
 import { actorFromPrincipal, requestOriginOf } from './audit.js';
 import { can } from './authz.js';
 import { systemClock, type Clock } from './clock.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
 import { MESSAGE_ENTITY_TYPE, type MessageRepository } from './message-repository.js';
-import type { Notifier } from './notifications.js';
 import type { PatientRepository } from './patient-repository.js';
-import { notificationRecipientFor } from './patient-repository.js';
 import { projectAllFor, projectFor, serialiseResponse, type ResponseBody } from './projection.js';
 import type { RateLimiter } from './rate-limiter.js';
 import { requirePrincipal } from './request-principal.js';
@@ -73,58 +76,22 @@ export const MESSAGE_RATE_LIMIT_PER_PRINCIPAL = 30;
 export const MESSAGE_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 
 export interface MessageDeps {
-  /** For the assignment-relationship lookup `can()` needs, and to resolve the patient recipient for a clinician-sent message's notification. */
+  /** For the assignment-relationship lookup `can()` needs. */
   readonly patients: PatientRepository;
   readonly messages: MessageRepository;
   readonly flags: FlagReader;
   readonly rateLimiter: RateLimiter;
-  /** Content-free — step 5. Best-effort: a notification failing to send never fails the message it describes. */
-  readonly notifier: Notifier;
-  readonly getClinicianEmail: AdminGetClinicianEmailPort;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
-  readonly log?: (line: Record<string, unknown>) => void;
 }
 
 const MESSAGE_LOG_SAMPLE_RATE = 1;
-
-async function notifyOtherParty(
-  deps: MessageDeps,
-  log: (line: Record<string, unknown>) => void,
-  patient: Awaited<ReturnType<PatientRepository['findById']>>,
-  senderRole: Principal['role'],
-): Promise<void> {
-  if (!patient) {
-    return;
-  }
-  try {
-    if (senderRole === 'patient') {
-      const clinicianId = patient.assigned_clinician_id;
-      if (!clinicianId) {
-        return;
-      }
-      const email = await deps.getClinicianEmail.getEmail(clinicianId);
-      if (!email) {
-        return;
-      }
-      await deps.notifier.send({ id: clinicianId, email }, 'newMessage', {});
-    } else {
-      // Only a patient or their assigned sub-clinician ever reaches this
-      // far (the finding above) — a principal never sends, so this branch
-      // is always the assigned sub-clinician notifying the patient.
-      await deps.notifier.send(notificationRecipientFor(patient), 'newMessage', {});
-    }
-  } catch {
-    log({ event: 'message-notification-failed', patientId: patient.id });
-  }
-}
 
 export function createMessageHandler(
   deps: MessageDeps,
 ): APIGatewayProxyHandlerV2WithLambdaAuthorizer<Record<string, unknown> | undefined> {
   const clock = deps.clock ?? systemClock;
   const logger = deps.logger ?? createSampledLogger({ clock, sampleRate: MESSAGE_LOG_SAMPLE_RATE });
-  const log = deps.log ?? (() => {});
 
   return async (event) => {
     const start = clock.now();
@@ -226,7 +193,6 @@ export function createMessageHandler(
       { patientId, senderRole: principal.role, body: parsed.data.body },
       actor,
     );
-    await notifyOtherParty(deps, log, patient, principal.role);
     return respond(201, { item: projectFor(principal, sent, resource) });
   };
 }
