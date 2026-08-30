@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { AssignmentRepository, InMemoryAssignmentStore } from './assignment-repository.js';
 import { createAssignmentHandler } from './assignment.js';
@@ -7,8 +7,6 @@ import { InMemoryAuditLog } from './audit.js';
 import { ClinicianRepository, InMemoryClinicianStore } from './clinician-repository.js';
 import type { Clock } from './clock.js';
 import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags.js';
-import { InMemoryDeliveryLog } from './notification-log.js';
-import { createNotifier, type EmailSend } from './notifications.js';
 import { InMemoryStore } from './store.js';
 
 const clock: Clock = { now: () => new Date('2026-08-22T09:00:00.000Z') };
@@ -99,20 +97,9 @@ async function build(overrides: { flagEnabled?: boolean } = {}) {
   const assignmentStore = new InMemoryAssignmentStore(patientStore);
   const repository = new AssignmentRepository(assignmentStore, clinicians, new InMemoryAuditLog(), clock);
 
-  const sendEmail: EmailSend = vi.fn(async () => {});
-  const deliveryLog = new InMemoryDeliveryLog();
-  const notifier = createNotifier({
-    sendEmail,
-    sendSms: vi.fn(async () => ({ ok: true, status: 'Sent' }) as const),
-    log: deliveryLog,
-    clock,
-  });
+  const handler = createAssignmentHandler({ repository, flags, clock });
 
-  const getClinicianEmail = { getEmail: vi.fn(async () => 'clinician@example.com') };
-
-  const handler = createAssignmentHandler({ repository, flags, notifier, getClinicianEmail, clock });
-
-  return { handler, patientStore, clinicians, repository, sendEmail, getClinicianEmail, deliveryLog };
+  return { handler, patientStore, clinicians, repository };
 }
 
 async function invoke(handler: Awaited<ReturnType<typeof build>>['handler'], event: LambdaAuthorizerEvent) {
@@ -137,19 +124,6 @@ describe('POST /patients/{id}/approve', () => {
     const body = JSON.parse(response.body) as { item: { status: string; assignedClinicianId: string } };
     expect(body.item.status).toBe('approved');
     expect(body.item.assignedClinicianId).toBe('cli-1');
-  });
-
-  it('sends the patientApproved notification', async () => {
-    const { handler, sendEmail } = await build();
-    await invoke(
-      handler,
-      eventFor('POST /patients/{id}/approve', {
-        principal: PRINCIPAL_CONTEXT,
-        pathParameters: { id: 'pat-1' },
-        body: { assignedClinicianId: 'cli-1' },
-      }),
-    );
-    expect(sendEmail).toHaveBeenCalledTimes(1);
   });
 
   it('is 403 for a sub-clinician caller — only the principal ever assigns', async () => {
@@ -241,21 +215,6 @@ describe('POST /patients/{id}/approve', () => {
     );
     expect(response.statusCode).toBe(404);
   });
-
-  it('still returns 200 when the notification fails to send — best-effort only', async () => {
-    const { handler, sendEmail } = await build();
-    (sendEmail as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('SES down'));
-
-    const response = await invoke(
-      handler,
-      eventFor('POST /patients/{id}/approve', {
-        principal: PRINCIPAL_CONTEXT,
-        pathParameters: { id: 'pat-1' },
-        body: { assignedClinicianId: 'cli-1' },
-      }),
-    );
-    expect(response.statusCode).toBe(200);
-  });
 });
 
 describe('POST /patients/{id}/decline', () => {
@@ -272,18 +231,6 @@ describe('POST /patients/{id}/decline', () => {
 
     expect(response.statusCode).toBe(200);
     expect((await patientStore.get('pat-1'))?.account_status).toBe('declined');
-  });
-
-  it('sends the patientDeclined notification', async () => {
-    const { handler, sendEmail } = await build();
-    await invoke(
-      handler,
-      eventFor('POST /patients/{id}/decline', {
-        principal: PRINCIPAL_CONTEXT,
-        pathParameters: { id: 'pat-1' },
-      }),
-    );
-    expect(sendEmail).toHaveBeenCalledTimes(1);
   });
 
   it('is 403 for a sub-clinician caller', async () => {
@@ -335,23 +282,6 @@ describe('POST /patients/{id}/reassign', () => {
     expect((await patientStore.get('pat-1'))?.assigned_clinician_id).toBe('cli-2');
   });
 
-  it('notifies the patient and both clinicians', async () => {
-    const { handler, sendEmail } = await buildApproved();
-    (sendEmail as ReturnType<typeof vi.fn>).mockClear();
-
-    await invoke(
-      handler,
-      eventFor('POST /patients/{id}/reassign', {
-        principal: PRINCIPAL_CONTEXT,
-        pathParameters: { id: 'pat-1' },
-        body: { assignedClinicianId: 'cli-2' },
-      }),
-    );
-
-    // Patient, new clinician, previous clinician — three sends.
-    expect(sendEmail).toHaveBeenCalledTimes(3);
-  });
-
   it('is 403 for a sub-clinician caller', async () => {
     const { handler } = await buildApproved();
     const response = await invoke(
@@ -389,20 +319,5 @@ describe('POST /patients/{id}/reassign', () => {
       }),
     );
     expect(response.statusCode).toBe(400);
-  });
-
-  it('still returns 200 when a clinician notification cannot be resolved — best-effort only', async () => {
-    const { handler, getClinicianEmail } = await buildApproved();
-    (getClinicianEmail.getEmail as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined);
-
-    const response = await invoke(
-      handler,
-      eventFor('POST /patients/{id}/reassign', {
-        principal: PRINCIPAL_CONTEXT,
-        pathParameters: { id: 'pat-1' },
-        body: { assignedClinicianId: 'cli-2' },
-      }),
-    );
-    expect(response.statusCode).toBe(200);
   });
 });

@@ -1115,11 +1115,20 @@ describe('DataStack — message function (TASK 3.6.1)', () => {
     });
   });
 
-  it('grants cognito-idp:AdminGetUser on the clinician pool alone — resolving an email to notify, never a write action', () => {
-    const statements = statementsWithSid('ReadClinicianEmailForMessageNotice');
-
-    expect(statements).toHaveLength(1);
-    expect(statements[0]?.Action).toEqual('cognito-idp:AdminGetUser');
+  // D-32 (2026-08-30): the "new message" notice, and the `AdminGetUser`
+  // grant that resolved an email for it, are deleted — this role now
+  // touches only DynamoDB.
+  it('grants no Cognito action at all', () => {
+    const template = synth();
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const messagePolicy = policies.find((policy) =>
+      JSON.stringify((policy as { Properties: unknown }).Properties).includes(
+        'ReadWriteAndQueryPatientMessages',
+      ),
+    ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
+    const actions = JSON.stringify(messagePolicy.Properties.PolicyDocument.Statement);
+    expect(actions).not.toContain('cognito-idp:');
+    expect(actions).not.toContain('ses:SendEmail');
   });
 
   it("is denied every other role's AUDIT# partition read and keyless-scan guardrails, the same as every function in this stack", () => {

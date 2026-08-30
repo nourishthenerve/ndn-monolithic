@@ -1,6 +1,10 @@
 # Clinician accounts (TASK 2.4.1)
 
-**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.4.1](../plan/05-execution-plan.md) · **Requirements:** §5 (clinician accounts), NFR-03 · **Decisions:** D-09, **D-30** · **Risks:** [R-09](../plan/02-risk-register.md), **[R-17](../plan/02-risk-register.md)** · **Depends on:** 2.2.1, 2.2.2, 2.1.3, 2.3.1
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.4.1](../plan/05-execution-plan.md) · **Requirements:** §5 (clinician accounts), NFR-03 · **Decisions:** D-09, **D-30**, **amended by D-32** · **Risks:** [R-09](../plan/02-risk-register.md), **[R-17](../plan/02-risk-register.md)** · **Depends on:** 2.2.1, 2.2.2, 2.1.3, 2.3.1
+
+## Amendment, D-32 (2026-08-30) — no deactivation notice, ever
+
+The owner's own words: "any notification will go via whatsapp." The deactivation notice (`clinicianDeactivated`) this file's own "Two deliberate deviations" section below describes as "does go through the Notifier" is deleted, not darkened. `AdminDeactivateClinicianPort.getEmail` is removed, and `ClinicianAdminFunction`'s `ses:SendEmail`/`cognito-idp:AdminGetUser` grants are removed with it — the role now touches only DynamoDB and the Admin* calls D-30's create/disable/enable/global-sign-out mechanics need. Deactivation and reactivation themselves (the record transition, the Cognito disable/enable, the audit row) are entirely unchanged — including everything D-30's own live-verification pass below proved. Only "then email the clinician" is gone.
 
 ## Status, D-30 (2026-08-29) — landing in two steps, both built
 

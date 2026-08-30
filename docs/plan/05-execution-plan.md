@@ -596,6 +596,8 @@ export interface Clinician extends BaseRecord {
 **Verification:** against the deployed pool, an invited clinician cannot complete sign-in without enrolling TOTP; deactivating one ends their session; their name still resolves afterwards.
 **Flag:** `clinicians.administration.enabled` — default off. **DoD:** the principal clinician can create, deactivate and reactivate clinicians; TOTP is unavoidable; no clinician can be deleted; history never loses a name. **Rollback:** flip the flag off; the directory is unchanged. **Do NOT:** call `AdminDeleteUser`; remove a `CLI#` record; allow self sign-up on the clinician pool; let a second principal exist; deactivate without revoking tokens.
 
+**Amended, D-30 (2026-08-29) then D-32 (2026-08-30).** D-30 already removed step 8's invite email — see `docs/runbooks/clinician-accounts.md`. D-32 removes step 8's other half, the deactivation notice: "any notification will go via whatsapp." `AdminDeactivateClinicianPort.getEmail` and `ClinicianAdminFunction`'s `ses:SendEmail`/`cognito-idp:AdminGetUser` grants are deleted; deactivation/reactivation mechanics are unchanged.
+
 ### TASK 2.5.1 — Approval and first assignment, and GSI1
 
 **Milestone:** M2.5 · **Requirements:** §5 (approval and assignment), §7 (GSI1 access patterns) · **Decisions:** D-07 · **Depends on:** 2.2.3, 2.4.1, 2.1.3 · **Blocks:** 2.5.2, 3.x (every clinical entity is scoped by assignment) · **Size:** M · **Cost:** £0.00 net-new — GSI1 write units inside the modelled DynamoDB line.
@@ -619,6 +621,8 @@ export interface AssignmentRequest extends BaseRecord<'pending' | 'approved' | '
 **Verification:** `aws dynamodb describe-table` shows GSI1; end-to-end, a registered patient is approved, appears under exactly one clinician, and is invisible to every other clinician.
 **Flag:** `assignment.enabled` — default off; turned on together with `auth.patientRegistration.enabled`, since registration without approval strands people in `pending`. **DoD:** a patient moves `pending → approved` with an assigned clinician, atomically and audibly; GSI1 serves clinician→patients with its access patterns proven; every unassigned path is denied and tested. **Rollback:** flip the flag off — no further decisions can be made; existing assignments stand. **Do NOT:** set `assigned_clinician_id` outside the transaction; delete a request or a declined patient; let a sub-clinician assign to another clinician; skip the ADR-0002 access-pattern check because GSI1 "is obvious".
 
+**Amended, D-32 (2026-08-30).** Step 6's own patient notification is deleted: "any notification will go via whatsapp." Approval and decline are otherwise unchanged — the same atomic write, the same audit row. Full reasoning: [01-decisions.md](01-decisions.md)'s D-32, [docs/runbooks/patient-assignment.md](../runbooks/patient-assignment.md).
+
 ### TASK 2.5.2 — Reassignment, with an append-only assignment history
 
 **Milestone:** M2.5 · **Requirements:** §5 (reassignment) · **Depends on:** 2.5.1, 2.1.3 · **Size:** S · **Cost:** £0.00
@@ -629,6 +633,8 @@ export interface AssignmentRequest extends BaseRecord<'pending' | 'approved' | '
 **Tests.** Unit: reassignment appends and never mutates a prior row. Unit: assignment history reconstructs correctly across three consecutive assignments. Integration: after reassignment, GSI1 filtered by current assignment returns the patient under the new clinician only, despite the stale projection row still existing. Negative: the previous clinician is denied on every one of that patient's routes after the change. Negative: there is no request shape that results in a patient with no `assigned_clinician_id`.
 **Verification:** end-to-end, a patient reassigned between two clinicians is visible to exactly one at every point, and the audit log names both decisions.
 **Flag:** `assignment.enabled` — the same flag as 2.5.1; reassignment is not separately switchable. **DoD:** reassignment is atomic and audited, history is complete and append-only, the previous clinician's access ends, no patient is ever unassigned. **Rollback:** flip the flag off. **Do NOT:** edit or delete a prior assignment row; delete a stale GSI1 projection; allow an "unassign"; reassign in bulk without one audit row per patient.
+
+**Amended, D-32 (2026-08-30).** Step 5's own notification to both clinicians and the patient is deleted: "any notification will go via whatsapp." `AssignmentFunction`'s `cognito-idp:AdminGetUser`/`ses:SendEmail` grants are removed with it; reassignment's own atomic write and audit trail are unchanged.
 
 ### TASK 2.5.3 — Principal clinician's caseload view, and GSI3
 
@@ -809,6 +815,8 @@ export interface ClinicalRecord extends VersionedRecord {
 **Tests.** `authz.test.ts`'s exhaustive suite is regenerated against the corrected `DOC_TABLE` row — the existing generator, not a bespoke test, so the correction is proven the same exhaustive way every other cell already is. Unit: a patient can send and read their own thread; an assigned sub-clinician can send and read the same thread; both see the same messages, in order. Negative: a patient reading another patient's thread (guessed id) is `403`. Negative: an unassigned sub-clinician is `403` on both routes. Negative: a principal or sub-clinician's send is rejected past the rate limit, exactly as SMS's own limiter proves for its own guard, reusing the identical test shape. Unit: the notification fires to the other party and carries no message content.
 **Verification:** a patient and their assigned clinician's deployed tokens can round-trip a message each way; the recorded rate limit refuses a burst past its own threshold.
 **Flag:** `messaging.enabled` — default off. **DoD:** a patient and their assigned clinician can message each other in one thread; nobody else reaches it; no message can be edited or removed once sent; the corrected matrix row is proven by the same exhaustive suite as every other row. **Rollback:** flip the flag off. **Do NOT:** let a message be edited or removed; let the notification carry any message content; leave the matrix correction untranscribed in `authz-matrix.ts` while citing it in code.
+
+**Amended, D-32 (2026-08-30).** Step 5's own "new message" notice is deleted: "any notification will go via whatsapp." `MessageFunction`'s `cognito-idp:AdminGetUser`/`ses:SendEmail` grants are removed with it; sending and reading a message are unchanged.
 
 ### TASK 3.6.2 — The message thread, on both sides of the account shell
 

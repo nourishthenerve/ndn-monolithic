@@ -1,6 +1,10 @@
 # Patient assignment (TASK 2.5.1 / 2.5.2)
 
-**Date:** 2026-08-22 · **Tasks:** [05-execution-plan.md § TASK 2.5.1](../plan/05-execution-plan.md), [§ TASK 2.5.2](../plan/05-execution-plan.md) · **Requirements:** §5 (approval, assignment, reassignment), §7 (GSI1 access patterns) · **Decisions:** D-07 · **Depends on:** 2.2.3, 2.4.1, 2.1.3, 2.5.1
+**Date:** 2026-08-22 · **Tasks:** [05-execution-plan.md § TASK 2.5.1](../plan/05-execution-plan.md), [§ TASK 2.5.2](../plan/05-execution-plan.md) · **Requirements:** §5 (approval, assignment, reassignment), §7 (GSI1 access patterns) · **Decisions:** D-07, **amended by D-32** · **Depends on:** 2.2.3, 2.4.1, 2.1.3, 2.5.1
+
+## Amendment, D-32 (2026-08-30) — step 5/6's own notification side-effect is deleted
+
+The owner's own words: "any notification will go via whatsapp." `patientApproved`/`patientDeclined`/`patientReassigned`/`clinicianCaseloadPatientAdded`/`clinicianCaseloadPatientRemoved` — every notification this task originally built (step 5's own text, and the "Notifications (step 6)" section below) — no longer fires. Approving, declining and reassigning a patient are entirely unchanged: the same three-way write, the same audit row, the same matrix enforcement described throughout this file. Only "then tell someone by email" is gone; a clinician now finds out over WhatsApp, the same human-mediated channel D-29 already established for patient onboarding. `AssignmentFunction`'s Cognito `AdminGetUser` grant (resolving a clinician's email for the reassignment notice) and its `ses:SendEmail` grant are both removed — the role now touches only DynamoDB. Read "Clinician emails are resolved via..." and "Notifications (step 6)" below as history.
 
 ## What this covers
 

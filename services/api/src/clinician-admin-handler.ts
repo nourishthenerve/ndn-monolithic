@@ -1,14 +1,17 @@
 // TASK 2.4.1: the deployed Lambda entry for the clinician-admin routes
 // (infra/src/data-stack.ts). Same split every other endpoint uses —
 // clinician-admin.ts is SDK-free and unit-testable, this file is the only
-// place that wires the real Cognito Admin* calls, the real DynamoDB-backed
-// stores, and the real Notifier.
+// place that wires the real Cognito Admin* calls and the real
+// DynamoDB-backed stores.
+//
+// D-32 (2026-08-30): the Notifier/SES wiring this file used to construct
+// for the deactivation notice — and the `AdminGetUser` call that resolved
+// an email for it — are deleted along with the notice itself.
 import {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminDisableUserCommand,
   AdminEnableUserCommand,
-  AdminGetUserCommand,
   AdminInitiateAuthCommand,
   AdminRespondToAuthChallengeCommand,
   AdminSetUserPasswordCommand,
@@ -28,15 +31,7 @@ import {
 import { ClinicianRepository } from './clinician-repository.js';
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
-import { DynamoDeliveryLog } from './dynamo-notification-log.js';
 import { DynamoClinicianStore } from './dynamo-store.js';
-import { createNotifier } from './notifications.js';
-import { createSesGenericEmailSender } from './ses.js';
-import { InMemorySmsFlagReader } from './sms-flags.js';
-import { createAwsEndUserMessagingSmsProvider } from './sms-provider.js';
-import { InMemoryRateLimiter } from './sms-rate-limiter.js';
-import { InMemorySpendCounterStore } from './sms-spend-cap.js';
-import { createSmsSender } from './sms.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
 import { buildOtpauthUri, generateTotpCode } from './totp.js';
 
@@ -191,12 +186,6 @@ const deactivateClinicianUser: AdminDeactivateClinicianPort = {
       new AdminUserGlobalSignOutCommand({ UserPoolId: clinicianUserPoolId, Username: subjectId }),
     );
   },
-  async getEmail(subjectId) {
-    const response = await cognitoClient.send(
-      new AdminGetUserCommand({ UserPoolId: clinicianUserPoolId, Username: subjectId }),
-    );
-    return response.UserAttributes?.find((attribute) => attribute.Name === 'email')?.Value;
-  },
 };
 
 const reactivateClinicianUser: AdminReactivateClinicianPort = {
@@ -207,36 +196,10 @@ const reactivateClinicianUser: AdminReactivateClinicianPort = {
   },
 };
 
-// The Notifier this handler's one call (the deactivation notice,
-// `clinicianDeactivated`) needs. It is never `smsEligible`
-// (packages/i18n/src/notifications/index.ts), so the SMS path below is
-// wired only to satisfy `NotifierDeps`'s type — `InMemorySmsFlagReader`'s
-// default (`enabled: false`) means it could not send even if somehow
-// reached. No origination identity is provisioned for this function, and
-// none needs to be while nothing reachable through it is ever smsEligible.
-const notifier = createNotifier({
-  sendEmail: createSesGenericEmailSender({
-    fromAddress: process.env.CLINICIAN_ADMIN_FROM_EMAIL ?? 'noreply@nourishthenerve.com',
-    configurationSetName: process.env.SES_CONFIGURATION_SET_NAME,
-  }),
-  sendSms: createSmsSender({
-    flags: new InMemorySmsFlagReader(),
-    rateLimiter: new InMemoryRateLimiter({ clock: systemClock, limit: 0, windowMs: 3_600_000 }),
-    spendCounter: new InMemorySpendCounterStore(),
-    provider: createAwsEndUserMessagingSmsProvider({
-      originationIdentity: process.env.SMS_ORIGINATION_IDENTITY ?? '',
-    }),
-    clock: systemClock,
-  }),
-  log: new DynamoDeliveryLog({ tableName: process.env.NOTIFICATION_TABLE_NAME ?? '' }),
-  clock: systemClock,
-});
-
 export const handler = createClinicianAdminHandler({
   repository,
   flags,
   createClinicianUser,
   deactivateClinicianUser,
   reactivateClinicianUser,
-  notifier,
 });
