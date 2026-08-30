@@ -64,6 +64,7 @@
 // still set `true` regardless.
 
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import {
   AccountRecovery,
   CfnManagedLoginBranding,
@@ -82,10 +83,11 @@ import type { Construct } from 'constructs';
 
 import {
   AUTH_CALLBACK_URL,
+  AUTH_CERTIFICATE_ARN,
   AUTH_SIGN_OUT_URL,
-  CLINICIAN_USER_POOL_DOMAIN_PREFIX,
+  CLINICIAN_LOGIN_DOMAIN_NAME,
   CLINICIAN_USER_POOL_NAME,
-  PATIENT_USER_POOL_DOMAIN_PREFIX,
+  PATIENT_LOGIN_DOMAIN_NAME,
   PATIENT_USER_POOL_NAME,
 } from './config.js';
 
@@ -364,20 +366,33 @@ export class AuthStack extends Stack {
     // the Essentials tier, and a second hosted-UI migration has nothing
     // this amendment needs it for.
     //
-    // A Cognito-prefix domain rather than a custom one: a custom domain
-    // needs its own ACM certificate in `us-east-1` and a DNS record in a
-    // hosted zone that lives in another account
-    // (docs/runbooks/iac-baseline.md), which is a manual cross-account step
-    // for cosmetics. The prefix is visible to the patient for the seconds
-    // they are on the sign-in page.
+    // Amendment, 2026-08-30: a custom domain, not the Cognito-prefix
+    // domain TASK 2.2.4 originally chose here — the owner asked for the
+    // hosted-UI URL to read as nourishthenerve.com rather than
+    // `<prefix>.auth.eu-west-2.amazoncognito.com`. `AUTH_CERTIFICATE_ARN`
+    // (config.ts) is the one manual cross-account step this needed: an
+    // ACM cert in us-east-1, DNS-validated in the 803129122420 hosted
+    // zone, requested and validated ahead of this deploy the same way
+    // CERTIFICATE_ARN was for the web distribution. After this stack's
+    // first deploy with a `customDomain`, one more manual step remains —
+    // a CNAME for each `*_LOGIN_DOMAIN_NAME` pointed at
+    // `patientUserPoolDomain.cloudFrontEndpoint` /
+    // `clinicianUserPoolDomain.cloudFrontEndpoint` (the `CfnOutput`s
+    // below), added by hand to that same hosted zone; Cognito does not
+    // serve traffic on the custom domain until that record exists.
+    const authCertificate = Certificate.fromCertificateArn(
+      this,
+      'AuthCertificate',
+      AUTH_CERTIFICATE_ARN,
+    );
     this.patientUserPoolDomain = new UserPoolDomain(this, 'PatientUserPoolDomain', {
       userPool: this.patientUserPool,
-      cognitoDomain: { domainPrefix: PATIENT_USER_POOL_DOMAIN_PREFIX },
+      customDomain: { domainName: PATIENT_LOGIN_DOMAIN_NAME, certificate: authCertificate },
       managedLoginVersion: ManagedLoginVersion.NEWER_MANAGED_LOGIN,
     });
     this.clinicianUserPoolDomain = new UserPoolDomain(this, 'ClinicianUserPoolDomain', {
       userPool: this.clinicianUserPool,
-      cognitoDomain: { domainPrefix: CLINICIAN_USER_POOL_DOMAIN_PREFIX },
+      customDomain: { domainName: CLINICIAN_LOGIN_DOMAIN_NAME, certificate: authCertificate },
       managedLoginVersion: ManagedLoginVersion.NEWER_MANAGED_LOGIN,
     });
 
@@ -399,6 +414,23 @@ export class AuthStack extends Stack {
       userPoolId: this.clinicianUserPool.userPoolId,
       clientId: this.clinicianUserPoolClient.userPoolClientId,
       useCognitoProvidedValues: true,
+    });
+
+    // The one value the custom-domain amendment above still needs a human
+    // for: the CNAME target for each `*_LOGIN_DOMAIN_NAME`, in the
+    // 803129122420 hosted zone, pointed here.
+    // `cloudFrontEndpoint`, not the deprecated `cloudFrontDomainName` —
+    // the latter is backed by an `AwsCustomResource` (a `describeUserPoolDomain`
+    // SDK call via a Lambda this stack would then have to give its own
+    // log group), where this is a plain `Fn::GetAtt` on the domain
+    // resource itself.
+    new CfnOutput(this, 'PatientLoginCloudFrontDomain', {
+      value: this.patientUserPoolDomain.cloudFrontEndpoint,
+      description: `CNAME target for ${PATIENT_LOGIN_DOMAIN_NAME} in the nourishthenerve.com hosted zone.`,
+    });
+    new CfnOutput(this, 'ClinicianLoginCloudFrontDomain', {
+      value: this.clinicianUserPoolDomain.cloudFrontEndpoint,
+      description: `CNAME target for ${CLINICIAN_LOGIN_DOMAIN_NAME} in the nourishthenerve.com hosted zone.`,
     });
 
     // "This task deploys infrastructure and exports identifiers." The four

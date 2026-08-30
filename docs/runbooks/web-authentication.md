@@ -21,7 +21,7 @@ Everything in this file is otherwise unchanged and current: the authorization-co
 ```text
 [sign in] ─GET /auth/signin──▶ Lambda: mint PKCE verifier + state
                                Set-Cookie ndn_pkce, ndn_state (HttpOnly)
-                               302 ─▶ <pool>.auth.eu-west-2.amazoncognito.com/oauth2/authorize
+                               302 ─▶ <pool>-login.nourishthenerve.com/oauth2/authorize
 
                        patient enters their password on Cognito's page (D-29 — see amendment above)
 
@@ -90,7 +90,7 @@ The alternative — proxying Cognito's challenge flow through our own Lambda so 
 
 TASK 2.2.1 deliberately created no user pool domain ("2.2.4 decides whether it needs the hosted UI at all"). The answer is yes: `/oauth2/authorize`, `/oauth2/token` and `/oauth2/revoke` all live on it and none exists without it.
 
-Cognito-prefix domains (`ndn-patients`, `ndn-clinicians`) rather than custom ones. A custom domain needs its own ACM certificate in `us-east-1` and a DNS record in a hosted zone that lives in **another AWS account** ([iac-baseline.md](iac-baseline.md)) — a manual cross-account step, for cosmetics on a page a patient sees for seconds. **These prefixes are globally unique per region across all AWS accounts**; if the deploy fails claiming one is taken, the fix is a new prefix in `config.ts`, not a retry.
+**Amendment, 2026-08-30: custom domains, not Cognito-prefix ones.** TASK 2.2.4 originally chose Cognito-prefix domains (`ndn-patients`, `ndn-clinicians`) over custom ones, on the grounds that a custom domain's manual cross-account ACM + DNS step ([iac-baseline.md](iac-baseline.md)) bought only cosmetics on a page a patient sees for seconds. The owner asked for exactly that cosmetic — the sign-in URL should read as `nourishthenerve.com`, not `amazoncognito.com` — so both pools now sit behind `patient-login.nourishthenerve.com` and `clinician-login.nourishthenerve.com`, each an `AWS::Cognito::UserPoolDomain` with a `customDomain` (not `cognitoDomain`) config, sharing one ACM cert (`AUTH_CERTIFICATE_ARN`, `infra/src/config.ts`) requested in `us-east-1` and DNS-validated in the `nourishthenerve.com` hosted zone the same cross-account way `CERTIFICATE_ARN` was for the web distribution. `auth-stack.ts` exports each domain's `cloudFrontDomainName` as a `CfnOutput` — the CNAME target the hosted zone needs, added by hand once per pool after a deploy that changes the domain.
 
 ## Sign-out revokes, it does not merely forget
 

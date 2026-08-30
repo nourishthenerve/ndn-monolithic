@@ -14,9 +14,11 @@ import {
   APEX_DOMAIN_NAME,
   AUTH_CALLBACK_URL,
   CERTIFICATE_ARN,
+  CLINICIAN_OAUTH_BASE_URL,
   DOMAIN_NAME,
   FLAG_PARAMETER_NAME_PREFIX,
   MONITORED_LOG_GROUP_NAMES,
+  PATIENT_OAUTH_BASE_URL,
   PR_ENV_SITE_DEPLOYMENT_LOG_GROUP_NAME,
   SES_CONFIGURATION_SET_NAME,
   UNMONITORED_LOG_GROUP_NAMES,
@@ -1337,8 +1339,8 @@ describe('WebStack — the authenticated web shell (TASK 2.2.4)', () => {
     );
     const variables = authFunction?.Properties?.Environment?.Variables as Record<string, string>;
 
-    expect(variables.PATIENT_OAUTH_BASE_URL).toContain('ndn-patients.auth');
-    expect(variables.CLINICIAN_OAUTH_BASE_URL).toContain('ndn-clinicians.auth');
+    expect(variables.PATIENT_OAUTH_BASE_URL).toBe(PATIENT_OAUTH_BASE_URL);
+    expect(variables.CLINICIAN_OAUTH_BASE_URL).toBe(CLINICIAN_OAUTH_BASE_URL);
     expect(variables.AUTH_CALLBACK_URL).toBe(AUTH_CALLBACK_URL);
 
     // It touches no table and no bucket: the only *data-plane-shaped*
