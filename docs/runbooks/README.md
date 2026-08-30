@@ -40,7 +40,7 @@ This directory holds one runbook per task, or per closely-related task cluster �
 - [patient-registration.md](patient-registration.md) — **superseded by D-29** — patient self-registration and the clinician approval lifecycle (TASK 2.2.3); the approval lifecycle itself is still current, the self-registration creation path is not
 - [patient-account-provisioning.md](patient-account-provisioning.md) — D-29: staff-mediated patient account creation and password reset over WhatsApp, replacing self-registration; the approval step is unchanged
 - [web-authentication.md](web-authentication.md) — the authenticated account shell: sign-in, the session, sign-out (TASK 2.2.4); amended by D-29 (a password on Cognito's page, not a one-time code)
-- [clinician-accounts.md](clinician-accounts.md) — clinician account provisioning, and the two live bugs found provisioning the first real principal (TASK 2.4.1); amended by D-30 — no invite email, both steps built and unit-tested, a real end-to-end live proof still outstanding
+- [clinician-accounts.md](clinician-accounts.md) — clinician account provisioning, and the two live bugs found provisioning the first real principal (TASK 2.4.1); amended by D-30 — no invite email, both steps built and live-verified end to end with a real synthetic test clinician
 - [admin-token-retirement.md](admin-token-retirement.md) — retiring the shared `ADMIN_API_TOKEN` bearer gate once the real authorizer covers everything it did (TASK 2.5.4)
 
 ## Data, clinical records, and the authorisation boundary
