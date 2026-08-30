@@ -435,6 +435,8 @@ describe('AuthStack — managed login branding (found missing live, 2026-08-27)'
       UserPoolId: unknown;
       ClientId: unknown;
       UseCognitoProvidedValues?: boolean;
+      Settings?: unknown;
+      Assets?: ReadonlyArray<{ Category: string; ColorMode: string; Extension: string }>;
     };
   }
 
@@ -448,9 +450,26 @@ describe('AuthStack — managed login branding (found missing live, 2026-08-27)'
     expect(brandings()).toHaveLength(2);
   });
 
-  it('uses Cognito-provided defaults rather than an unset, broken style', () => {
+  // Amendment, 2026-08-30: `useCognitoProvidedValues: true` is gone —
+  // confirmed live, it accepts a custom `assets` array without error but
+  // never renders it, so a favicon needed the switch to an explicit
+  // `settings` object (captured verbatim from Cognito's own defaults,
+  // `managed-login-branding-settings.json`) instead.
+  it('supplies real settings rather than an unset, broken style', () => {
     for (const branding of brandings()) {
-      expect(branding.Properties.UseCognitoProvidedValues).toBe(true);
+      expect(branding.Properties.UseCognitoProvidedValues).toBeUndefined();
+      expect(branding.Properties.Settings).toBeTruthy();
+    }
+  });
+
+  it('carries a favicon for both light and dark mode, ICO and SVG', () => {
+    for (const branding of brandings()) {
+      const categories = (branding.Properties.Assets ?? []).map(
+        (asset) => `${asset.Category}:${asset.ColorMode}`,
+      );
+      expect(categories.sort()).toEqual(
+        ['FAVICON_ICO:DARK', 'FAVICON_ICO:LIGHT', 'FAVICON_SVG:DARK', 'FAVICON_SVG:LIGHT'].sort(),
+      );
     }
   });
 });
