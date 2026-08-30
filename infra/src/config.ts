@@ -454,19 +454,28 @@ export const CLINICIAN_USER_POOL_ISSUER = `https://cognito-idp.${REGION}.amazona
 export const AUTH_CALLBACK_URL = `${SITE_ORIGIN}/en/account/callback`;
 export const AUTH_SIGN_OUT_URL = `${SITE_ORIGIN}/`;
 
-// TASK 2.2.4: the Cognito-hosted sign-in domains. Globally unique per
-// region across all AWS accounts, which is why they carry the project
-// prefix; `<prefix>.auth.eu-west-2.amazoncognito.com` is where a patient
-// enters their one-time code and a clinician their password and TOTP.
-//
-// A Cognito prefix domain rather than a custom one: a custom domain needs
-// its own us-east-1 certificate and a DNS record in the hosted zone that
-// lives in account 803129122420 (docs/runbooks/iac-baseline.md) — a manual
-// cross-account step, for cosmetics on a page a patient sees for seconds.
-export const PATIENT_USER_POOL_DOMAIN_PREFIX = 'ndn-patients';
-export const CLINICIAN_USER_POOL_DOMAIN_PREFIX = 'ndn-clinicians';
+// TASK 2.2.4 amendment, 2026-08-30: the Cognito-hosted sign-in domains,
+// now custom domains under nourishthenerve.com rather than the default
+// `<prefix>.auth.eu-west-2.amazoncognito.com`. The owner's own request
+// ("make it look like masked by nourishthenerve.com") reverses TASK
+// 2.2.4's original call — a Cognito-prefix domain, because a custom one
+// needed a manual cross-account ACM + DNS step "for cosmetics on a page a
+// patient sees for seconds." Whether it is cosmetic is the owner's
+// judgment to make, not this codebase's; once asked for, the manual step
+// is the same one TASK 1.6.1's own CERTIFICATE_ARN already took.
+export const PATIENT_LOGIN_DOMAIN_NAME = 'patient-login.nourishthenerve.com';
+export const CLINICIAN_LOGIN_DOMAIN_NAME = 'clinician-login.nourishthenerve.com';
 
-/** The `/oauth2/*` base for a pool's hosted domain — where `authorize`, `token` and `revoke` live. */
-export function userPoolOAuthBaseUrl(domainPrefix: string): string {
-  return `https://${domainPrefix}.auth.${REGION}.amazoncognito.com`;
-}
+export const PATIENT_OAUTH_BASE_URL = `https://${PATIENT_LOGIN_DOMAIN_NAME}`;
+export const CLINICIAN_OAUTH_BASE_URL = `https://${CLINICIAN_LOGIN_DOMAIN_NAME}`;
+
+// Requested 2026-08-30 in us-east-1 against the ndn-prod account (Cognito
+// custom domains require us-east-1 regardless of the pool's own region,
+// same CloudFront-driven constraint CERTIFICATE_ARN above documents) —
+// covers both LOGIN_DOMAIN_NAMEs above as SANs on one cert, kept separate
+// from CERTIFICATE_ARN (the web distribution's own cert) so this change
+// carries no blast radius onto the live site. DNS-validated via CNAMEs
+// added to the nourishthenerve.com hosted zone in 803129122420, the same
+// cross-account pattern.
+export const AUTH_CERTIFICATE_ARN =
+  'arn:aws:acm:us-east-1:357601815388:certificate/353ceb93-69cf-4350-8127-a98cb560f03c';

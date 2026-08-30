@@ -348,9 +348,11 @@ describe('AuthStack — exported identifiers', () => {
     const outputs = synth().findOutputs('*');
     expect(Object.keys(outputs).sort()).toEqual([
       'ClinicianAdminAuthClientId',
+      'ClinicianLoginCloudFrontDomain',
       'ClinicianUserPoolClientId',
       'ClinicianUserPoolId',
       'ClinicianUserPoolIssuerUrl',
+      'PatientLoginCloudFrontDomain',
       'PatientUserPoolClientId',
       'PatientUserPoolId',
       'PatientUserPoolIssuerUrl',

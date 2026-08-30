@@ -43,7 +43,7 @@ export type PoolKey = 'patient' | 'clinician';
 
 export interface PoolConfig {
   readonly clientId: string;
-  /** `https://<prefix>.auth.<region>.amazoncognito.com` */
+  /** The pool's hosted-UI base origin, e.g. `https://patient-login.nourishthenerve.com`. */
   readonly oauthBaseUrl: string;
 }
 
