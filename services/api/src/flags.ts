@@ -55,13 +55,12 @@ export type FlagName =
   | 'assessments.enabled'
   // TASK 3.4.1: scheduling, and both the clinician-calendar and
   // patient's-own-list reads over the same records. Default off.
+  // TASK 3.4.3's own `appointments.reminders.enabled` — the automated
+  // 1-hour reminder send this flag used to gate independently of
+  // scheduling (D-11) — is deleted along with the reminder sweep itself:
+  // D-32 (2026-08-30), a clinician now reminds a patient over WhatsApp,
+  // by hand.
   | 'appointments.enabled'
-  // TASK 3.4.3: the 1-hour reminder send, independent of
-  // appointments.enabled (D-11) — scheduling and reminding are two
-  // capabilities, and turning one on must never silently turn on real
-  // SMS spend. Default off; the EventBridge rule keeps firing regardless,
-  // this flag is the rollback with no deploy.
-  | 'appointments.reminders.enabled'
   // TASK 3.5.1: a clinician assigning existing (published) content to a
   // patient, and the patient's own hydrated read of it. Default off.
   | 'contentAssignment.enabled'

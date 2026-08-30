@@ -6,6 +6,10 @@
 
 Everything below is this task's own record and is left as it was written — as of 2026-08-10, `sms.ts` truly called no provider. That sentence stopped being true at **TASK 2.3.2**: `createSmsSender` now calls a real `SmsProvider` (AWS End User Messaging SMS, ADR-0008) once every guard below has passed. Nothing in this runbook's guard order, thresholds or verification changed — see [`sms-provider.md`](sms-provider.md) for what 2.3.2 added.
 
+## Amendment, D-32 (2026-08-30) — unreachable, not deleted
+
+The appointment reminder sweep (TASK 3.4.3) was this mechanism's only real caller — `appointmentReminder1Hour` was, and remains, the only template ever marked `smsEligible` (`packages/i18n/src/notifications/index.ts`). D-32 deletes that sweep outright: a clinician now reminds a patient over WhatsApp, by hand. Nothing below is wrong or dangerous left as-is — it is simply unreachable, the same "dark, unreachable, not removed" posture D-31 already holds for Stripe. LL-02 (leasing a real UK SMS identity) is closed as moot alongside it.
+
 ## What this covers
 
 R-02's five named mitigations for SMS pumping fraud — "+44-only destination allow-list, per-principal rate limit, hard block at cap, anomalous-velocity alarm, SMS only behind authentication" — and R-01's "never silently drop a reminder" — land now, before any SMS provider is chosen (ADR 0008: provider selection is M2.2) or any SMS can physically be sent. The cap therefore can never be breached even once: there is nothing yet that calls a provider.

@@ -1182,21 +1182,12 @@ describe('DynamoAppointmentStore', () => {
     });
   });
 
-  it('create() also derives GSI4 (gsi4pk/gsi4sk) when scheduledAt is after created_at — the "in the future at creation" check', async () => {
+  // D-32 (2026-08-30) removed GSI4 (and the reminder sweep it existed
+  // for) — this asserts create() never writes gsi4pk/gsi4sk again, a
+  // regression guard against the projection quietly coming back.
+  it('create() never writes gsi4pk/gsi4sk — GSI4 no longer exists', async () => {
     ddbMock.on(PutCommand).resolves({});
-    // buildAppointment()'s own defaults: scheduledAt 2026-09-01, created_at 2026-08-22 — already future.
     await store.create(buildAppointment());
-
-    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
-      Item: { gsi4pk: 'APPT#REMINDER', gsi4sk: '2026-09-01T10:00:00.000Z#pat-1' },
-    });
-  });
-
-  it('create() omits gsi4pk/gsi4sk entirely when scheduledAt is not after created_at — not set to a falsy value, absent', async () => {
-    ddbMock.on(PutCommand).resolves({});
-    await store.create(
-      buildAppointment({ scheduledAt: '2026-08-01T10:00:00.000Z', created_at: '2026-08-22T09:00:00.000Z' }),
-    );
 
     const item = ddbMock.commandCalls(PutCommand)[0]?.args[0].input.Item;
     expect(item).not.toHaveProperty('gsi4pk');
@@ -1347,126 +1338,6 @@ describe('DynamoAppointmentStore', () => {
     ).rejects.toThrow(AppError);
   });
 
-  it('listReminderCandidates() issues a GSI4 Query with an inclusive BETWEEN bound, never a Scan, then one GetCommand per row', async () => {
-    ddbMock.on(QueryCommand).resolves({
-      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T09:55:00.000Z', gsi4pk: 'APPT#REMINDER', gsi4sk: '2026-09-01T09:55:00.000Z#pat-1' }],
-    });
-    ddbMock.on(GetCommand).resolves({
-      Item: {
-        ...buildAppointment({ scheduledAt: '2026-09-01T09:55:00.000Z' }),
-        pk: 'PAT#pat-1',
-        sk: 'APPT#2026-09-01T09:55:00.000Z',
-      },
-    });
-
-    const result = await store.listReminderCandidates(
-      '2026-09-01T09:00:00.000Z',
-      '2026-09-01T10:15:00.000Z',
-    );
-    expect(result).toHaveLength(1);
-
-    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
-      TableName: 'ndn-data',
-      IndexName: 'GSI4',
-      KeyConditionExpression: 'gsi4pk = :reminderKey AND gsi4sk BETWEEN :fromKey AND :toKey',
-      ExpressionAttributeValues: {
-        ':reminderKey': 'APPT#REMINDER',
-        ':fromKey': '2026-09-01T09:00:00.000Z',
-        // One millisecond past the given windowEnd — see this method's own doc for why.
-        ':toKey': '2026-09-01T10:15:00.001Z',
-      },
-    });
-  });
-
-  it('listReminderCandidates() excludes a row whose appointment_status is not scheduled, after the follow-up GetItem confirms it', async () => {
-    ddbMock.on(QueryCommand).resolves({
-      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T09:55:00.000Z' }],
-    });
-    ddbMock.on(GetCommand).resolves({
-      Item: {
-        ...buildAppointment({ scheduledAt: '2026-09-01T09:55:00.000Z', appointment_status: 'cancelled' }),
-        pk: 'PAT#pat-1',
-        sk: 'APPT#2026-09-01T09:55:00.000Z',
-      },
-    });
-
-    const result = await store.listReminderCandidates(
-      '2026-09-01T09:00:00.000Z',
-      '2026-09-01T10:15:00.000Z',
-    );
-    expect(result).toEqual([]);
-  });
-
-  it('listReminderCandidates() excludes a row that already has reminder_sent_at set', async () => {
-    ddbMock.on(QueryCommand).resolves({
-      Items: [{ pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T09:55:00.000Z' }],
-    });
-    ddbMock.on(GetCommand).resolves({
-      Item: {
-        ...buildAppointment({ scheduledAt: '2026-09-01T09:55:00.000Z' }),
-        reminder_sent_at: '2026-09-01T09:00:00.000Z',
-        pk: 'PAT#pat-1',
-        sk: 'APPT#2026-09-01T09:55:00.000Z',
-      },
-    });
-
-    const result = await store.listReminderCandidates(
-      '2026-09-01T09:00:00.000Z',
-      '2026-09-01T10:15:00.000Z',
-    );
-    expect(result).toEqual([]);
-  });
-
-  it('listReminderCandidates() returns an empty array, not an error, when the GSI4 Query itself finds nothing', async () => {
-    ddbMock.on(QueryCommand).resolves({ Items: [] });
-    const result = await store.listReminderCandidates(
-      '2026-09-01T09:00:00.000Z',
-      '2026-09-01T10:15:00.000Z',
-    );
-    expect(result).toEqual([]);
-    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
-  });
-
-  it('claimForReminder() issues an atomic UpdateItem on reminder_sent_at alone, conditioned on the row existing and not already claimed', async () => {
-    ddbMock.on(UpdateCommand).resolves({
-      Attributes: {
-        ...buildAppointment(),
-        reminder_sent_at: '2026-08-22T09:00:00.000Z',
-        pk: 'PAT#pat-1',
-        sk: 'APPT#2026-09-01T10:00:00.000Z',
-      },
-    });
-
-    const result = await store.claimForReminder(
-      'pat-1',
-      '2026-09-01T10:00:00.000Z',
-      '2026-08-22T09:00:00.000Z',
-    );
-    expect(result?.reminder_sent_at).toBe('2026-08-22T09:00:00.000Z');
-    expect(result).not.toHaveProperty('pk');
-
-    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
-      TableName: 'ndn-data',
-      Key: { pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
-      UpdateExpression: 'SET reminder_sent_at = :now',
-      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(reminder_sent_at)',
-      ExpressionAttributeValues: { ':now': '2026-08-22T09:00:00.000Z' },
-      ReturnValues: 'ALL_NEW',
-    });
-  });
-
-  it('claimForReminder() returns undefined, not a thrown error, on a conditional check failure — already claimed or nonexistent', async () => {
-    ddbMock
-      .on(UpdateCommand)
-      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
-
-    const result = await store.claimForReminder(
-      'pat-1',
-      '2026-09-01T10:00:00.000Z',
-      '2026-08-22T09:00:00.000Z',
-    );
-    expect(result).toBeUndefined();
-  });
 });
 
 function buildContentAssignment(overrides: Partial<ContentAssignment> = {}): ContentAssignment {

@@ -21,17 +21,8 @@ export type AppointmentStatus = 'scheduled' | 'completed' | 'cancelled' | 'no-sh
 export interface Appointment extends BaseRecord {
   patientId: string;
   clinicianId: string;
-  /** ISO-8601, UTC (a trailing `Z`) — also this record's own key suffix (`APPT#<scheduledAt>`) on both the main table and GSI1's/GSI4's projections. */
+  /** ISO-8601, UTC (a trailing `Z`) — also this record's own key suffix (`APPT#<scheduledAt>`) on both the main table and GSI1's projection. GSI4 carried the identical suffix too, until D-32 (2026-08-30) removed it along with the reminder sweep it existed for. */
   scheduledAt: string;
   durationMinutes: number;
   appointment_status: AppointmentStatus;
-  /**
-   * TASK 3.4.3: set exactly once, atomically, by the reminder sweep's own
-   * claim step — the fact "a reminder attempt was made," independent of
-   * whether the attempt itself succeeded, degraded to email, or failed
-   * every guard. Absent, not `false`, until claimed — the same
-   * absent-vs-empty distinction this codebase draws for every optional
-   * field a write either sets for real or never touches.
-   */
-  reminder_sent_at?: string;
 }

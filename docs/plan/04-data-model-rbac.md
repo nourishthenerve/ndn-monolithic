@@ -17,7 +17,7 @@
 | Call participant | `CALL#<appointmentId>` / `CONN#<connectionId>` | TASK 4.2.1 — at most two live items per call, written only on an authorised, in-window join; same native TTL as the connection row it points at |
 | Audit event | `AUDIT#<date>` / `<ts>#<id>` | **Append-only**, who/what/when/where |
 
-GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR-PP-10) · **GSI3** admin cross-caseload views (FR-DP-02) · **GSI4** appointment-window lookups for reminders.
+GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR-PP-10) · **GSI3** admin cross-caseload views (FR-DP-02). **GSI4** (appointment-window lookups for reminders) existed from TASK 3.4.3 until D-32 (2026-08-30) deleted the reminder sweep it served — see `docs/adr/0002-database.md`.
 
 **RBAC matrix** (C=create R=read U=update J=join-call P=reset-password D=**never**, — = denied):
 

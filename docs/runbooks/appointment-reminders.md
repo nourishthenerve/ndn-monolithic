@@ -1,8 +1,16 @@
 # The 1-hour reminder, GSI4, and the first real SMS send (TASK 3.4.3)
 
-**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.4.3](../plan/05-execution-plan.md) · **Requirements:** C-02, NFR-09, R-01, R-02 · **Decisions:** D-10, D-11 · **Risks:** R-01, R-02 · **Depends on:** 3.4.1, 2.3.1, 2.3.2
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 3.4.3](../plan/05-execution-plan.md) · **Requirements:** C-02, NFR-09, R-01, R-02 · **Decisions:** D-10, D-11, **superseded by D-32** · **Risks:** R-01, R-02 · **Depends on:** 3.4.1, 2.3.1, 2.3.2
 
-## What this covers
+## Deleted, D-32 (2026-08-30) — WhatsApp replaces the sweep
+
+**The entire flow this runbook describes is deleted, not merely disabled.** The owner's own words: "remove this reminder thing, the clinician handling whatsapp will send a reminder manually." `reminder-sweep.ts`, `reminder-sweep-handler.ts`, GSI4 (main table and `Appointment.reminder_sent_at`), the `ReminderSweepFunction` Lambda/role and its `rate(15 minutes)` EventBridge rule, and the `appointments.reminders.enabled` flag are all gone from the codebase, along with every test that covered them (`reminder-sweep.test.ts`, and the reminder-specific cases in `appointment-repository.test.ts`/`appointment.test.ts`/`dynamo-store.test.ts`/`data-stack.test.ts`). Scheduling and cancelling an appointment (TASK 3.4.1/3.4.2) are unaffected — only the automated reminder step is gone.
+
+**An unplanned further consequence, found while scoping the removal:** `appointmentReminder1Hour` was the *only* template ever marked `smsEligible` (`packages/i18n/src/notifications/index.ts`), and this sweep was therefore the only real caller SMS sending could ever have had. Removing it makes `sms.ts`, `sms-provider.ts`, `sms-rate-limiter.ts`, `sms-spend-cap.ts`/`dynamo-sms-spend-cap.ts`, TASK 0.5.3's own hard-cap mechanism, ADR-0008, and LL-02 (UK SMS provider onboarding) all unreachable — no other code path was ever going to call any of them. Per D-31's own precedent for genuinely-dead-but-harmless code (LL-02 was never actioned — no real number leased, $0 spent), none of that is deleted; it stays in place, unused, the same "dark, unreachable, not removed" posture Stripe already holds. `workshop-confirmation-sms.md`'s own SMS template is equally moot, and was already marked so by D-31.
+
+**Why this file is kept rather than deleted:** GSI4's own proof (below) and the idempotent-claim reasoning are exactly as true historically as they were on 2026-08-22 — a real record of a mechanism that worked, not a design error. Everything from "What this covers" onward should be read as history, not current behaviour.
+
+## What this covers (as originally built — see the note above for its current status)
 
 `02-risk-register.md`'s R-01 names the arithmetic directly: "§5 asks for ~150 SMS/month; C-02's £5 buys ~108" at scale, mitigated by "email-primary; SMS reserved for the 1-hour reminder … never silently drop a reminder — built as a property of the notification abstraction at 2.3.1." TASK 2.3.2 built and proved a real SMS send against a real provider but noted its own cost line as "£0.00 this month — no reminder exists to send until 3.4.x." This is that task, and it is the first time this platform sends an SMS anyone will actually receive.
 
