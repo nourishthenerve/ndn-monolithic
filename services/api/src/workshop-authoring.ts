@@ -64,10 +64,14 @@ const createWorkshopBodySchema = z.object({
   id: z.string().min(1),
   status: z.enum(['draft', 'published', 'cancelled']),
   dateTimeUtc: dateTimeUtcSchema,
-  capacity: z.number().int().positive(),
-  // GBP pence, per D-13 — TASK 1.5.1's own Tests line: "rejected if
-  // negative/non-integer."
-  priceMinorUnits: z.number().int().nonnegative(),
+  // D-31: optional, not required — workshops are announcement-only, no
+  // registration or payment exists on the public site to enforce a
+  // capacity or charge a price against. Still validated when given,
+  // since TASK 1.5.2's own dead Stripe Checkout code (never wired, never
+  // to be turned on) would misbehave against a negative/fractional value
+  // if it were ever reached.
+  capacity: z.number().int().positive().optional(),
+  priceMinorUnits: z.number().int().nonnegative().optional(),
   posterKey: z.string().min(1).optional(),
   details: detailsSchema,
 });

@@ -18,8 +18,6 @@ describe('fetchPublishedWorkshops', () => {
           {
             id: 'workshop-1',
             dateTimeUtc: '2026-07-01T10:00:00.000Z',
-            capacity: 20,
-            priceMinorUnits: 2500,
             details: { en: { title: 'Balance & Falls Prevention', description: 'A workshop.' } },
           },
         ],
@@ -33,12 +31,34 @@ describe('fetchPublishedWorkshops', () => {
       {
         id: 'workshop-1',
         dateTimeUtc: '2026-07-01T10:00:00.000Z',
-        capacity: 20,
-        priceMinorUnits: 2500,
         details: { en: { title: 'Balance & Falls Prevention', description: 'A workshop.' } },
       },
     ]);
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/workshops'));
+  });
+
+  it('D-31: ignores capacity/priceMinorUnits even if the API still returns them', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          items: [
+            {
+              id: 'workshop-1',
+              dateTimeUtc: '2026-07-01T10:00:00.000Z',
+              capacity: 20,
+              priceMinorUnits: 2500,
+              details: { en: { title: 'Balance & Falls Prevention', description: 'A workshop.' } },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const [workshop] = await fetchPublishedWorkshops();
+
+    expect(workshop).not.toHaveProperty('capacity');
+    expect(workshop).not.toHaveProperty('priceMinorUnits');
   });
 
   it('returns [] on a non-2xx response rather than throwing', async () => {

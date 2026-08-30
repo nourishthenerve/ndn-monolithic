@@ -323,6 +323,8 @@ export interface Workshop extends BaseRecord {
 **Verification:** `aws iam simulate-principal-policy` on the runtime role vs. the media bucket → `s3:DeleteObject` `explicitDeny`, `s3:PutObject` `allowed`; `curl -sI` a direct S3 URL → 403.
 **Flag:** `workshops.enabled` — default off. **DoD:** a workshop with a poster can be created, published, and rendered publicly; cancelling never deletes it or its media. **Rollback:** `cdk destroy` reverts the bucket/behavior (`RETAIN` keeps uploaded posters). **Do NOT:** make the media bucket or any prefix publicly writable/listable; grant the runtime role `DeleteObject` on it; delete a cancelled workshop's row or poster.
 
+**Amended by D-31, 2026-08-30.** `capacity`/`priceMinorUnits` (the Interfaces block above, as originally built) moved from required to optional and are no longer rendered on the public detail page — workshops are announcement-only, no registration or payment exists on the site to enforce a capacity or charge a price against. Full reasoning: [01-decisions.md](01-decisions.md)'s D-31, [docs/runbooks/workshops.md](../runbooks/workshops.md).
+
 ### TASK 1.5.2 — Stripe Checkout + idempotent webhooks + registration confirmation email
 
 **Milestone:** M1.5 · **Requirements:** FR-WEB-02 · **Decisions:** D-13, ADR-0010 · **Depends on:** 1.5.1, 1.4.1, 0.6.1 · **Size:** M · **Cost:** £0.00 recurring infra (Stripe per-transaction fees excluded from C-01, netted from workshop revenue).

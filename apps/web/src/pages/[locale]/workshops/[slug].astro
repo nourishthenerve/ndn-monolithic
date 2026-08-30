@@ -56,10 +56,6 @@ const formattedDate = new Intl.DateTimeFormat(locale, {
   dateStyle: 'long',
   timeStyle: 'short',
 }).format(new Date(workshop.dateTimeUtc));
-const formattedPrice = new Intl.NumberFormat(locale, {
-  style: 'currency',
-  currency: 'GBP',
-}).format(workshop.priceMinorUnits / 100);
 ---
 
 <BaseLayout
@@ -83,10 +79,6 @@ const formattedPrice = new Intl.NumberFormat(locale, {
     <dl>
       <dt>{t('workshops.detail.dateLabel', undefined, locale)}</dt>
       <dd>{formattedDate}</dd>
-      <dt>{t('workshops.detail.priceLabel', undefined, locale)}</dt>
-      <dd>{formattedPrice}</dd>
-      <dt>{t('workshops.detail.capacityLabel', undefined, locale)}</dt>
-      <dd>{workshop.capacity}</dd>
     </dl>
   </article>
 </BaseLayout>

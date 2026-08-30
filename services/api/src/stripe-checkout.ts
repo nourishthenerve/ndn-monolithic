@@ -86,7 +86,15 @@ export function createWorkshopCheckoutHandler(
 
     // Capacity reserved *before* calling Stripe — a workshop already at
     // capacity never triggers a Checkout Session creation at all.
-    const reserved = await deps.registrations.reserveCapacity(req.workshopId, workshop.capacity);
+    // D-31: `capacity`/`priceMinorUnits` are optional on `Workshop` now —
+    // this whole handler is unreachable dead code (never wired, never to
+    // be turned on, see stripe-checkout-registration.md), so the `?? 0`
+    // fallbacks below exist only to keep it compiling, not because either
+    // value is ever meant to actually be 0 for a real workshop.
+    const reserved = await deps.registrations.reserveCapacity(
+      req.workshopId,
+      workshop.capacity ?? 0,
+    );
     if (!reserved) {
       return { kind: 'full' };
     }
@@ -98,7 +106,7 @@ export function createWorkshopCheckoutHandler(
       session = await deps.createCheckoutSession({
         workshopId: req.workshopId,
         workshopTitle,
-        priceMinorUnits: workshop.priceMinorUnits,
+        priceMinorUnits: workshop.priceMinorUnits ?? 0,
         clientReferenceId: `REGISTRATION#${req.registrationId}`,
       });
     } catch (error) {
