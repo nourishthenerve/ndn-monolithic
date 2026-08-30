@@ -256,18 +256,9 @@ export const TURNSTILE_SECRET_PARAMETER_NAME = '/ndn/turnstile-secret-key';
 // TASK 4.4.1 (D-12, ADR-0006): the Cloudflare Realtime TURN key id —
 // which of the account's keys `turn-credentials.ts` mints credentials
 // against. Not secret on its own (it only names a key, the API token
-// below is what authorises minting against it), but left empty rather
-// than invented: a Cloudflare Calls/Realtime TURN key is a manual
-// dashboard step for the site owner, the same "not something CDK can
-// provision" category CERTIFICATE_ARN/TURNSTILE_SECRET_PARAMETER_NAME/
-// SMS_ORIGINATION_IDENTITY above already document.
-// `turn-credentials-handler.ts` still deploys and every guard in the
-// issuance chain still runs correctly against an empty key id — the
-// provider call itself fails (`PROVIDER_ERROR`), and a denied credential
-// request degrades to TASK 4.3.3's own STUN-only terminal path, never a
-// hang. See docs/runbooks/video-calls.md for the provisioning step this
-// leaves as the site owner's own action.
-export const CLOUDFLARE_TURN_KEY_ID = '';
+// below is what authorises minting against it). Provisioned 2026-08-30 —
+// the "ndn-video-relay" TURN key in the Cloudflare Realtime dashboard.
+export const CLOUDFLARE_TURN_KEY_ID = '1de66ac40f608adf38d0432e6c613dc5'; // gitleaks:allow — not secret, see comment above
 
 // TASK 4.4.1: the SSM SecureString holding the matching Cloudflare TURN
 // API token (D-14) — same out-of-band `aws ssm put-parameter --type

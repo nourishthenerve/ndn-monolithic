@@ -40,17 +40,15 @@ export const signallingWebSocketUrl = 'wss://93im3xehxh.execute-api.eu-west-2.am
 // post without a new index or a table Scan.
 export const blogContentType = 'blog';
 
-// TASK 1.4.1: Cloudflare Turnstile's own well-known, publicly documented
-// "always passes" test site key — not secret, safe to build into static
-// HTML. [Owner action] Replace with the real site key from a Turnstile
-// widget created in the Cloudflare dashboard before flipping
-// `testimonials.submission.enabled` on for real; see
-// docs/runbooks/testimonials.md. D-32 (2026-08-30): the contact form this
+// TASK 1.4.1: the real site key, provisioned 2026-08-30 — "NDN Site
+// Widget" in the Cloudflare dashboard, hostnames nourishthenerve.com and
+// next.nourishthenerve.com. Not secret — a site key is meant to be public,
+// safe to build into static HTML. D-32 (2026-08-30): the contact form this
 // key was originally built for is deleted; testimonial submission is now
 // its only caller. The matching secret key lives server-side only (SSM
-// SecureString, infra/src/config.ts's TURNSTILE_SECRET_PARAMETER_NAME),
-// never here.
-export const turnstileSiteKey = '1x00000000000000000000AA';
+// SecureString, infra/src/config.ts's TURNSTILE_SECRET_PARAMETER_NAME,
+// provisioned the same day), never here.
+export const turnstileSiteKey = '0x4AAAAAAEiDaB79oLUw9LNz'; // gitleaks:allow — not secret, see comment above
 
 // D-32 (2026-08-30): the contact page's replacement for the deleted form —
 // a direct link to the clinic's WhatsApp Business number, the same
