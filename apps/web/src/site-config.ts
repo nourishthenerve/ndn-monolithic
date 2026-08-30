@@ -55,11 +55,9 @@ export const turnstileSiteKey = '1x00000000000000000000AA';
 // D-32 (2026-08-30): the contact page's replacement for the deleted form —
 // a direct link to the clinic's WhatsApp Business number, the same
 // human-staffed channel D-29 already established for patient account
-// creation (docs/runbooks/patient-account-provisioning.md). [Owner action]
-// Replace with the real WhatsApp Business number before go-live; publishing
-// it is a content change, not an engineering one (the identical scoping
-// patient-account-provisioning.md already draws for this same number).
-export const whatsappBusinessNumber = '+44 00 0000 0000';
+// creation (docs/runbooks/patient-account-provisioning.md). The real
+// number, provided by the owner 2026-08-30.
+export const whatsappBusinessNumber = '+91 88611 11636';
 
 /** `https://wa.me/<digits>` — wa.me accepts digits only, no `+`/spaces/hyphens. */
 export function whatsappChatUrl(number: string): string {
