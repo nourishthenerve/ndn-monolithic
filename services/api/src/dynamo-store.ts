@@ -102,8 +102,28 @@ const WORKSHOP_CAPACITY_SORT_KEY = 'CAPACITY';
 const STRIPE_EVENT_PK = (eventId: string) => `STRIPE_EVENT#${eventId}`;
 const STRIPE_EVENT_SORT_KEY = 'RECEIVED';
 
+/**
+ * `removeUndefinedValues` added 2026-08-31, after a live 500 on
+ * `POST /patients` (patient-admin.ts's own note has the full trace).
+ * Without it, one `undefined` anywhere in an item — including nested,
+ * which is where it happened — makes the document client throw rather than
+ * write, and the caller sees a 500 with nothing in it naming the field.
+ *
+ * DynamoDB has no `undefined`: an attribute is present or it is not.
+ * Dropping the key is therefore the only thing "write `undefined`" could
+ * faithfully mean, and doing it here makes an entire class of "an optional
+ * field was left blank" 500 unrepresentable rather than something each
+ * call site has to remember. It is a safety net, not a licence: the
+ * convention this codebase already states — build the record without the
+ * key rather than with an `undefined` value (`DynamoAssignmentStore.writeDecision`'s
+ * own comment, and now patient-admin.ts's) — still holds, because "no
+ * phone was given" and "phone is blank" are different facts and only the
+ * call site knows which it means.
+ */
 function defaultDocumentClient(): DynamoDBDocumentClient {
-  return DynamoDBDocumentClient.from(new DynamoDBClient({}));
+  return DynamoDBDocumentClient.from(new DynamoDBClient({}), {
+    marshallOptions: { removeUndefinedValues: true },
+  });
 }
 
 /**

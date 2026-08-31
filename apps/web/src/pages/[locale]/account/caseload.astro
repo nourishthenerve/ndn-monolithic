@@ -38,12 +38,19 @@ const heading = t('caseload.heading', undefined, locale);
 >
   <Heading level={1}>{heading}</Heading>
 
-  <RequireAuth client:only="react" loadingLabel={t('account.loading', undefined, locale)}>
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    requirePrincipalClinician
+  >
     <Fragment slot="signedOut">
       <p>
         {t('account.signedOut', undefined, locale)}{' '}
         <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
       </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('caseload.forbidden', undefined, locale)}</p>
     </Fragment>
     <CaseloadView
       client:only="react"

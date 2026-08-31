@@ -131,3 +131,17 @@ Rollback is the same command with `false`. Sign-in disappears; the static site i
 - Hard-code a user-facing string — the i18n lint rule is in the required gate.
 - Bypass `RequireAuth` for a "quick" preview page.
 - Give `GET /auth/signin` anything to spend: it sets one-time cookies and must never read the refresh cookie, or `SameSite=Lax` stops covering CSRF.
+
+## Amendment, 2026-08-31 — the session knows whether it is the principal, for rendering only
+
+`RequireAuth` could tell "signed in" from "signed out" and nothing else, which is why every staff page offered its form to any signed-in clinician and only refused at submit. `apps/web/src/auth/token-claims.ts` (new) reads the `cognito:groups` claim off the access token the browser already holds; `Session` carries the answer as `isPrincipalClinician`, and `RequireAuth` gains `requirePrincipalClinician` + a `forbidden` slot.
+
+**This is presentation, not authorisation, and the distinction is load-bearing.** The claim is *not* signature-verified in the browser and must never be treated as if it were. It doesn't need to be: every route behind these pages re-derives the caller's role inside the Lambda authorizer from a verified token (`authorizer.ts`'s `roleFor`) and checks it against the RBAC matrix, entirely unchanged. The worst a forged claim buys is the sight of a link, followed by the same 403 the server would have returned anyway.
+
+That asymmetry is why this is deliberately **not** a new `GET /auth/me`, and not a `role` field threaded through `/auth/token`. Either would be a change to the one flow the clinic has just got working, deployed to answer a question the browser can already answer for itself, for a purpose that carries no security weight.
+
+**Three states, not two.** `isPrincipalClinician` returns `true`, `false`, or `undefined` when the token cannot be read at all, and only a positive `false` hides anything. A decode failure therefore degrades to the previous behaviour — show it, let the server refuse — rather than locking the principal out of their own admin pages. Collapsing that third state into `false` is the specific mistake `token-claims.test.ts` is built around.
+
+It answers "is this the principal" rather than "what is the role" because telling a patient token from a sub-clinician token needs the pool, and the pool is only knowable from `iss` against a user-pool id this bundle does not carry. Every gate the UI actually has is principal-or-not, so that is the only question the module claims to answer.
+
+Change-password stays ungated: clinician-only, not principal-only, and reachable by every signed-in identity from `/account`.

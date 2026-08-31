@@ -31,6 +31,23 @@ import type { Locale } from '@ndn/i18n';
  * who is allowed to load it — the a11y suite scans every route with
  * whichever identities it has, and a page loaded by the "wrong" role
  * still gets a real axe scan of its own legible forbidden state.
+ *
+ * **Amendment, 2026-08-31 — and a coverage gap this makes worth naming.**
+ * The three principal-only pages (`caseload`, `patient-admin`,
+ * `clinician-admin`) now decide client-side whether to render their
+ * content at all (`RequireAuth`'s `requirePrincipalClinician`), rather
+ * than rendering a form and letting the submit be refused. The paragraph
+ * above still holds — the scan gets a real axe pass over a legible
+ * forbidden state — but the consequence is that those three pages' *real*
+ * content is no longer axe-scanned by anything, because the a11y suite's
+ * clinician fixture is a sub-clinician.
+ *
+ * That is not fixable by adding a principal fixture: exactly one
+ * principal may exist (clinician-repository.ts's own transactional
+ * invariant), so a principal test identity would have to *be* the owner's
+ * own live account, with its password in CI. Not a trade worth making for
+ * an axe scan. Recorded here rather than quietly lost — see
+ * docs/runbooks/live-session-accessibility.md.
  */
 export type AccountOwnerRole = 'patient' | 'clinician' | 'either';
 

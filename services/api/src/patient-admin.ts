@@ -213,18 +213,43 @@ export function createPatientAdminHandler(
           // clinician-admin.ts's own header already accepts for the
           // identical create-then-record shape.
           await deps.setPatientPassword.setPassword(created.subjectId, password);
+          // **An optional field the caller omitted must be an absent
+          // property, never a present one holding `undefined`.** Found
+          // live, 2026-08-31: this object literal named all four optional
+          // fields unconditionally, so leaving the phone / referral
+          // source / presenting condition blank on the form produced
+          // `personal.phone === undefined` on the record — and the
+          // DynamoDB document client refuses to marshal that ("Pass
+          // options.removeUndefinedValues=true to remove undefined values
+          // from map/array/set"), throwing out of `register` and reaching
+          // the browser as a 500, i.e. "Something went wrong creating the
+          // account." Every patient created before this had all three
+          // fields filled in, which is why it had never been hit.
+          //
+          // `dynamo-store.ts`'s client now also sets
+          // `removeUndefinedValues` so no *other* call site can reproduce
+          // this. Both halves are deliberate: that option keeps a blank
+          // optional field from ever being a 500 again, and this spread
+          // keeps the record honest — "no phone was given" and "phone is
+          // blank" stay different facts here, exactly as
+          // `patient-admin-request.ts` already keeps them different on the
+          // request.
           const patient = await deps.repository.register(
             {
               subjectId: created.subjectId,
               personal: {
                 fullName: parsed.data.fullName,
                 email: parsed.data.email,
-                phone: parsed.data.phone,
                 marketingOptIn: parsed.data.marketingOptIn,
+                ...(parsed.data.phone ? { phone: parsed.data.phone } : {}),
               },
               clinical: {
-                referralSource: parsed.data.referralSource,
-                presentingCondition: parsed.data.presentingCondition,
+                ...(parsed.data.referralSource
+                  ? { referralSource: parsed.data.referralSource }
+                  : {}),
+                ...(parsed.data.presentingCondition
+                  ? { presentingCondition: parsed.data.presentingCondition }
+                  : {}),
               },
             },
             actor,
