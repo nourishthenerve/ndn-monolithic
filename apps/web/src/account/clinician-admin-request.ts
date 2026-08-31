@@ -4,11 +4,12 @@
 // untested JSX into coverage instrumentation.
 
 /**
- * The three roles `POST /clinicians` accepts. `'helpdesk'` (2026-08-31) is
- * an administrative account with no clinical reach — see
- * docs/plan/04-data-model-rbac.md's `Helpdesk` column.
+ * The four roles `POST /clinicians` accepts. `'helpdesk'` and
+ * `'visitor'` (2026-08-31) both have no clinical reach at all — see
+ * docs/plan/04-data-model-rbac.md's columns of those names, and
+ * docs/runbooks/role-model.md for the whole picture.
  */
-export type ClinicianFormRole = 'principal' | 'sub' | 'helpdesk';
+export type ClinicianFormRole = 'principal' | 'sub' | 'helpdesk' | 'visitor';
 
 /** What the create form collects. */
 export interface CreateClinicianFormFields {

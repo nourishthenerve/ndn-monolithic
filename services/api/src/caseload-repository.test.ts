@@ -62,6 +62,13 @@ class FakeCaseloadStore implements CaseloadStore {
     return this.patients.get(patientId);
   }
 
+  /** Keyed by patient id — the fixture's stand-in for an `APPT#` partition. */
+  completedAppointments = new Map<string, number>();
+
+  async countCompletedAppointments(patientId: string) {
+    return this.completedAppointments.get(patientId) ?? 0;
+  }
+
   /** The real store counts two GSI3 partitions; here it is the same arithmetic over the fixture. */
   async count() {
     const present = this.orderedIds
@@ -180,6 +187,87 @@ describe('listPage', () => {
     expect(getPatientSpy).toHaveBeenCalledTimes(2);
   });
 
+  // 2026-08-31: the visitor's whole view, and the one authorisation rule
+  // this repository holds that the matrix does not.
+  describe('a visitor', () => {
+    const VISITOR: Principal = {
+      subjectId: 'visitor-sub',
+      role: 'visitor',
+      accountStatus: 'active',
+      clinicianId: 'visitor-sub',
+    };
+
+    async function buildTagged() {
+      const built = await build([
+        buildPatient({
+          id: 'pat-iic',
+          tag: 'IIC',
+          personal: {
+            fullName: 'IIC Patient',
+            email: 'iic@example.com',
+            address: '1 Example Street',
+            marketingOptIn: false,
+          },
+        }),
+        buildPatient({ id: 'pat-ndn', tag: 'NDN' }),
+        // No tag at all — a record written before tagging existed. Absence
+        // must never be read as membership.
+        buildPatient({ id: 'pat-untagged', tag: undefined }),
+      ]);
+      built.store.completedAppointments.set('pat-iic', 3);
+      return built;
+    }
+
+    it('sees IIC-tagged patients only — an untagged record is not IIC', async () => {
+      const { repository } = await buildTagged();
+
+      const page = await repository.listPage(VISITOR, undefined, 10);
+
+      expect(page.items.map((item) => item.patientId)).toEqual(['pat-iic']);
+    });
+
+    it('sees name, address and a completed-appointment count, and nothing else', async () => {
+      const { repository } = await buildTagged();
+
+      const [entry] = (await repository.listPage(VISITOR, undefined, 10)).items;
+
+      expect(entry).toEqual({
+        patientId: 'pat-iic',
+        fullName: 'IIC Patient',
+        accountStatus: 'approved',
+        tag: 'IIC',
+        address: '1 Example Street',
+        completedAppointments: 3,
+      });
+      // The fields a visitor must never receive are absent from the
+      // payload, not merely unrendered by a caller.
+      expect(entry).not.toHaveProperty('assignedClinicianId');
+      expect(entry).not.toHaveProperty('assignedClinicianName');
+      expect(JSON.stringify(entry)).not.toContain('iic@example.com');
+    });
+
+    it('skips a non-IIC patient entirely rather than returning a blanked row', async () => {
+      // A redacted row would still disclose that the patient exists,
+      // which is the fact the tag is there to keep.
+      const { repository } = await buildTagged();
+      const page = await repository.listPage(VISITOR, undefined, 10);
+      expect(page.items).toHaveLength(1);
+    });
+
+    it('still gives every other role the full entry, count included where it belongs', async () => {
+      const { repository, store } = await buildTagged();
+      const countSpy = vi.spyOn(store, 'countCompletedAppointments');
+
+      const page = await repository.listPage(PRINCIPAL, undefined, 10);
+
+      expect(page.items).toHaveLength(3);
+      expect(page.items[0]).toMatchObject({ assignedClinicianName: 'A Clinician' });
+      // Not computed for anyone but a visitor — a query per patient per
+      // page to render a number no other view shows.
+      expect(countSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it('skips a patient that fell out of the caseload between the index read and the GetItem', async () => {
     class StaleIndexStore implements CaseloadStore {
       async queryPage() {
@@ -190,6 +278,9 @@ describe('listPage', () => {
       }
       async count() {
         return { total: 0, active: 0 };
+      }
+      async countCompletedAppointments() {
+        return 0;
       }
     }
     const clinicianStore = new InMemoryClinicianStore();

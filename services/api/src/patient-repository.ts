@@ -42,6 +42,8 @@ export interface PatientRegistration {
   readonly subjectId: string;
   readonly personal: PatientPersonal;
   readonly clinical?: PatientClinical;
+  /** 2026-08-31: which programme the patient came in through. `POST /patients` always supplies one (defaulting to `NDN`); absent here means an older caller, and stays absent on the record. */
+  readonly tag?: Patient['tag'];
 }
 
 /**
@@ -92,6 +94,14 @@ const TRANSITION_AUDIT_ACTIONS = {
 export interface PatientProfilePatch {
   readonly personal?: Partial<PatientPersonal>;
   readonly clinical?: Partial<PatientClinical>;
+  /**
+   * 2026-08-31. Top-level, replaced rather than merged — unlike the two
+   * sub-objects above there is nothing to merge, a tag is one value.
+   * Reachable only through `patient.ts`'s clinician patch schema, never
+   * a patient's own: the tag decides which patients a `visitor` account
+   * can see, so the subject of the record must not be able to set it.
+   */
+  readonly tag?: Patient['tag'];
 }
 
 export class PatientRepository {
@@ -133,6 +143,7 @@ export class PatientRepository {
       // could arrive.
       clinical: registration.clinical ?? {},
       account_status: 'pending',
+      ...(registration.tag ? { tag: registration.tag } : {}),
       keywords: [],
     } as Omit<Patient, 'created_at' | 'updated_at' | 'status'>);
   }
@@ -201,6 +212,7 @@ export class PatientRepository {
     return this.repository.update(id, actor, {
       ...(patch.personal ? { personal: { ...existing.personal, ...patch.personal } } : {}),
       ...(patch.clinical ? { clinical: { ...existing.clinical, ...patch.clinical } } : {}),
+      ...(patch.tag ? { tag: patch.tag } : {}),
     });
   }
 }

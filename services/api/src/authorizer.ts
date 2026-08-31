@@ -85,14 +85,15 @@ export interface AuthorizerResult {
 const DENY: AuthorizerResult = { isAuthorized: false, context: {} };
 
 /**
- * 2026-08-31: the third clinician-pool group. Order matters below and is
- * not arbitrary — `principal-clinician` is tested first, so an account
- * holding both memberships resolves to the *wider* role rather than
- * silently losing every clinical permission to the narrower one. Neither
- * group is self-assignable (`AdminAddUserToGroup` only), so holding both
- * means an administrator put them there.
+ * 2026-08-31: the second and third clinician-pool groups. Order matters
+ * below and is not arbitrary — they are tested widest-first, so an
+ * account holding several memberships resolves to the *widest* rather
+ * than silently losing permissions to the narrowest. No group is
+ * self-assignable (`AdminAddUserToGroup` only), so holding several means
+ * an administrator put them there.
  */
 export const HELPDESK_GROUP = 'helpdesk';
+export const VISITOR_GROUP = 'visitor';
 
 function roleFor(pool: TokenPool, groups: readonly string[]): Role {
   if (pool === 'patient') {
@@ -106,7 +107,10 @@ function roleFor(pool: TokenPool, groups: readonly string[]): Role {
   if (groups.includes(PRINCIPAL_CLINICIAN_GROUP)) {
     return 'principal-clinician';
   }
-  return groups.includes(HELPDESK_GROUP) ? 'helpdesk' : 'sub-clinician';
+  if (groups.includes(HELPDESK_GROUP)) {
+    return 'helpdesk';
+  }
+  return groups.includes(VISITOR_GROUP) ? 'visitor' : 'sub-clinician';
 }
 
 /**

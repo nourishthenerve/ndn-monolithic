@@ -20,8 +20,8 @@ import type { AccountStatus } from './principal.js';
 import type { BaseRecord } from './types.js';
 
 /**
- * `'helpdesk'` (2026-08-31): the record side of `Role`'s own
- * `'helpdesk'` (principal.ts). Kept in this union rather than given a
+ * `'helpdesk'` and `'visitor'` (2026-08-31): the record side of `Role`'s
+ * own values of the same names (principal.ts). Kept in this union rather than given a
  * separate entity because a helpdesk account is administered exactly like
  * a clinician account — same pool, same `CLI#<sub>`/`PROFILE` row, same
  * create/deactivate/reactivate routes — and differs only in which
@@ -33,7 +33,7 @@ import type { BaseRecord } from './types.js';
  * on `role === 'principal'` alone (clinician-repository.ts), so any
  * number of `'helpdesk'` rows may exist alongside it.
  */
-export type ClinicianRole = 'principal' | 'sub' | 'helpdesk';
+export type ClinicianRole = 'principal' | 'sub' | 'helpdesk' | 'visitor';
 
 export interface Clinician extends BaseRecord {
   /** The Cognito `sub` in the clinician pool. See this file's header. */
@@ -47,3 +47,17 @@ export interface Clinician extends BaseRecord {
    */
   account_status: Extract<AccountStatus, 'active' | 'deactivated'>;
 }
+
+/**
+ * The roles that may hold a patient's care. A helpdesk account is a
+ * `Clinician` record in the same pool and the same directory, but it
+ * treats nobody — assigning a patient to one would leave that patient
+ * with no clinician at all while the record claimed otherwise, and would
+ * grant the helpdesk account nothing (`can()` scopes helpdesk by role,
+ * never by `assigned_clinician_id`).
+ *
+ * Enforced server-side by `AssignmentRepository`, which is the boundary;
+ * the UI filters its dropdowns by the same rule so the option is never
+ * offered in the first place.
+ */
+export const TREATING_CLINICIAN_ROLES: readonly ClinicianRole[] = ['principal', 'sub'];

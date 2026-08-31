@@ -166,16 +166,17 @@ export function createMessageHandler(
       return respond(403, { error: 'FORBIDDEN' });
     }
     // 2026-08-31: unreachable, and written down rather than cast away.
-    // The matrix denies `Helpdesk` every action on the `Messages` row
-    // (authz-matrix.ts), so the check above has already refused this role
-    // — but `MessageSenderRole` deliberately does not include `helpdesk`
-    // (a message from the helpdesk is not a thing this system models),
+    // The matrix denies `Helpdesk` and `Visitor` every action on the
+    // `Messages` row (authz-matrix.ts), so the check above has already
+    // refused both — but `MessageSenderRole` deliberately includes
+    // neither (a message from the front desk, or from a read-only
+    // partner account, is not a thing this system models),
     // and the compiler is right to insist the two facts be reconciled
     // somewhere. Reconciled here, as a refusal rather than a cast: if the
     // matrix is ever widened without this line being revisited, the
     // result is a 403, not a message attributed to a role no reader of a
     // thread would know how to interpret.
-    if (principal.role === 'helpdesk') {
+    if (principal.role === 'helpdesk' || principal.role === 'visitor') {
       return respond(403, { error: 'FORBIDDEN' });
     }
     // Unlike appointments/assessments/content-assignment, this branch is

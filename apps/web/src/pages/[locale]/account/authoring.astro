@@ -1,0 +1,84 @@
+---
+// 2026-08-31: writing a blog post or a workshop, with keywords. The owner:
+// *"for blogs and webinar there is no way to upload it with tags/keywords
+// - it will only be possible via principal clinician account."*
+//
+// Both APIs have existed since TASK 1.3.2/1.5.1 with nothing pointing at
+// them — every post on the live site was written by calling the API by
+// hand. Principal-only, in the matrix (`Content item`/`Workshop`, narrowed
+// to `Principal` the same day) and here.
+//
+// Statically generated and **empty**, same discipline every account page
+// states. Deliberately absent from routes.ts, same as every sibling.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { AuthoringPanel } from '../../../account/AuthoringPanel.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('authoring.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('authoring.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    allowRoles={['principal-clinician']}
+  >
+    <Fragment slot="signedOut">
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
+      </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('authoring.forbidden', undefined, locale)}</p>
+    </Fragment>
+    <AuthoringPanel
+      client:only="react"
+      strings={{
+        blogHeading: t('authoring.blogHeading', undefined, locale),
+        blogIntro: t('authoring.blogIntro', undefined, locale),
+        workshopHeading: t('authoring.workshopHeading', undefined, locale),
+        workshopIntro: t('authoring.workshopIntro', undefined, locale),
+        slugLabel: t('authoring.slugLabel', undefined, locale),
+        slugHint: t('authoring.slugHint', undefined, locale),
+        titleLabel: t('authoring.titleLabel', undefined, locale),
+        excerptLabel: t('authoring.excerptLabel', undefined, locale),
+        bodyLabel: t('authoring.bodyLabel', undefined, locale),
+        descriptionLabel: t('authoring.descriptionLabel', undefined, locale),
+        keywordsLabel: t('authoring.keywordsLabel', undefined, locale),
+        keywordsHint: t('authoring.keywordsHint', undefined, locale),
+        dateTimeLabel: t('authoring.dateTimeLabel', undefined, locale),
+        capacityLabel: t('authoring.capacityLabel', undefined, locale),
+        publishNowLabel: t('authoring.publishNowLabel', undefined, locale),
+        publishNowHint: t('authoring.publishNowHint', undefined, locale),
+        submitButton: t('authoring.submitButton', undefined, locale),
+        submitting: t('authoring.submitting', undefined, locale),
+        successMessage: t('authoring.successMessage', undefined, locale),
+        conflictError: t('authoring.conflictError', undefined, locale),
+        invalidError: t('authoring.invalidError', undefined, locale),
+        slugError: t('authoring.slugError', undefined, locale),
+        dateTimeError: t('authoring.dateTimeError', undefined, locale),
+        forbidden: t('authoring.forbidden', undefined, locale),
+        error: t('authoring.error', undefined, locale),
+      }}
+    />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
+  </RequireAuth>
+</BaseLayout>

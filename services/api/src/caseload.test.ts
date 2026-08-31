@@ -78,6 +78,10 @@ class FakeCaseloadStore implements CaseloadStore {
   async count() {
     return { total: 0, active: 0 };
   }
+
+  async countCompletedAppointments() {
+    return 0;
+  }
 }
 
 function build(overrides: { flagEnabled?: boolean } = {}) {

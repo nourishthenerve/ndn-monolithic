@@ -77,7 +77,14 @@ const createPatientBodySchema = z.object({
   email: z.string().email().max(254),
   fullName: z.string().min(1).max(200),
   phone: z.string().max(40).optional(),
+  address: z.string().max(500).optional(),
   marketingOptIn: z.boolean(),
+  // 2026-08-31: which programme the patient came in through. Optional on
+  // the wire and defaulted below rather than required, so a caller that
+  // predates tagging still works — but the form always sends one, and
+  // every patient created from today carries a tag rather than an
+  // absence that later has to be interpreted.
+  tag: z.enum(['IIC', 'NDN']).optional(),
   // The two fields self-registration's own `PatientRegistration.clinical`
   // ever carried (patient-repository.ts) — staff collect the same two over
   // WhatsApp, nothing wider.
@@ -299,7 +306,9 @@ export function createPatientAdminHandler(
                 email: parsed.data.email,
                 marketingOptIn: parsed.data.marketingOptIn,
                 ...(parsed.data.phone ? { phone: parsed.data.phone } : {}),
+                ...(parsed.data.address ? { address: parsed.data.address } : {}),
               },
+              tag: parsed.data.tag ?? 'NDN',
               clinical: {
                 ...(parsed.data.referralSource
                   ? { referralSource: parsed.data.referralSource }

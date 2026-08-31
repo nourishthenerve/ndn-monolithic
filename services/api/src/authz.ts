@@ -133,6 +133,16 @@ function resolveColumn(principal: Principal, resource: Resource): Resolved<Matri
         return unresolved('malformed-principal');
       }
       return resolved('Helpdesk');
+    // Role alone again, and for the same reason: a visitor has no care
+    // relationship to anything. What narrows *which* patients they see is
+    // not the column — it is the patient's own `tag`, applied by
+    // caseload-repository.ts on the way out. The matrix says "may read a
+    // patient profile at all"; the tag says "which ones".
+    case 'visitor':
+      if (!isLinked(principal.clinicianId) || principal.patientId !== undefined) {
+        return unresolved('malformed-principal');
+      }
+      return resolved('Visitor');
     default:
       return unresolved('unknown-role');
   }

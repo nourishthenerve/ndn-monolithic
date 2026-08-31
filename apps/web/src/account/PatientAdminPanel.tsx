@@ -63,6 +63,21 @@ interface FoundPatient {
   readonly accountStatus: string;
 }
 
+/**
+ * The roles that may hold a patient's care — `TREATING_CLINICIAN_ROLES`
+ * in @ndn/shared-types, restated here rather than imported.
+ *
+ * `apps/web` deliberately does not depend on `@ndn/shared-types` (every
+ * API shape this app reads is restated locally and narrowed to the fields
+ * a component renders — see `PatientAccountStatus` above), and adding the
+ * dependency for one array would pull the whole authorisation vocabulary
+ * into a bundle that needs none of it. **The server is the boundary
+ * regardless**: `AssignmentRepository` refuses a non-treating target with
+ * `CLINICIAN_NOT_AVAILABLE` whatever this list says, so a drift here
+ * costs a rejected click, not an unsafe assignment.
+ */
+const TREATING_CLINICIAN_ROLES: readonly string[] = ['principal', 'sub'];
+
 /** One assignable colleague, from `GET /clinicians`. Deactivated ones never reach the dropdown. */
 interface AssignableClinician {
   readonly id: string;
@@ -86,6 +101,10 @@ const EMPTY_CREATE_FIELDS: CreatePatientFormFields = {
   email: '',
   fullName: '',
   phone: '',
+  address: '',
+  // The clinic's own programme is the common case and therefore the
+  // default; `IIC` is the deliberate choice a person makes.
+  tag: 'NDN',
   marketingOptIn: false,
   referralSource: '',
   presentingCondition: '',
@@ -98,6 +117,10 @@ export interface PatientAdminPanelStrings {
   readonly emailLabel: string;
   readonly fullNameLabel: string;
   readonly phoneLabel: string;
+  readonly addressLabel: string;
+  readonly tagLabel: string;
+  readonly tagNdnLabel: string;
+  readonly tagIicLabel: string;
   readonly marketingOptInLabel: string;
   readonly referralSourceLabel: string;
   readonly presentingConditionLabel: string;
@@ -250,7 +273,12 @@ export function PatientAdminPanel({
           return;
         }
         const payload = (await response.json()) as {
-          items?: readonly { id: string; displayName: string; account_status: string }[];
+          items?: readonly {
+            id: string;
+            displayName: string;
+            role: string;
+            account_status: string;
+          }[];
         };
         if (cancelled) {
           return;
@@ -258,6 +286,15 @@ export function PatientAdminPanel({
         setClinicians(
           (payload.items ?? [])
             .filter((clinician) => clinician.account_status === 'active')
+            // 2026-08-31, reported: the dropdown listed helpdesk (and
+            // now visitor) accounts. They are `Clinician` records in the
+            // same directory and they are `active`, so a status filter
+            // alone let them through — but neither treats anyone, and
+            // `AssignmentRepository` refuses both with
+            // `CLINICIAN_NOT_AVAILABLE`. Offering an option the server is
+            // guaranteed to reject is the bug; the server-side check is
+            // the boundary and is what actually prevents it.
+            .filter((clinician) => TREATING_CLINICIAN_ROLES.includes(clinician.role))
             .map(({ id, displayName }) => ({ id, displayName })),
         );
       } catch {
@@ -459,6 +496,30 @@ export function PatientAdminPanel({
               value={createFields.phone}
               onChange={(event) => setCreateFields((f) => ({ ...f, phone: event.target.value }))}
             />
+          </p>
+          <p>
+            <label htmlFor="create-address">{strings.addressLabel}</label>
+            <input
+              id="create-address"
+              type="text"
+              disabled={isCreating}
+              value={createFields.address}
+              onChange={(event) => setCreateFields((f) => ({ ...f, address: event.target.value }))}
+            />
+          </p>
+          <p>
+            <label htmlFor="create-tag">{strings.tagLabel}</label>
+            <select
+              id="create-tag"
+              disabled={isCreating}
+              value={createFields.tag}
+              onChange={(event) =>
+                setCreateFields((f) => ({ ...f, tag: event.target.value === 'IIC' ? 'IIC' : 'NDN' }))
+              }
+            >
+              <option value="NDN">{strings.tagNdnLabel}</option>
+              <option value="IIC">{strings.tagIicLabel}</option>
+            </select>
           </p>
           <p>
             <label htmlFor="create-referral-source">{strings.referralSourceLabel}</label>

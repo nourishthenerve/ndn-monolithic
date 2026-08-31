@@ -24,6 +24,7 @@
 // `reassign`'s own doc for why this needs no second, stale GSI1 row and
 // no read-side filter — a deliberate, reasoned departure from that half
 // of the task's own step 3.
+import { TREATING_CLINICIAN_ROLES } from '@ndn/shared-types';
 import type { AssignmentRequest, Patient } from '@ndn/shared-types';
 
 import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
@@ -100,10 +101,20 @@ export class AssignmentRepository {
       );
     }
     const clinician = await this.clinicians.findById(assignedClinicianId);
-    if (!clinician || clinician.account_status !== 'active') {
+    // 2026-08-31: the role check joins the status check, and for the same
+    // reason — a target that cannot actually hold this patient's care.
+    // `helpdesk` accounts live in the same directory and are `active`,
+    // so status alone would have let one be assigned a patient, leaving
+    // that patient with nobody treating them while the record claimed
+    // otherwise. See `TREATING_CLINICIAN_ROLES`.
+    if (
+      !clinician ||
+      clinician.account_status !== 'active' ||
+      !TREATING_CLINICIAN_ROLES.includes(clinician.role)
+    ) {
       throw new AppError(
         'CLINICIAN_NOT_AVAILABLE',
-        `clinician ${assignedClinicianId} does not exist or is not active`,
+        `clinician ${assignedClinicianId} does not exist, is not active, or does not treat patients`,
       );
     }
 
@@ -203,10 +214,20 @@ export class AssignmentRepository {
     const previousClinicianId = patient.assigned_clinician_id;
 
     const clinician = await this.clinicians.findById(assignedClinicianId);
-    if (!clinician || clinician.account_status !== 'active') {
+    // 2026-08-31: the role check joins the status check, and for the same
+    // reason — a target that cannot actually hold this patient's care.
+    // `helpdesk` accounts live in the same directory and are `active`,
+    // so status alone would have let one be assigned a patient, leaving
+    // that patient with nobody treating them while the record claimed
+    // otherwise. See `TREATING_CLINICIAN_ROLES`.
+    if (
+      !clinician ||
+      clinician.account_status !== 'active' ||
+      !TREATING_CLINICIAN_ROLES.includes(clinician.role)
+    ) {
       throw new AppError(
         'CLINICIAN_NOT_AVAILABLE',
-        `clinician ${assignedClinicianId} does not exist or is not active`,
+        `clinician ${assignedClinicianId} does not exist, is not active, or does not treat patients`,
       );
     }
 

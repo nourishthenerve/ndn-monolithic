@@ -14,10 +14,15 @@
 // component it serves, without giving up a real, worthwhile unit test.
 
 /** What the create form collects, before any trimming/omission. */
+/** 2026-08-31: which programme the patient came in through — `Patient.tag`. */
+export type PatientFormTag = 'IIC' | 'NDN';
+
 export interface CreatePatientFormFields {
   readonly email: string;
   readonly fullName: string;
   readonly phone: string;
+  readonly address: string;
+  readonly tag: PatientFormTag;
   readonly marketingOptIn: boolean;
   readonly referralSource: string;
   readonly presentingCondition: string;
@@ -28,6 +33,9 @@ export interface CreatePatientRequestBody {
   readonly email: string;
   readonly fullName: string;
   readonly phone?: string;
+  readonly address?: string;
+  /** Always sent — the form has no blank state for it, and defaults to `NDN`. */
+  readonly tag: PatientFormTag;
   readonly marketingOptIn: boolean;
   readonly referralSource?: string;
   readonly presentingCondition?: string;
@@ -43,13 +51,20 @@ export function buildCreatePatientRequestBody(
   fields: CreatePatientFormFields,
 ): CreatePatientRequestBody {
   const phone = fields.phone.trim();
+  const address = fields.address.trim();
   const referralSource = fields.referralSource.trim();
   const presentingCondition = fields.presentingCondition.trim();
   return {
     email: fields.email.trim(),
     fullName: fields.fullName.trim(),
     marketingOptIn: fields.marketingOptIn,
+    // Unlike every other field here, the tag is never omitted: it has no
+    // "not given" state on the form (two radio-style choices, one always
+    // selected), and an absent tag on the record means "created before
+    // tagging existed", which a patient created today is not.
+    tag: fields.tag,
     ...(phone ? { phone } : {}),
+    ...(address ? { address } : {}),
     ...(referralSource ? { referralSource } : {}),
     ...(presentingCondition ? { presentingCondition } : {}),
   };

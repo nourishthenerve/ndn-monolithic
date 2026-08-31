@@ -55,15 +55,21 @@ import { clinicianUserPoolIssuer, patientUserPoolIssuer } from '../site-config.j
 /** The `cognito:groups` memberships that name a staff role — `authorizer.ts`'s own constants, restated. */
 const PRINCIPAL_CLINICIAN_GROUP = 'principal-clinician';
 const HELPDESK_GROUP = 'helpdesk';
+const VISITOR_GROUP = 'visitor';
 
 /**
- * The same four values `Role` (@ndn/shared-types) carries, derived the
+ * The same five values `Role` (@ndn/shared-types) carries, derived the
  * same way `authorizer.ts` derives them. Every one is a positive answer a
  * caller may hide content on; `undefined` — a token that cannot be read,
  * or one from neither known pool — is not, and must fall through to
  * showing the content. See `viewerRoleFromAccessToken`.
  */
-export type ViewerRole = 'patient' | 'sub-clinician' | 'principal-clinician' | 'helpdesk';
+export type ViewerRole =
+  | 'patient'
+  | 'sub-clinician'
+  | 'principal-clinician'
+  | 'helpdesk'
+  | 'visitor';
 
 /** base64url → JSON, with the padding `atob` wants and the UTF-8 decode a JSON payload deserves. */
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
@@ -96,10 +102,10 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
  *
  * The pool decides first and absolutely: a patient-pool token is a
  * patient whatever its groups claim says, which is `authorizer.ts`'s own
- * rule and the reason the two pools exist. Then
- * `principal-clinician` before `helpdesk`, matching that file's
- * precedence too — a token carrying both resolves to the wider role on
- * the server, and a UI that disagreed would hide pages the API allows.
+ * rule and the reason the two pools exist. Then the groups, **widest
+ * first**, matching that file's precedence exactly — a token carrying
+ * several resolves to the widest role on the server, and a UI that
+ * disagreed would hide pages the API allows.
  */
 export function viewerRoleFromAccessToken(accessToken: string): ViewerRole | undefined {
   const payload = decodeJwtPayload(accessToken);
@@ -127,5 +133,8 @@ export function viewerRoleFromAccessToken(accessToken: string): ViewerRole | und
   if (groups.includes(PRINCIPAL_CLINICIAN_GROUP)) {
     return 'principal-clinician';
   }
-  return groups.includes(HELPDESK_GROUP) ? 'helpdesk' : 'sub-clinician';
+  if (groups.includes(HELPDESK_GROUP)) {
+    return 'helpdesk';
+  }
+  return groups.includes(VISITOR_GROUP) ? 'visitor' : 'sub-clinician';
 }

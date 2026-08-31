@@ -50,7 +50,7 @@ import type {
 import { z } from 'zod';
 
 import { actorFromPrincipal, requestOriginOf } from './audit.js';
-import { HELPDESK_GROUP, PRINCIPAL_CLINICIAN_GROUP } from './authorizer.js';
+import { HELPDESK_GROUP, PRINCIPAL_CLINICIAN_GROUP, VISITOR_GROUP } from './authorizer.js';
 import { can } from './authz.js';
 import type { ClinicianRepository } from './clinician-repository.js';
 import { systemClock, type Clock } from './clock.js';
@@ -78,6 +78,7 @@ const CLINICIAN_RESOURCE = { entityType: 'clinician-account' } as const;
 const GROUP_FOR_CLINICIAN_ROLE: Readonly<Record<ClinicianRole, string | undefined>> = {
   principal: PRINCIPAL_CLINICIAN_GROUP,
   helpdesk: HELPDESK_GROUP,
+  visitor: VISITOR_GROUP,
   sub: undefined,
 };
 
@@ -159,11 +160,12 @@ export interface ChangeOwnPasswordPort {
 const createClinicianBodySchema = z.object({
   email: z.string().email().max(254),
   displayName: z.string().min(1).max(200),
-  // `'helpdesk'` (2026-08-31) — a third role in the same pool, created
-  // through this same route because it is administered identically
-  // (shared-types' `ClinicianRole` has the reasoning). The only thing
-  // that differs is which `cognito:groups` membership it gets below.
-  role: z.enum(['principal', 'sub', 'helpdesk']),
+  // `'helpdesk'` and `'visitor'` (2026-08-31) — two more roles in the
+  // same pool, created through this same route because they are
+  // administered identically (shared-types' `ClinicianRole` has the
+  // reasoning). The only thing that differs is which `cognito:groups`
+  // membership each gets below.
+  role: z.enum(['principal', 'sub', 'helpdesk', 'visitor']),
   // Bounded, not policy-checked here: Cognito owns the password policy,
   // and duplicating it in a Zod schema would be a second copy to drift.
   // The floor is Cognito's own absolute minimum, so an obviously-empty

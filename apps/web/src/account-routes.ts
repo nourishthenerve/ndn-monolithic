@@ -95,6 +95,8 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // Principal-only in practice (services/api/src/clinician-admin.ts's own
   // `can()` check), same reasoning as `patient-admin` above.
   { segment: 'clinician-admin', ownerRole: 'clinician' },
+  // 2026-08-31: blog and workshop authoring, principal-only.
+  { segment: 'authoring', ownerRole: 'clinician' },
   // D-34: any signed-in clinician's own self-service password change —
   // clinician-only, not principal-only (services/api/src/clinician-admin.ts's
   // own role check, not the `can()` matrix — see that file's own header).
