@@ -21,22 +21,34 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 
 **RBAC matrix** (C=create R=read U=update J=join-call P=reset-password D=**never**, — = denied):
 
-| Entity | Patient (own) | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Principal |
-|---|---|---|---|---|---|
-| Own profile | R U | — | R U | — | R U |
-| Patient profile | R U (self) | — | R U | — | C R U P |
-| Patient assignment | — | — | — | — | C R U |
-| Diagnosis / care plan | **R** | — | C R U | — | C R U |
-| Assessment — `visible{}` | R | — | C R U | — | R |
-| **Assessment — `private{}`** | **—** | **—** | C R U | **—** | R |
-| Appointments | R J | — | C R U J | — | R |
-| Content assignment | R | — | C R U | — | R |
-| Messages | C R (own thread) | — | C R (own patients) | — | R |
-| Clinician accounts | — | — | — | — | C R U (deactivate only) |
-| Audit log | — | — | — | — | R |
-| Content item | — | — | C R U | C R U | C R U |
-| Testimonial moderation | — | — | C R U | C R U | C R U |
-| Workshop | — | — | C R U | C R U | C R U |
+| Entity | Patient (own) | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Helpdesk | Principal |
+|---|---|---|---|---|---|---|
+| Own profile | R U | — | R U | — | R U | R U |
+| Patient profile | R U (self) | — | R U | — | C R U P | C R U P |
+| Patient assignment | — | — | — | — | — | C R U |
+| Diagnosis / care plan | **R** | — | C R U | — | **—** | C R U |
+| Assessment — `visible{}` | R | — | C R U | — | **—** | R |
+| **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | R |
+| Appointments | R J | — | C R U J | — | — | R |
+| Content assignment | R | — | C R U | — | C R U | R |
+| Messages | C R (own thread) | — | C R (own patients) | — | **—** | R |
+| Clinician accounts | — | — | — | — | **—** | C R U (deactivate only) |
+| Audit log | — | — | — | — | — | R |
+| Content item | — | — | C R U | C R U | C R U | C R U |
+| Testimonial moderation | — | — | C R U | C R U | — | C R U |
+| Workshop | — | — | C R U | C R U | — | C R U |
+
+**2026-08-31 adds the `Helpdesk` column.** The owner: *"Besides principal clinician and clinician I also want to create an account for helpdesk person who will be able to either create a new patient account/registration or edit/upload content to existing patients including providing them new temporary password. This account will be able to login using the clinician sign in button."*
+
+A helpdesk account lives in the **clinician pool** — that is what "login using the clinician sign in button" means, and it is also what makes the role possible at all: the pool already carries a `cognito:groups` claim the authorizer reads, so a third group (`helpdesk`) is a third role with no second directory and no second sign-in flow. It is emphatically *not* a third kind of clinician: `Clinician.role` gains `'helpdesk'`, and the singleton-principal invariant is untouched (many helpdesk accounts may exist, exactly one principal).
+
+The column is **defined by its denials**, and every one of them is deliberate rather than an omission:
+
+* **What it can do**, and only because the request names each: create a patient account (`Patient profile: C`), issue a new temporary password (`P` — the same action D-29 named precisely so that "hand someone a credential" is never hidden inside an `update`), find and read patients in order to do either (`R`), and upload and assign content (`Content item` and `Content assignment`: `C R U`). `U` on `Patient profile` is the one grant not literally in the request: it is the clerical data helpdesk types in at creation — a mistyped phone number or a corrected spelling — and withholding it would mean the person who made the typo is the one person who cannot fix it. If the owner would rather they could not, this is the single cell to strike.
+* **No clinical reach whatsoever.** `Diagnosis / care plan`, both `Assessment` rows and `Messages` are denied outright. This is the whole reason for a distinct role rather than another sub-clinician: an administrator who can reset a patient's password must not thereby be able to read what a clinician wrote about them. Note this makes `Helpdesk` the only column in the table denied `Assessment — visible{}` while still holding `R` on the patient's own profile — the split is intentional and is the boundary the role exists to draw.
+* **No assignment, and no clinician administration.** `Patient assignment` stays `Principal`-only, so a helpdesk-created account lands in `pending` and waits for the principal to assign a clinician — the same two-step D-29 already established, with the first step now delegable and the second not. `Clinician accounts` is denied for the obvious reason: a role that could create roles could create itself a principal.
+* **No `Audit log`.** Reading who did what to whom is oversight, which is the principal's.
+* **`Testimonial moderation` and `Workshop` denied**, unlike the sub-clinician columns. Nothing in the request asks for them, and marketing surfaces are not helpdesk work; `Content item` is granted only because "edit/upload content to existing patients" cannot be done without it.
 
 **The clinician-private boundary is enforced at the repository layer** — a projection function strips `private{}` before data can reach any patient-facing serialiser. Not in the handler, not in the view: one chokepoint, 100% test coverage, negative test per endpoint forever (NFR-06).
 

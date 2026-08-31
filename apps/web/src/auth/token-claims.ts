@@ -32,18 +32,34 @@
 // answer a question the browser can already answer for itself, for a
 // purpose that carries no security weight.
 //
-// ## Why "is the principal" and not "what is the role"
+// ## What it can and cannot tell apart
 //
-// Telling a patient token from a sub-clinician token needs the pool, and
-// the pool is only knowable from `iss` against a user-pool id this bundle
-// does not carry. Every gate the UI actually has is "principal, or not",
-// so that is the only question this file answers — rather than inventing a
-// three-way role it cannot honestly determine. (`authorizer.ts` refuses a
-// patient-pool token claiming this group; here, a patient pool that
-// somehow held a same-named group would reveal a link and nothing else.)
+// It answers "which named staff group is this token in", not "what is
+// this caller's role". Telling a patient token from a sub-clinician token
+// needs the pool, and the pool is only knowable from `iss` against a
+// user-pool id this bundle does not carry — so both collapse into
+// `'other'`, which is exactly right for the only thing this is used for:
+// every gate the UI has is "one of the named staff groups, or not".
+// (`authorizer.ts` refuses a patient-pool token claiming either group;
+// here, a patient pool that somehow held a same-named group would reveal
+// a link and nothing else.)
+//
+// Extended 2026-08-31 (same day) from a boolean to `StaffRole`, when the
+// helpdesk role arrived and the UI's gates stopped being uniform: the
+// patient dashboard and patient accounts admit helpdesk, clinician
+// accounts does not.
 
-/** The `cognito:groups` membership that distinguishes the two clinician roles — `authorizer.ts`'s own constant, restated. */
+/** The `cognito:groups` memberships that name a staff role — `authorizer.ts`'s own constants, restated. */
 const PRINCIPAL_CLINICIAN_GROUP = 'principal-clinician';
+const HELPDESK_GROUP = 'helpdesk';
+
+/**
+ * `'other'` is a real, positive answer — "a readable token in neither
+ * named group", i.e. a sub-clinician or a patient — and is what a caller
+ * hides content on. It is *not* the same as `undefined`; see
+ * `staffRoleFromAccessToken`.
+ */
+export type StaffRole = 'principal-clinician' | 'helpdesk' | 'other';
 
 /** base64url → JSON, with the padding `atob` wants and the UTF-8 decode a JSON payload deserves. */
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
@@ -67,14 +83,19 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
 }
 
 /**
- * `true` / `false` when the token says so, and **`undefined` when it
- * cannot be read at all** — three states, not two, and the difference
- * decides behaviour: a caller that cannot tell must fall back to showing
- * the thing and letting the server refuse it, never to hiding a page from
- * the one person entitled to it because a claim moved. Hide on a positive
- * "no"; never on a shrug.
+ * A `StaffRole` when the token says so, and **`undefined` when it cannot
+ * be read at all** — the two are not the same, and the difference decides
+ * behaviour: a caller that cannot tell must fall back to showing the
+ * thing and letting the server refuse it, never to hiding a page from the
+ * one person entitled to it because a claim moved. Hide on a positive
+ * answer; never on a shrug.
+ *
+ * `principal-clinician` is tested before `helpdesk`, matching
+ * `authorizer.ts`'s own precedence exactly — a token carrying both
+ * resolves to the wider role on the server, and a UI that disagreed would
+ * hide pages the API would have allowed.
  */
-export function isPrincipalClinician(accessToken: string): boolean | undefined {
+export function staffRoleFromAccessToken(accessToken: string): StaffRole | undefined {
   const payload = decodeJwtPayload(accessToken);
   if (!payload) {
     return undefined;
@@ -83,8 +104,11 @@ export function isPrincipalClinician(accessToken: string): boolean | undefined {
   if (!Array.isArray(groups)) {
     // A clinician in no group at all is a sub-clinician, and Cognito omits
     // the claim entirely rather than sending an empty array — so an absent
-    // claim on a readable token is a real "no", not a failure to read.
-    return false;
+    // claim on a readable token is a real answer, not a failure to read.
+    return 'other';
   }
-  return groups.includes(PRINCIPAL_CLINICIAN_GROUP);
+  if (groups.includes(PRINCIPAL_CLINICIAN_GROUP)) {
+    return 'principal-clinician';
+  }
+  return groups.includes(HELPDESK_GROUP) ? 'helpdesk' : 'other';
 }

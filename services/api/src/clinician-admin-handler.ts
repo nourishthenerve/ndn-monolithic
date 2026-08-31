@@ -22,7 +22,6 @@ import {
   VerifySoftwareTokenCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 
-import { PRINCIPAL_CLINICIAN_GROUP } from './authorizer.js';
 import {
   createClinicianAdminHandler,
   type AdminCreateClinicianPort,
@@ -97,12 +96,14 @@ const createClinicianUser: AdminCreateClinicianPort = {
     }
     return sub;
   },
-  async addToPrincipalGroup(subjectId) {
+  // 2026-08-31: the group name is chosen by `clinician-admin.ts`'s own
+  // role→group map, not by this file — see `AdminCreateClinicianPort`.
+  async addToGroup(subjectId, groupName) {
     await cognitoClient.send(
       new AdminAddUserToGroupCommand({
         UserPoolId: clinicianUserPoolId,
         Username: subjectId,
-        GroupName: PRINCIPAL_CLINICIAN_GROUP,
+        GroupName: groupName,
       }),
     );
   },

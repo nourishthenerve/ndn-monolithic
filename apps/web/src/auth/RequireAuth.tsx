@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { createSessionClient, type SessionClient, type SessionState } from './session.js';
+import type { StaffRole } from './token-claims.js';
 
 export interface RequireAuthProps {
   readonly children: ReactNode;
@@ -34,21 +35,27 @@ export interface RequireAuthProps {
    */
   readonly loadingLabel?: string;
   /**
-   * 2026-08-31: when set, a signed-in caller who is *known* not to be the
-   * principal clinician gets `forbidden` instead of the children — so a
+   * 2026-08-31: when set, a signed-in caller whose staff role is *known*
+   * and not in this list gets `forbidden` instead of the children — so a
    * sub-clinician never sees a create-patient or create-clinician form at
    * all, rather than filling one in and being refused at submit.
    *
-   * "Known" is doing real work here. `token-claims.ts` returns three
-   * states, and only a positive `false` hides anything: a token whose
-   * claims cannot be read renders the children as before and lets the
-   * server refuse, because hiding the admin pages from the one person
-   * entitled to them is a far worse failure than briefly offering them to
-   * someone the API will turn away. **This is presentation, not
-   * authorisation** — every route behind these pages re-derives the role
-   * from a verified token and checks the RBAC matrix, unchanged.
+   * "Known" is doing real work here. `token-claims.ts` distinguishes a
+   * positive answer from "could not read the token", and only a positive
+   * answer hides anything: an unreadable token renders the children as
+   * before and lets the server refuse, because hiding the admin pages
+   * from the one person entitled to them is a far worse failure than
+   * briefly offering them to someone the API will turn away. **This is
+   * presentation, not authorisation** — every route behind these pages
+   * re-derives the role from a verified token and checks the RBAC matrix,
+   * unchanged.
+   *
+   * The lists are not uniform, which is why this is a list rather than a
+   * boolean: the patient dashboard and patient accounts admit `helpdesk`
+   * alongside the principal; clinician accounts admits the principal
+   * alone. Each page's list mirrors its own routes' matrix column.
    */
-  readonly requirePrincipalClinician?: boolean;
+  readonly allowStaffRoles?: readonly StaffRole[];
   /** Rendered in place of the children for a signed-in caller the line above excludes. Omit to render nothing at all. */
   readonly forbidden?: ReactNode;
   /** Injectable for tests; defaults to the module-level client. */
@@ -61,7 +68,7 @@ export function RequireAuth({
   children,
   signedOut,
   loadingLabel,
-  requirePrincipalClinician = false,
+  allowStaffRoles,
   forbidden,
   client = defaultClient,
 }: RequireAuthProps): ReactNode {
@@ -93,9 +100,10 @@ export function RequireAuth({
     return <>{signedOut}</>;
   }
 
-  // Only an explicit `false` hides anything — see `requirePrincipalClinician`'s
-  // own doc for why `undefined` deliberately falls through to the children.
-  if (requirePrincipalClinician && state.session.isPrincipalClinician === false) {
+  // A known role that is not on the list hides; an unreadable token
+  // deliberately falls through to the children — see `allowStaffRoles`.
+  const { staffRole } = state.session;
+  if (allowStaffRoles && staffRole !== undefined && !allowStaffRoles.includes(staffRole)) {
     return <>{forbidden}</>;
   }
 

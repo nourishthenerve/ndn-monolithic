@@ -46,7 +46,11 @@ import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
 import { buildCreateClinicianRequestBody } from './clinician-admin-request.js';
-import type { CreateClinicianFormFields, CreateClinicianRequestBody } from './clinician-admin-request.js';
+import type {
+  ClinicianFormRole,
+  CreateClinicianFormFields,
+  CreateClinicianRequestBody,
+} from './clinician-admin-request.js';
 
 type CreateStatus =
   | 'idle'
@@ -59,6 +63,11 @@ type CreateStatus =
   | 'error';
 type DirectoryStatus = 'loading' | 'ready' | 'forbidden' | 'error';
 
+/** A `<select>` hands back a plain string; this is the one place it becomes a role, closed-set and defaulting to the least-privileged value. */
+function asFormRole(value: string): ClinicianFormRole {
+  return value === 'principal' || value === 'helpdesk' ? value : 'sub';
+}
+
 const EMPTY_CREATE_FIELDS: CreateClinicianFormFields = {
   email: '',
   displayName: '',
@@ -70,7 +79,7 @@ const EMPTY_CREATE_FIELDS: CreateClinicianFormFields = {
 export interface DirectoryClinician {
   readonly id: string;
   readonly displayName: string;
-  readonly role: 'principal' | 'sub';
+  readonly role: ClinicianFormRole;
   readonly account_status: 'active' | 'deactivated';
 }
 
@@ -83,6 +92,7 @@ export interface ClinicianAdminPanelStrings {
   readonly roleLabel: string;
   readonly rolePrincipalLabel: string;
   readonly roleSubLabel: string;
+  readonly roleHelpdeskLabel: string;
   readonly passwordFieldLabel: string;
   readonly passwordFieldHint: string;
   readonly createButton: string;
@@ -323,6 +333,17 @@ export function ClinicianAdminPanel({
 
   const isCreating = status === 'submitting';
 
+  const roleLabel = (role: ClinicianFormRole): string => {
+    switch (role) {
+      case 'principal':
+        return strings.rolePrincipalLabel;
+      case 'helpdesk':
+        return strings.roleHelpdeskLabel;
+      case 'sub':
+        return strings.roleSubLabel;
+    }
+  };
+
   return (
     <>
       <section>
@@ -357,11 +378,10 @@ export function ClinicianAdminPanel({
               id="create-clinician-role"
               disabled={isCreating}
               value={fields.role}
-              onChange={(event) =>
-                setFields((f) => ({ ...f, role: event.target.value === 'principal' ? 'principal' : 'sub' }))
-              }
+              onChange={(event) => setFields((f) => ({ ...f, role: asFormRole(event.target.value) }))}
             >
               <option value="sub">{strings.roleSubLabel}</option>
+              <option value="helpdesk">{strings.roleHelpdeskLabel}</option>
               <option value="principal">{strings.rolePrincipalLabel}</option>
             </select>
           </p>
@@ -442,11 +462,7 @@ export function ClinicianAdminPanel({
                   return (
                     <tr key={clinician.id}>
                       <td>{clinician.displayName}</td>
-                      <td>
-                        {clinician.role === 'principal'
-                          ? strings.rolePrincipalLabel
-                          : strings.roleSubLabel}
-                      </td>
+                      <td>{roleLabel(clinician.role)}</td>
                       <td>{isActive ? strings.statusActiveLabel : strings.statusDeactivatedLabel}</td>
                       <td>
                         {/* The principal is never offered a control that

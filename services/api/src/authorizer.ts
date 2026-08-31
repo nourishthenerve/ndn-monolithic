@@ -84,15 +84,29 @@ export interface AuthorizerResult {
 
 const DENY: AuthorizerResult = { isAuthorized: false, context: {} };
 
+/**
+ * 2026-08-31: the third clinician-pool group. Order matters below and is
+ * not arbitrary — `principal-clinician` is tested first, so an account
+ * holding both memberships resolves to the *wider* role rather than
+ * silently losing every clinical permission to the narrower one. Neither
+ * group is self-assignable (`AdminAddUserToGroup` only), so holding both
+ * means an administrator put them there.
+ */
+export const HELPDESK_GROUP = 'helpdesk';
+
 function roleFor(pool: TokenPool, groups: readonly string[]): Role {
   if (pool === 'patient') {
     // A patient-pool token is a patient even if its groups claim says
     // otherwise. This is the case the "a `cognito:groups` claim asserting
     // principal-clinician on a patient-pool token" test covers, and the
-    // reason the two directories exist at all.
+    // reason the two directories exist at all — and it now covers
+    // `helpdesk` for free, by the same construction.
     return 'patient';
   }
-  return groups.includes(PRINCIPAL_CLINICIAN_GROUP) ? 'principal-clinician' : 'sub-clinician';
+  if (groups.includes(PRINCIPAL_CLINICIAN_GROUP)) {
+    return 'principal-clinician';
+  }
+  return groups.includes(HELPDESK_GROUP) ? 'helpdesk' : 'sub-clinician';
 }
 
 /**

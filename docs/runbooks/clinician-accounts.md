@@ -130,3 +130,49 @@ Found while building the form: a duplicate email raised `UsernameExistsException
 ### Backfill required
 
 The seven clinician records that existed on 2026-08-31 — the principal included — predate the GSI2 projection and are invisible to `GET /clinicians` until `scripts/backfill-directory-index.mjs` is run once against the table. See [caseload-view.md](caseload-view.md#backfill-required--this-is-a-data-migration) for the command and why its `Scan` is sanctioned. (The inert `SK = META` row left behind by the 2026-08-28 migration above is untouched by it — the script matches `sk = 'PROFILE'` only.)
+
+## Amendment, 2026-08-31 (same day) — the `helpdesk` role
+
+**Trigger:** the owner: *"Besides principal clinician and clinician I also want to create an account for helpdesk person who will be able to either create a new patient account/registration or edit/upload content to existing patients including providing them new temporary password. This account will be able to login using the clinician sign in button."*
+
+### What it is
+
+A third role in the **clinician pool** — that is what "login using the clinician sign in button" means, and it is also what makes the role cheap: the pool already carries a `cognito:groups` claim the authorizer reads, so a third group is a third role with no second directory, no second sign-in flow and no second set of pages.
+
+It is emphatically *not* a third kind of clinician. `ClinicianRole` gains `'helpdesk'` and `Role` gains it too, but the singleton-principal invariant is untouched: it is conditioned on `role === 'principal'` alone, so **many helpdesk accounts may exist** alongside exactly one principal. Created through the same `POST /clinicians` route, administered by the same deactivate/reactivate routes, listed in the same directory.
+
+### What it may do — and, more importantly, may not
+
+`docs/plan/04-data-model-rbac.md`'s new `Helpdesk` column is the authority and carries the full reasoning; `authz-matrix.ts` transcribes it. In short: `Patient profile: C R U P` and `Content item` / `Content assignment: C R U`, and **denied every clinical row outright** — diagnosis, care plan, both assessment halves, messages. That denial is the entire reason for a distinct role rather than another sub-clinician: an administrator who can reset a patient's password must not thereby be able to read what a clinician wrote about them.
+
+Also denied: `Patient assignment` (so a helpdesk-created account lands `pending` and waits for the principal — the first step of D-29's two-step is now delegable, the second is not), `Clinician accounts` (a role that could create roles could create itself a principal), and `Audit log`.
+
+The one grant not literally in the request is `U` on `Patient profile` — the clerical data helpdesk types in at creation, so the person who makes a typo is not the one person who cannot fix it. **If that is unwanted, it is a single cell to strike** in the doc and its two transcriptions.
+
+### The group, and the one thing that is not code
+
+`roleFor()` reads `cognito:groups` and nothing else — a `CLI#` record saying `helpdesk` with no group membership behind it is a sub-clinician in every decision that matters. That is exactly the bug found live on 2026-08-28 for the principal role, so the mapping now lives in one place: `GROUP_FOR_CLINICIAN_ROLE` (clinician-admin.ts), built from `authorizer.ts`'s own two group constants. `'sub'` maps to no group at all — a sub-clinician is the *absence* of a membership, which is one less thing that can be granted, revoked or forgotten.
+
+`principal-clinician` is tested before `helpdesk` in `roleFor()`, so an account holding both memberships resolves to the wider role rather than silently losing every clinical permission. `token-claims.ts` mirrors that precedence exactly, so the UI never hides a page the API would have allowed.
+
+**Operational, done by hand in `ndn-prod`, 2026-08-31** — the same "true singleton, not CDK-managed" precedent this file's 2026-08-28 section already set for `principal-clinician`:
+
+```sh
+aws cognito-idp create-group --user-pool-id eu-west-2_1SFN2y0Jt --group-name helpdesk \
+  --description "Administrative staff: registers patients, resets patient passwords, manages content. No clinical access."
+```
+
+Done. Every helpdesk account created through `POST /clinicians` from now on is added to it automatically.
+
+### In the UI
+
+The role dropdown gains **Helpdesk**, and the pages divide by role rather than by "is signed in":
+
+| Page | Principal | Helpdesk | Sub-clinician |
+|---|---|---|---|
+| Patient dashboard (`/account/caseload`) | full, with assign/reassign | list and counts, **no assign column** | hidden |
+| Patient accounts (`/account/patient-admin`) | full | full | hidden |
+| Clinician accounts (`/account/clinician-admin`) | full | hidden | hidden |
+| Change password (`/account/change-password`) | yes | yes | yes |
+
+The dashboard drops the assign column for helpdesk rather than showing it broken: `Patient assignment` is denied, so every press would be a 403. `GET /clinicians` is Principal-only, so the "assign at registration" dropdown on the patient-accounts page simply does not appear for helpdesk either — the account is created `pending`, which is correct.

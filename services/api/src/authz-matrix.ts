@@ -10,6 +10,13 @@
 // own independent copy of the table, so a widened cell here fails a named
 // test rather than passing silently.
 //
+// 2026-08-31 adds the doc's `Helpdesk` column — an administrative account
+// in the clinician pool with no clinical reach at all. Read that column
+// down the table rather than across this file's own diff: it is defined
+// by what it is denied (every clinical row, assignment, clinician
+// accounts, the audit log) far more than by the four cells it holds. The
+// doc's own note on it is the reasoning; this is the transcription.
+//
 // Two transcription notes, both presentational only:
 //   * the doc's markdown emphasis (`**R**`, `**—**`) is dropped — it marks
 //     the two cells the doc wants a reader to notice, not a different
@@ -46,6 +53,7 @@ export type MatrixColumn =
   | 'Patient (other)'
   | 'Sub-clinician (assigned)'
   | 'Sub-clinician (unassigned)'
+  | 'Helpdesk'
   | 'Principal';
 
 export type MatrixCell = readonly Action[];
@@ -56,27 +64,29 @@ export type RbacMatrix = Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn
 const DENIED: MatrixCell = [];
 
 export const RBAC_MATRIX: RbacMatrix = {
-  // | Own profile | R U | — | R U | — | R U |
+  // | Own profile | R U | — | R U | — | R U | R U |
   'Own profile': {
     'Patient (own)': ['read', 'update'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: ['read', 'update'],
     Principal: ['read', 'update'],
   },
   // D-29 (2026-08-29): `C` and `P` added to Principal — see this row's own
   // note in docs/plan/04-data-model-rbac.md. Self-registration is retired;
   // a patient account is now created, and its password reset, by a
   // principal only.
-  // | Patient profile | R U (self) | — | R U | — | C R U P |
+  // | Patient profile | R U (self) | — | R U | — | C R U P | C R U P |
   'Patient profile': {
     'Patient (own)': ['read', 'update'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: ['create', 'read', 'update', 'reset-password'],
     Principal: ['create', 'read', 'update', 'reset-password'],
   },
-  // | Patient assignment | — | — | — | — | C R U |
+  // | Patient assignment | — | — | — | — | — | C R U |
   // TASK 2.5.1: the doc was silent on this row — no cell governed
   // approving/declining a patient's assignment. Settled here, explicitly,
   // rather than left to fall out of "Patient profile"'s relationship
@@ -93,30 +103,34 @@ export const RBAC_MATRIX: RbacMatrix = {
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': DENIED,
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
     Principal: ['create', 'read', 'update'],
   },
-  // | Diagnosis / care plan | **R** | — | C R U | — | C R U |
+  // | Diagnosis / care plan | **R** | — | C R U | — | **—** | C R U |
   'Diagnosis / care plan': {
     'Patient (own)': ['read'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
     Principal: ['create', 'read', 'update'],
   },
-  // | Assessment — `visible{}` | R | — | C R U | — | R |
+  // | Assessment — `visible{}` | R | — | C R U | — | **—** | R |
   'Assessment — `visible{}`': {
     'Patient (own)': ['read'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
     Principal: ['read'],
   },
-  // | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | R |
+  // | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | R |
   'Assessment — `private{}`': {
     'Patient (own)': DENIED,
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
     Principal: ['read'],
   },
   // TASK 4.2.1: `J` (join-call) added to the two parties actually on the
@@ -124,20 +138,22 @@ export const RBAC_MATRIX: RbacMatrix = {
   // `Principal`, who keeps plain `R`. See 04-data-model-rbac.md's own
   // note on this row for why that's narrower than "wherever read
   // applies."
-  // | Appointments | R J | — | C R U J | — | R |
+  // | Appointments | R J | — | C R U J | — | — | R |
   Appointments: {
     'Patient (own)': ['read', 'join-call'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update', 'join-call'],
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
     Principal: ['read'],
   },
-  // | Content assignment | R | — | C R U | — | R |
+  // | Content assignment | R | — | C R U | — | C R U | R |
   'Content assignment': {
     'Patient (own)': ['read'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: ['create', 'read', 'update'],
     Principal: ['read'],
   },
   // TASK 3.6.1: corrected from `R (own patients)` — the assigned
@@ -145,55 +161,61 @@ export const RBAC_MATRIX: RbacMatrix = {
   // own key-shape description, "Patient↔clinician" (`04-data-model-
   // rbac.md`). Corrected in the doc first, then transcribed here, per
   // this file's own standing rule.
-  // | Messages | C R (own thread) | — | C R (own patients) | — | R |
+  // | Messages | C R (own thread) | — | C R (own patients) | — | **—** | R |
   Messages: {
     'Patient (own)': ['create', 'read'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read'],
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
     Principal: ['read'],
   },
-  // | Clinician accounts | — | — | — | — | C R U (deactivate only) |
+  // | Clinician accounts | — | — | — | — | **—** | C R U (deactivate only) |
   'Clinician accounts': {
     'Patient (own)': DENIED,
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': DENIED,
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
     Principal: ['create', 'read', 'update'],
   },
-  // | Audit log | — | — | — | — | R |
+  // | Audit log | — | — | — | — | — | R |
   'Audit log': {
     'Patient (own)': DENIED,
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': DENIED,
     'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
     Principal: ['read'],
   },
   // TASK 2.5.4: the three rows the doc's own note explains — clinic-wide
   // marketing/admin resources with no patient relationship to scope by,
   // so both `Sub-clinician` columns carry the identical cell on purpose.
-  // | Content item | — | — | C R U | C R U | C R U |
+  // | Content item | — | — | C R U | C R U | C R U | C R U |
   'Content item': {
     'Patient (own)': DENIED,
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': ['create', 'read', 'update'],
+    Helpdesk: ['create', 'read', 'update'],
     Principal: ['create', 'read', 'update'],
   },
-  // | Testimonial moderation | — | — | C R U | C R U | C R U |
+  // | Testimonial moderation | — | — | C R U | C R U | — | C R U |
   'Testimonial moderation': {
     'Patient (own)': DENIED,
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': ['create', 'read', 'update'],
+    Helpdesk: DENIED,
     Principal: ['create', 'read', 'update'],
   },
-  // | Workshop | — | — | C R U | C R U | C R U |
+  // | Workshop | — | — | C R U | C R U | — | C R U |
   Workshop: {
     'Patient (own)': DENIED,
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': ['create', 'read', 'update'],
+    Helpdesk: DENIED,
     Principal: ['create', 'read', 'update'],
   },
 };

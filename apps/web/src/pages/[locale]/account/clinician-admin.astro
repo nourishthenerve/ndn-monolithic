@@ -41,7 +41,7 @@ const heading = t('clinicianAdmin.heading', undefined, locale);
   <RequireAuth
     client:only="react"
     loadingLabel={t('account.loading', undefined, locale)}
-    requirePrincipalClinician
+    allowStaffRoles={['principal-clinician']}
   >
     <Fragment slot="signedOut">
       <p>
@@ -63,6 +63,7 @@ const heading = t('clinicianAdmin.heading', undefined, locale);
         roleLabel: t('clinicianAdmin.roleLabel', undefined, locale),
         rolePrincipalLabel: t('clinicianAdmin.rolePrincipalLabel', undefined, locale),
         roleSubLabel: t('clinicianAdmin.roleSubLabel', undefined, locale),
+        roleHelpdeskLabel: t('clinicianAdmin.roleHelpdeskLabel', undefined, locale),
         createButton: t('clinicianAdmin.createButton', undefined, locale),
         creating: t('clinicianAdmin.creating', undefined, locale),
         createSuccessHeading: t('clinicianAdmin.createSuccessHeading', undefined, locale),

@@ -87,7 +87,7 @@ function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
   let nextSub = 0;
   const createClinicianUser: AdminCreateClinicianPort = {
     createUser: vi.fn(async () => `sub-${(nextSub += 1)}`),
-    addToPrincipalGroup: vi.fn(async () => {}),
+    addToGroup: vi.fn(async () => {}),
     setPassword: vi.fn(async () => {}),
     provisionTotp: vi.fn(async () => ({
       secret: 'JBSWY3DPEHPK3PXP',
@@ -280,7 +280,7 @@ describe('POST /clinicians', () => {
       }),
     );
 
-    expect(createClinicianUser.addToPrincipalGroup).not.toHaveBeenCalled();
+    expect(createClinicianUser.addToGroup).not.toHaveBeenCalled();
   });
 
   it('adds a newly-created principal to the principal Cognito group, only after the record is accepted', async () => {
@@ -295,8 +295,8 @@ describe('POST /clinicians', () => {
     );
 
     const body = JSON.parse(response.body) as { item: { id: string } };
-    expect(createClinicianUser.addToPrincipalGroup).toHaveBeenCalledWith(body.item.id);
-    expect(createClinicianUser.addToPrincipalGroup).toHaveBeenCalledTimes(1);
+    expect(createClinicianUser.addToGroup).toHaveBeenCalledWith(body.item.id, 'principal-clinician');
+    expect(createClinicianUser.addToGroup).toHaveBeenCalledTimes(1);
   });
 
   it('is 409 for a second principal and never grants that second attempt the group', async () => {
@@ -320,7 +320,45 @@ describe('POST /clinicians', () => {
     expect(response.statusCode).toBe(409);
     // Exactly once total across both attempts — the first (accepted)
     // creation grants it, the second (rejected, 409) never does.
-    expect(createClinicianUser.addToPrincipalGroup).toHaveBeenCalledTimes(1);
+    expect(createClinicianUser.addToGroup).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-08-31: the third role. The record and the Cognito group have to
+  // agree, because `roleFor()` reads only the group — a `CLI#` row saying
+  // `helpdesk` with no group membership behind it is a sub-clinician in
+  // every decision that matters, which is exactly the bug found live on
+  // 2026-08-28 for the principal role.
+  it('creates a helpdesk account and grants it the helpdesk group', async () => {
+    const { handler, createClinicianUser, repository } = build();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'desk@example.com', displayName: 'Front Desk', role: 'helpdesk' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(201);
+    const body = JSON.parse(response.body) as { item: { id: string; role: string } };
+    expect(body.item.role).toBe('helpdesk');
+    expect(await repository.findById(body.item.id)).toMatchObject({ role: 'helpdesk' });
+    expect(createClinicianUser.addToGroup).toHaveBeenCalledWith(body.item.id, 'helpdesk');
+  });
+
+  it('allows many helpdesk accounts — the singleton invariant is the principal role’s alone', async () => {
+    const { handler } = build();
+
+    for (const email of ['desk1@example.com', 'desk2@example.com', 'desk3@example.com']) {
+      const response = await invoke(
+        handler,
+        eventFor('POST /clinicians', {
+          principal: PRINCIPAL_CONTEXT,
+          body: { email, displayName: 'Front Desk', role: 'helpdesk' },
+        }),
+      );
+      expect(response.statusCode).toBe(201);
+    }
   });
 
   it('is 403 for a sub-clinician caller', async () => {

@@ -169,6 +169,15 @@ export function CaseloadView({
   const [choices, setChoices] = useState<Readonly<Record<string, string>>>({});
   const [pendingPatientId, setPendingPatientId] = useState<string | undefined>();
   const [assignFailed, setAssignFailed] = useState(false);
+  /**
+   * 2026-08-31: helpdesk reads this dashboard but is denied the `Patient
+   * assignment` row outright, so the assign column is not merely
+   * inoperative for them — it is an offer the API will always refuse, and
+   * the whole column is dropped rather than shown broken. `undefined`
+   * (token unreadable) keeps the column, on this file's own "hide only on
+   * a positive answer" rule.
+   */
+  const [canAssign, setCanAssign] = useState(true);
 
   const load = useCallback(
     async (cursor: string | undefined) => {
@@ -220,6 +229,14 @@ export function CaseloadView({
   useEffect(() => {
     let cancelled = false;
     const loadClinicians = async () => {
+      const state = await client.resolve();
+      if (!cancelled && state.status === 'signed-in' && state.session.staffRole === 'helpdesk') {
+        setCanAssign(false);
+        // No colleague list either: `GET /clinicians` is Principal-only
+        // and would 403, and there is nothing left on this page for the
+        // answer to feed.
+        return;
+      }
       const accessToken = await client.authorization();
       if (!accessToken) {
         return;
@@ -352,7 +369,7 @@ export function CaseloadView({
             <th scope="col">{strings.patientColumnLabel}</th>
             <th scope="col">{strings.statusColumnLabel}</th>
             <th scope="col">{strings.clinicianColumnLabel}</th>
-            <th scope="col">{strings.assignColumnLabel}</th>
+            {canAssign && <th scope="col">{strings.assignColumnLabel}</th>}
           </tr>
         </thead>
         <tbody>
@@ -364,6 +381,7 @@ export function CaseloadView({
                 <td>{item.fullName}</td>
                 <td>{statusLabel(item.accountStatus)}</td>
                 <td>{item.assignedClinicianName ?? strings.unassignedLabel}</td>
+                {canAssign && (
                 <td>
                   {clinicians.length === 0 ? (
                     strings.noCliniciansLabel
@@ -408,6 +426,7 @@ export function CaseloadView({
                     </>
                   )}
                 </td>
+                )}
               </tr>
             );
           })}

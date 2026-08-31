@@ -42,7 +42,7 @@
 // `enable`, the audit row each writes) are entirely unchanged; only the
 // "then tell the clinician by email" step is gone. `AdminDeactivateClinicianPort`
 // no longer needs to resolve an email at all.
-import type { Principal } from '@ndn/shared-types';
+import type { ClinicianRole, Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyHandlerV2WithLambdaAuthorizer,
@@ -50,6 +50,7 @@ import type {
 import { z } from 'zod';
 
 import { actorFromPrincipal, requestOriginOf } from './audit.js';
+import { HELPDESK_GROUP, PRINCIPAL_CLINICIAN_GROUP } from './authorizer.js';
 import { can } from './authz.js';
 import type { ClinicianRepository } from './clinician-repository.js';
 import { systemClock, type Clock } from './clock.js';
@@ -62,6 +63,23 @@ import { requirePrincipal } from './request-principal.js';
 
 const CLINICIAN_ADMIN_FLAG = 'clinicians.administration.enabled';
 const CLINICIAN_RESOURCE = { entityType: 'clinician-account' } as const;
+
+/**
+ * The one place a `ClinicianRole` becomes a `cognito:groups` membership.
+ * `roleFor()` (authorizer.ts) reads the same two group names back off a
+ * verified token, and both constants are that file's — so the record's
+ * `role`, the group granted here, and the role the authorizer derives
+ * cannot drift into three different opinions.
+ *
+ * `sub` is `undefined`, not a group name: a sub-clinician is a
+ * clinician-pool token in *no* named group, which is `roleFor`'s own
+ * fallback.
+ */
+const GROUP_FOR_CLINICIAN_ROLE: Readonly<Record<ClinicianRole, string | undefined>> = {
+  principal: PRINCIPAL_CLINICIAN_GROUP,
+  helpdesk: HELPDESK_GROUP,
+  sub: undefined,
+};
 
 // Every request, unsampled — the lowest-volume admin surface in the
 // estate (one principal, acting rarely) and the one whose own access a
@@ -138,7 +156,11 @@ export interface ChangeOwnPasswordPort {
 const createClinicianBodySchema = z.object({
   email: z.string().email().max(254),
   displayName: z.string().min(1).max(200),
-  role: z.enum(['principal', 'sub']),
+  // `'helpdesk'` (2026-08-31) — a third role in the same pool, created
+  // through this same route because it is administered identically
+  // (shared-types' `ClinicianRole` has the reasoning). The only thing
+  // that differs is which `cognito:groups` membership it gets below.
+  role: z.enum(['principal', 'sub', 'helpdesk']),
   // Bounded, not policy-checked here: Cognito owns the password policy,
   // and duplicating it in a Zod schema would be a second copy to drift.
   // The floor is Cognito's own absolute minimum, so an obviously-empty
@@ -161,12 +183,18 @@ export interface AdminCreateClinicianPort {
    * `AdminAddUserToGroup`, so `authorizer.ts`'s `roleFor()` — which reads
    * `cognito:groups`, never the `CLI#` record's own `role` field — could
    * never resolve anyone to `principal-clinician`, no matter what the
-   * DynamoDB record said. Called only when `role === 'principal'`, after
-   * `repository.create()` has actually accepted the row (never before —
-   * a rejected `PRINCIPAL_ALREADY_EXISTS` create must not have already
-   * granted the group).
+   * DynamoDB record said. Called only after `repository.create()` has
+   * actually accepted the row (never before — a rejected
+   * `PRINCIPAL_ALREADY_EXISTS` create must not have already granted the
+   * group).
+   *
+   * Generalised from `addToPrincipalGroup` on 2026-08-31, when a second
+   * group appeared. `groupName` comes from `GROUP_FOR_CLINICIAN_ROLE`
+   * below, never from a caller's string — the mapping from role to group
+   * is the single fact `roleFor()` reads back, and it lives in exactly
+   * one place.
    */
-  addToPrincipalGroup(subjectId: string): Promise<void>;
+  addToGroup(subjectId: string, groupName: string): Promise<void>;
   /**
    * D-30: a permanent password, set once — the same `AdminSetUserPassword`
    * shape `patient-admin.ts`'s own port already uses for D-29, `Permanent:
@@ -328,8 +356,14 @@ export function createClinicianAdminHandler(
             { displayName: parsed.data.displayName, role: parsed.data.role },
             actor,
           );
-          if (clinician.role === 'principal') {
-            await deps.createClinicianUser.addToPrincipalGroup(subjectId);
+          // `'sub'` maps to no group at all, and deliberately: `roleFor()`
+          // treats "a clinician-pool token in none of the named groups" as
+          // the sub-clinician case, so a sub-clinician is the absence of a
+          // membership rather than a membership of its own. One less thing
+          // that can be granted, revoked, or forgotten.
+          const groupName = GROUP_FOR_CLINICIAN_ROLE[clinician.role];
+          if (groupName) {
+            await deps.createClinicianUser.addToGroup(subjectId, groupName);
           }
           // Shown once, here, and nowhere else — never stored, never
           // logged (`logger.logRequest` above logs only route/status/
