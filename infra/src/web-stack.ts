@@ -610,11 +610,39 @@ export class WebStack extends Stack {
           // any new inline script anywhere on the site) ever produces a
           // hash not listed here, so a drift is caught at build time
           // rather than silently, live, again.
+          //
+          // **Found live, 2026-08-31, the first real authenticated form
+          // submission ever driven through a real browser:** every
+          // `contentApiUrl`/`signallingWebSocketUrl` call — every account
+          // panel that fetches or mutates anything (caseload, patient
+          // profile, clinical records, calendar, messages, next
+          // appointment, patient/clinician admin, change-password, video
+          // call signalling and TURN credentials; `site-config.ts`'s own
+          // header already named the reason: "No CloudFront same-origin
+          // proxy exists for this API yet") — was silently blocked by
+          // this policy's own `connect-src` gap. With no `connect-src`
+          // directive at all, CSP falls back to `default-src 'self'`,
+          // which permits same-origin `/auth/*` (proxied through this
+          // same distribution, this file's own `/auth/*` behaviour below)
+          // but refuses every cross-origin `execute-api.amazonaws.com`
+          // call outright — a browser-enforced block, invisible to any
+          // server-side test, an a11y scan, or a signed-out Playwright
+          // check, and only reachable by a real signed-in browser
+          // actually attempting the fetch. The two origins named are
+          // `apps/web/src/site-config.ts`'s own `contentApiUrl`/
+          // `signallingWebSocketUrl` constants, hardcoded here the
+          // identical way that file documents for its own copies —
+          // `NdnDataStack`'s `HttpApi`/`WebSocketApi` are stable,
+          // rarely-changing generated ids, and this stack has no live
+          // cross-stack reference to either construct to read them from
+          // instead.
           contentSecurityPolicy:
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
             "script-src 'self' https://challenges.cloudflare.com https://js.stripe.com " +
             "'sha256-eIXWvAmxkr251LJZkjniEK5LcPF3NkapbJepohwYRIc=' " +
             "'sha256-Ya0pUYrC7nM5Cn/056TyVuEiz6dFGrzmkWzgON0pF0U='; " +
+            "connect-src 'self' https://m4ptz0to5m.execute-api.eu-west-2.amazonaws.com " +
+            'wss://93im3xehxh.execute-api.eu-west-2.amazonaws.com; ' +
             'frame-src https://challenges.cloudflare.com https://checkout.stripe.com; ' +
             "object-src 'none'; frame-ancestors 'none'",
         },
