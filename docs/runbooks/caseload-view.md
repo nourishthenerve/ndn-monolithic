@@ -64,3 +64,47 @@ Not independently re-verified against a live table in this test suite — that i
 ## Cost
 
 £0.00 net-new, as planned — GSI3's write units land on writes that already happen (`writeDecision`), inside `03-cost-model.md`'s existing DynamoDB line; one more 128 MB arm64 Lambda inside the always-free allowance.
+
+---
+
+## Amendment, 2026-08-31 — this became the principal's patient dashboard
+
+**Trigger:** the owner, after signing in as the principal clinician for the first time: *"I want … an overall dashboard showing how many patients are there in the system with active ones being at the top. which clinicians each patient has been assigned to with having the option to reassign to a new clinician."*
+
+Everything above still describes the page's authorisation posture, its cursor discipline and its markup accurately. Three things it describes are now wrong, and this section — not an edit in place — is where they are corrected.
+
+### 1. GSI3 is no longer sparse (supersedes "Sparse by construction, not by filtering")
+
+The section above is the exact reason the request could not be served: a `pending` patient — the one the principal opens this page to assign — carried no `gsi3pk`, so no query could reach them. Sparseness was doing a job (keeping the index to "rows that belong in an admin view"), and the job turned out to be the wrong one: **every** patient belongs in an admin view; what differs is what the principal should do about them.
+
+`patientDirectoryIndexAttributes` (exported from `dynamo-store.ts`) now derives `gsi3pk`/`gsi3sk` for every patient, and `gsi3sk` leads with a status rank — `0` approved, `1` pending, `2` suspended, `3` declined — so "active ones at the top" is DynamoDB's own index order across every page, with nothing sorted on the read side. The clinician segment is `UNASSIGNED` where a clinician id would be. The `#PAT#` marker is untouched, so `queryPage`'s parse is unchanged. GSI1 stays sparse: it answers "which patients are mine", which an unassigned patient has no answer to.
+
+Three call sites write a patient `PROFILE` row, and all three must derive the same projection, so `createPatientProfileStore(tableName)` now owns the key shape *and* the projection together — the seven handlers that each repeated `PAT#<id>`/`PROFILE` by hand go through it, and `withoutTableKeys` strips every GSI attribute on read so a stale one cannot be round-tripped back in. (Before this, `PatientRepository.update` only kept the index alive *by accident*, because the attributes were never stripped and so happened to be re-written.)
+
+### 2. Counts
+
+`listPage` asks the store for `{ total, active }` on the **first page only** — a count is a fact about the directory, not the page, and re-counting on every page turn would be two Queries to repeat something already shown. `DynamoCaseloadStore.count` is two `Select: 'COUNT'` Queries over the same GSI3 partition, the second with `begins_with(gsi3sk, '0#')`. No counter attribute, nothing to drift.
+
+### 3. Assign and reassign in place
+
+Each row carries a `<select>` of active colleagues (`GET /clinicians`, new the same day) and one button. The component picks `POST /patients/{id}/approve` for an unassigned patient and `POST /patients/{id}/reassign` for an assigned one — a fact about the patient's status, not a question worth asking the principal; the API rejects the wrong one with 409 (`ALREADY_ASSIGNED`/`NOT_ASSIGNED`) regardless, so the server remains the authority. Deactivated colleagues are filtered out of the dropdown because `AssignmentRepository` would reject them with `CLINICIAN_NOT_AVAILABLE`. A successful mutation reloads the current page: approval changes a patient's rank, and therefore their position in the index, so re-reading is the only honest thing to show.
+
+The route stays `/{locale}/account/caseload` — already deployed, already registered for the nightly authenticated axe scan (`account-routes.ts`), already flag-gated. Only its heading and `caseload.*` strings changed, to "Patient dashboard".
+
+### Backfill required — this is a data migration
+
+No index rewrites its own existing rows. Every patient and clinician record written before 2026-08-31 is invisible to the new queries until `scripts/backfill-directory-index.mjs` is run once against the table:
+
+```sh
+export AWS_PROFILE=ndn-prod AWS_REGION=eu-west-2
+node scripts/backfill-directory-index.mjs --table <table-name>          # dry run
+node scripts/backfill-directory-index.mjs --table <table-name> --apply  # write
+```
+
+Idempotent (a correct row is skipped), additive (an `UpdateItem` naming only the index attributes — never a `PutItem` that could clobber a concurrent domain-field write, never a delete), and the one sanctioned `Scan` in the repo. Its own header explains why that is not a breach of the no-`Scan` rule: the rule is about request paths, and the rows it needs are precisely the ones no index knows about.
+
+### Verification, amended
+
+- `caseload-repository.test.ts` gains: an unassigned patient appears as a row with no clinician fields rather than being skipped; counts are returned on the first page and not on later ones (asserted both by the response and by spying that `count()` is not even called).
+- `dynamo-store.test.ts` gains: the rank prefix and `UNASSIGNED` segment of `patientDirectoryIndexAttributes`, including that `split('#PAT#')` still recovers the id; `count()` issues exactly two `Select: 'COUNT'` Queries and sums every page; `DynamoStore.get` strips every GSI key attribute and `put` re-derives them. `writeDecision`'s decline case is rewritten — GSI1 drops, GSI3 stays.
+- `clinician-admin.test.ts` gains the `GET /clinicians` suite (200 for the principal including deactivated colleagues, 403 for a sub-clinician and a patient, 404 behind the flag).

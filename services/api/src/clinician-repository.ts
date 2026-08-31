@@ -49,6 +49,12 @@ export interface ClinicianStore {
   create(item: Clinician): Promise<void>;
   /** Plain overwrite — deactivate/reactivate. Callers never change `role` through this. */
   update(item: Clinician): Promise<void>;
+  /**
+   * Every clinician, every status, in id order. Unpaginated on purpose —
+   * see `DynamoClinicianStore.list`'s own doc: this is the one collection
+   * in the estate small enough that its whole extent is the useful answer.
+   */
+  list(): Promise<Clinician[]>;
 }
 
 export class InMemoryClinicianStore implements ClinicianStore {
@@ -57,6 +63,10 @@ export class InMemoryClinicianStore implements ClinicianStore {
 
   async get(id: string): Promise<Clinician | undefined> {
     return this.items.get(id);
+  }
+
+  async list(): Promise<Clinician[]> {
+    return [...this.items.values()].sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async create(item: Clinician): Promise<void> {
@@ -122,6 +132,22 @@ export class ClinicianRepository {
   /** Still readable in every status — a deactivated clinician's name still resolves on every past record. */
   async findById(id: string): Promise<Clinician | undefined> {
     return this.store.get(id);
+  }
+
+  /**
+   * The whole directory, deactivated colleagues included. Reached only
+   * once `can()` has granted `read` on the `'Clinician accounts'` row
+   * (Principal-only), the same contract `findById` and every other
+   * repository read in this codebase keeps with its handler.
+   *
+   * Deactivated clinicians are returned rather than filtered out: the
+   * principal needs to see them to reactivate them, and the caller —
+   * never this method — is the one that decides which of them may be
+   * assigned a patient (`AssignmentRepository` already rejects a
+   * non-`active` target with `CLINICIAN_NOT_AVAILABLE`).
+   */
+  async list(): Promise<Clinician[]> {
+    return this.store.list();
   }
 
   /**

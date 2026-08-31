@@ -29,6 +29,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import type { QueryCommandOutput } from '@aws-sdk/lib-dynamodb';
 import type {
   Appointment,
   Assessment,
@@ -39,6 +40,7 @@ import type {
   ContentItem,
   Message,
   Patient,
+  PatientAccountStatus,
   Registration,
   Testimonial,
   Workshop,
@@ -104,11 +106,39 @@ function defaultDocumentClient(): DynamoDBDocumentClient {
   return DynamoDBDocumentClient.from(new DynamoDBClient({}));
 }
 
-/** Strips the table's storage-layer `pk`/`sk` attributes so callers only ever see domain fields. */
+/**
+ * Every attribute this table uses for *storage* rather than for domain
+ * meaning — the base table's `pk`/`sk` and each GSI's own key pair.
+ *
+ * **The index keys were missing here until 2026-08-31, and their absence
+ * was load-bearing by accident.** `gsi1pk`/`gsi1sk`/`gsi3pk`/`gsi3sk` live
+ * as plain attributes on a patient's own `PROFILE` row
+ * (assignment-repository.ts's `reassign` explains why, at length), so every
+ * `Patient` read back through `withoutTableKeys` carried them into API
+ * responses — and a later plain `put` of that same object happened to
+ * re-write them, which is the only reason `PatientRepository.update` never
+ * dropped a patient out of the caseload index. Stripping them turns that
+ * accident into a real bug unless the write side derives them
+ * deliberately, so the two changes land together:
+ * `DynamoStoreOptions.indexAttributes` (below) is the write half.
+ */
+const TABLE_KEY_ATTRIBUTES = [
+  'pk',
+  'sk',
+  'gsi1pk',
+  'gsi1sk',
+  'gsi2pk',
+  'gsi2sk',
+  'gsi3pk',
+  'gsi3sk',
+] as const;
+
+/** Strips the table's storage-layer key attributes so callers only ever see domain fields. */
 function withoutTableKeys<T>(row: Record<string, unknown>): T {
   const item = { ...row };
-  delete item.pk;
-  delete item.sk;
+  for (const attribute of TABLE_KEY_ATTRIBUTES) {
+    delete item[attribute];
+  }
   return item as T;
 }
 
@@ -120,21 +150,32 @@ export function singleItemKeys(pkPrefix: string): { pk(key: string): string; sk(
   };
 }
 
-export interface DynamoStoreOptions {
+export interface DynamoStoreOptions<T> {
   readonly tableName: string;
   readonly keys: { pk(key: string): string; sk(key: string): string };
+  /**
+   * Derived, never stored on the domain object — the GSI key attributes
+   * this entity projects itself into, recomputed from the item on every
+   * write. `withoutTableKeys` (above) strips them on the way back out, so
+   * these two halves are the *only* places an index key is ever written or
+   * read; a caller cannot round-trip a stale one by accident, and cannot
+   * drop one by forgetting to carry it forward.
+   */
+  readonly indexAttributes?: (item: T) => Record<string, string>;
   readonly client?: DynamoDBDocumentClient;
 }
 
 export class DynamoStore<T> implements KeyValueStore<T> {
   private readonly client: DynamoDBDocumentClient;
   private readonly tableName: string;
-  private readonly keys: DynamoStoreOptions['keys'];
+  private readonly keys: DynamoStoreOptions<T>['keys'];
+  private readonly indexAttributes: DynamoStoreOptions<T>['indexAttributes'];
 
-  constructor(options: DynamoStoreOptions) {
+  constructor(options: DynamoStoreOptions<T>) {
     this.client = options.client ?? defaultDocumentClient();
     this.tableName = options.tableName;
     this.keys = options.keys;
+    this.indexAttributes = options.indexAttributes;
   }
 
   async get(key: string): Promise<T | undefined> {
@@ -154,7 +195,12 @@ export class DynamoStore<T> implements KeyValueStore<T> {
     await this.client.send(
       new PutCommand({
         TableName: this.tableName,
-        Item: { ...item, pk: this.keys.pk(key), sk: this.keys.sk(key) },
+        Item: {
+          ...item,
+          ...(this.indexAttributes ? this.indexAttributes(item) : {}),
+          pk: this.keys.pk(key),
+          sk: this.keys.sk(key),
+        },
       }),
     );
   }
@@ -656,6 +702,27 @@ const CLINICIAN_PROFILE_SK = 'PROFILE';
 const CLINICIAN_PRINCIPAL_MARKER_PK = 'CLI#PRINCIPAL_MARKER';
 const CLINICIAN_PRINCIPAL_MARKER_SK = 'MARKER';
 
+// 2026-08-31: the clinician *directory* — `GET /clinicians`, which the
+// principal's dashboard needs to offer "reassign to…" as a list of real
+// colleagues rather than a UUID typed in by hand. Same fixed-partition
+// shape `TESTIMONIAL_INDEX#all`/`WORKSHOP_INDEX#all` already use on GSI2,
+// and it can collide with neither of those nor with a content keyword's
+// `KEYWORD#...`.
+//
+// **One deliberate divergence from those two: the index keys go on the
+// `PROFILE` row itself, not on a separate `INDEX` row beside it.** A
+// testimonial's index row exists because its main row is written by a
+// plain overwrite that knows nothing about the projection; a clinician's
+// projection is a pure function of `item.id`, so both writers below can
+// derive it identically and there is nothing for a second row to protect
+// against. It also keeps `list()` to one `Query` plus one `GetItem` per
+// clinician rather than a `Query` that returns a row nobody wants.
+const CLINICIAN_INDEX_GSI2PK = 'CLINICIAN_INDEX#all';
+const clinicianIndexAttributes = (id: string) => ({
+  gsi2pk: CLINICIAN_INDEX_GSI2PK,
+  gsi2sk: CLINICIAN_PK(id),
+});
+
 export interface DynamoClinicianStoreOptions {
   readonly tableName: string;
   readonly client?: DynamoDBDocumentClient;
@@ -692,7 +759,12 @@ export class DynamoClinicianStore implements ClinicianStore {
    * only.
    */
   async create(item: Clinician): Promise<void> {
-    const mainItem = { ...item, pk: CLINICIAN_PK(item.id), sk: CLINICIAN_PROFILE_SK };
+    const mainItem = {
+      ...item,
+      ...clinicianIndexAttributes(item.id),
+      pk: CLINICIAN_PK(item.id),
+      sk: CLINICIAN_PROFILE_SK,
+    };
     const transactItems = [
       {
         Put: {
@@ -737,9 +809,58 @@ export class DynamoClinicianStore implements ClinicianStore {
     await this.client.send(
       new PutCommand({
         TableName: this.tableName,
-        Item: { ...item, pk: CLINICIAN_PK(item.id), sk: CLINICIAN_PROFILE_SK },
+        Item: {
+          ...item,
+          // Re-derived, not carried over from the caller's object — see
+          // `clinicianIndexAttributes`. A deactivated clinician stays in
+          // the directory on purpose: the principal has to be able to see
+          // them in order to reactivate them.
+          ...clinicianIndexAttributes(item.id),
+          pk: CLINICIAN_PK(item.id),
+          sk: CLINICIAN_PROFILE_SK,
+        },
       }),
     );
+  }
+
+  /**
+   * The whole directory, every status, in `CLI#<id>` order — one `Query`
+   * against GSI2's fixed partition plus one `GetItem` per row (GSI2 is
+   * KEYS_ONLY), never a `Scan`.
+   *
+   * Unpaginated, and deliberately: a clinician directory is a handful of
+   * people, not a caseload — this is the one collection in the estate
+   * whose whole extent genuinely fits one response. `LastEvaluatedKey` is
+   * still followed rather than ignored, so "a handful" being wrong one
+   * day is a slower call, not a silently truncated list.
+   */
+  async list(): Promise<Clinician[]> {
+    const clinicians: Clinician[] = [];
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const result: QueryCommandOutput = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          IndexName: GSI2_INDEX_NAME,
+          KeyConditionExpression: 'gsi2pk = :indexKey',
+          ExpressionAttributeValues: { ':indexKey': CLINICIAN_INDEX_GSI2PK },
+          ExclusiveStartKey: startKey,
+        }),
+      );
+      for (const row of result.Items ?? []) {
+        if (typeof row.pk !== 'string' || typeof row.sk !== 'string') {
+          continue;
+        }
+        const item = await this.client.send(
+          new GetCommand({ TableName: this.tableName, Key: { pk: row.pk, sk: row.sk } }),
+        );
+        if (item.Item) {
+          clinicians.push(withoutTableKeys<Clinician>(item.Item));
+        }
+      }
+      startKey = result.LastEvaluatedKey;
+    } while (startKey);
+    return clinicians;
   }
 }
 
@@ -778,10 +899,94 @@ const GSI1_PATIENT_SK = (patientId: string) => `PAT#${patientId}`;
 // WORKSHOP_INDEX_GSI2PK already use, on their own index rather than
 // sharing GSI2), sorted by clinician so one Query returns the whole
 // cross-caseload list already grouped.
+//
+// ## Amendment, 2026-08-31 — GSI3 indexes *every* patient, not only the
+// assigned ones, and ranks them by status
+//
+// GSI3 was sparse on `assigned_clinician_id`, which made it exactly the
+// wrong index for the principal's dashboard: the patients most needing an
+// action — the ones just registered, still `pending`, with nobody
+// responsible for them yet — were the precise set it could not return, so
+// there was no way to reach "register a patient, then assign them" from a
+// list at all. Now every `PROFILE` row carries a GSI3 projection, and the
+// sort key leads with a status rank so DynamoDB's own index order puts
+// operative patients on page one, ahead of pending and closed ones,
+// without the read side sorting or filtering anything.
+//
+// `gsi3sk = <rank>#CLI#<clinicianId | UNASSIGNED>#PAT#<patientId>`. The
+// `#PAT#` marker keeps its old meaning and its old parse
+// (`split('#PAT#').pop()`); the clinician segment keeps grouping a
+// clinician's patients together within a rank; `UNASSIGNED` is a literal,
+// not an absent segment, so an unassigned patient sorts as a group of its
+// own rather than colliding with a real clinician id (a Cognito sub —
+// UUIDs, never this word).
+//
+// **This changes the shape of already-written rows**, which is why
+// `scripts/backfill-directory-index.mjs` exists: rows written before this
+// date carry the old, sparse projection and are invisible to the new
+// queries until it is run once against the table.
 const GSI3_INDEX_NAME = 'GSI3';
 const GSI3_CASELOAD_PK = 'CASELOAD#all';
-const GSI3_CASELOAD_SK = (clinicianId: string, patientId: string) =>
-  `CLI#${clinicianId}#PAT#${patientId}`;
+const GSI3_UNASSIGNED_CLINICIAN = 'UNASSIGNED';
+
+/**
+ * The status rank that leads `gsi3sk`. `approved` is what
+ * `OPERATIVE_PATIENT_STATUSES` (shared-types) already means by an active
+ * patient, so it sorts first; `pending` follows because it is the status
+ * that most often needs the principal to do something; the two closed
+ * states come last. Digits, not names, so the ordering is the number's,
+ * not the English word's.
+ */
+const PATIENT_DIRECTORY_RANK: Readonly<Record<PatientAccountStatus, string>> = {
+  approved: '0',
+  pending: '1',
+  suspended: '2',
+  declined: '3',
+};
+
+/**
+ * GSI3's projection for one patient — a pure function of the two fields it
+ * reads, so no writer can put the index out of step with the record.
+ * Exported because three call sites write a patient `PROFILE` row
+ * (`DynamoStore<Patient>` in patient-handler.ts and
+ * patient-admin-handler.ts, and `writeDecision` below) and all three must
+ * derive it identically.
+ */
+export function patientDirectoryIndexAttributes(patient: Patient): {
+  gsi3pk: string;
+  gsi3sk: string;
+} {
+  const rank = PATIENT_DIRECTORY_RANK[patient.account_status];
+  const clinicianId = patient.assigned_clinician_id ?? GSI3_UNASSIGNED_CLINICIAN;
+  return {
+    gsi3pk: GSI3_CASELOAD_PK,
+    gsi3sk: `${rank}#CLI#${clinicianId}#PAT#${patient.id}`,
+  };
+}
+
+/** The `gsi3sk` prefix that selects exactly the operative patients — the dashboard's own "active" count. */
+const GSI3_ACTIVE_PREFIX = `${PATIENT_DIRECTORY_RANK.approved}#`;
+
+/**
+ * The patient `PROFILE` row's store, key shape and directory projection
+ * together. Seven handlers construct a `PatientRepository`, and every one
+ * of them repeated the same `PAT#<id>` / `PROFILE` key literals; now that
+ * a write must also carry `patientDirectoryIndexAttributes`, "repeated
+ * seven times" turns from duplication into a way to lose a patient out of
+ * the dashboard by omission. One factory, so the projection is not
+ * something a call site can forget.
+ */
+export function createPatientProfileStore(
+  tableName: string,
+  client?: DynamoDBDocumentClient,
+): DynamoStore<Patient> {
+  return new DynamoStore<Patient>({
+    tableName,
+    keys: { pk: (id: string) => PATIENT_PK(id), sk: () => PATIENT_PROFILE_SK },
+    indexAttributes: patientDirectoryIndexAttributes,
+    client,
+  });
+}
 
 export interface DynamoAssignmentStoreOptions {
   readonly tableName: string;
@@ -831,23 +1036,22 @@ export class DynamoAssignmentStore implements AssignmentStore {
     };
     const patientItem: Record<string, unknown> = {
       ...patient,
+      // GSI3 is no longer sparse — every patient is in the directory, and
+      // an unassigned one is precisely the row the dashboard most needs to
+      // surface (see this section's 2026-08-31 amendment).
+      ...patientDirectoryIndexAttributes(patient),
       pk: PATIENT_PK(patient.id),
       sk: PATIENT_PROFILE_SK,
     };
-    // Sparse, derived from `assigned_clinician_id` alone — see this
-    // section's header. Simply omitted (not set to `undefined`) when
+    // GSI1 stays sparse, derived from `assigned_clinician_id` alone — see
+    // this section's header. Simply omitted (not set to `undefined`) when
     // there is no assignment, so a decline's `PutCommand` never tries to
-    // marshall an explicit `undefined` value. GSI3 (TASK 2.5.3) piggybacks
-    // on the same condition: `assigned_clinician_id` is only ever set by
-    // this store alongside `account_status: 'approved'` (approve/reassign
-    // both do both in the same write), so "carries a clinician" and
-    // "belongs in the caseload view" are the same fact here, not two
-    // conditions that could drift apart.
+    // marshall an explicit `undefined` value. Unlike GSI3, this index
+    // answers "which patients belong to *this* clinician", a question an
+    // unassigned patient has no answer to.
     if (patient.assigned_clinician_id) {
       patientItem.gsi1pk = GSI1_CLINICIAN_PK(patient.assigned_clinician_id);
       patientItem.gsi1sk = GSI1_PATIENT_SK(patient.id);
-      patientItem.gsi3pk = GSI3_CASELOAD_PK;
-      patientItem.gsi3sk = GSI3_CASELOAD_SK(patient.assigned_clinician_id, patient.id);
     }
 
     try {
@@ -938,8 +1142,10 @@ export class DynamoCaseloadStore implements CaseloadStore {
 
   /**
    * One bounded `Query` against GSI3 (docs/adr/0002-database.md's proof),
-   * sorted by clinician — never a `Scan`, never more than `limit` items
-   * read, never a second page fetched to build this one (step 5).
+   * in the index's own order — active patients first, then grouped by
+   * clinician within each status rank (`patientDirectoryIndexAttributes`).
+   * Never a `Scan`, never more than `limit` items read, never a second page
+   * fetched to build this one (step 5).
    */
   async queryPage(
     cursor: string | undefined,
@@ -959,9 +1165,10 @@ export class DynamoCaseloadStore implements CaseloadStore {
     for (const row of result.Items ?? []) {
       const gsi3sk = row.gsi3sk;
       if (typeof gsi3sk === 'string') {
-        // `CLI#<clinicianId>#PAT#<patientId>` — the patient id is
+        // `<rank>#CLI#<clinicianId>#PAT#<patientId>` — the patient id is
         // everything after the last `#PAT#` marker; clinician ids are
-        // Cognito subs (UUIDs, no `#`), so this is unambiguous.
+        // Cognito subs (UUIDs, no `#`), so this is unambiguous, and the
+        // rank prefix added on 2026-08-31 leaves the parse untouched.
         const patientId = gsi3sk.split('#PAT#').pop();
         if (patientId) {
           patientIds.push(patientId);
@@ -969,6 +1176,50 @@ export class DynamoCaseloadStore implements CaseloadStore {
       }
     }
     return { patientIds, nextCursor: encodeCaseloadCursor(result.LastEvaluatedKey) };
+  }
+
+  /**
+   * "How many patients are in the system, and how many of those are
+   * active" — two `Select: 'COUNT'` Queries over the same GSI3 partition
+   * the page read above already uses, distinguished only by whether the
+   * active rank prefix is required.
+   *
+   * `COUNT` still pages at DynamoDB's own 1MB boundary, so both loops
+   * follow `LastEvaluatedKey` rather than trusting one round trip — on a
+   * KEYS_ONLY index that is thousands of patients per page, so in practice
+   * this is one call each.
+   */
+  async count(): Promise<{ total: number; active: number }> {
+    const [total, active] = await Promise.all([
+      this.countMatching(undefined),
+      this.countMatching(GSI3_ACTIVE_PREFIX),
+    ]);
+    return { total, active };
+  }
+
+  private async countMatching(sortKeyPrefix: string | undefined): Promise<number> {
+    let count = 0;
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const result: QueryCommandOutput = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          IndexName: GSI3_INDEX_NAME,
+          KeyConditionExpression: sortKeyPrefix
+            ? 'gsi3pk = :caseloadKey AND begins_with(gsi3sk, :prefix)'
+            : 'gsi3pk = :caseloadKey',
+          ExpressionAttributeValues: {
+            ':caseloadKey': GSI3_CASELOAD_PK,
+            ...(sortKeyPrefix ? { ':prefix': sortKeyPrefix } : {}),
+          },
+          Select: 'COUNT',
+          ExclusiveStartKey: startKey,
+        }),
+      );
+      count += result.Count ?? 0;
+      startKey = result.LastEvaluatedKey;
+    } while (startKey);
+    return count;
   }
 
   async getPatient(patientId: string): Promise<Patient | undefined> {

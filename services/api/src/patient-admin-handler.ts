@@ -9,11 +9,10 @@ import {
   AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider';
-import type { Patient } from '@ndn/shared-types';
 
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
-import { DynamoStore } from './dynamo-store.js';
+import { createPatientProfileStore } from './dynamo-store.js';
 import type {
   AdminCreatePatientPort,
   AdminFindPatientPort,
@@ -28,15 +27,12 @@ const flags = createSsmFlagReader();
 const tableName = process.env.PRINCIPAL_TABLE_NAME ?? '';
 const auditLog = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
 
-// `PAT#<sub>` / `PROFILE` — the same key shape patient-handler.ts and the
-// retired post-confirmation-handler.ts both wired `DynamoStore<Patient>`
-// against, because the record id and the Cognito sub are the same value
-// (dynamo-principal-directory.ts).
+// `PAT#<sub>` / `PROFILE` — the key shape (and, since 2026-08-31, the
+// GSI3 directory projection) that `createPatientProfileStore` owns for
+// every handler, because the record id and the Cognito sub are the same
+// value (dynamo-principal-directory.ts).
 const repository = new PatientRepository(
-  new DynamoStore<Patient>({
-    tableName,
-    keys: { pk: (id: string) => `PAT#${id}`, sk: () => 'PROFILE' },
-  }),
+  createPatientProfileStore(tableName),
   auditLog,
   systemClock,
 );

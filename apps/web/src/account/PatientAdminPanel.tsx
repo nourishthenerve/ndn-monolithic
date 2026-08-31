@@ -22,7 +22,28 @@
 // just Cognito's own `AdminGetUser` against the pool's email-keyed
 // username. Finding a patient fills the reset form's own id field, so
 // staff never have to copy it by hand between the two sections.
-import { useState } from 'react';
+//
+// **Assigning at registration (2026-08-31).** The owner's own framing of
+// this page — "when they contact via whatsapp the principal clinician
+// registers them to the system and assign a clinician to him" — is one
+// action to the person doing it, and was two round trips on two different
+// screens. The create form now carries an optional clinician dropdown
+// (`GET /clinicians`); choosing one makes the panel follow a successful
+// `POST /patients` with `POST /patients/{id}/approve`, the same call the
+// dashboard's own assign button makes. Deliberately still *two* API
+// calls, not a new combined endpoint: account creation and account
+// approval are two distinct RBAC rows with two distinct audit trails
+// (patient-admin.ts's own header, "two distinct actions on two distinct
+// RBAC rows"), and that stays true whether or not one screen triggers
+// both. Leaving the dropdown blank keeps the old behaviour exactly — the
+// patient is created `pending` and waits on the dashboard.
+//
+// The account is reported as created either way. If the follow-up
+// assignment fails, the password panel still appears — the account exists
+// and its one-time password must not be swallowed by an error about a
+// later step — with a plain note that the assignment did not happen and
+// can be made from the dashboard.
+import { useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
@@ -40,6 +61,25 @@ interface FoundPatient {
   readonly id: string;
   readonly fullName: string;
   readonly accountStatus: string;
+}
+
+/** One assignable colleague, from `GET /clinicians`. Deactivated ones never reach the dropdown. */
+interface AssignableClinician {
+  readonly id: string;
+  readonly displayName: string;
+}
+
+/**
+ * What the create panel reports. `assignedTo` names the colleague the
+ * follow-up approval actually assigned; `assignmentFailed` says the
+ * principal chose one and the approval call did not land — two different
+ * facts from "no clinician was chosen", which is both fields absent.
+ */
+interface CreateResult {
+  readonly id: string;
+  readonly password: string;
+  readonly assignedTo?: string;
+  readonly assignmentFailed?: boolean;
 }
 
 const EMPTY_CREATE_FIELDS: CreatePatientFormFields = {
@@ -70,6 +110,11 @@ export interface PatientAdminPanelStrings {
   readonly createConflictError: string;
   readonly createValidationError: string;
   readonly createError: string;
+  readonly assignClinicianLabel: string;
+  readonly assignClinicianNone: string;
+  readonly assignClinicianHint: string;
+  readonly assignedToLabel: string;
+  readonly assignFailedWarning: string;
   readonly findHeading: string;
   readonly findIntro: string;
   readonly findButton: string;
@@ -97,6 +142,12 @@ export interface PatientAdminPanelProps {
   readonly createPatient?: (accessToken: string, body: CreatePatientRequestBody) => Promise<Response>;
   readonly resetPassword?: (accessToken: string, patientId: string) => Promise<Response>;
   readonly findPatient?: (accessToken: string, email: string) => Promise<Response>;
+  readonly listClinicians?: (accessToken: string) => Promise<Response>;
+  readonly approvePatient?: (
+    accessToken: string,
+    patientId: string,
+    clinicianId: string,
+  ) => Promise<Response>;
 }
 
 const defaultClient = createSessionClient();
@@ -125,6 +176,24 @@ function defaultFindPatient(accessToken: string, email: string): Promise<Respons
   return fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
 }
 
+function defaultListClinicians(accessToken: string): Promise<Response> {
+  return fetch(`${contentApiUrl}/clinicians`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+}
+
+function defaultApprovePatient(
+  accessToken: string,
+  patientId: string,
+  clinicianId: string,
+): Promise<Response> {
+  return fetch(`${contentApiUrl}/patients/${encodeURIComponent(patientId)}/approve`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ assignedClinicianId: clinicianId }),
+  });
+}
+
 /** A password, shown once, in a plain readonly field — easy to select-all and copy, no clipboard-API permission to fail on. */
 function OneTimePassword({
   password,
@@ -147,10 +216,15 @@ export function PatientAdminPanel({
   createPatient = defaultCreatePatient,
   resetPassword = defaultResetPassword,
   findPatient = defaultFindPatient,
+  listClinicians = defaultListClinicians,
+  approvePatient = defaultApprovePatient,
 }: PatientAdminPanelProps): ReactNode {
   const [createFields, setCreateFields] = useState<CreatePatientFormFields>(EMPTY_CREATE_FIELDS);
   const [createStatus, setCreateStatus] = useState<CreateStatus>('idle');
-  const [createResult, setCreateResult] = useState<{ id: string; password: string } | undefined>();
+  const [createResult, setCreateResult] = useState<CreateResult | undefined>();
+
+  const [clinicians, setClinicians] = useState<readonly AssignableClinician[]>([]);
+  const [assignClinicianId, setAssignClinicianId] = useState('');
 
   const [findEmailInput, setFindEmailInput] = useState('');
   const [findStatus, setFindStatus] = useState<FindStatus>('idle');
@@ -159,6 +233,42 @@ export function PatientAdminPanel({
   const [patientIdInput, setPatientIdInput] = useState('');
   const [resetStatus, setResetStatus] = useState<ResetStatus>('idle');
   const [resetPasswordResult, setResetPasswordResult] = useState<string | undefined>();
+
+  // Loaded once on mount. A failure leaves the list empty, which renders
+  // the form without its optional dropdown — registering a patient must
+  // not depend on the clinician directory being reachable.
+  useEffect(() => {
+    let cancelled = false;
+    const loadClinicians = async () => {
+      const accessToken = await client.authorization();
+      if (!accessToken) {
+        return;
+      }
+      try {
+        const response = await listClinicians(accessToken);
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as {
+          items?: readonly { id: string; displayName: string; account_status: string }[];
+        };
+        if (cancelled) {
+          return;
+        }
+        setClinicians(
+          (payload.items ?? [])
+            .filter((clinician) => clinician.account_status === 'active')
+            .map(({ id, displayName }) => ({ id, displayName })),
+        );
+      } catch {
+        // Left empty — see this effect's own note.
+      }
+    };
+    void loadClinicians();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, listClinicians]);
 
   const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -192,8 +302,32 @@ export function PatientAdminPanel({
         setCreateStatus('error');
         return;
       }
-      setCreateResult({ id: payload.item.id, password: payload.password });
+      const patientId = payload.item.id;
+      // The optional second step. Its failure never downgrades the create:
+      // the account exists and its password is shown once, here, or not at
+      // all — see this file's 2026-08-31 header note.
+      let assignedTo: string | undefined;
+      let assignmentFailed = false;
+      if (assignClinicianId) {
+        try {
+          const approval = await approvePatient(accessToken, patientId, assignClinicianId);
+          if (approval.ok) {
+            assignedTo = clinicians.find((c) => c.id === assignClinicianId)?.displayName;
+          } else {
+            assignmentFailed = true;
+          }
+        } catch {
+          assignmentFailed = true;
+        }
+      }
+      setCreateResult({
+        id: patientId,
+        password: payload.password,
+        ...(assignedTo ? { assignedTo } : {}),
+        ...(assignmentFailed ? { assignmentFailed } : {}),
+      });
       setCreateFields(EMPTY_CREATE_FIELDS);
+      setAssignClinicianId('');
       setCreateStatus('success');
     } catch {
       setCreateStatus('error');
@@ -348,6 +482,28 @@ export function PatientAdminPanel({
               }
             />
           </p>
+          {clinicians.length > 0 && (
+            <>
+              <p>
+                <label htmlFor="create-assign-clinician">{strings.assignClinicianLabel}</label>
+                <select
+                  id="create-assign-clinician"
+                  disabled={isCreating}
+                  aria-describedby="create-assign-clinician-hint"
+                  value={assignClinicianId}
+                  onChange={(event) => setAssignClinicianId(event.target.value)}
+                >
+                  <option value="">{strings.assignClinicianNone}</option>
+                  {clinicians.map((clinician) => (
+                    <option key={clinician.id} value={clinician.id}>
+                      {clinician.displayName}
+                    </option>
+                  ))}
+                </select>
+              </p>
+              <p id="create-assign-clinician-hint">{strings.assignClinicianHint}</p>
+            </>
+          )}
           <p>
             <label htmlFor="create-marketing-opt-in">
               <input
@@ -378,6 +534,12 @@ export function PatientAdminPanel({
             <p>
               {strings.patientIdLabel}: <code>{createResult.id}</code>
             </p>
+            {createResult.assignedTo && (
+              <p>
+                {strings.assignedToLabel}: {createResult.assignedTo}
+              </p>
+            )}
+            {createResult.assignmentFailed && <p>{strings.assignFailedWarning}</p>}
           </div>
         )}
       </section>

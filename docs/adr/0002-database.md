@@ -32,6 +32,31 @@ Deliberately **one fixed partition value**, the same "`_all`" shape `TESTIMONIAL
 
 No `Scan` anywhere in this pattern.
 
+### Amendment, 2026-08-31 — GSI3 became the patient directory
+
+The row above is superseded, not deleted: the sparse-on-assignment shape it proves is exactly what the principal's dashboard could not use. The owner asked for "an overall dashboard showing how many patients are there in the system with active ones being at the top", and a sparse index answers neither half — a just-registered `pending` patient, the one row the principal opens the page to act on, carried no `gsi3pk` at all, so no query could reach them.
+
+| Access pattern | Query | Proof |
+|---|---|---|
+| **Whole patient directory, active first, grouped by clinician within a status** | `gsi3pk = 'CASELOAD#all'`, `Limit`, `ExclusiveStartKey` | `gsi3pk`/`gsi3sk` are now on **every** patient's `PAT#<id>`/`PROFILE` row, derived by one exported function (`patientDirectoryIndexAttributes`, dynamo-store.ts) that all three writers of that row call. `gsi3sk = <rank>#CLI#<assignedClinicianId \| UNASSIGNED>#PAT#<patientId>`, where `rank` is `0` approved / `1` pending / `2` suspended / `3` declined. Ordering is therefore the index's own — the read side sorts nothing, and "active at the top" holds across pages, not merely within one |
+| **How many patients, and how many active** | `gsi3pk = 'CASELOAD#all'` with `Select: 'COUNT'`; the same again with `begins_with(gsi3sk, '0#')` | Two counting Queries on a `KEYS_ONLY` index, on the first page of a listing only (`caseload-repository.ts`). No counter attribute to keep consistent, no `Scan`, and nothing to drift from the rows it counts |
+
+The `#PAT#` marker is unchanged, so `DynamoCaseloadStore.queryPage`'s existing parse (everything after the last `#PAT#`) still recovers the patient id; `UNASSIGNED` is a literal that cannot collide with a clinician id (a Cognito `sub`). GSI1 stays sparse and unchanged — it answers "which patients are *this clinician's*", a question an unassigned patient genuinely has no answer to.
+
+Rows written before this date carry the old projection or none, and no index rewrites itself: `scripts/backfill-directory-index.mjs` is the one-shot correction, and the one place in this repo a `Scan` is sanctioned (it is a maintenance job, not a request path — see its own header).
+
+## GSI2's third fixed partition, 2026-08-31 — the clinician directory
+
+`GET /clinicians` needs "every clinician, whatever their status", and nothing indexed one. The `CLI#<id>`/`PROFILE` row now carries `gsi2pk = 'CLINICIAN_INDEX#all'` / `gsi2sk = CLI#<id>`.
+
+| Access pattern | Query | Proof |
+|---|---|---|
+| **Whole clinician directory** | `gsi2pk = 'CLINICIAN_INDEX#all'`, then one `GetItem` per row | The same `_all` fixed-partition shape `TESTIMONIAL_INDEX#all`/`WORKSHOP_INDEX#all` already use on GSI2, and it collides with neither those nor a content keyword's `KEYWORD#...`. Unpaginated by design: a clinician directory is a handful of people, and `LastEvaluatedKey` is still followed so "a handful" being wrong is a slower call, never a silently truncated list |
+
+Unlike the testimonial and workshop projections, the keys go on the `PROFILE` row itself rather than a separate `INDEX` row: a clinician's projection is a pure function of `item.id`, so both writers (`create`, `update`) derive it identically and there is nothing a second row would protect against. `KEYS_ONLY`, same as every other index on this table.
+
+No `Scan` in either of the two patterns above. The pre-existing rows are, again, `scripts/backfill-directory-index.mjs`'s job.
+
 ## GSI4, proved before code (TASK 3.4.3) — removed, D-32 (2026-08-30)
 
 **GSI4 no longer exists.** The reminder sweep it existed for is deleted outright — the owner's own words: "remove this reminder thing, the clinician handling whatsapp will send a reminder manually." This section's proof is kept, unedited, as the historical record of why the index looked the way it did while it existed; `infra/src/data-stack.ts` no longer calls `addGlobalSecondaryIndex` for it, `Appointment.reminder_sent_at` no longer exists on the type, and this table now has three GSIs, not four. Full reasoning: [01-decisions.md](../plan/01-decisions.md)'s D-32, [docs/runbooks/appointment-reminders.md](../runbooks/appointment-reminders.md).

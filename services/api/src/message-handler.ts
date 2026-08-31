@@ -8,11 +8,10 @@
 // `AdminGetUser` call that resolved an assigned clinician's email for it
 // — are deleted along with the notice itself. This function now touches
 // nothing outside DynamoDB.
-import type { Patient } from '@ndn/shared-types';
 
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
-import { DynamoMessageStore, DynamoStore } from './dynamo-store.js';
+import { createPatientProfileStore, DynamoMessageStore } from './dynamo-store.js';
 import { MessageRepository } from './message-repository.js';
 import {
   MESSAGE_RATE_LIMIT_PER_PRINCIPAL,
@@ -29,10 +28,7 @@ const tableName = process.env.PRINCIPAL_TABLE_NAME ?? '';
 const audit = new DynamoAuditLog({ tableName: process.env.AUDIT_TABLE_NAME ?? '' });
 
 const patients = new PatientRepository(
-  new DynamoStore<Patient>({
-    tableName,
-    keys: { pk: (id: string) => `PAT#${id}`, sk: () => 'PROFILE' },
-  }),
+  createPatientProfileStore(tableName),
   audit,
   systemClock,
 );

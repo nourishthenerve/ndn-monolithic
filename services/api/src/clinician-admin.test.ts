@@ -401,6 +401,144 @@ describe('POST /clinicians', () => {
     );
     expect(response.statusCode).toBe(409);
   });
+
+  // 2026-08-31: the principal may set a colleague's first password.
+  it('uses a principal-chosen password instead of generating one', async () => {
+    const { handler, createClinicianUser } = build({ password: 'Gen3rat3d!Pass' });
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: {
+          email: 'new@example.com',
+          displayName: 'New Clinician',
+          role: 'sub',
+          password: 'Ch0sen!ByPrincipal',
+        },
+      }),
+    );
+
+    expect(response.statusCode).toBe(201);
+    const body = JSON.parse(response.body) as { item: { id: string }; password: string };
+    expect(createClinicianUser.setPassword).toHaveBeenCalledWith(body.item.id, 'Ch0sen!ByPrincipal');
+    // Still echoed back once, exactly as a generated one is — the
+    // principal is relaying it over WhatsApp either way, and the response
+    // is the only place it ever appears on this side.
+    expect(body.password).toBe('Ch0sen!ByPrincipal');
+  });
+
+  it('falls back to the generated password when the field is absent', async () => {
+    const { handler, createClinicianUser } = build({ password: 'Gen3rat3d!Pass' });
+
+    await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'new@example.com', displayName: 'New Clinician', role: 'sub' },
+      }),
+    );
+
+    expect(createClinicianUser.setPassword).toHaveBeenCalledWith(
+      expect.any(String),
+      'Gen3rat3d!Pass',
+    );
+  });
+
+  it('returns 400, not 500, when Cognito rejects a chosen password', async () => {
+    const { handler, createClinicianUser } = build();
+    vi.mocked(createClinicianUser.setPassword).mockRejectedValueOnce(
+      new AppError('PASSWORD_POLICY_VIOLATION', 'rejected'),
+    );
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'new@example.com', displayName: 'New', role: 'sub', password: 'weakpass' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'PASSWORD_POLICY_VIOLATION' });
+  });
+
+  it('returns 409, not 500, when the email already has a Cognito account', async () => {
+    const { handler, createClinicianUser } = build();
+    vi.mocked(createClinicianUser.createUser).mockRejectedValueOnce(
+      new AppError('COGNITO_ACCOUNT_ALREADY_EXISTS', 'exists'),
+    );
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'taken@example.com', displayName: 'New', role: 'sub' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(409);
+  });
+});
+
+// 2026-08-31: the directory read the dashboard and this page's own
+// deactivate control both depend on.
+describe('GET /clinicians', () => {
+  async function seed(repository: ReturnType<typeof build>['repository']) {
+    const actor = {
+      subjectId: 'principal-sub',
+      role: 'principal-clinician' as const,
+      requestId: 'r',
+      sourceIpHash: 'h',
+    };
+    await repository.create('cli-1', { displayName: 'Active One', role: 'sub' }, actor);
+    await repository.create('cli-2', { displayName: 'Gone One', role: 'sub' }, actor);
+    await repository.deactivate('cli-2', actor);
+  }
+
+  it('returns every clinician to the principal, deactivated ones included', async () => {
+    const { handler, repository } = build();
+    await seed(repository);
+
+    const response = await invoke(
+      handler,
+      eventFor('GET /clinicians', { principal: PRINCIPAL_CONTEXT }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as {
+      items: { id: string; displayName: string; account_status: string }[];
+    };
+    expect(body.items).toEqual([
+      expect.objectContaining({ id: 'cli-1', account_status: 'active' }),
+      // Deactivated, and still listed — the principal has to see them to
+      // restore their access.
+      expect.objectContaining({ id: 'cli-2', account_status: 'deactivated' }),
+    ]);
+  });
+
+  it.each([
+    ['a sub-clinician', SUB_CLINICIAN_CONTEXT],
+    ['a patient', PATIENT_CONTEXT],
+  ])('refuses %s with 403 — the clinician directory is Principal-only', async (_label, principal) => {
+    const { handler, repository } = build();
+    await seed(repository);
+
+    const response = await invoke(handler, eventFor('GET /clinicians', { principal }));
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 404 when the flag is off, like every other route on this handler', async () => {
+    const { handler } = build({ flagEnabled: false });
+
+    const response = await invoke(
+      handler,
+      eventFor('GET /clinicians', { principal: PRINCIPAL_CONTEXT }),
+    );
+
+    expect(response.statusCode).toBe(404);
+  });
 });
 
 describe('POST /clinicians/{id}/deactivate', () => {

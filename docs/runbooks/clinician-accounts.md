@@ -98,3 +98,35 @@ Both discovered in one sitting, provisioning the real principal clinician and th
 - The real principal's group membership: `aws cognito-idp admin-add-user-to-group --user-pool-id eu-west-2_1SFN2y0Jt --username <sub> --group-name principal-clinician`, once, since bug 2's fix wasn't deployed yet at the time.
 
 Every clinician created **after** both fixes deploy needs none of this — `POST /clinicians` does it all correctly now.
+
+## Amendment, 2026-08-31 — a directory, a chosen password, and "remove access"
+
+**Trigger:** the owner: *"an option to add or remove a clinicians — with which the old one will not have access to login and the new one will now have access after principal clinician has provided email and password for him."*
+
+`POST /clinicians/{id}/deactivate` and `/reactivate` have existed since this task shipped. What did not exist was any way to *reach* them: nothing listed clinicians, so there was no id to call them with short of reading DynamoDB by hand. That is the gap, and it is why the request reads as though the capability is missing.
+
+### `GET /clinicians` (new)
+
+Same handler, same authorizer, gated by `can(principal, 'read', { entityType: 'clinician-account' })` — the `'Clinician accounts'` row already grants `R` to `Principal` and denies every other column, so **no RBAC matrix change was needed**; `authz-matrix.ts` and `04-data-model-rbac.md` are untouched.
+
+Returns every clinician, **deactivated ones included** — the principal has to see a removed colleague in order to restore them. Backed by a new GSI2 projection on the `CLI#<id>`/`PROFILE` row (`gsi2pk = 'CLINICIAN_INDEX#all'`), proved in `docs/adr/0002-database.md`. `ClinicianAdminFunction` gains one `dynamodb:Query` statement scoped to GSI2's index ARN alone — never `grantReadData()`, whose action list includes `Scan`, matching `CaseloadFunction`'s own precedent for GSI3.
+
+### "Remove access" is deactivation, and the wording says so
+
+The UI's buttons read **Remove access** / **Restore access**, not "delete". `AdminDeleteUserCommand` is a banned identifier repo-wide (`packages/eslint-plugin-no-destructive`) and C-03 keeps every record readable; deactivation is also what the request actually asks for — `AdminDisableUser` plus `AdminUserGlobalSignOut` end any live session immediately and block every future sign-in, which is exactly "the old one will not have access to login". The row's own audit trail, notes and past records stay untouched.
+
+The principal's own row is rendered **without** a button: exactly one principal exists by construction, and removing their access would leave nobody able to restore anyone's.
+
+### An optional, principal-chosen first password
+
+`POST /clinicians` accepts an optional `password`. Absent — still the default and the recommendation — D-30's generated password is used exactly as before. Present, it is passed to `AdminSetUserPassword` verbatim (`Permanent: true`, unchanged) and **Cognito's own policy is the judge**: `InvalidPasswordException` is translated to `PASSWORD_POLICY_VIOLATION` and returned as a 400 the form shows, so a weak password is refused rather than quietly accepted. The password is echoed back once in the response either way, because the principal is relaying it over WhatsApp either way.
+
+The form field is `type="text"`, not `type="password"`, deliberately: the principal is about to read it aloud, and a masked field they cannot check is how a colleague ends up locked out of an account nobody can reproduce the credential for. `buildCreateClinicianRequestBody` does not trim it — whitespace is a legitimate part of a password, and silently stripping it would set a credential that differs from the one being read out.
+
+### A 500 that should always have been a 409
+
+Found while building the form: a duplicate email raised `UsernameExistsException` straight out of `AdminCreateUser` and reached the caller as a 500, so `ClinicianAdminPanel`'s "an account with this email already exists" message could never be shown. Now mapped to `COGNITO_ACCOUNT_ALREADY_EXISTS` → 409, the identical translation `patient-admin-handler.ts` has done since D-29.
+
+### Backfill required
+
+The six clinician records that existed on 2026-08-31 — the principal included — predate the GSI2 projection and are invisible to `GET /clinicians` until `scripts/backfill-directory-index.mjs` is run once against the table. See [caseload-view.md](caseload-view.md#backfill-required--this-is-a-data-migration) for the command and why its `Scan` is sanctioned. (The inert `SK = META` row left behind by the 2026-08-28 migration above is untouched by it — the script matches `sk = 'PROFILE'` only.)

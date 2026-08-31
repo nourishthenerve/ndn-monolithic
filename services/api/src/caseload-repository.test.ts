@@ -61,6 +61,17 @@ class FakeCaseloadStore implements CaseloadStore {
   async getPatient(patientId: string): Promise<Patient | undefined> {
     return this.patients.get(patientId);
   }
+
+  /** The real store counts two GSI3 partitions; here it is the same arithmetic over the fixture. */
+  async count() {
+    const present = this.orderedIds
+      .map((id) => this.patients.get(id))
+      .filter((patient): patient is Patient => Boolean(patient));
+    return {
+      total: present.length,
+      active: present.filter((patient) => patient.account_status === 'approved').length,
+    };
+  }
 }
 
 async function build(patients: Patient[]) {
@@ -87,9 +98,54 @@ describe('listPage', () => {
     const page = await repository.listPage(PRINCIPAL, undefined, 10);
 
     expect(page.items).toEqual([
-      { patientId: 'pat-1', fullName: 'A Patient', assignedClinicianId: 'cli-1', assignedClinicianName: 'A Clinician' },
+      {
+        patientId: 'pat-1',
+        fullName: 'A Patient',
+        accountStatus: 'approved',
+        assignedClinicianId: 'cli-1',
+        assignedClinicianName: 'A Clinician',
+      },
     ]);
     expect(page.nextCursor).toBeUndefined();
+  });
+
+  // 2026-08-31: the change that made this a dashboard rather than a
+  // caseload. A `pending` patient nobody is responsible for yet used to be
+  // dropped here (and, before that, was never in GSI3 at all) — they are
+  // precisely the row the principal opens this page to act on.
+  it('includes an unassigned patient, with no clinician fields rather than no row', async () => {
+    const { repository } = await build([
+      buildPatient({ id: 'pat-new', account_status: 'pending', assigned_clinician_id: undefined }),
+    ]);
+
+    const page = await repository.listPage(PRINCIPAL, undefined, 10);
+
+    expect(page.items).toEqual([
+      { patientId: 'pat-new', fullName: 'A Patient', accountStatus: 'pending' },
+    ]);
+  });
+
+  it('counts every patient and the active subset, on the first page only', async () => {
+    const { repository } = await build([
+      buildPatient({ id: 'pat-1' }),
+      buildPatient({ id: 'pat-2' }),
+      buildPatient({ id: 'pat-3', account_status: 'pending', assigned_clinician_id: undefined }),
+    ]);
+
+    const first = await repository.listPage(PRINCIPAL, undefined, 2);
+    expect(first.counts).toEqual({ total: 3, active: 2 });
+
+    const second = await repository.listPage(PRINCIPAL, first.nextCursor, 2);
+    expect(second.counts).toBeUndefined();
+  });
+
+  it('does not count on a later page — a count is a fact about the directory, not the page', async () => {
+    const { repository, store } = await build([buildPatient({ id: 'pat-1' }), buildPatient({ id: 'pat-2' })]);
+    const countSpy = vi.spyOn(store, 'count');
+
+    await repository.listPage(PRINCIPAL, '1', 1);
+
+    expect(countSpy).not.toHaveBeenCalled();
   });
 
   it('paginates: a cursor round-trips, and every item across all pages appears exactly once', async () => {
@@ -130,7 +186,10 @@ describe('listPage', () => {
         return { patientIds: ['ghost'], nextCursor: undefined };
       }
       async getPatient() {
-        return undefined; // reassigned/declined since the index write
+        return undefined; // the record is gone since the index write
+      }
+      async count() {
+        return { total: 0, active: 0 };
       }
     }
     const clinicianStore = new InMemoryClinicianStore();

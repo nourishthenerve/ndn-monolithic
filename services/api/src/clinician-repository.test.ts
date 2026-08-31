@@ -152,6 +152,7 @@ describe('no delete', () => {
       'create',
       'deactivate',
       'findById',
+      'list',
       'reactivate',
       'transition',
     ]);

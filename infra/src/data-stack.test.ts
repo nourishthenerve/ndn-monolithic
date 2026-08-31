@@ -797,12 +797,15 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // patient's id by email, served by the same function. D-34
     // (2026-08-31) added `POST /clinicians/me/change-password`, served
     // by the same `ClinicianAdminFunction` as the other clinician-account
-    // routes.
+    // routes. The same day added `GET /clinicians` — the directory the
+    // principal's dashboard and clinician-admin page both read, served by
+    // that same function.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
         'GET /caseload',
         'GET /caseload/mine',
+        'GET /clinicians',
         'GET /clinicians/me/calendar',
         'GET /patients',
         'GET /patients/{id}',

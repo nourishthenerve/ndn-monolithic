@@ -172,3 +172,17 @@ Moving identity verification from "prove you can read this mailbox" (Cognito's o
 - Grant `reset-password` or `create` on `Patient profile` to the assigned sub-clinician without a documented reason — the current scoping is Principal-only by design, not by oversight.
 - Flip `patients.administration.enabled` on for real patient data before LL-05/LL-06 close, per TASK 5.5.3's own standing gate — this task's own flag is separate from, and does not substitute for, that gate. (Synthetic test-patient use, per the owner's own explicit instruction, is a different, already-approved case — see "No DPIA update yet" above.)
 - Treat `AdminCreateUser`'s `email_verified: true` as meaning the address was actually verified. It was typed in by staff from a WhatsApp conversation, the same provenance `clinician-admin.ts` already accepts for a clinician's own invite address.
+
+## Amendment, 2026-08-31 — assigning a clinician at registration
+
+**Trigger:** the owner: *"This principal clinician should also have option to register new patients so that when they contact via whatsapp the principal clinician registers them to the system and assign a clinician to him."*
+
+Both halves already existed as API routes (`POST /patients` here, `POST /patients/{id}/approve` in [patient-assignment.md](patient-assignment.md)); what did not exist was a path through the UI that treated them as the single action the person doing it experiences.
+
+The create form on `/{locale}/account/patient-admin` now carries an optional **"Assign to a clinician"** dropdown, populated from `GET /clinicians` (active colleagues only — `AssignmentRepository` rejects a deactivated one with `CLINICIAN_NOT_AVAILABLE`). Choosing one makes the panel follow a successful create with an approval call for that clinician. Leaving it on "Assign later" is exactly the old behaviour: the patient is created `pending` and waits on the patient dashboard, where they are now visible ([caseload-view.md](caseload-view.md#amendment-2026-08-31--this-became-the-principals-patient-dashboard) — before that change a `pending` patient appeared in no list at all).
+
+**Still two API calls, not a new combined endpoint.** Account creation and account approval are two distinct RBAC rows with two distinct audit trails — this file's own "two distinct actions on two distinct RBAC rows" — and that stays true whether or not one screen triggers both.
+
+**A failed assignment never downgrades the create.** The account exists and its one-time password is shown once or never, so the success panel appears regardless, with a plain note that the assignment did not save and can be made from the dashboard. Swallowing the password inside an error about a later step would strand a real account nobody can sign in to.
+
+`POST /patients` itself is unchanged — no new field, no new behaviour, no password option (unlike clinician creation, which gained one; nothing in the request asked for a staff-chosen patient password, and D-29's generated-and-relayed model is untouched). The only change on the API side is that a newly registered patient now lands in GSI3's directory immediately, via `createPatientProfileStore`.
