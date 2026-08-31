@@ -276,13 +276,28 @@ export class AuthStack extends Stack {
       // No `signInPolicy` — the Cognito default is `PASSWORD` only, which
       // is exactly what this pool wants. Adding email OTP here would hand
       // a clinician a way past the TOTP requirement below.
-      mfa: Mfa.REQUIRED,
+      //
+      // Amendment, 2026-08-31 — `REQUIRED` relaxed to `OPTIONAL`, the
+      // owner's own explicit call ("I don't want 2FA as of now"), applied
+      // directly against the live pool first (`set-user-pool-mfa-config`)
+      // after the real principal account — created with mandatory TOTP,
+      // per the design below — turned out to have no enrolled device at
+      // all and was locked out with no way to complete an MFA_SETUP
+      // challenge it had already been issued once and lost. `OPTIONAL`
+      // rather than `OFF`: TOTP stays available (`mfaSecondFactor` below
+      // is unchanged) for anyone who wants it, including via D-30's own
+      // `POST /clinicians` enrolment flow — this only stops Cognito
+      // *forcing* it on every clinician pool-wide. Reverting to
+      // `REQUIRED` is a one-line change back; re-enrolling a clinician
+      // who is signing in with password alone by then is not.
+      mfa: Mfa.OPTIONAL,
       // SMS is off deliberately, twice over: it is a spendable path (R-02,
       // and 0.5.3's hard cap exists because of it), and a phone-number
-      // factor is a weaker one than an authenticator app. Cognito enforces
-      // the enrolment itself — a clinician cannot complete a first sign-in
-      // without registering a TOTP device — which is the enforcement 2.4.1
-      // relies on rather than reimplementing.
+      // factor is a weaker one than an authenticator app. Left in place
+      // by the amendment above — `mfaSecondFactor` only says which
+      // factors D-30's own admin-driven enrolment is allowed to
+      // provision, not whether Cognito compels one; `mfa: OPTIONAL`
+      // above is what changed that.
       mfaSecondFactor: { otp: true, sms: false },
       // CDK's own defaults, written out so they are visible in the
       // synthesized template and assertable in a test rather than

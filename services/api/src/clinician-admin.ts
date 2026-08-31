@@ -103,24 +103,32 @@ export interface AdminCreateClinicianPort {
    */
   setPassword(subjectId: string, password: string): Promise<void>;
   /**
-   * D-30: completes the clinician pool's mandatory `MFA_SETUP` challenge
-   * on the new clinician's own behalf, so a working TOTP secret exists
-   * before Cognito ever gets a chance to email anyone about it —
-   * `AdminInitiateAuth` (against `auth-stack.ts`'s `ClinicianAdminAuthClient`,
-   * never the browser-facing one) → `AssociateSoftwareToken` →
-   * `VerifySoftwareToken` (the one-time code computed by this codebase
-   * itself, `totp.ts`, not typed in by a human) → `AdminRespondToAuthChallenge`
-   * → `AdminUserGlobalSignOut`, so nothing this round trip mints outlives
-   * the request that triggered it. Returns the secret and an `otpauth://`
-   * URI for the principal to relay — never stored beyond the API response
-   * that carries it once, never logged, the same discipline
+   * D-30: completes the clinician pool's `MFA_SETUP` challenge on the new
+   * clinician's own behalf when Cognito issues one, so a working TOTP
+   * secret exists before Cognito ever gets a chance to email anyone
+   * about it — `AdminInitiateAuth` (against `auth-stack.ts`'s
+   * `ClinicianAdminAuthClient`, never the browser-facing one) →
+   * `AssociateSoftwareToken` → `VerifySoftwareToken` (the one-time code
+   * computed by this codebase itself, `totp.ts`, not typed in by a
+   * human) → `AdminRespondToAuthChallenge` → `AdminUserGlobalSignOut`,
+   * so nothing this round trip mints outlives the request that
+   * triggered it. Returns the secret and an `otpauth://` URI for the
+   * principal to relay — never stored beyond the API response that
+   * carries it once, never logged, the same discipline
    * `patient-admin.ts`'s own generated password already follows.
+   *
+   * Amendment, 2026-08-31: the pool's `mfa` is `OPTIONAL`, not
+   * `REQUIRED`, as of this date (auth-stack.ts) — a brand-new clinician
+   * with no device enrolled yet completes sign-in outright, no
+   * challenge, so there is nothing to provision. Returns `undefined` in
+   * that case; the caller omits `totpSecret`/`otpauthUri` from the
+   * response rather than treating their absence as an error.
    */
   provisionTotp(
     subjectId: string,
     email: string,
     password: string,
-  ): Promise<{ secret: string; otpauthUri: string }>;
+  ): Promise<{ secret: string; otpauthUri: string } | undefined>;
 }
 
 /** Both calls step 4 requires, as one port — deactivation is never "just" the disable. */
@@ -240,12 +248,15 @@ export function createClinicianAdminHandler(
           // Shown once, here, and nowhere else — never stored, never
           // logged (`logger.logRequest` above logs only route/status/
           // duration), the identical discipline `patient-admin.ts`'s own
-          // generated password already follows for D-29.
+          // generated password already follows for D-29. `totp` is
+          // `undefined` under the pool's current `OPTIONAL` MFA setting
+          // when nothing was provisioned (`provisionTotp`'s own header) —
+          // omitted rather than sent as null/empty, so a caller can tell
+          // "no TOTP" from "TOTP, but blank" by the field's presence.
           return respond(201, {
             item: clinician,
             password,
-            totpSecret: totp.secret,
-            otpauthUri: totp.otpauthUri,
+            ...(totp ? { totpSecret: totp.secret, otpauthUri: totp.otpauthUri } : {}),
           });
         }
         case 'POST /clinicians/{id}/deactivate': {
