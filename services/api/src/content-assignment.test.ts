@@ -198,7 +198,7 @@ describe('POST /patients/{id}/content', () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("is 403 for the principal — authz-matrix.ts's own R-only Principal cell on the Content assignment row", async () => {
+  it("lets the principal assign content — the same cell the treating sub-clinician holds", async () => {
     const { handler, assignments } = await build();
     const response = await invoke(
       handler,
@@ -209,8 +209,13 @@ describe('POST /patients/{id}/content', () => {
         principal: PRINCIPAL_CONTEXT,
       }),
     );
-    expect(response.statusCode).toBe(403);
-    await expect(assignments.listForPatient('pat-1')).resolves.toEqual([]);
+    // Flipped 2026-08-31 with the doc's `Principal` column: the
+    // read-only cell this test guarded rested on the principal being an
+    // overseer who never treats anyone, which is not who the principal
+    // is in this practice. See 04-data-model-rbac.md's second
+    // amendment of that date.
+    expect(response.statusCode).toBe(201);
+    await expect(assignments.listForPatient('pat-1')).resolves.toHaveLength(1);
   });
 
   it('is 403 for an unassigned sub-clinician, before any write', async () => {
@@ -288,7 +293,7 @@ describe('POST /patients/{id}/content', () => {
     expect(smuggled.statusCode).toBe(400);
   });
 
-  it('is 403, not 404, for the principal against a patient id that does not exist', async () => {
+  it('is 403, not 404, for a caller the matrix denies — the refusal must not leak whether the patient exists', async () => {
     const { handler } = await build();
     const response = await invoke(
       handler,
@@ -296,9 +301,15 @@ describe('POST /patients/{id}/content', () => {
         routeKey: ASSIGN_ROUTE,
         pathParameters: { id: 'nobody' },
         body: { contentId: 'content-1' },
-        principal: PRINCIPAL_CONTEXT,
+        principal: UNASSIGNED_SUB_CONTEXT,
       }),
     );
+    // Flipped 2026-08-31 with the doc's `Principal` column (see
+    // 04-data-model-rbac.md's second amendment of that date). The
+    // ordering property this test guards is unchanged and still worth
+    // asserting — it has simply moved to the role the matrix still
+    // denies here. A caller the matrix refuses must not learn from the
+    // status code whether the patient exists.
     expect(response.statusCode).toBe(403);
   });
 });

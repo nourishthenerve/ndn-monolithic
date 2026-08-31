@@ -11,12 +11,38 @@
 // about API Gateway: it is that a shape mismatch after a future change to
 // authorizer.ts must fail as `UNAUTHENTICATED` rather than as a Principal
 // with `role: undefined` reaching `can()`.
-import type { Principal } from '@ndn/shared-types';
+import type { Principal, Role } from '@ndn/shared-types';
 import { z } from 'zod';
 
 import { AppError } from './errors.js';
 
-const ROLES = ['patient', 'sub-clinician', 'principal-clinician'] as const;
+/**
+ * **This list is the single most dangerous place in this file to be out
+ * of date, and on 2026-08-31 it was.** `Role` gained `'helpdesk'` earlier
+ * the same day; this array did not, so `z.enum(ROLES)` rejected every
+ * helpdesk context the authorizer produced and `requirePrincipal` threw —
+ * turning a correctly-authorised helpdesk caller into a blanket **401 on
+ * every route**, before any handler or `can()` check ran. Nothing caught
+ * it: the array is a literal tuple, so widening `Role` was not a type
+ * error anywhere, and the matrix suite exercises `can()` directly rather
+ * than through this boundary.
+ *
+ * Fixed so it cannot recur: `satisfies` rejects a value that is not a
+ * `Role`, and the exhaustiveness check below rejects a `Role` that is
+ * missing from the list. Adding a role without editing this line is now
+ * a compile error rather than a production 401.
+ */
+const ROLES = [
+  'patient',
+  'sub-clinician',
+  'principal-clinician',
+  'helpdesk',
+] as const satisfies readonly Role[];
+
+/** Compile-time proof that `ROLES` covers `Role` — see the note above. `never` here means a role is missing. */
+type UnlistedRole = Exclude<Role, (typeof ROLES)[number]>;
+const _everyRoleIsListed: UnlistedRole extends never ? true : never = true;
+void _everyRoleIsListed;
 const ACCOUNT_STATUSES = [
   'pending',
   'approved',

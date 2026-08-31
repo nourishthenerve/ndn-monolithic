@@ -81,6 +81,11 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   { segment: 'patient', ownerRole: 'patient' },
   // TASK 2.5.3: the principal clinician's cross-caseload view.
   { segment: 'caseload', ownerRole: 'clinician' },
+  // 2026-08-31: staff looking at one named patient (`?id=`). Registered
+  // with no id, so the scan sees its "no patient was chosen" state — a
+  // real, legible state, and the only one a fixed path can reach. The
+  // same limitation `call` below already carries for `?appointmentId=`.
+  { segment: 'patient-record', ownerRole: 'clinician' },
   // D-29: the principal clinician's patient-account creation/reset-password
   // form. Principal-only in practice (services/api/src/patient-admin.ts's
   // own `can()` check), the same "no finer role than 'clinician' in this

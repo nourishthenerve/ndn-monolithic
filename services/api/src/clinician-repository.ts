@@ -164,6 +164,32 @@ export class ClinicianRepository {
     return this.transition(id, 'active', actor);
   }
 
+  /**
+   * 2026-08-31: `PATCH /clinicians/me` — the only field of their own
+   * record a clinician may change. `role` and `account_status` are
+   * untouched here for the same reason `transition` leaves `role` alone:
+   * granting a role and revoking access are the principal's, and neither
+   * may become an implicit side effect of someone correcting their own
+   * name.
+   */
+  async updateDisplayName(
+    id: string,
+    displayName: string,
+    actor: ActorContext,
+  ): Promise<Clinician> {
+    const existing = await this.store.get(id);
+    if (!existing) {
+      throw new AppError('RECORD_NOT_FOUND', `clinician ${id} not found`);
+    }
+    const now = this.clock.now().toISOString();
+    const record: Clinician = { ...existing, displayName, updated_at: now };
+    await this.store.update(record);
+    await this.audit.write(
+      auditEventFor(actor, { at: now, action: 'update', entityType: CLINICIAN_ENTITY_TYPE, entityId: id }),
+    );
+    return record;
+  }
+
   private async transition(
     id: string,
     account_status: Clinician['account_status'],

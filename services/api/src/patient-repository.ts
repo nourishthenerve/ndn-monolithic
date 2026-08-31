@@ -51,15 +51,32 @@ export interface PatientRegistration {
  * pass" is how a record ends up in a state nobody designed, and it is
  * also how a `deleted` sneaks into a field that has no such value.
  */
-export type PatientTransition = 'suspend';
+/**
+ * `'restore'` (2026-08-31): the way back out of `suspended`. `suspend`
+ * has existed since TASK 2.2.3 with nothing calling it; `POST
+ * /patients/{id}/suspend` (patient-admin.ts, Principal-only) now does,
+ * and a revocation with no reversal is a trap rather than a control —
+ * the same reason `deactivate` has always shipped beside `reactivate` on
+ * the clinician side.
+ *
+ * Restoring returns a patient to `approved`, not to `pending`.
+ * `assigned_clinician_id` is untouched by both transitions, so a
+ * suspended patient keeps the clinician they had and gets them back on
+ * restore — which is what makes this a suspension rather than a
+ * disguised unassignment (2.5.2's "there is no unassign" still holds:
+ * only `reassign` moves a patient between clinicians).
+ */
+export type PatientTransition = 'suspend' | 'restore';
 
 const TRANSITIONS: Record<PatientTransition, Patient['account_status']> = {
   suspend: 'suspended',
+  restore: 'approved',
 };
 
 /** The audit action this transition is recorded as, from `AUDIT_ACTIONS`'s existing vocabulary. */
 const TRANSITION_AUDIT_ACTIONS = {
   suspend: 'update',
+  restore: 'update',
 } as const;
 
 /**

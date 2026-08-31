@@ -71,3 +71,20 @@ export function whatsappChatUrl(number: string): string {
 export function workshopPosterUrl(posterKey: string): string {
   return `/media/${posterKey}`;
 }
+
+// 2026-08-31: the two Cognito user pool ids, so the browser can tell a
+// patient's token from a clinician's (`auth/token-claims.ts` reads them
+// out of the access token's `iss`). Not secret by any measure — a pool id
+// is in every JWKS URL, in the hosted-UI domain, and in any client that
+// verifies one of these tokens — and hardcoded here rather than looked up
+// at build time, the same convention `contentApiUrl` above documents for
+// a stable, manually-obtained AWS identifier. Mirrors
+// infra/src/config.ts's `PATIENT_USER_POOL_ID`/`CLINICIAN_USER_POOL_ID`.
+//
+// Used **only to decide what to render**. Nothing here is an
+// authorisation check; every route re-derives the caller's role from a
+// verified token inside the Lambda authorizer.
+export const patientUserPoolIssuer =
+  'https://cognito-idp.eu-west-2.amazonaws.com/eu-west-2_lMonWXA0b';
+export const clinicianUserPoolIssuer =
+  'https://cognito-idp.eu-west-2.amazonaws.com/eu-west-2_1SFN2y0Jt';

@@ -319,6 +319,17 @@ export class AuthStack extends Stack {
       // rather than transmitted; unlike the clinician pool, no MFA
       // challenge follows.
       authFlows: { userSrp: true },
+      // 2026-08-31: the patient client now carries the admin scope too —
+      // see `addWebClient`'s own `extraScopes` header, whose original
+      // "the patient client stays exactly `openid email`" reasoning this
+      // supersedes. A patient may now change their own password
+      // (clinician-admin.ts's route note has the full argument: *change*
+      // requires already holding the credential, *reset* is the
+      // identity-verification act D-29 guards, and only the second is
+      // still staff-only). `ChangePassword` refuses any token without
+      // this scope regardless of whether the current password is
+      // correct, so without it the feature cannot work at all.
+      extraScopes: [OAuthScope.COGNITO_ADMIN],
     });
 
     this.clinicianUserPoolClient = this.addWebClient('ClinicianUserPoolClient', {
@@ -528,10 +539,16 @@ export class AuthStack extends Stack {
        * misleading. Confirmed live: a token requested with `openid email`
        * only decodes to `scope: "openid email"`, no admin scope, and
        * `ChangePassword` fails every time no matter the password.
-       * `extraScopes` exists so only the clinician client carries this —
-       * the patient client stays exactly `openid email`, D-29's "no
-       * self-service of any kind for patients" intact by construction
-       * rather than by a check somewhere remembering to enforce it.
+       * `extraScopes` existed so that only the clinician client carried
+       * this. **Superseded 2026-08-31**: both clients carry it now, so
+       * the option's remaining job is to keep the scope an explicit,
+       * per-client decision rather than a default nobody re-reads. The
+       * reasoning it used to encode — D-29's "no self-service of any kind
+       * for patients" — is unchanged where it actually matters: password
+       * *reset* is still staff-only over WhatsApp, and there is still no
+       * recovery flow, no email link and no OTP. What the scope enables
+       * is a signed-in patient replacing a password they already hold,
+       * which verifies no identity because it needs none.
        */
       extraScopes?: OAuthScope[];
     },

@@ -106,7 +106,7 @@ describe('GET /auth/signin', () => {
     expect(url.searchParams.get('code_challenge_method')).toBe('S256');
     expect(url.searchParams.get('code_challenge')).toBeTruthy();
     expect(url.searchParams.get('redirect_uri')).toBe(CONFIG.callbackUrl);
-    expect(url.searchParams.get('scope')).toBe('openid email');
+    expect(url.searchParams.get('scope')).toBe('openid email aws.cognito.signin.user.admin');
   });
 
   it('sends a clinician to the clinician pool', async () => {
@@ -118,22 +118,26 @@ describe('GET /auth/signin', () => {
     );
   });
 
-  // Found live, 2026-08-31: without the extra scope, a clinician's own
-  // access token can never call Cognito's `ChangePassword` — it fails
-  // with the identical `NotAuthorizedException` a truly wrong current
-  // password would, regardless of whether the password sent is correct.
-  // auth-stack.ts's own `extraScopes` header on the clinician web client
-  // has the full story; this is that scope's request-side counterpart.
-  it('D-34: asks the clinician pool for the admin scope ChangePassword needs, never the patient pool', async () => {
-    const clinician = await startedSession('clinician');
-    expect(new URL(clinician.start.headers.location ?? '').searchParams.get('scope')).toBe(
-      'openid email aws.cognito.signin.user.admin',
-    );
-
-    const patient = await startedSession('patient');
-    expect(new URL(patient.start.headers.location ?? '').searchParams.get('scope')).toBe(
-      'openid email',
-    );
+  // Found live, 2026-08-31: without the extra scope, an access token can
+  // never call Cognito's `ChangePassword` — it fails with the identical
+  // `NotAuthorizedException` a truly wrong current password would,
+  // regardless of whether the password sent is correct. An app client may
+  // only *request* a scope it is configured with, so the sign-in has to
+  // ask for it or the token comes back without it.
+  //
+  // Amended the same day: **both** pools ask now. This test used to
+  // assert the patient pool asks for `openid email` alone, on D-29's "no
+  // self-service for patients" — but the thing D-29 actually guards is
+  // password *reset* (an identity-verification act, still staff-only over
+  // WhatsApp), not a signed-in patient replacing a password they already
+  // hold. See clinician-admin.ts's own route note.
+  it('asks both pools for the admin scope ChangePassword needs', async () => {
+    for (const pool of ['clinician', 'patient'] as const) {
+      const { start } = await startedSession(pool);
+      expect(new URL(start.headers.location ?? '').searchParams.get('scope')).toBe(
+        'openid email aws.cognito.signin.user.admin',
+      );
+    }
   });
 
   it('treats any unrecognised pool as the patient pool', async () => {

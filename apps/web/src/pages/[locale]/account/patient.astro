@@ -62,12 +62,19 @@ const heading = t('patientProfile.heading', undefined, locale);
 >
   <Heading level={1}>{heading}</Heading>
 
-  <RequireAuth client:only="react" loadingLabel={t('account.loading', undefined, locale)}>
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    allowRoles={['patient']}
+  >
     <Fragment slot="signedOut">
       <p>
         {t('account.signedOut', undefined, locale)}{' '}
         <SignInLink label={t('account.signInPatient', undefined, locale)} pool="patient" />
       </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('patientProfile.forbidden', undefined, locale)}</p>
     </Fragment>
     <PatientProfile
       client:only="react"

@@ -169,7 +169,7 @@ describe('POST /patients/{id}/messages', () => {
     expect(body.item.senderRole).toBe('sub-clinician');
   });
 
-  it("is 403 for the principal — a real finding: this task's own step 2 claims the principal can send, but authz-matrix.ts's Messages row Principal cell stays bare R", async () => {
+  it("lets the principal send — the finding this test recorded is now fixed in the doc, not worked around", async () => {
     const { handler, messages } = await build();
     const response = await invoke(
       handler,
@@ -180,8 +180,13 @@ describe('POST /patients/{id}/messages', () => {
         principal: PRINCIPAL_CONTEXT,
       }),
     );
-    expect(response.statusCode).toBe(403);
-    await expect(messages.listForThread('pat-1')).resolves.toEqual({ items: [], nextCursor: undefined });
+    // Flipped 2026-08-31 with the doc's `Principal` column: the
+    // read-only cell this test guarded rested on the principal being an
+    // overseer who never treats anyone, which is not who the principal
+    // is in this practice. See 04-data-model-rbac.md's second
+    // amendment of that date.
+    expect(response.statusCode).toBe(201);
+    await expect(messages.listForThread('pat-1')).resolves.toMatchObject({ items: [expect.objectContaining({ senderRole: 'principal-clinician' })] });
   });
 
   it('is 403 for an unassigned sub-clinician, before any write', async () => {

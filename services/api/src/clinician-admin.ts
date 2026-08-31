@@ -106,6 +106,9 @@ const changeOwnPasswordBodySchema = z.object({
   newPassword: z.string().min(1),
 });
 
+/** `PATCH /clinicians/me` — the same bound `createClinicianBodySchema` puts on the field the principal types. */
+const updateOwnProfileBodySchema = z.object({ displayName: z.string().min(1).max(200) });
+
 /**
  * `ChangePassword` is a *user* Cognito API, not an Admin* one — it takes
  * the caller's own access token as proof of an active session, not a
@@ -309,6 +312,68 @@ export function createClinicianAdminHandler(
 
     try {
       switch (routeKey) {
+        // 2026-08-31: the owner's "other clinician would be able to
+        // update his details". The `Own profile` row has been in
+        // 04-data-model-rbac.md since TASK 2.1.1 with `R U` for every
+        // signed-in column and **no endpoint behind it** — `own-profile`
+        // was a vocabulary entry nothing ever asked `can()` about. This
+        // is that endpoint.
+        //
+        // The resource names the caller's own clinician id, which is what
+        // puts a sub-clinician in the `Sub-clinician (assigned)` column
+        // (authz.ts models a clinician's own profile as a resource
+        // assigned to themselves). A patient lands in `Patient (other)`
+        // and is denied automatically — they have no `CLI#` record to
+        // update, and this needs no special case to say so.
+        //
+        // `displayName` is the whole of it, because it is the whole of
+        // what a `Clinician` record carries that its owner may change:
+        // `role` is the principal's to grant, `account_status` is the
+        // principal's to revoke, `id` is Cognito's, and the email lives
+        // in the pool, not here.
+        case 'PATCH /clinicians/me': {
+          const clinicianId = principal.clinicianId;
+          if (!clinicianId) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          if (
+            !can(principal, 'update', {
+              entityType: 'own-profile',
+              assignedClinicianId: clinicianId,
+            }).allowed
+          ) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          const parsed = updateOwnProfileBodySchema.safeParse(parseJsonBody(event));
+          if (!parsed.success) {
+            return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
+          }
+          const updated = await deps.repository.updateDisplayName(
+            clinicianId,
+            parsed.data.displayName,
+            actor,
+          );
+          return respond(200, { item: updated });
+        }
+        case 'GET /clinicians/me': {
+          const clinicianId = principal.clinicianId;
+          if (!clinicianId) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          if (
+            !can(principal, 'read', {
+              entityType: 'own-profile',
+              assignedClinicianId: clinicianId,
+            }).allowed
+          ) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          const clinician = await deps.repository.findById(clinicianId);
+          if (!clinician) {
+            return respond(404, { error: 'RECORD_NOT_FOUND' });
+          }
+          return respond(200, { item: clinician });
+        }
         case 'GET /clinicians': {
           if (!can(principal, 'read', CLINICIAN_RESOURCE).allowed) {
             return respond(403, { error: 'FORBIDDEN' });
@@ -412,11 +477,35 @@ export function createClinicianAdminHandler(
           return respond(200, { item: clinician });
         }
         case 'POST /clinicians/me/change-password': {
-          // Clinicians only — D-29's "no self-service" model for patients
-          // is untouched by D-34; relaxing MFA never meant relaxing this.
-          if (principal.role === 'patient') {
-            return respond(403, { error: 'FORBIDDEN' });
-          }
+          // **Patients too, as of 2026-08-31** — the owner: "the patient
+          // should be able to update his details, including password."
+          //
+          // This route used to refuse them outright, on D-29's "no
+          // self-service" model. That refusal conflated two different
+          // things, and the distinction is what makes lifting it safe
+          // rather than a reversal:
+          //
+          //   * **Password *reset*** — "I have forgotten it, let me back
+          //     in" — is an identity-verification act, and D-29's whole
+          //     point is that this platform has no channel it trusts to
+          //     perform one automatically. Unchanged: there is still no
+          //     self-service recovery, no email link, no OTP. Staff reset
+          //     a patient's password by hand after verifying them over
+          //     WhatsApp (`POST /patients/{id}/reset-password`).
+          //   * **Password *change*** — which is this route — requires
+          //     the caller to already hold the current password and prove
+          //     it to Cognito itself. It verifies no identity because it
+          //     needs none: whoever can do this already has the
+          //     credential. Refusing it protected nothing and left a
+          //     patient unable to replace a password that staff had read
+          //     aloud over WhatsApp, which is the one credential in this
+          //     system most likely to need replacing.
+          //
+          // The route's path still says `/clinicians/` — a name from when
+          // it was clinician-only (D-34). Left alone deliberately: it is
+          // not user-visible, and renaming a live route mid-fix buys
+          // nothing but a window where a deployed page calls a path that
+          // no longer exists.
           const parsed = changeOwnPasswordBodySchema.safeParse(parseJsonBody(event));
           if (!parsed.success) {
             return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });

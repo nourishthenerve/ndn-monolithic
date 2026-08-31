@@ -1021,6 +1021,20 @@ export class DataStack extends Stack {
       methods: [HttpMethod.POST],
       integration: patientAdminIntegration,
     });
+    // 2026-08-31: "only the principal clinician would be able to remove
+    // the patient". Governed by the `'Patient assignment'` row, not
+    // `'Patient profile'` — see patient-admin.ts's own note on why those
+    // two must not be the same permission.
+    httpApi.addRoutes({
+      path: '/patients/{id}/suspend',
+      methods: [HttpMethod.POST],
+      integration: patientAdminIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/restore',
+      methods: [HttpMethod.POST],
+      integration: patientAdminIntegration,
+    });
 
     // TASK 2.5.4: no `authorizer:` override — `defaultAuthorizer` applies,
     // same as the content/testimonial/workshop authoring routes above.
@@ -1221,6 +1235,17 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/clinicians/me/change-password',
       methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
+    });
+    // 2026-08-31: "other clinician would be able to update his details" —
+    // the `Own profile` row's first endpoint, and self-service like
+    // change-password above rather than principal-only. No `authorizer:`
+    // override, same as every other route on this integration: the
+    // route's own `can()` check on `'own-profile'` with the caller's own
+    // clinician id is what scopes it.
+    httpApi.addRoutes({
+      path: '/clinicians/me',
+      methods: [HttpMethod.GET, HttpMethod.PATCH],
       integration: clinicianAdminIntegration,
     });
 

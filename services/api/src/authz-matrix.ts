@@ -115,60 +115,68 @@ export const RBAC_MATRIX: RbacMatrix = {
     Helpdesk: DENIED,
     Principal: ['create', 'read', 'update'],
   },
-  // | Assessment — `visible{}` | R | — | C R U | — | **—** | R |
+  // | Assessment — `visible{}` | R | — | C R U | — | **—** | C R U |
   'Assessment — `visible{}`': {
     'Patient (own)': ['read'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
     Helpdesk: DENIED,
-    Principal: ['read'],
+    Principal: ['create', 'read', 'update'],
   },
-  // | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | R |
+  // | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | C R U |
   'Assessment — `private{}`': {
     'Patient (own)': DENIED,
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
     Helpdesk: DENIED,
-    Principal: ['read'],
+    Principal: ['create', 'read', 'update'],
   },
-  // TASK 4.2.1: `J` (join-call) added to the two parties actually on the
-  // call — `Patient (own)` and `Sub-clinician (assigned)` — never to
-  // `Principal`, who keeps plain `R`. See 04-data-model-rbac.md's own
-  // note on this row for why that's narrower than "wherever read
-  // applies."
-  // | Appointments | R J | — | C R U J | — | — | R |
+  // TASK 4.2.1 added `J` (join-call) to the two parties actually on the
+  // call — `Patient (own)` and `Sub-clinician (assigned)` — and withheld
+  // it from `Principal`, who kept plain `R`.
+  //
+  // **Superseded 2026-08-31.** That narrowing rested on the principal
+  // never being a party to a call, which was an assumption about the
+  // practice rather than a rule about calls: the principal here is the
+  // clinic's own practising clinician, so they routinely are. `can()`
+  // resolves a principal by role alone, so it cannot tell "this
+  // appointment's own clinician" from "any appointment" — the choice is
+  // a principal who cannot run a video call with their own patient, or
+  // one who could join a colleague's. See the doc's own note; this cell
+  // is where that trade is reversed if the practice grows.
+  // | Appointments | R J | — | C R U J | — | **R** | C R U J |
   Appointments: {
     'Patient (own)': ['read', 'join-call'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update', 'join-call'],
     'Sub-clinician (unassigned)': DENIED,
-    Helpdesk: DENIED,
-    Principal: ['read'],
+    Helpdesk: ['read'],
+    Principal: ['create', 'read', 'update', 'join-call'],
   },
-  // | Content assignment | R | — | C R U | — | C R U | R |
+  // | Content assignment | R | — | C R U | — | C R U | C R U |
   'Content assignment': {
     'Patient (own)': ['read'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
     Helpdesk: ['create', 'read', 'update'],
-    Principal: ['read'],
+    Principal: ['create', 'read', 'update'],
   },
   // TASK 3.6.1: corrected from `R (own patients)` — the assigned
   // sub-clinician's cell was read-only, which does not match the row's
   // own key-shape description, "Patient↔clinician" (`04-data-model-
   // rbac.md`). Corrected in the doc first, then transcribed here, per
   // this file's own standing rule.
-  // | Messages | C R (own thread) | — | C R (own patients) | — | **—** | R |
+  // | Messages | C R (own thread) | — | C R (own patients) | — | **—** | C R |
   Messages: {
     'Patient (own)': ['create', 'read'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read'],
     'Sub-clinician (unassigned)': DENIED,
     Helpdesk: DENIED,
-    Principal: ['read'],
+    Principal: ['create', 'read'],
   },
   // | Clinician accounts | — | — | — | — | **—** | C R U (deactivate only) |
   'Clinician accounts': {

@@ -75,6 +75,13 @@ const SUB_CLINICIAN_CONTEXT = {
   clinicianId: 'sub-sub',
 };
 
+const HELPDESK_CONTEXT = {
+  subjectId: 'helpdesk-sub',
+  role: 'helpdesk',
+  accountStatus: 'active',
+  clinicianId: 'helpdesk-sub',
+};
+
 const PATIENT_CONTEXT = {
   subjectId: 'patient-sub',
   role: 'patient',
@@ -369,6 +376,88 @@ describe('POST /patients', () => {
         expect(value, `${key} is present but undefined`).toBeDefined();
       }
     }
+  });
+});
+
+// 2026-08-31: "Only the principal clinician would be able to remove the
+// patient." Deliberately on the `Patient assignment` row rather than
+// `Patient profile` — helpdesk holds `update` on the latter, and
+// "correct a phone number" must not be the same permission as "revoke
+// this person's access". The helpdesk case below is the one that proves
+// the split is real rather than incidental.
+describe('POST /patients/{id}/suspend and /restore', () => {
+  async function createOne(handler: ReturnType<typeof build>['handler']) {
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients', { principal: PRINCIPAL_CONTEXT, body: VALID_BODY }),
+    );
+    return (JSON.parse(response.body) as { item: { id: string } }).item.id;
+  }
+
+  it('suspends and restores, leaving the assigned clinician untouched throughout', async () => {
+    const { handler, repository } = build();
+    const id = await createOne(handler);
+
+    const suspended = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id },
+      }),
+    );
+    expect(suspended.statusCode).toBe(200);
+    expect(await repository.findById(id)).toMatchObject({ account_status: 'suspended' });
+
+    const restored = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/restore', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id },
+      }),
+    );
+    expect(restored.statusCode).toBe(200);
+    expect(await repository.findById(id)).toMatchObject({ account_status: 'approved' });
+  });
+
+  it('never removes the record — suspension is a status, not a delete', async () => {
+    const { handler, repository } = build();
+    const id = await createOne(handler);
+    await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', { principal: PRINCIPAL_CONTEXT, pathParameters: { id } }),
+    );
+    const stored = await repository.findById(id);
+    expect(stored).toBeDefined();
+    expect(stored?.personal.fullName).toBe('New Patient');
+  });
+
+  it.each([
+    ['helpdesk', HELPDESK_CONTEXT],
+    ['a sub-clinician', SUB_CLINICIAN_CONTEXT],
+    ['a patient', PATIENT_CONTEXT],
+  ])('refuses %s — this is the Patient assignment row, not the profile row', async (_label, principal) => {
+    const { handler, repository } = build();
+    const id = await createOne(handler);
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', { principal, pathParameters: { id } }),
+    );
+
+    expect(response.statusCode).toBe(403);
+    expect(await repository.findById(id)).toMatchObject({ account_status: 'pending' });
+  });
+
+  it('404s a patient that does not exist', async () => {
+    const { handler } = build();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'nobody' },
+      }),
+    );
+    expect(response.statusCode).toBe(404);
   });
 });
 

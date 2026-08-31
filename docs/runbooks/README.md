@@ -36,6 +36,7 @@ This directory holds one runbook per task, or per closely-related task cluster �
 ## Auth and identity
 
 - [cognito-user-pools.md](cognito-user-pools.md) — the two Cognito user pools, one per role, and why not one pool with groups (TASK 2.2.1); amended by D-29 — the patient pool's own amendment section
+- [role-model.md](role-model.md) — **who may do what**, all four roles end to end: patient, sub-clinician, helpdesk, principal — a reader's guide to the RBAC matrix plus the decisions that are not cells (2026-08-31)
 - [lambda-authorizer.md](lambda-authorizer.md) — the shared Lambda authorizer verifying tokens from either pool (TASK 2.2.2)
 - [patient-registration.md](patient-registration.md) — **superseded by D-29** — patient self-registration and the clinician approval lifecycle (TASK 2.2.3); the approval lifecycle itself is still current, the self-registration creation path is not
 - [patient-account-provisioning.md](patient-account-provisioning.md) — D-29: staff-mediated patient account creation and password reset over WhatsApp, replacing self-registration; the approval step is unchanged
