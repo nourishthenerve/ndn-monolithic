@@ -107,6 +107,17 @@ const createClinicianUser: AdminCreateClinicianPort = {
   // or the new clinician present. See totp.ts for the code computation
   // this relies on and clinician-admin.ts's own port header for the full
   // sequence.
+  //
+  // Amendment, 2026-08-31: the pool's `mfa` moved from `REQUIRED` to
+  // `OPTIONAL` (auth-stack.ts's own header on that change has the full
+  // reasoning). A brand-new user under `REQUIRED` always landed on
+  // `MFA_SETUP` here; under `OPTIONAL` with no device yet enrolled,
+  // `AdminInitiateAuth` now completes outright instead — no challenge,
+  // real tokens back immediately. That is expected now, not a fault:
+  // this port returns `undefined` rather than throwing, and the caller
+  // (clinician-admin.ts) treats "no TOTP was provisioned" as a normal
+  // outcome, the same way a clinician who signs in with password alone
+  // is a normal outcome under `OPTIONAL`.
   async provisionTotp(subjectId, email, password) {
     const initiate = await cognitoClient.send(
       new AdminInitiateAuthCommand({
@@ -116,15 +127,24 @@ const createClinicianUser: AdminCreateClinicianPort = {
         AuthParameters: { USERNAME: subjectId, PASSWORD: password },
       }),
     );
+    if (!initiate.ChallengeName) {
+      // Sign-in completed outright — MFA is optional and nothing is
+      // enrolled yet. Nothing to provision; still sign out the session
+      // this round trip minted, the same "no residual credential"
+      // discipline the rest of this function follows.
+      await cognitoClient.send(
+        new AdminUserGlobalSignOutCommand({ UserPoolId: clinicianUserPoolId, Username: subjectId }),
+      );
+      return undefined;
+    }
     if (initiate.ChallengeName !== 'MFA_SETUP' || !initiate.Session) {
-      // A brand-new user with MFA required and no device enrolled yet
-      // should always land here — anything else means this account's
-      // MFA state was not what this flow assumes, and proceeding would
-      // silently skip enrolment rather than fail loudly.
+      // Some other challenge — not the no-challenge case above, and not
+      // the `MFA_SETUP` case this flow knows how to complete. This
+      // account's state was not what either path assumes, and
+      // proceeding would silently skip enrolment rather than fail
+      // loudly.
       throw new Error(
-        `Expected an MFA_SETUP challenge provisioning TOTP for a new clinician, got: ${
-          initiate.ChallengeName ?? '(sign-in completed without a challenge)'
-        }`,
+        `Expected either no challenge or an MFA_SETUP challenge provisioning TOTP for a new clinician, got: ${initiate.ChallengeName}`,
       );
     }
     const associated = await cognitoClient.send(

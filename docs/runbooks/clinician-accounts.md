@@ -1,6 +1,12 @@
 # Clinician accounts (TASK 2.4.1)
 
-**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.4.1](../plan/05-execution-plan.md) · **Requirements:** §5 (clinician accounts), NFR-03 · **Decisions:** D-09, **D-30**, **amended by D-32** · **Risks:** [R-09](../plan/02-risk-register.md), **[R-17](../plan/02-risk-register.md)** · **Depends on:** 2.2.1, 2.2.2, 2.1.3, 2.3.1
+**Date:** 2026-08-22 · **Task:** [05-execution-plan.md § TASK 2.4.1](../plan/05-execution-plan.md) · **Requirements:** §5 (clinician accounts), NFR-03 · **Decisions:** D-09, **D-30**, **amended by D-32, D-34** · **Risks:** [R-09](../plan/02-risk-register.md), **[R-17](../plan/02-risk-register.md)** · **Depends on:** 2.2.1, 2.2.2, 2.1.3, 2.3.1
+
+## Amendment, D-34 (2026-08-31) — TOTP relaxed from mandatory to optional
+
+The real principal account (`contact@nourishthenerve.com`) had no TOTP device enrolled and was locked out — this file's own "Provisioning a real clinician... is an operator action" note below is exactly where that gap was: the operator action happened, `MFA_SETUP` was issued once, and nothing completed it. `MfaConfiguration: ON` gives no recovery path except changing the pool's own policy. The owner's own words: "let's reset everything... i dont want 2fa as of now." `infra/src/auth-stack.ts`'s clinician pool moved `mfa: Mfa.REQUIRED` → `Mfa.OPTIONAL` — TOTP stays available (`mfaSecondFactor` unchanged), just no longer forced.
+
+Everything below describing "the clinician pool's mandatory TOTP enrolment" now means *mandatory when this file was written* — `provisionTotp` (`clinician-admin.ts`/`clinician-admin-handler.ts`) is amended to treat "no `MFA_SETUP` challenge, sign-in completed outright" as the expected outcome under `OPTIONAL`, not a fault: it returns `undefined`, and `POST /clinicians`'s response omits `totpSecret`/`otpauthUri` rather than erroring. A clinician created from now on, same as the principal today, can sign in with password alone. Full reasoning: `docs/plan/01-decisions.md`'s D-34.
 
 ## Amendment, D-32 (2026-08-30) — no deactivation notice, ever
 

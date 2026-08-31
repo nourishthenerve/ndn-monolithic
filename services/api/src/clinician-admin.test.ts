@@ -173,6 +173,34 @@ describe('POST /clinicians', () => {
     expect(body.otpauthUri).toMatch(/^otpauth:\/\/totp\//);
   });
 
+  // Amendment, 2026-08-31: the pool's `mfa` is `OPTIONAL`, not `REQUIRED`
+  // — `provisionTotp` returns `undefined` when Cognito completes
+  // sign-in with no MFA_SETUP challenge (auth-stack.ts/clinician-admin-handler.ts's
+  // own headers on why). The response must omit rather than error on it.
+  it('D-30 amendment: omits totpSecret/otpauthUri when nothing was provisioned', async () => {
+    const { handler, createClinicianUser } = build({ password: 'Str0ng!Passw0rd' });
+    createClinicianUser.provisionTotp = vi.fn(async () => undefined);
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'new@example.com', displayName: 'New Clinician', role: 'sub' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(201);
+    const body = JSON.parse(response.body) as {
+      item: { id: string };
+      password: string;
+      totpSecret?: string;
+      otpauthUri?: string;
+    };
+    expect(body.password).toBe('Str0ng!Passw0rd');
+    expect(body).not.toHaveProperty('totpSecret');
+    expect(body).not.toHaveProperty('otpauthUri');
+  });
+
   it('D-30: Cognito artefacts are provisioned before the CLI# record is written, in order', async () => {
     const { handler, createClinicianUser, repository } = build();
     const order: string[] = [];

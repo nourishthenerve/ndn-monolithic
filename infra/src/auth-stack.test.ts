@@ -134,9 +134,13 @@ describe('AuthStack — the pools exist and cannot be deleted', () => {
 });
 
 describe('AuthStack — the two policies one pool could not hold', () => {
-  it('requires TOTP and only TOTP on the clinician pool', () => {
+  // Amendment, 2026-08-31: `ON` (mandatory) relaxed to `OPTIONAL` — the
+  // owner's own call, auth-stack.ts's own header on `mfa:` below has the
+  // full reasoning. TOTP is still the only *offered* factor when a
+  // clinician does enrol one; it is no longer forced on every clinician.
+  it('offers TOTP and only TOTP on the clinician pool, without forcing it', () => {
     const properties = poolProperties(CLINICIAN_USER_POOL_NAME);
-    expect(properties.MfaConfiguration).toBe('ON');
+    expect(properties.MfaConfiguration).toBe('OPTIONAL');
     expect(properties.EnabledMfas).toEqual(['SOFTWARE_TOKEN_MFA']);
     // R-02: SMS is a spendable path, and a phone-number factor is a poorer
     // one. Asserted as an absence, not just a non-selection.

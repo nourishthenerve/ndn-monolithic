@@ -66,8 +66,9 @@ export interface ClinicianAdminPanelProps {
 interface CreateClinicianResult {
   readonly id: string;
   readonly password: string;
-  readonly totpSecret: string;
-  readonly otpauthUri: string;
+  /** Absent when the pool's `mfa` is `OPTIONAL` and nothing was provisioned — see clinician-admin.ts's own header. */
+  readonly totpSecret?: string;
+  readonly otpauthUri?: string;
 }
 
 const defaultClient = createSessionClient();
@@ -136,7 +137,7 @@ export function ClinicianAdminPanel({
         totpSecret?: string;
         otpauthUri?: string;
       };
-      if (!payload.item?.id || !payload.password || !payload.totpSecret || !payload.otpauthUri) {
+      if (!payload.item?.id || !payload.password) {
         setStatus('error');
         return;
       }
@@ -209,8 +210,12 @@ export function ClinicianAdminPanel({
           <h3>{strings.createSuccessHeading}</h3>
           <p>{strings.createSuccessWarning}</p>
           <OneTimeSecret label={strings.passwordLabel} value={result.password} />
-          <OneTimeSecret label={strings.totpSecretLabel} value={result.totpSecret} />
-          <OneTimeSecret label={strings.otpauthUriLabel} value={result.otpauthUri} />
+          {result.totpSecret && result.otpauthUri && (
+            <>
+              <OneTimeSecret label={strings.totpSecretLabel} value={result.totpSecret} />
+              <OneTimeSecret label={strings.otpauthUriLabel} value={result.otpauthUri} />
+            </>
+          )}
           <p>
             {strings.clinicianIdLabel}: <code>{result.id}</code>
           </p>
