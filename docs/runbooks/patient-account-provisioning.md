@@ -186,3 +186,23 @@ The create form on `/{locale}/account/patient-admin` now carries an optional **"
 **A failed assignment never downgrades the create.** The account exists and its one-time password is shown once or never, so the success panel appears regardless, with a plain note that the assignment did not save and can be made from the dashboard. Swallowing the password inside an error about a later step would strand a real account nobody can sign in to.
 
 `POST /patients` itself is unchanged — no new field, no new behaviour, no password option (unlike clinician creation, which gained one; nothing in the request asked for a staff-chosen patient password, and D-29's generated-and-relayed model is untouched). The only change on the API side is that a newly registered patient now lands in GSI3's directory immediately, via `createPatientProfileStore`.
+
+## Bug found live, 2026-08-31 — "Something went wrong creating the account"
+
+**Symptom:** the principal filled in the create form, chose a clinician to assign, and got the generic create-failed message. **Cause:** a 500 out of `POST /patients`, and the Lambda log named it exactly:
+
+```text
+Invoke Error {"errorType":"Error","errorMessage":"Pass options.removeUndefinedValues=true
+to remove undefined values from map/array/set.", ... at Object.marshall ...}
+```
+
+Nothing to do with the assignment step. `patient-admin.ts` built the record with all four optional fields named unconditionally — `phone: parsed.data.phone`, and the same for `referralSource` and `presentingCondition` — so omitting one on the form produced a **present property holding `undefined`**, which the DynamoDB document client refuses to marshal.
+
+This had been latent since D-29 and was reachable the whole time; it only needed someone to leave the phone box empty. It survived a thorough test suite because both halves are individually well-tested and neither exercises the seam: the handler suite's `VALID_BODY` has always carried a phone, and the in-memory store it writes through marshals nothing at all. The same class of bug as the two [clinician-accounts.md](clinician-accounts.md) records from 2026-08-28 — a disagreement *between* modules, invisible until something real ran end to end.
+
+**Fixed in two places, deliberately:**
+
+- `patient-admin.ts` builds `personal`/`clinical` with conditional spreads, so an omitted optional field is an absent property. This is the honest fix — "no phone was given" and "phone is blank" are different facts, and only the call site knows which it means. It is the same rule `patient-admin-request.ts` already applies on the request side and `DynamoAssignmentStore.writeDecision` already applies to its own index attributes.
+- `dynamo-store.ts`'s shared document client now sets `marshallOptions: { removeUndefinedValues: true }`, so no *other* call site can reproduce it. DynamoDB has no `undefined` — an attribute is present or it is not — so dropping the key is the only thing "write `undefined`" could faithfully mean.
+
+**Regression test:** `patient-admin.test.ts` creates a patient with every optional field omitted and asserts no property of `personal`/`clinical` is present-but-`undefined` — the invariant in plain JavaScript, checkable against the in-memory store, and general enough to cover an optional field added later.

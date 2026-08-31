@@ -79,3 +79,13 @@ Items 1, 2 and 4 below are done (2026-08-28). What's left is genuinely separate 
 ## Cost
 
 Negligible — reuses existing Cognito/API infrastructure; no new AWS resource beyond the two test-principal records named above (already needed by TASK 5.1.1 regardless) and, if step 3's fixture is built as a scheduled Lambda rather than an ad hoc script, one more low-volume invocation per day, inside every existing Lambda's own free-tier headroom.
+
+## Coverage lost, 2026-08-31, and why it is not recoverable
+
+The three principal-only pages — `/account/caseload`, `/account/patient-admin`, `/account/clinician-admin` — now decide client-side whether to render their content at all, instead of rendering a form and letting the submit be refused. The owner's own words, on seeing the create-clinician form offered to a sub-clinician: *"for a non-principal clinician I dont even want create patient or create clinician account to be visible. Atm it says at the very end that you dont have permission to create the account."*
+
+That is a real improvement to the product and a real loss to this suite. The clinician identity this suite signs in as is a **sub-clinician** fixture, so from today those three routes are axe-scanned in their *forbidden* state — a legible state worth scanning, and exactly what `account-routes.ts`'s own `ownerRole` doc already anticipated — but their real content is scanned by nothing.
+
+**It cannot be fixed by adding a principal fixture.** Exactly one principal clinician may exist, enforced transactionally (`clinician-repository.ts`'s singleton marker row), so a principal test identity would have to *be* the owner's own live account, with its real password in CI secrets. That is not a trade worth making for an axe scan on three pages.
+
+What remains true of those pages' accessibility is what was true before this suite existed: semantic HTML by construction — real `<table>`/`<caption>`/`scope="col"`, `role="status"`/`role="alert"` regions, real `<button>`s disabled rather than hidden, and every form control carrying its own label or `aria-label`. Verified by review, not by axe. Stated here rather than left to be discovered.

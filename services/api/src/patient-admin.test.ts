@@ -222,6 +222,53 @@ describe('POST /patients', () => {
     );
     expect(response.statusCode).toBe(409);
   });
+
+  // Found live, 2026-08-31: leaving every optional field blank made the
+  // record carry `personal.phone === undefined` and two more like it, and
+  // the real DynamoDB document client refuses to marshal an `undefined`
+  // ("Pass options.removeUndefinedValues=true…") — a 500 the browser
+  // showed as "Something went wrong creating the account."
+  //
+  // Nothing caught it because `VALID_BODY` above has always carried a
+  // phone, and because the in-memory store this suite writes through
+  // marshals nothing at all. So the assertion is on the property that
+  // *is* checkable here and is the actual invariant: an optional field
+  // the caller omitted must be an **absent property**, never a present
+  // one holding `undefined`. That is true or false in plain JavaScript,
+  // independently of which store is underneath.
+  it('omits an unsupplied optional field entirely rather than storing it as undefined', async () => {
+    const { handler, repository } = build();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients', {
+        principal: PRINCIPAL_CONTEXT,
+        body: {
+          email: 'sparse@example.com',
+          fullName: 'Sparse Patient',
+          marketingOptIn: false,
+          // No phone, no referralSource, no presentingCondition — the
+          // shape the form sends when staff fill in only what the patient
+          // gave them over WhatsApp.
+        },
+      }),
+    );
+
+    expect(response.statusCode).toBe(201);
+    const stored = await repository.findById(
+      (JSON.parse(response.body) as { item: { id: string } }).item.id,
+    );
+    expect(stored).toBeDefined();
+    expect(Object.keys(stored?.personal ?? {})).not.toContain('phone');
+    expect(stored?.clinical).toEqual({});
+    // The general form of the same rule, so a future optional field added
+    // to either half is covered without anyone remembering this test.
+    for (const half of [stored?.personal, stored?.clinical]) {
+      for (const [key, value] of Object.entries(half ?? {})) {
+        expect(value, `${key} is present but undefined`).toBeDefined();
+      }
+    }
+  });
 });
 
 describe('POST /patients/{id}/reset-password', () => {

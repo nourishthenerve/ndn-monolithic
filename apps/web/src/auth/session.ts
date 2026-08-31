@@ -18,6 +18,15 @@ export interface Session {
   /** Held for its hour and then refreshed. Never persisted. */
   readonly accessToken: string;
   readonly expiresAt: number;
+  /**
+   * 2026-08-31: read off the token's own `cognito:groups` claim, for
+   * deciding what to *render* and nothing else — `token-claims.ts`'s
+   * header has the full reasoning, including why an unverified claim is
+   * the right tool for this and the wrong tool for anything else.
+   * `undefined` means "could not be determined", which callers must treat
+   * as "show it and let the server answer", never as "no".
+   */
+  readonly isPrincipalClinician: boolean | undefined;
 }
 
 export type SessionState =
@@ -45,6 +54,8 @@ export interface SessionClient {
   authorization(): Promise<string | undefined>;
 }
 
+import { isPrincipalClinician } from './token-claims.js';
+
 type Fetcher = typeof fetch;
 
 interface TokenResponse {
@@ -71,7 +82,11 @@ export function createSessionClient(options: { fetcher?: Fetcher; now?: () => nu
       session = undefined;
       return { status: 'signed-out' };
     }
-    session = { accessToken, expiresAt: now() + expiresIn * 1000 };
+    session = {
+      accessToken,
+      expiresAt: now() + expiresIn * 1000,
+      isPrincipalClinician: isPrincipalClinician(accessToken),
+    };
     return { status: 'signed-in', session };
   }
 

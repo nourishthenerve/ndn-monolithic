@@ -18,10 +18,39 @@ import { createSessionClient, type SessionClient, type SessionState } from './se
 
 export interface RequireAuthProps {
   readonly children: ReactNode;
-  /** Rendered in place of the children when there is no session — a sign-in prompt, never the content. */
-  readonly signedOut: ReactNode;
-  /** Announced while the session resolves. */
-  readonly loadingLabel: string;
+  /**
+   * Rendered in place of the children when there is no session — a
+   * sign-in prompt, never the content. Optional so a *nested* gate (one
+   * inside another `RequireAuth` that has already handled the signed-out
+   * case) can omit it and render nothing rather than repeat the prompt.
+   */
+  readonly signedOut?: ReactNode;
+  /**
+   * Announced while the session resolves. Optional for the same reason
+   * `signedOut` is: a nested gate whose parent already announced the wait
+   * must not announce it a second time, and omitting this renders nothing
+   * at all until the session is known — the same "renders nothing is
+   * literal" discipline this file's header describes.
+   */
+  readonly loadingLabel?: string;
+  /**
+   * 2026-08-31: when set, a signed-in caller who is *known* not to be the
+   * principal clinician gets `forbidden` instead of the children — so a
+   * sub-clinician never sees a create-patient or create-clinician form at
+   * all, rather than filling one in and being refused at submit.
+   *
+   * "Known" is doing real work here. `token-claims.ts` returns three
+   * states, and only a positive `false` hides anything: a token whose
+   * claims cannot be read renders the children as before and lets the
+   * server refuse, because hiding the admin pages from the one person
+   * entitled to them is a far worse failure than briefly offering them to
+   * someone the API will turn away. **This is presentation, not
+   * authorisation** — every route behind these pages re-derives the role
+   * from a verified token and checks the RBAC matrix, unchanged.
+   */
+  readonly requirePrincipalClinician?: boolean;
+  /** Rendered in place of the children for a signed-in caller the line above excludes. Omit to render nothing at all. */
+  readonly forbidden?: ReactNode;
   /** Injectable for tests; defaults to the module-level client. */
   readonly client?: SessionClient;
 }
@@ -32,6 +61,8 @@ export function RequireAuth({
   children,
   signedOut,
   loadingLabel,
+  requirePrincipalClinician = false,
+  forbidden,
   client = defaultClient,
 }: RequireAuthProps): ReactNode {
   const [state, setState] = useState<SessionState>({ status: 'unknown' });
@@ -49,13 +80,24 @@ export function RequireAuth({
   if (state.status === 'unknown') {
     // A live region rather than a bare spinner: a screen-reader user is
     // told the page is working, which is the same information a sighted
-    // user gets from the text.
-    return (
+    // user gets from the text. No label, no region — an empty live region
+    // announces nothing and is worse than none.
+    return loadingLabel ? (
       <p role="status" aria-live="polite">
         {loadingLabel}
       </p>
-    );
+    ) : null;
   }
 
-  return state.status === 'signed-in' ? <>{children}</> : <>{signedOut}</>;
+  if (state.status !== 'signed-in') {
+    return <>{signedOut}</>;
+  }
+
+  // Only an explicit `false` hides anything — see `requirePrincipalClinician`'s
+  // own doc for why `undefined` deliberately falls through to the children.
+  if (requirePrincipalClinician && state.session.isPrincipalClinician === false) {
+    return <>{forbidden}</>;
+  }
+
+  return <>{children}</>;
 }
