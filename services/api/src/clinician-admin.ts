@@ -55,6 +55,7 @@ import type { ClinicianRepository } from './clinician-repository.js';
 import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
+import { extractBearerToken } from './jwt-verify.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
 import { generatePassword } from './password-generator.js';
 import { requirePrincipal } from './request-principal.js';
@@ -67,6 +68,40 @@ const CLINICIAN_RESOURCE = { entityType: 'clinician-account' } as const;
 // reviewer is most likely to want to reconstruct later, same reasoning
 // audit-read.ts states for its own sample rate.
 const CLINICIAN_ADMIN_LOG_SAMPLE_RATE = 1;
+
+// Amendment, 2026-08-31 (D-34): `POST /clinicians/me/change-password` —
+// the self-service change every clinician needs once they are the one
+// signing in, not the principal setting a password for them. Deliberately
+// not routed through `can()`/authz-matrix.ts: every row there governs a
+// principal or clinician acting on an *entity* (a patient, an
+// appointment, a colleague's account), and this acts on nothing but the
+// caller's own Cognito credential — the same reason `requirePrincipal`
+// alone, not the matrix, already gates `/auth/*`. The one access rule
+// this needs — clinicians only, never a patient — is a role check, not a
+// resource permission, so it is written as one below rather than
+// stretched to fit a matrix row that would otherwise gain a column no
+// other row needs. Cognito's own `ChangePassword` API is the real
+// boundary regardless: it requires the caller's own current password,
+// which nothing on this side of the call ever sees or could forge.
+const changeOwnPasswordBodySchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(1),
+});
+
+/**
+ * `ChangePassword` is a *user* Cognito API, not an Admin* one — it takes
+ * the caller's own access token as proof of an active session, not a
+ * `UserPoolId`/`Username`. `accessToken` is read directly off the
+ * incoming request's `Authorization` header (the handler does this, not
+ * `requirePrincipal` — that function derives *identity* from the
+ * authorizer's own verified context and deliberately takes no header;
+ * this needs the raw token *string* for an entirely separate reason,
+ * to hand back to Cognito, which re-validates it independently on
+ * every call).
+ */
+export interface ChangeOwnPasswordPort {
+  changePassword(accessToken: string, currentPassword: string, newPassword: string): Promise<void>;
+}
 
 const createClinicianBodySchema = z.object({
   email: z.string().email().max(254),
@@ -147,6 +182,7 @@ export interface ClinicianAdminDeps {
   readonly createClinicianUser: AdminCreateClinicianPort;
   readonly deactivateClinicianUser: AdminDeactivateClinicianPort;
   readonly reactivateClinicianUser: AdminReactivateClinicianPort;
+  readonly changeOwnPassword: ChangeOwnPasswordPort;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
   /** Overridable for test determinism only — `patient-admin.ts`'s own identical seam for D-29. */
@@ -290,6 +326,39 @@ export function createClinicianAdminHandler(
           const clinician = await deps.repository.reactivate(id, actor);
           await deps.reactivateClinicianUser.enable(id);
           return respond(200, { item: clinician });
+        }
+        case 'POST /clinicians/me/change-password': {
+          // Clinicians only — D-29's "no self-service" model for patients
+          // is untouched by D-34; relaxing MFA never meant relaxing this.
+          if (principal.role === 'patient') {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          const parsed = changeOwnPasswordBodySchema.safeParse(parseJsonBody(event));
+          if (!parsed.success) {
+            return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
+          }
+          const accessToken = extractBearerToken(
+            event.headers?.authorization ?? event.headers?.Authorization,
+          );
+          if (!accessToken) {
+            return respond(401, { error: 'UNAUTHORIZED' });
+          }
+          try {
+            await deps.changeOwnPassword.changePassword(
+              accessToken,
+              parsed.data.currentPassword,
+              parsed.data.newPassword,
+            );
+          } catch (error) {
+            if (error instanceof AppError && error.code === 'INCORRECT_CURRENT_PASSWORD') {
+              return respond(400, { error: error.code });
+            }
+            if (error instanceof AppError && error.code === 'PASSWORD_POLICY_VIOLATION') {
+              return respond(400, { error: error.code });
+            }
+            throw error;
+          }
+          return respond(200, { status: 'password-changed' });
         }
         default:
           return respond(404, { error: 'NOT_FOUND' });

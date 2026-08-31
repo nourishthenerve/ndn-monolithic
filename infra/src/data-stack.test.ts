@@ -794,7 +794,10 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // `PatientAdminFunction`, replacing TASK 2.2.3's public
     // `POST /registrations` (route-protection.ts's own PUBLIC_ROUTE_KEYS).
     // The same day's own follow-up added `GET /patients` — finding a
-    // patient's id by email, served by the same function.
+    // patient's id by email, served by the same function. D-34
+    // (2026-08-31) added `POST /clinicians/me/change-password`, served
+    // by the same `ClinicianAdminFunction` as the other clinician-account
+    // routes.
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
@@ -815,6 +818,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'PATCH /workshops/{id}',
         'POST /calls/{appointmentId}/turn-credentials',
         'POST /clinicians',
+        'POST /clinicians/me/change-password',
         'POST /clinicians/{id}/deactivate',
         'POST /clinicians/{id}/reactivate',
         'POST /content',
