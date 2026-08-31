@@ -129,4 +129,4 @@ Found while building the form: a duplicate email raised `UsernameExistsException
 
 ### Backfill required
 
-The six clinician records that existed on 2026-08-31 — the principal included — predate the GSI2 projection and are invisible to `GET /clinicians` until `scripts/backfill-directory-index.mjs` is run once against the table. See [caseload-view.md](caseload-view.md#backfill-required--this-is-a-data-migration) for the command and why its `Scan` is sanctioned. (The inert `SK = META` row left behind by the 2026-08-28 migration above is untouched by it — the script matches `sk = 'PROFILE'` only.)
+The seven clinician records that existed on 2026-08-31 — the principal included — predate the GSI2 projection and are invisible to `GET /clinicians` until `scripts/backfill-directory-index.mjs` is run once against the table. See [caseload-view.md](caseload-view.md#backfill-required--this-is-a-data-migration) for the command and why its `Scan` is sanctioned. (The inert `SK = META` row left behind by the 2026-08-28 migration above is untouched by it — the script matches `sk = 'PROFILE'` only.)
