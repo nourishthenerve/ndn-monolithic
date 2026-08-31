@@ -128,6 +128,23 @@ describe('signing out', () => {
     }));
     expect(await client.authorization()).toBeDefined(); // a fresh refresh, not the dropped token
   });
+
+  // Found live, 2026-08-31: without this, sign-out ended this app's own
+  // session but left Cognito's browser-side one live, so the next sign-in
+  // silently re-authenticated against it instead of prompting again.
+  it('returns the logoutUrl the server sends, so the caller can navigate to Cognito\'s own logout endpoint', async () => {
+    const { client } = build({
+      responses: [jsonResponse({ status: 'signed-out', logoutUrl: 'https://patient-login.example/logout?x=1' })],
+    });
+
+    expect(await client.signOut()).toBe('https://patient-login.example/logout?x=1');
+  });
+
+  it('returns undefined when the server sends no logoutUrl — there was no session to build one for', async () => {
+    const { client } = build({ responses: [jsonResponse({ status: 'signed-out' })] });
+
+    expect(await client.signOut()).toBeUndefined();
+  });
 });
 
 describe('the token is not reachable from outside the closure', () => {

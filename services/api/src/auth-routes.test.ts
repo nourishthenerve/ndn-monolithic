@@ -292,6 +292,39 @@ describe('POST /auth/signout', () => {
     expect((await routes({ routeKey: 'POST /auth/signout' })).statusCode).toBe(200);
     expect(revoke).not.toHaveBeenCalled();
   });
+
+  // Found live, 2026-08-31: revoking the refresh token kills this app's
+  // own session but leaves Cognito's browser-side hosted-UI session
+  // cookie live, so the next sign-in silently re-authenticated against
+  // it instead of prompting again — "you are already signed in." The
+  // client navigates to this URL, not `/`, once it responds.
+  it('returns the pool\'s own Cognito logout URL for a real session', async () => {
+    const { routes } = build();
+    const response = await routes({ routeKey: 'POST /auth/signout', cookieHeader });
+
+    const body = response.body as { logoutUrl?: string };
+    const url = new URL(body.logoutUrl ?? '');
+    expect(url.origin).toBe(CONFIG.pools.patient.oauthBaseUrl);
+    expect(url.pathname).toBe('/logout');
+    expect(url.searchParams.get('client_id')).toBe('patient-client');
+    expect(url.searchParams.get('logout_uri')).toBe(CONFIG.signOutUrl);
+  });
+
+  it('sends a clinician to the clinician pool\'s own logout URL', async () => {
+    const { routes } = build();
+    const clinicianCookieHeader = `${REFRESH_COOKIE}=clinician.${encodeURIComponent(REFRESH_TOKEN)}`;
+    const response = await routes({ routeKey: 'POST /auth/signout', cookieHeader: clinicianCookieHeader });
+
+    const body = response.body as { logoutUrl?: string };
+    expect(new URL(body.logoutUrl ?? '').origin).toBe(CONFIG.pools.clinician.oauthBaseUrl);
+  });
+
+  it('omits logoutUrl when there was no session — there is no pool to build one for', async () => {
+    const { routes } = build();
+    const response = await routes({ routeKey: 'POST /auth/signout' });
+
+    expect(response.body).not.toHaveProperty('logoutUrl');
+  });
 });
 
 describe('every cookie this file sets, on every route', () => {

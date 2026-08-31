@@ -101,6 +101,7 @@
   "account.signInPatient": "Sign in as a patient",
   "account.signInClinician": "Sign in as a clinician",
   "account.signOut": "Sign out",
+  "account.changePasswordLink": "Change password",
   "account.signedInIntro": "You are signed in. Your care plan and appointments will appear here.",
   "account.callback.heading": "Signing you in",
   "account.callback.exchanging": "Completing your sign-in…",

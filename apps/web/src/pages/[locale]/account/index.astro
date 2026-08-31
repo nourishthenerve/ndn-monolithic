@@ -4,9 +4,17 @@
 // makes this page private is not server rendering but that its content is
 // not in the HTML at all. The island below decides whether to build any,
 // and renders nothing until the session resolves.
+//
+// D-34 (2026-08-31): a real, visible link to change-password.astro — this
+// page is the one every signed-in identity actually lands on, unlike
+// every other account page's own "URL-only reachability" (account-routes.ts).
+// Found live: nothing pointed at the feature once it shipped, so nobody
+// could find it. Shown to a signed-in patient too, same as every sibling
+// account link — the server-side role check (clinician-admin.ts) is the
+// real boundary, not this link's visibility.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Heading } from '@ndn/ui';
+import { Heading, Link } from '@ndn/ui';
 
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
@@ -38,6 +46,11 @@ const heading = t('account.heading', undefined, locale);
       </p>
     </Fragment>
     <p>{t('account.signedInIntro', undefined, locale)}</p>
+    <p>
+      <Link href={`/${locale}/account/change-password`}>
+        {t('account.changePasswordLink', undefined, locale)}
+      </Link>
+    </p>
     <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

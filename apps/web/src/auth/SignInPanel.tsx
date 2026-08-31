@@ -61,9 +61,16 @@ export function SignOutButton({
       onClick={() => {
         // Sign-out is a real server call: it revokes the refresh token at
         // Cognito (2.2.1 enabled revocation) rather than only dropping the
-        // cookie, so a captured cookie stops working too.
-        void client.signOut().then(() => {
-          window.location.assign('/');
+        // cookie, so a captured cookie stops working too. The navigation
+        // afterward is never hardcoded to `/` — `signOut()`'s own return
+        // is Cognito's `/logout` URL when there was a session to end,
+        // which also clears Cognito's own browser-side session cookie;
+        // without that step, the *next* sign-in silently re-authenticates
+        // against a browser Cognito still remembers (found live,
+        // 2026-08-31). `signOut()` only omits it when there was no
+        // session at all, and `/` is already correct for that case.
+        void client.signOut().then((logoutUrl) => {
+          window.location.assign(logoutUrl ?? '/');
         });
       }}
     >

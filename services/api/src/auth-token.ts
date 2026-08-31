@@ -133,6 +133,30 @@ export function authorizeUrl(
   return `${oauthBaseUrl}/oauth2/authorize?${query.toString()}`;
 }
 
+/**
+ * Amendment, 2026-08-31: found live — `/oauth2/revoke` (this file's own
+ * `OAuthClient.revoke`) invalidates the refresh token server-side, but
+ * does nothing about the *browser's* own Cognito hosted-UI session
+ * cookie, set on `oauthBaseUrl`'s own domain the moment a sign-in
+ * completes there. Revoking the token makes this app's own session
+ * genuinely dead — `/auth/refresh` correctly starts returning 401 — but
+ * the next `GET /auth/signin` still redirects into a browser Cognito
+ * still recognises as signed in, which is confusing at best ("you are
+ * already signed in") and at worst re-authenticates silently, with no
+ * credential ever re-entered. Cognito's own `/logout` endpoint is the
+ * one thing that clears that cookie — this is that endpoint's URL, the
+ * `GET /auth/signin`-flow's own `authorizeUrl` above shaped the same
+ * way. `logout_uri` must exactly match one of the app client's own
+ * registered `logoutUrls` (auth-stack.ts) or Cognito refuses the
+ * request outright, the identical constraint `redirect_uri` above is
+ * already under.
+ */
+export function logoutUrl(config: AuthTokenConfig, pool: PoolKey): string {
+  const { clientId, oauthBaseUrl } = config.pools[pool];
+  const query = new URLSearchParams({ client_id: clientId, logout_uri: config.signOutUrl });
+  return `${oauthBaseUrl}/logout?${query.toString()}`;
+}
+
 /** What Cognito's `/oauth2/token` returns, reduced to what this system uses. */
 export interface TokenSet {
   readonly accessToken: string;

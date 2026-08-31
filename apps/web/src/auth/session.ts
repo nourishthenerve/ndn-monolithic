@@ -31,7 +31,16 @@ export interface SessionClient {
   resolve(): Promise<SessionState>;
   /** Exchanges a callback `code`. Returns `signed-out` if the exchange is refused. */
   complete(code: string, state: string): Promise<SessionState>;
-  signOut(): Promise<void>;
+  /**
+   * Ends this app's own session, then returns where the browser must
+   * navigate next to also end Cognito's — `undefined` only when there was
+   * no session to sign out of, in which case there is no pool to build
+   * one for and `/` is already correct. Never the site itself: a plain
+   * `window.location.assign('/')` here would leave Cognito's own
+   * hosted-UI session cookie live, so the *next* sign-in would silently
+   * re-authenticate against it (found live, 2026-08-31).
+   */
+  signOut(): Promise<string | undefined>;
   /** The access token, refreshed at most once if it has expired. */
   authorization(): Promise<string | undefined>;
 }
@@ -103,7 +112,21 @@ export function createSessionClient(options: { fetcher?: Fetcher; now?: () => nu
 
     async signOut() {
       session = undefined;
-      await post('/auth/signout');
+      // Not `post()`: that helper's return shape is `TokenResponse`
+      // (`accessToken`/`expiresIn`), and this response carries something
+      // else entirely — `logoutUrl`, read directly here rather than
+      // stretching `adopt()` to parse two unrelated shapes.
+      const response = await fetcher('/auth/signout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+      });
+      try {
+        const payload = (await response.json()) as { logoutUrl?: unknown };
+        return typeof payload.logoutUrl === 'string' ? payload.logoutUrl : undefined;
+      } catch {
+        return undefined;
+      }
     },
 
     async authorization() {

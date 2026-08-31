@@ -22,6 +22,7 @@ import {
   createPkcePair,
   decodeRefreshCookie,
   encodeRefreshCookie,
+  logoutUrl,
   parseCookies,
   PKCE_COOKIE,
   PKCE_COOKIE_MAX_AGE_SECONDS,
@@ -200,11 +201,24 @@ export function createAuthRoutes(deps: AuthRoutesDeps) {
           // server-side half needs retrying.
           await deps.oauth.revoke(session.pool, session.token).catch(() => undefined);
         }
+        // Found live, 2026-08-31: revoking the token kills this app's own
+        // session, but leaves Cognito's *browser-side* hosted-UI session
+        // cookie untouched — the next sign-in redirected straight back
+        // into a browser Cognito still recognised, "already signed in."
+        // `logoutUrl` is Cognito's own fix for that (auth-token.ts's own
+        // header on it); the client-side `SignOutButton` navigates here
+        // instead of straight to `/` once this responds. No session
+        // cookie means no pool to build one for — `/` is still exactly
+        // right for that case, so `logoutUrl` is simply absent rather
+        // than a guess.
         return {
           statusCode: 200,
           headers: NO_STORE,
           cookies: [clearCookie(REFRESH_COOKIE), clearCookie(PKCE_COOKIE), clearCookie(STATE_COOKIE)],
-          body: { status: 'signed-out' },
+          body: {
+            status: 'signed-out',
+            ...(session ? { logoutUrl: logoutUrl(deps.config, session.pool) } : {}),
+          },
         };
       }
 
