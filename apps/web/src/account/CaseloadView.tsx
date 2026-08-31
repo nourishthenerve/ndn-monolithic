@@ -11,6 +11,36 @@
 // matching the backend's own "never accumulate a caseload in memory"
 // (step 5) at the UI layer too. Previous pages are recoverable via a
 // client-side cursor stack, not by holding their data.
+//
+// ## Amendment, 2026-08-31 — the principal's dashboard
+//
+// The owner asked for "an overall dashboard showing how many patients are
+// there in the system with active ones being at the top. which clinicians
+// each patient has been assigned to with having the option to reassign to
+// a new clinician". This view was two-thirds of that already; the three
+// things it lacked all landed together:
+//
+//   * **counts** — `GET /caseload` returns `counts` on the first page
+//     (caseload-repository.ts explains why only the first);
+//   * **every patient, active first** — GSI3 was sparse on assignment, so
+//     a just-registered patient was structurally invisible here. It now
+//     indexes every patient and ranks by status, so ordering and
+//     completeness are both the index's doing, not this component's;
+//   * **assign / reassign in place** — a `<select>` of active colleagues
+//     (`GET /clinicians`) and one button per row, calling
+//     `POST /patients/{id}/approve` for a patient nobody has yet and
+//     `POST /patients/{id}/reassign` for one who is already assigned.
+//     Which of the two is correct is a fact about the patient's status,
+//     not a choice the principal should have to make, so this component
+//     picks it from `accountStatus` — the API rejects the wrong one with a
+//     409 (`ALREADY_ASSIGNED` / `NOT_ASSIGNED`) regardless, so the server
+//     stays the authority and this is only about not asking a pointless
+//     question.
+//
+// A mutation reloads the current page rather than patching a row in state:
+// approval changes the patient's *status*, which changes their position in
+// the index, so the honest thing to show afterwards is what the index
+// actually returns now.
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -18,15 +48,31 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
+export type PatientAccountStatus = 'pending' | 'approved' | 'declined' | 'suspended';
+
 export interface CaseloadEntry {
   readonly patientId: string;
   readonly fullName: string;
-  readonly assignedClinicianName: string;
+  readonly accountStatus: PatientAccountStatus;
+  readonly assignedClinicianId?: string;
+  readonly assignedClinicianName?: string;
+}
+
+export interface CaseloadCounts {
+  readonly total: number;
+  readonly active: number;
 }
 
 interface CaseloadPage {
   readonly items: readonly CaseloadEntry[];
   readonly nextCursor?: string;
+  readonly counts?: CaseloadCounts;
+}
+
+/** One assignable colleague, from `GET /clinicians`. Deactivated ones are filtered out before they reach the dropdown. */
+interface AssignableClinician {
+  readonly id: string;
+  readonly displayName: string;
 }
 
 type ViewState =
@@ -41,10 +87,25 @@ export interface CaseloadViewStrings {
   readonly errorLabel: string;
   readonly emptyLabel: string;
   readonly patientColumnLabel: string;
+  readonly statusColumnLabel: string;
   readonly clinicianColumnLabel: string;
+  readonly assignColumnLabel: string;
   readonly nextPageLabel: string;
   readonly previousPageLabel: string;
   readonly caption: string;
+  readonly totalPatientsLabel: string;
+  readonly activePatientsLabel: string;
+  readonly statusPendingLabel: string;
+  readonly statusApprovedLabel: string;
+  readonly statusDeclinedLabel: string;
+  readonly statusSuspendedLabel: string;
+  readonly unassignedLabel: string;
+  readonly chooseClinicianLabel: string;
+  readonly assignButton: string;
+  readonly reassignButton: string;
+  readonly working: string;
+  readonly assignError: string;
+  readonly noCliniciansLabel: string;
 }
 
 export interface CaseloadViewProps {
@@ -52,6 +113,13 @@ export interface CaseloadViewProps {
   readonly client?: SessionClient;
   /** Injectable for tests; defaults to a real same-origin-authorised fetch against `contentApiUrl`. */
   readonly fetchPage?: (cursor: string | undefined, accessToken: string) => Promise<Response>;
+  readonly listClinicians?: (accessToken: string) => Promise<Response>;
+  readonly assignPatient?: (
+    accessToken: string,
+    patientId: string,
+    clinicianId: string,
+    alreadyAssigned: boolean,
+  ) => Promise<Response>;
 }
 
 const defaultClient = createSessionClient();
@@ -64,16 +132,43 @@ function defaultFetchPage(cursor: string | undefined, accessToken: string): Prom
   return fetch(url, { headers: { authorization: `Bearer ${accessToken}` } });
 }
 
+function defaultListClinicians(accessToken: string): Promise<Response> {
+  return fetch(`${contentApiUrl}/clinicians`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+}
+
+function defaultAssignPatient(
+  accessToken: string,
+  patientId: string,
+  clinicianId: string,
+  alreadyAssigned: boolean,
+): Promise<Response> {
+  const action = alreadyAssigned ? 'reassign' : 'approve';
+  return fetch(`${contentApiUrl}/patients/${encodeURIComponent(patientId)}/${action}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ assignedClinicianId: clinicianId }),
+  });
+}
+
 export function CaseloadView({
   strings,
   client = defaultClient,
   fetchPage = defaultFetchPage,
+  listClinicians = defaultListClinicians,
+  assignPatient = defaultAssignPatient,
 }: CaseloadViewProps): ReactNode {
   const [state, setState] = useState<ViewState>({ status: 'loading' });
   // The cursor that produced the page currently on screen, and the stack
   // of cursors that got here — popping it is how "previous page" works
   // without ever holding more than one page's data.
   const [cursorStack, setCursorStack] = useState<readonly (string | undefined)[]>([undefined]);
+  const [clinicians, setClinicians] = useState<readonly AssignableClinician[]>([]);
+  /** patientId -> the clinician chosen in that row's dropdown, before the button is pressed. */
+  const [choices, setChoices] = useState<Readonly<Record<string, string>>>({});
+  const [pendingPatientId, setPendingPatientId] = useState<string | undefined>();
+  const [assignFailed, setAssignFailed] = useState(false);
 
   const load = useCallback(
     async (cursor: string | undefined) => {
@@ -101,7 +196,11 @@ export function CaseloadView({
         const payload = (await response.json()) as Partial<CaseloadPage>;
         setState({
           status: 'ready',
-          page: { items: payload.items ?? [], nextCursor: payload.nextCursor },
+          page: {
+            items: payload.items ?? [],
+            nextCursor: payload.nextCursor,
+            counts: payload.counts,
+          },
         });
       } catch {
         setState({ status: 'error' });
@@ -114,11 +213,107 @@ export function CaseloadView({
     void load(cursorStack.at(-1));
   }, [cursorStack, load]);
 
+  // The colleague list is loaded once, not per page: it changes when the
+  // principal adds or deactivates someone on a different page entirely,
+  // and re-fetching it on every page turn would be a read per turn to get
+  // the same handful of names back.
+  useEffect(() => {
+    let cancelled = false;
+    const loadClinicians = async () => {
+      const accessToken = await client.authorization();
+      if (!accessToken) {
+        return;
+      }
+      try {
+        const response = await listClinicians(accessToken);
+        if (!response.ok) {
+          // A sub-clinician or patient who reached this page gets a 403
+          // here as well as on the caseload itself — the empty list that
+          // follows is not an error state of its own, it is the same
+          // refusal already reported above the table.
+          return;
+        }
+        const payload = (await response.json()) as {
+          items?: readonly { id: string; displayName: string; account_status: string }[];
+        };
+        if (cancelled) {
+          return;
+        }
+        setClinicians(
+          (payload.items ?? [])
+            // Only active colleagues can take a patient —
+            // `AssignmentRepository` rejects a deactivated one with
+            // `CLINICIAN_NOT_AVAILABLE`, so offering them here would be
+            // offering an action guaranteed to fail.
+            .filter((clinician) => clinician.account_status === 'active')
+            .map(({ id, displayName }) => ({ id, displayName })),
+        );
+      } catch {
+        // Left empty — the dropdown renders its "no colleagues" hint, and
+        // the table itself is still useful without the assign control.
+      }
+    };
+    void loadClinicians();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, listClinicians]);
+
   const goNext = (nextCursor: string) => {
     setCursorStack((stack) => [...stack, nextCursor]);
   };
   const goPrevious = () => {
     setCursorStack((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack));
+  };
+
+  const statusLabel = (accountStatus: PatientAccountStatus): string => {
+    switch (accountStatus) {
+      case 'approved':
+        return strings.statusApprovedLabel;
+      case 'pending':
+        return strings.statusPendingLabel;
+      case 'declined':
+        return strings.statusDeclinedLabel;
+      case 'suspended':
+        return strings.statusSuspendedLabel;
+    }
+  };
+
+  const handleAssign = async (entry: CaseloadEntry) => {
+    const clinicianId = choices[entry.patientId];
+    if (!clinicianId) {
+      return;
+    }
+    setAssignFailed(false);
+    setPendingPatientId(entry.patientId);
+    const accessToken = await client.authorization();
+    if (!accessToken) {
+      setPendingPatientId(undefined);
+      setState({ status: 'forbidden' });
+      return;
+    }
+    try {
+      const response = await assignPatient(
+        accessToken,
+        entry.patientId,
+        clinicianId,
+        Boolean(entry.assignedClinicianId),
+      );
+      if (!response.ok) {
+        setAssignFailed(true);
+        return;
+      }
+      setChoices((current) => {
+        const next = { ...current };
+        delete next[entry.patientId];
+        return next;
+      });
+      await load(cursorStack.at(-1));
+    } catch {
+      setAssignFailed(true);
+    } finally {
+      setPendingPatientId(undefined);
+    }
   };
 
   if (state.status === 'loading') {
@@ -135,27 +330,87 @@ export function CaseloadView({
     return <p role="alert">{strings.errorLabel}</p>;
   }
 
+  const { counts } = state.page;
+
   if (state.page.items.length === 0 && cursorStack.length === 1) {
-    return <p>{strings.emptyLabel}</p>;
+    return (
+      <>
+        {counts && <PatientCounts counts={counts} strings={strings} />}
+        <p>{strings.emptyLabel}</p>
+      </>
+    );
   }
 
   return (
     <>
+      {counts && <PatientCounts counts={counts} strings={strings} />}
+      {assignFailed && <p role="alert">{strings.assignError}</p>}
       <table>
         <caption>{strings.caption}</caption>
         <thead>
           <tr>
             <th scope="col">{strings.patientColumnLabel}</th>
+            <th scope="col">{strings.statusColumnLabel}</th>
             <th scope="col">{strings.clinicianColumnLabel}</th>
+            <th scope="col">{strings.assignColumnLabel}</th>
           </tr>
         </thead>
         <tbody>
-          {state.page.items.map((item) => (
-            <tr key={item.patientId}>
-              <td>{item.fullName}</td>
-              <td>{item.assignedClinicianName}</td>
-            </tr>
-          ))}
+          {state.page.items.map((item) => {
+            const isBusy = pendingPatientId === item.patientId;
+            const selectId = `assign-${item.patientId}`;
+            return (
+              <tr key={item.patientId}>
+                <td>{item.fullName}</td>
+                <td>{statusLabel(item.accountStatus)}</td>
+                <td>{item.assignedClinicianName ?? strings.unassignedLabel}</td>
+                <td>
+                  {clinicians.length === 0 ? (
+                    strings.noCliniciansLabel
+                  ) : (
+                    <>
+                      {/* The column header names the control's purpose but
+                          not *whose* row it is, and a `<td>` is not a
+                          label — so each control carries its own
+                          accessible name, patient included, for anyone
+                          navigating by form control alone. */}
+                      <select
+                        id={selectId}
+                        aria-label={`${strings.chooseClinicianLabel} — ${item.fullName}`}
+                        disabled={isBusy}
+                        value={choices[item.patientId] ?? ''}
+                        onChange={(event) =>
+                          setChoices((current) => ({
+                            ...current,
+                            [item.patientId]: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">{strings.chooseClinicianLabel}</option>
+                        {clinicians.map((clinician) => (
+                          <option key={clinician.id} value={clinician.id}>
+                            {clinician.displayName}
+                          </option>
+                        ))}
+                      </select>{' '}
+                      <button
+                        type="button"
+                        aria-label={`${item.assignedClinicianId ? strings.reassignButton : strings.assignButton} — ${item.fullName}`}
+                        disabled={isBusy || !choices[item.patientId]}
+                        onClick={() => void handleAssign(item)}
+                      >
+                        {isBusy
+                          ? strings.working
+                          : item.assignedClinicianId
+                            ? strings.reassignButton
+                            : strings.assignButton}
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <nav aria-label={strings.caption}>
@@ -171,5 +426,23 @@ export function CaseloadView({
         </button>
       </nav>
     </>
+  );
+}
+
+/** The two figures above the table. A `<dl>`, not a paragraph — each is a labelled value, which is what a description list is for. */
+function PatientCounts({
+  counts,
+  strings,
+}: {
+  readonly counts: CaseloadCounts;
+  readonly strings: CaseloadViewStrings;
+}): ReactNode {
+  return (
+    <dl>
+      <dt>{strings.totalPatientsLabel}</dt>
+      <dd>{counts.total}</dd>
+      <dt>{strings.activePatientsLabel}</dt>
+      <dd>{counts.active}</dd>
+    </dl>
   );
 }

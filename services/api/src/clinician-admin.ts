@@ -103,10 +103,47 @@ export interface ChangeOwnPasswordPort {
   changePassword(accessToken: string, currentPassword: string, newPassword: string): Promise<void>;
 }
 
+// Amendment, 2026-08-31 — `GET /clinicians`, and a password the principal
+// may choose.
+//
+// Both come from the same request: "an option to add or remove a
+// clinicians — with which the old one will not have access to login and
+// the new one will now have access after principal clinician has provided
+// email and password for him."
+//
+//   * **The list.** Adding and removing colleagues through a UI needs a
+//     UI that can *see* them — `POST /clinicians/{id}/deactivate` has
+//     existed since TASK 2.4.1 with no way to discover an id to pass it,
+//     and the dashboard's "reassign to…" needs the same list. Governed by
+//     `read` on the row this file's other routes already use
+//     (`'Clinician accounts'`, Principal-only) — no new matrix cell, the
+//     doc already grants `R` there.
+//   * **The password.** D-30 generates one and shows it once, which stays
+//     the default and the recommendation — a generated password is longer
+//     and less guessable than a chosen one, and it is the shape the
+//     WhatsApp handoff was designed around. `password` is *optional*, and
+//     when present it is used verbatim instead: the owner asked to set a
+//     colleague's first password themselves, and Cognito's own policy
+//     (auth-stack.ts) is the thing that judges it — a rejected password
+//     comes back as a 400 the form can show, never a silently weakened
+//     account. Nothing else changes: still `Permanent: true`, still shown
+//     once, still never stored or logged on this side.
+//
+// "Remove" is deactivation, not deletion, and deliberately:
+// `AdminDeleteUserCommand` is a banned identifier repo-wide
+// (packages/eslint-plugin-no-destructive) and C-03 keeps every record
+// readable. Deactivation is what the request actually asks for — "the old
+// one will not have access to login" — and it is what `disable` +
+// `revokeTokens` already deliver, immediately and for any live session.
 const createClinicianBodySchema = z.object({
   email: z.string().email().max(254),
   displayName: z.string().min(1).max(200),
   role: z.enum(['principal', 'sub']),
+  // Bounded, not policy-checked here: Cognito owns the password policy,
+  // and duplicating it in a Zod schema would be a second copy to drift.
+  // The floor is Cognito's own absolute minimum, so an obviously-empty
+  // field fails fast rather than costing a round trip.
+  password: z.string().min(6).max(256).optional(),
 });
 
 /**
@@ -244,6 +281,17 @@ export function createClinicianAdminHandler(
 
     try {
       switch (routeKey) {
+        case 'GET /clinicians': {
+          if (!can(principal, 'read', CLINICIAN_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          // The whole directory, deactivated colleagues included — the
+          // principal has to see a deactivated account in order to
+          // reactivate it. No pagination: see
+          // `ClinicianRepository.list`'s own doc.
+          const items = await deps.repository.list();
+          return respond(200, { items });
+        }
         case 'POST /clinicians': {
           if (!can(principal, 'create', CLINICIAN_RESOURCE).allowed) {
             return respond(403, { error: 'FORBIDDEN' });
@@ -266,7 +314,9 @@ export function createClinicianAdminHandler(
           // already minted are never returned to anyone and the Cognito
           // user is simply unusable — nobody ever learns its password.
           const subjectId = await deps.createClinicianUser.createUser(parsed.data.email);
-          const password = makePassword();
+          // The principal's own choice when they made one, a generated
+          // password otherwise — see this file's 2026-08-31 amendment.
+          const password = parsed.data.password ?? makePassword();
           await deps.createClinicianUser.setPassword(subjectId, password);
           const totp = await deps.createClinicianUser.provisionTotp(
             subjectId,
@@ -372,6 +422,26 @@ export function createClinicianAdminHandler(
       }
       if (error instanceof AppError && error.code === 'RECORD_ALREADY_EXISTS') {
         return respond(409, { error: error.code });
+      }
+      // 2026-08-31, found while building the directory UI: a duplicate
+      // email raised `UsernameExistsException` straight out of
+      // `AdminCreateUser` and reached the caller as a 500, so the "an
+      // account with this email already exists" message
+      // `ClinicianAdminPanel` has always carried could never be shown.
+      // `patient-admin.ts` has mapped the identical Cognito case to a 409
+      // since D-29; this is the same mapping, on the same reasoning — the
+      // caller is an authenticated principal, so telling them the truth
+      // is no existence oracle.
+      if (error instanceof AppError && error.code === 'COGNITO_ACCOUNT_ALREADY_EXISTS') {
+        return respond(409, { error: error.code });
+      }
+      // A principal-chosen password Cognito's own policy refused — a 400
+      // the form can show, not a 500. Never reachable on the generated
+      // path (`password-generator.ts` satisfies the pool's policy by
+      // construction), only on the `password` field this file's own
+      // 2026-08-31 amendment added.
+      if (error instanceof AppError && error.code === 'PASSWORD_POLICY_VIOLATION') {
+        return respond(400, { error: error.code });
       }
       throw error;
     }

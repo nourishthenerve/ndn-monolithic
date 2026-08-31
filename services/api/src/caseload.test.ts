@@ -74,6 +74,10 @@ class FakeCaseloadStore implements CaseloadStore {
   async getPatient() {
     return undefined;
   }
+
+  async count() {
+    return { total: 0, active: 0 };
+  }
 }
 
 function build(overrides: { flagEnabled?: boolean } = {}) {

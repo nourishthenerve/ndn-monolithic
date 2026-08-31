@@ -12,6 +12,18 @@
 // could find it. Shown to a signed-in patient too, same as every sibling
 // account link — the server-side role check (clinician-admin.ts) is the
 // real boundary, not this link's visibility.
+//
+// Amendment, same day: the three staff tools get the same treatment, for
+// the same reason and on the same reasoning. The patient dashboard,
+// patient accounts and clinician accounts pages have each been reachable
+// by typed URL only since they shipped, which is why the owner's request
+// for "two options available" reads as though they do not exist — they
+// do, there was simply nothing linking to them. Listed unconditionally,
+// not behind a client-side role guess: every one of these pages already
+// renders its own "you do not have access" when the API says so
+// (`CaseloadView`/`PatientAdminPanel`/`ClinicianAdminPanel` all treat a
+// 403 as an ordinary outcome), and a link that lies about what the server
+// will allow is better than a menu that quietly disagrees with it.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link } from '@ndn/ui';
@@ -46,11 +58,30 @@ const heading = t('account.heading', undefined, locale);
       </p>
     </Fragment>
     <p>{t('account.signedInIntro', undefined, locale)}</p>
-    <p>
-      <Link href={`/${locale}/account/change-password`}>
-        {t('account.changePasswordLink', undefined, locale)}
-      </Link>
-    </p>
+    <nav aria-label={t('account.staffToolsHeading', undefined, locale)}>
+      <ul>
+        <li>
+          <Link href={`/${locale}/account/caseload`}>
+            {t('account.dashboardLink', undefined, locale)}
+          </Link>
+        </li>
+        <li>
+          <Link href={`/${locale}/account/patient-admin`}>
+            {t('account.patientAdminLink', undefined, locale)}
+          </Link>
+        </li>
+        <li>
+          <Link href={`/${locale}/account/clinician-admin`}>
+            {t('account.clinicianAdminLink', undefined, locale)}
+          </Link>
+        </li>
+        <li>
+          <Link href={`/${locale}/account/change-password`}>
+            {t('account.changePasswordLink', undefined, locale)}
+          </Link>
+        </li>
+      </ul>
+    </nav>
     <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

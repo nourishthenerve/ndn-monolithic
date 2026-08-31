@@ -59,23 +59,38 @@ const TOTP_ISSUER = 'Nourish the Nerve';
 
 const createClinicianUser: AdminCreateClinicianPort = {
   async createUser(email) {
-    const response = await cognitoClient.send(
-      new AdminCreateUserCommand({
-        UserPoolId: clinicianUserPoolId,
-        Username: email,
-        UserAttributes: [
-          { Name: 'email', Value: email },
-          // The principal invited this address directly — there is no
-          // separate verification step to wait on, unlike a patient's
-          // self-serve `SignUp`.
-          { Name: 'email_verified', Value: 'true' },
-        ],
-        // D-30: no Cognito-sent invite of any kind — `setPassword`/
-        // `provisionTotp` below are what give this account a working
-        // credential, never an email Cognito delivers on its own.
-        MessageAction: 'SUPPRESS',
-      }),
-    );
+    let response;
+    try {
+      response = await cognitoClient.send(
+        new AdminCreateUserCommand({
+          UserPoolId: clinicianUserPoolId,
+          Username: email,
+          UserAttributes: [
+            { Name: 'email', Value: email },
+            // The principal invited this address directly — there is no
+            // separate verification step to wait on, unlike a patient's
+            // self-serve `SignUp`.
+            { Name: 'email_verified', Value: 'true' },
+          ],
+          // D-30: no Cognito-sent invite of any kind — `setPassword`/
+          // `provisionTotp` below are what give this account a working
+          // credential, never an email Cognito delivers on its own.
+          MessageAction: 'SUPPRESS',
+        }),
+      );
+    } catch (error) {
+      // 2026-08-31: mapped rather than left to surface as a 500 — see
+      // clinician-admin.ts's own note where this becomes a 409. The
+      // identical translation `patient-admin-handler.ts` has done since
+      // D-29.
+      if ((error as { name?: string }).name === 'UsernameExistsException') {
+        throw new AppError(
+          'COGNITO_ACCOUNT_ALREADY_EXISTS',
+          'a Cognito account with this email already exists',
+        );
+      }
+      throw error;
+    }
     const sub = response.User?.Attributes?.find((attribute) => attribute.Name === 'sub')?.Value;
     if (!sub) {
       throw new Error('AdminCreateUser did not return a sub attribute');
@@ -94,15 +109,31 @@ const createClinicianUser: AdminCreateClinicianPort = {
   // D-30: `Permanent: true` — no `NEW_PASSWORD_REQUIRED` challenge for this
   // account to get stuck on, the identical shape `patient-admin.ts`'s own
   // `AdminSetUserPassword` call already uses for D-29.
+  //
+  // 2026-08-31: `InvalidPasswordException` is translated here because the
+  // password may now be one the principal typed (clinician-admin.ts's own
+  // amendment) rather than one `password-generator.ts` produced —
+  // Cognito's policy is the judge, and its verdict has to reach the form
+  // as a 400 rather than a 500.
   async setPassword(subjectId, password) {
-    await cognitoClient.send(
-      new AdminSetUserPasswordCommand({
-        UserPoolId: clinicianUserPoolId,
-        Username: subjectId,
-        Password: password,
-        Permanent: true,
-      }),
-    );
+    try {
+      await cognitoClient.send(
+        new AdminSetUserPasswordCommand({
+          UserPoolId: clinicianUserPoolId,
+          Username: subjectId,
+          Password: password,
+          Permanent: true,
+        }),
+      );
+    } catch (error) {
+      if ((error as { name?: string }).name === 'InvalidPasswordException') {
+        throw new AppError(
+          'PASSWORD_POLICY_VIOLATION',
+          'AdminSetUserPassword: password rejected by the pool policy',
+        );
+      }
+      throw error;
+    }
   },
   // D-30: completes Cognito's own `MFA_SETUP` challenge on the new
   // clinician's behalf — the one path that lets this codebase hand the

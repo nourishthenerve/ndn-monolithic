@@ -44,6 +44,7 @@ import {
   DynamoWebhookEventStore,
   DynamoWorkshopCapacityStore,
   DynamoWorkshopStore,
+  patientDirectoryIndexAttributes,
   singleItemKeys,
 } from './dynamo-store.js';
 import { AppError } from './errors.js';
@@ -97,6 +98,75 @@ describe('DynamoStore', () => {
       TableName: 'ndn-data',
       Item: { pk: 'PAT#1', sk: 'META', name: 'Ada' },
     });
+  });
+
+  // 2026-08-31: the read half of the index-attribute contract. Storage
+  // keys are stripped on the way out, which is only safe because `put`
+  // re-derives them on the way in (the test below).
+  it('get() strips every GSI key attribute, not just pk/sk', async () => {
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        pk: 'PAT#1',
+        sk: 'META',
+        gsi1pk: 'CLI#cli-1',
+        gsi1sk: 'PAT#1',
+        gsi3pk: 'CASELOAD#all',
+        gsi3sk: '0#CLI#cli-1#PAT#1',
+        name: 'Ada',
+      },
+    });
+
+    expect(await store.get('1')).toEqual({ name: 'Ada' });
+  });
+
+  it('put() re-derives index attributes from the item when the store was given a projection', async () => {
+    const indexed = new DynamoStore<{ name: string }>({
+      tableName: 'ndn-data',
+      keys: singleItemKeys('PAT'),
+      indexAttributes: (item) => ({ gsi3pk: 'CASELOAD#all', gsi3sk: `NAME#${item.name}` }),
+      client: ddbMock as unknown as DynamoDBDocumentClient,
+    });
+    ddbMock.on(PutCommand).resolves({});
+
+    await indexed.put('1', { name: 'Ada' });
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      Item: { pk: 'PAT#1', sk: 'META', gsi3pk: 'CASELOAD#all', gsi3sk: 'NAME#Ada' },
+    });
+  });
+});
+
+// 2026-08-31: the ordering the principal's dashboard is built on — "active
+// ones at the top" is this function's `rank` prefix and nothing else; no
+// caller sorts.
+describe('patientDirectoryIndexAttributes', () => {
+  it('ranks approved ahead of pending, and both ahead of the closed statuses', () => {
+    const rankOf = (patient: RealPatient) =>
+      patientDirectoryIndexAttributes(patient).gsi3sk.split('#')[0];
+
+    expect(rankOf(buildPatient({ account_status: 'approved' }))).toBe('0');
+    expect(rankOf(buildPatient({ account_status: 'pending' }))).toBe('1');
+    expect(rankOf(buildPatient({ account_status: 'suspended' }))).toBe('2');
+    expect(rankOf(buildPatient({ account_status: 'declined' }))).toBe('3');
+  });
+
+  it('groups by clinician within a rank, and gives an unassigned patient a group of their own', () => {
+    expect(
+      patientDirectoryIndexAttributes(
+        buildPatient({ account_status: 'approved', assigned_clinician_id: 'cli-1' }),
+      ),
+    ).toEqual({ gsi3pk: 'CASELOAD#all', gsi3sk: '0#CLI#cli-1#PAT#pat-1' });
+
+    expect(
+      patientDirectoryIndexAttributes(buildPatient({ account_status: 'pending' })),
+    ).toEqual({ gsi3pk: 'CASELOAD#all', gsi3sk: '1#CLI#UNASSIGNED#PAT#pat-1' });
+  });
+
+  it('keeps the `#PAT#` marker the caseload store parses the patient id back out of', () => {
+    const { gsi3sk } = patientDirectoryIndexAttributes(
+      buildPatient({ account_status: 'approved', assigned_clinician_id: 'cli-1' }),
+    );
+    expect(gsi3sk.split('#PAT#').pop()).toBe('pat-1');
   });
 });
 
@@ -729,6 +799,87 @@ describe('DynamoClinicianStore', () => {
     });
     expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input.ConditionExpression).toBeUndefined();
   });
+
+  // 2026-08-31: the GSI2 directory projection, and the `list()` it exists
+  // to serve.
+  it('create() projects the row into GSI2 so it is reachable by the directory query', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await store.create(buildClinician({ role: 'sub' }));
+
+    expect(ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[0]?.Put).toMatchObject({
+      Item: expect.objectContaining({
+        gsi2pk: 'CLINICIAN_INDEX#all',
+        gsi2sk: 'CLI#sub-1',
+      }),
+    });
+  });
+
+  it('update() re-derives the GSI2 projection rather than trusting the caller to carry it', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    // The caller's object has no index attributes at all — `get()` strips
+    // them, so this is exactly the shape a deactivate round trip produces.
+    await store.update(buildClinician({ account_status: 'deactivated' }));
+
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      Item: expect.objectContaining({
+        gsi2pk: 'CLINICIAN_INDEX#all',
+        gsi2sk: 'CLI#sub-1',
+      }),
+    });
+  });
+
+  it('list() queries GSI2 then reads each row — a Query, never a Scan — and strips index attributes', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { pk: 'CLI#sub-1', sk: 'PROFILE', gsi2pk: 'CLINICIAN_INDEX#all', gsi2sk: 'CLI#sub-1' },
+      ],
+    });
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        pk: 'CLI#sub-1',
+        sk: 'PROFILE',
+        gsi2pk: 'CLINICIAN_INDEX#all',
+        gsi2sk: 'CLI#sub-1',
+        ...buildClinician(),
+      },
+    });
+
+    const result = await store.list();
+
+    expect(result).toEqual([expect.objectContaining({ id: 'sub-1', role: 'sub' })]);
+    // Storage keys never reach a caller — the record the API returns is
+    // domain fields only.
+    expect(result[0]).not.toHaveProperty('gsi2pk');
+    expect(result[0]).not.toHaveProperty('pk');
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      IndexName: 'GSI2',
+      KeyConditionExpression: 'gsi2pk = :indexKey',
+      ExpressionAttributeValues: { ':indexKey': 'CLINICIAN_INDEX#all' },
+    });
+  });
+
+  it('list() follows LastEvaluatedKey rather than silently truncating the directory', async () => {
+    ddbMock
+      .on(QueryCommand)
+      .resolvesOnce({
+        Items: [{ pk: 'CLI#sub-1', sk: 'PROFILE' }],
+        LastEvaluatedKey: { pk: 'CLI#sub-1', sk: 'PROFILE' },
+      })
+      .resolves({ Items: [{ pk: 'CLI#sub-2', sk: 'PROFILE' }] });
+    ddbMock
+      .on(GetCommand)
+      .resolvesOnce({ Item: { pk: 'CLI#sub-1', sk: 'PROFILE', ...buildClinician({ id: 'sub-1' }) } })
+      .resolves({ Item: { pk: 'CLI#sub-2', sk: 'PROFILE', ...buildClinician({ id: 'sub-2' }) } });
+
+    const result = await store.list();
+
+    expect(result.map((clinician) => clinician.id)).toEqual(['sub-1', 'sub-2']);
+    expect(ddbMock.commandCalls(QueryCommand)[1]?.args[0].input.ExclusiveStartKey).toEqual({
+      pk: 'CLI#sub-1',
+      sk: 'PROFILE',
+    });
+  });
 });
 
 function buildPatient(overrides: Partial<RealPatient> = {}): RealPatient {
@@ -801,12 +952,17 @@ describe('DynamoAssignmentStore', () => {
         gsi1pk: 'CLI#cli-1',
         gsi1sk: 'PAT#pat-1',
         gsi3pk: 'CASELOAD#all',
-        gsi3sk: 'CLI#cli-1#PAT#pat-1',
+        // 2026-08-31: `<rank>#` prefix — `0` is `approved`, so an active
+        // patient sorts ahead of every pending or closed one.
+        gsi3sk: '0#CLI#cli-1#PAT#pat-1',
       },
     });
   });
 
-  it('writeDecision() for a decline writes no gsi1pk/gsi1sk/gsi3pk/gsi3sk at all', async () => {
+  // Rewritten 2026-08-31: GSI3 is no longer sparse. A declined patient
+  // *does* belong in the directory (the principal has to be able to see
+  // them), so only GSI1 — the "which patients are mine" index — drops out.
+  it('writeDecision() for a decline drops the GSI1 projection but keeps the patient in the GSI3 directory', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     const request = buildAssignmentRequest({ status: 'declined' });
     const patient = buildPatient({ account_status: 'declined' });
@@ -817,8 +973,9 @@ describe('DynamoAssignmentStore', () => {
       ?.Put?.Item as Record<string, unknown>;
     expect(patientItem.gsi1pk).toBeUndefined();
     expect(patientItem.gsi1sk).toBeUndefined();
-    expect(patientItem.gsi3pk).toBeUndefined();
-    expect(patientItem.gsi3sk).toBeUndefined();
+    expect(patientItem.gsi3pk).toBe('CASELOAD#all');
+    // Rank `3` (declined), and `UNASSIGNED` where a clinician id would be.
+    expect(patientItem.gsi3sk).toBe('3#CLI#UNASSIGNED#PAT#pat-1');
   });
 
   it('writeDecision() propagates a cancelled transaction as AppError — the atomicity property: neither leg lands', async () => {
@@ -934,6 +1091,38 @@ describe('DynamoCaseloadStore', () => {
     expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
       Key: { pk: 'PAT#pat-1', sk: 'PROFILE' },
     });
+  });
+
+  // 2026-08-31: the dashboard's own header figures.
+  it('count() asks for COUNT twice — the whole partition, and the active rank prefix', async () => {
+    ddbMock.on(QueryCommand).resolves({ Count: 7 });
+
+    const counts = await store.count();
+
+    expect(counts).toEqual({ total: 7, active: 7 });
+    const inputs = ddbMock.commandCalls(QueryCommand).map((call) => call.args[0].input);
+    expect(inputs).toHaveLength(2);
+    for (const input of inputs) {
+      expect(input).toMatchObject({ IndexName: 'GSI3', Select: 'COUNT' });
+    }
+    expect(inputs.map((input) => input.KeyConditionExpression).sort()).toEqual([
+      'gsi3pk = :caseloadKey',
+      'gsi3pk = :caseloadKey AND begins_with(gsi3sk, :prefix)',
+    ]);
+    const active = inputs.find((input) => input.KeyConditionExpression?.includes('begins_with'));
+    expect(active?.ExpressionAttributeValues).toMatchObject({ ':prefix': '0#' });
+  });
+
+  it('count() adds up every COUNT page rather than trusting one round trip', async () => {
+    ddbMock
+      .on(QueryCommand)
+      .resolvesOnce({ Count: 2, LastEvaluatedKey: { pk: 'PAT#pat-2', sk: 'PROFILE' } })
+      .resolves({ Count: 3 });
+
+    const counts = await store.count();
+
+    // Each of the two counting queries paged once then finished: 2 + 3.
+    expect(counts.total).toBe(5);
   });
 });
 

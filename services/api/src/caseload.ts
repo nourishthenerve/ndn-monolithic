@@ -97,7 +97,14 @@ export function createCaseloadHandler(
       const cursor = event.queryStringParameters?.cursor;
       const limit = parsePageSize(event.queryStringParameters?.limit);
       const page = await deps.repository.listPage(principal, cursor, limit);
-      return respond(200, { items: page.items, nextCursor: page.nextCursor });
+      // `counts` is present on the first page only (caseload-repository.ts)
+      // — omitted rather than sent as null, so a caller can tell "not
+      // counted on this page" from "counted, and the answer is zero".
+      return respond(200, {
+        items: page.items,
+        nextCursor: page.nextCursor,
+        ...(page.counts ? { counts: page.counts } : {}),
+      });
     } catch (error) {
       if (error instanceof AppError && error.code === 'INVALID_CURSOR') {
         return respond(400, { error: error.code });

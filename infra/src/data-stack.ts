@@ -1078,6 +1078,23 @@ export class DataStack extends Stack {
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
       }),
     );
+    // 2026-08-31: `GET /clinicians` — one `Query` against GSI2's fixed
+    // `CLINICIAN_INDEX#all` partition (dynamo-store.ts), whose follow-up
+    // `GetItem` per row is already covered by the statement above.
+    // `dynamodb:Query` alone, never `grantReadData()` (whose action list
+    // includes `Scan`) — `CaseloadFunctionRole`'s own `QueryCaseloadIndex`
+    // statement states the same reasoning for GSI3. No `LeadingKeys`
+    // condition: on an index query that condition matches the *index's*
+    // partition key, which here is a fixed literal, not `CLI#*` — the
+    // scoping that matters is the index ARN itself.
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryClinicianDirectoryIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [`${this.table.tableArn}/index/${GSI2_INDEX_NAME}`],
+      }),
+    );
     // The audit rows this function writes — `PutItem` only, never queried
     // back (attachAuditPartitionReadGuardrail below closes that).
     clinicianAdminRole.addToPrincipalPolicy(
@@ -1176,6 +1193,15 @@ export class DataStack extends Stack {
     httpApi.addRoutes({
       path: '/clinicians',
       methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
+    });
+    // 2026-08-31: the directory read. Same integration, same authorizer,
+    // same Principal-only `can()` check inside — the principal's dashboard
+    // needs a list of colleagues to reassign a patient to, and the
+    // clinician-admin page needs one to deactivate from.
+    httpApi.addRoutes({
+      path: '/clinicians',
+      methods: [HttpMethod.GET],
       integration: clinicianAdminIntegration,
     });
     httpApi.addRoutes({
