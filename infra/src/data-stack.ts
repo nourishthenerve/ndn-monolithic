@@ -436,9 +436,28 @@ export class DataStack extends Stack {
       // alias, config.ts's own DOMAIN_NAME comment) — and `authorization`
       // joins `content-type` in `allowHeaders`, the first header this API
       // needs for a bearer-token request rather than a public POST.
+      // `PATCH` added 2026-08-31, and it was missing the whole time this
+      // API has had a `PATCH` route on it. Found while working out why a
+      // blog post would not save: `PATCH` is not a CORS-simple method, so
+      // a browser preflights it, and a preflight response whose
+      // `Access-Control-Allow-Methods` omits it makes the browser refuse
+      // to send the real request at all. **Nothing reaches the API, so
+      // nothing appears in any log** — the same silent shape as this
+      // API's own 2026-08-22 CORS defect (`allowOrigins` still naming
+      // only `next.`), and found the same way.
+      //
+      // Every `PATCH` this site makes from a browser was therefore dead:
+      // a patient saving their own profile (`PATCH /patients/me`, live
+      // since TASK 3.1.1), a clinician correcting a patient's details,
+      // and a clinician renaming themselves. Only ever exercised by
+      // handler tests and by `curl`, neither of which preflights.
+      //
+      // The list stays exactly the methods this API's routes actually
+      // use — GET, POST, PATCH — rather than a wildcard: a method that is
+      // not routed has no business being advertised as allowed.
       corsPreflight: {
         allowOrigins: [SITE_ORIGIN, `https://${WWW_DOMAIN_NAME}`, `https://${DOMAIN_NAME}`],
-        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.PATCH],
         allowHeaders: ['content-type', 'authorization'],
       },
       // TASK 2.2.2: **protected unless it says otherwise.** Every route on

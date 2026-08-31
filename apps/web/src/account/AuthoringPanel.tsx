@@ -32,6 +32,7 @@ import {
   buildCreateWorkshopRequestBody,
   isValidSlug,
   parseKeywords,
+  slugify,
   toUtcInstant,
 } from './authoring-request.js';
 import type { BlogFormFields, WorkshopFormFields } from './authoring-request.js';
@@ -120,10 +121,18 @@ export function AuthoringPanel({
   const [blog, setBlog] = useState<BlogFormFields>(EMPTY_BLOG);
   const [blogStatus, setBlogStatus] = useState<SubmitStatus>('idle');
   const [blogSlugError, setBlogSlugError] = useState(false);
+  /**
+   * Whether the author has typed in the web-address field themselves.
+   * Until they do, it follows the title; once they do, it stops — editing
+   * a URL by hand and watching it be overwritten on the next keystroke of
+   * the title would be worse than not deriving it at all.
+   */
+  const [blogSlugEdited, setBlogSlugEdited] = useState(false);
 
   const [workshop, setWorkshop] = useState<WorkshopFormFields>(EMPTY_WORKSHOP);
   const [workshopStatus, setWorkshopStatus] = useState<SubmitStatus>('idle');
   const [workshopSlugError, setWorkshopSlugError] = useState(false);
+  const [workshopSlugEdited, setWorkshopSlugEdited] = useState(false);
   const [workshopDateError, setWorkshopDateError] = useState(false);
 
   const handleBlog = async (event: FormEvent<HTMLFormElement>) => {
@@ -147,6 +156,7 @@ export function AuthoringPanel({
       setBlogStatus(status);
       if (status === 'success') {
         setBlog(EMPTY_BLOG);
+        setBlogSlugEdited(false);
       }
     } catch {
       setBlogStatus('error');
@@ -179,6 +189,7 @@ export function AuthoringPanel({
       setWorkshopStatus(status);
       if (status === 'success') {
         setWorkshop(EMPTY_WORKSHOP);
+        setWorkshopSlugEdited(false);
       }
     } catch {
       setWorkshopStatus('error');
@@ -206,20 +217,6 @@ export function AuthoringPanel({
         <p>{strings.blogIntro}</p>
         <form onSubmit={(event) => void handleBlog(event)}>
           <p>
-            <label htmlFor="blog-slug">{strings.slugLabel}</label>
-            <input
-              id="blog-slug"
-              type="text"
-              required
-              disabled={blogBusy}
-              aria-describedby="blog-slug-hint"
-              value={blog.id}
-              onChange={(event) => setBlog((f) => ({ ...f, id: event.target.value }))}
-            />
-          </p>
-          <p id="blog-slug-hint">{strings.slugHint}</p>
-          {blogSlugError && <p role="alert">{strings.slugError}</p>}
-          <p>
             <label htmlFor="blog-title">{strings.titleLabel}</label>
             <input
               id="blog-title"
@@ -227,9 +224,30 @@ export function AuthoringPanel({
               required
               disabled={blogBusy}
               value={blog.title}
-              onChange={(event) => setBlog((f) => ({ ...f, title: event.target.value }))}
+              onChange={(event) => {
+                const title = event.target.value;
+                setBlog((f) => ({ ...f, title, ...(blogSlugEdited ? {} : { id: slugify(title) }) }));
+                setBlogSlugError(false);
+              }}
             />
           </p>
+          <p>
+            <label htmlFor="blog-slug">{strings.slugLabel}</label>
+            <input
+              id="blog-slug"
+              type="text"
+              disabled={blogBusy}
+              aria-describedby="blog-slug-hint"
+              value={blog.id}
+              onChange={(event) => {
+                setBlogSlugEdited(true);
+                setBlog((f) => ({ ...f, id: event.target.value }));
+                setBlogSlugError(false);
+              }}
+            />
+          </p>
+          <p id="blog-slug-hint">{strings.slugHint}</p>
+          {blogSlugError && <p role="alert">{strings.slugError}</p>}
           <p>
             <label htmlFor="blog-excerpt">{strings.excerptLabel}</label>
             <input
@@ -300,20 +318,6 @@ export function AuthoringPanel({
         <p>{strings.workshopIntro}</p>
         <form onSubmit={(event) => void handleWorkshop(event)}>
           <p>
-            <label htmlFor="workshop-slug">{strings.slugLabel}</label>
-            <input
-              id="workshop-slug"
-              type="text"
-              required
-              disabled={workshopBusy}
-              aria-describedby="workshop-slug-hint"
-              value={workshop.id}
-              onChange={(event) => setWorkshop((f) => ({ ...f, id: event.target.value }))}
-            />
-          </p>
-          <p id="workshop-slug-hint">{strings.slugHint}</p>
-          {workshopSlugError && <p role="alert">{strings.slugError}</p>}
-          <p>
             <label htmlFor="workshop-title">{strings.titleLabel}</label>
             <input
               id="workshop-title"
@@ -321,9 +325,34 @@ export function AuthoringPanel({
               required
               disabled={workshopBusy}
               value={workshop.title}
-              onChange={(event) => setWorkshop((f) => ({ ...f, title: event.target.value }))}
+              onChange={(event) => {
+                const title = event.target.value;
+                setWorkshop((f) => ({
+                  ...f,
+                  title,
+                  ...(workshopSlugEdited ? {} : { id: slugify(title) }),
+                }));
+                setWorkshopSlugError(false);
+              }}
             />
           </p>
+          <p>
+            <label htmlFor="workshop-slug">{strings.slugLabel}</label>
+            <input
+              id="workshop-slug"
+              type="text"
+              disabled={workshopBusy}
+              aria-describedby="workshop-slug-hint"
+              value={workshop.id}
+              onChange={(event) => {
+                setWorkshopSlugEdited(true);
+                setWorkshop((f) => ({ ...f, id: event.target.value }));
+                setWorkshopSlugError(false);
+              }}
+            />
+          </p>
+          <p id="workshop-slug-hint">{strings.slugHint}</p>
+          {workshopSlugError && <p role="alert">{strings.slugError}</p>}
           <p>
             <label htmlFor="workshop-description">{strings.descriptionLabel}</label>
             <textarea

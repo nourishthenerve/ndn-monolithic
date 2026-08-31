@@ -136,6 +136,39 @@ describe('DataStack — ContentHttpApi CORS (TASK 2.5.3 fix)', () => {
       },
     });
   });
+
+  // Found live 2026-08-31: `PATCH` was absent, so every browser `PATCH`
+  // on this API — a patient saving their own profile, a clinician
+  // correcting a patient's details, a clinician renaming themselves —
+  // was refused at preflight and never sent. Nothing reached the API, so
+  // nothing appeared in any log.
+  //
+  // Asserted as the exact list rather than `arrayWith`: the point is that
+  // it matches the methods this API's routes actually use, so a route
+  // added with a method nobody added here fails this test rather than
+  // failing silently in a browser.
+  it('allows exactly the methods this API routes — GET, POST and PATCH', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+      CorsConfiguration: {
+        AllowMethods: ['GET', 'POST', 'PATCH'],
+      },
+    });
+  });
+
+  it('routes no HTTP method the CORS preflight does not allow', () => {
+    const template = synth();
+    const allowed = new Set(['GET', 'POST', 'PATCH']);
+    const routed = Object.values(template.findResources('AWS::ApiGatewayV2::Route'))
+      .map((route) => String((route.Properties as { RouteKey: string }).RouteKey))
+      // The signalling WebSocket API's routes are in this same template
+      // and are `$connect`/`$disconnect`/`$default` — no HTTP method, no
+      // CORS preflight, nothing for this assertion to say about them.
+      .filter((routeKey) => !routeKey.startsWith('$'))
+      .map((routeKey) => routeKey.split(' ')[0] ?? '');
+    expect(routed.length).toBeGreaterThan(0);
+    expect([...new Set(routed)].filter((method) => !allowed.has(method))).toEqual([]);
+  });
 });
 
 describe('DataStack — guardrail', () => {
