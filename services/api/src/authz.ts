@@ -123,6 +123,16 @@ function resolveColumn(principal: Principal, resource: Resource): Resolved<Matri
         return unresolved('malformed-principal');
       }
       return resolved('Principal');
+    // 2026-08-31. Like `Principal` and unlike either sub-clinician column,
+    // this one is role alone — a helpdesk account has no care relationship
+    // to any patient, which is the point of it. It is still linked by
+    // `clinicianId` (its record is a `CLI#` row in the clinician pool), so
+    // the same malformed-principal check applies unchanged.
+    case 'helpdesk':
+      if (!isLinked(principal.clinicianId) || principal.patientId !== undefined) {
+        return unresolved('malformed-principal');
+      }
+      return resolved('Helpdesk');
     default:
       return unresolved('unknown-role');
   }

@@ -19,7 +19,21 @@
 import type { AccountStatus } from './principal.js';
 import type { BaseRecord } from './types.js';
 
-export type ClinicianRole = 'principal' | 'sub';
+/**
+ * `'helpdesk'` (2026-08-31): the record side of `Role`'s own
+ * `'helpdesk'` (principal.ts). Kept in this union rather than given a
+ * separate entity because a helpdesk account is administered exactly like
+ * a clinician account — same pool, same `CLI#<sub>`/`PROFILE` row, same
+ * create/deactivate/reactivate routes — and differs only in which
+ * `cognito:groups` membership it carries and therefore which matrix
+ * column governs it. A second entity would duplicate every one of those
+ * mechanics to express one different word.
+ *
+ * The "exactly one principal" invariant is unaffected: it is conditioned
+ * on `role === 'principal'` alone (clinician-repository.ts), so any
+ * number of `'helpdesk'` rows may exist alongside it.
+ */
+export type ClinicianRole = 'principal' | 'sub' | 'helpdesk';
 
 export interface Clinician extends BaseRecord {
   /** The Cognito `sub` in the clinician pool. See this file's header. */

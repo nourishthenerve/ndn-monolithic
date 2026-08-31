@@ -24,9 +24,9 @@ export interface Session {
    * header has the full reasoning, including why an unverified claim is
    * the right tool for this and the wrong tool for anything else.
    * `undefined` means "could not be determined", which callers must treat
-   * as "show it and let the server answer", never as "no".
+   * as "show it and let the server answer", never as a denial.
    */
-  readonly isPrincipalClinician: boolean | undefined;
+  readonly staffRole: StaffRole | undefined;
 }
 
 export type SessionState =
@@ -54,7 +54,8 @@ export interface SessionClient {
   authorization(): Promise<string | undefined>;
 }
 
-import { isPrincipalClinician } from './token-claims.js';
+import { staffRoleFromAccessToken } from './token-claims.js';
+import type { StaffRole } from './token-claims.js';
 
 type Fetcher = typeof fetch;
 
@@ -85,7 +86,7 @@ export function createSessionClient(options: { fetcher?: Fetcher; now?: () => nu
     session = {
       accessToken,
       expiresAt: now() + expiresIn * 1000,
-      isPrincipalClinician: isPrincipalClinician(accessToken),
+      staffRole: staffRoleFromAccessToken(accessToken),
     };
     return { status: 'signed-in', session };
   }

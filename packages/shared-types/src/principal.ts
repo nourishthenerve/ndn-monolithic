@@ -11,7 +11,21 @@
 // vocabulary. The decision function itself is NOT here — `can()` lives in
 // services/api/src/authz.ts and reads services/api/src/authz-matrix.ts.
 
-export type Role = 'patient' | 'sub-clinician' | 'principal-clinician';
+/**
+ * `'helpdesk'` (2026-08-31): an administrative account in the *clinician*
+ * pool — it signs in through the same button a clinician does — with no
+ * clinical reach at all. It exists to create patient accounts, issue
+ * temporary passwords, and upload and assign content; it is denied
+ * diagnoses, care plans, assessments and messages outright. See
+ * docs/plan/04-data-model-rbac.md's `Helpdesk` column, which is the
+ * authority; services/api/src/authz-matrix.ts transcribes it.
+ *
+ * It is a `Role`, not a kind of clinician: `Clinician.role` gains the same
+ * value so the record and the token agree, but nothing about the
+ * "exactly one principal" invariant changes — many helpdesk accounts may
+ * exist.
+ */
+export type Role = 'patient' | 'sub-clinician' | 'principal-clinician' | 'helpdesk';
 
 /**
  * Deliberately no `'delete'`. docs/plan/04-data-model-rbac.md's matrix has

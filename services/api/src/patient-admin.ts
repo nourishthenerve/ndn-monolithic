@@ -198,12 +198,67 @@ export function createPatientAdminHandler(
           if (!parsed.success) {
             return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
           }
+          // **"An account with this email already exists" that no lookup
+          // can then find.** Found live, 2026-08-31, and it is this
+          // endpoint's own half-completed write staring back: the steps
+          // below are `AdminCreateUser` → `AdminSetUserPassword` →
+          // `repository.register`, and until an hour ago the third could
+          // throw (the `undefined`-marshalling bug this file's own note
+          // above records). When it did, the Cognito user survived with no
+          // `PAT#` record behind it — an account that cannot sign in
+          // (`dynamo-principal-directory.ts` has nothing to resolve, so
+          // the authorizer denies every request), cannot be found by
+          // `GET /patients?email=` (no record to return), does not appear
+          // on the dashboard, and blocks its own email from ever being
+          // registered again. The operator is told the account exists and
+          // then that it does not, which is exactly as unhelpful as it
+          // sounds.
+          //
+          // The marshalling bug is fixed, but the orphan it left is real
+          // and this is the only endpoint that can clear it. So: a Cognito
+          // user that already exists is a conflict **only when a record
+          // exists behind it**. When none does, this call completes the
+          // provisioning it started — sets a fresh password on the
+          // existing user and writes the missing record — rather than
+          // refusing forever.
+          //
+          // Deliberately not "always fall through to register":
+          // `PatientRepository.register` is idempotent and returns an
+          // existing record untouched, so an unguarded path here would
+          // hand back a *real* patient's record alongside a newly-set
+          // password — silently resetting a live credential on what the
+          // operator thinks is a fresh account. The `findById` check below
+          // is what keeps "complete an orphan" from becoming "take over an
+          // account". Healing one is safe for the mirror-image reason: an
+          // orphaned account has never been usable by anyone, so there is
+          // no session, and no patient, to disturb.
+          //
+          // No `AdminDeleteUser` anywhere — a banned identifier repo-wide
+          // and no part of this fix. The orphan is completed, never
+          // removed.
           const created = await deps.createPatientUser.createUser(parsed.data.email);
+          let subjectId: string;
           if (created.outcome === 'exists') {
-            throw new AppError(
-              'COGNITO_ACCOUNT_ALREADY_EXISTS',
-              'a Cognito account with this email already exists',
-            );
+            const existingUser = await deps.findPatientUser.findByEmail(parsed.data.email);
+            if (!existingUser) {
+              // `AdminCreateUser` said the username is taken and
+              // `AdminGetUser` cannot find it — the two disagree about the
+              // same pool, which no ordinary state produces. Refuse rather
+              // than guess at a subject id to write a record against.
+              throw new AppError(
+                'COGNITO_ACCOUNT_ALREADY_EXISTS',
+                'a Cognito account with this email already exists',
+              );
+            }
+            if (await deps.repository.findById(existingUser.subjectId)) {
+              throw new AppError(
+                'COGNITO_ACCOUNT_ALREADY_EXISTS',
+                'a Cognito account with this email already exists',
+              );
+            }
+            subjectId = existingUser.subjectId;
+          } else {
+            subjectId = created.subjectId;
           }
           const password = makePassword();
           // Set before the record is written: a patient who exists in
@@ -212,7 +267,7 @@ export function createPatientAdminHandler(
           // with the record still to come — the ordering
           // clinician-admin.ts's own header already accepts for the
           // identical create-then-record shape.
-          await deps.setPatientPassword.setPassword(created.subjectId, password);
+          await deps.setPatientPassword.setPassword(subjectId, password);
           // **An optional field the caller omitted must be an absent
           // property, never a present one holding `undefined`.** Found
           // live, 2026-08-31: this object literal named all four optional
@@ -236,7 +291,7 @@ export function createPatientAdminHandler(
           // request.
           const patient = await deps.repository.register(
             {
-              subjectId: created.subjectId,
+              subjectId,
               personal: {
                 fullName: parsed.data.fullName,
                 email: parsed.data.email,

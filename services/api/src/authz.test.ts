@@ -15,21 +15,21 @@ import { can } from './authz.js';
 
 // prettier-ignore
 const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string>>>> = {
-  //                            | Patient (own)      | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Principal                 |
-  'Own profile':              { 'Patient (own)': 'R U',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'R U' },
-  'Patient profile':          { 'Patient (own)': 'R U (self)',     'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Principal: 'C R U P' },
-  'Patient assignment':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
-  'Diagnosis / care plan':    { 'Patient (own)': '**R**',          'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'C R U' },
-  'Assessment — `visible{}`': { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'R' },
-  'Assessment — `private{}`': { 'Patient (own)': '**—**',          'Patient (other)': '**—**', 'Sub-clinician (assigned)': 'C R U',        'Sub-clinician (unassigned)': '**—**', Principal: 'R' },
-  Appointments:               { 'Patient (own)': 'R J',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U J',          'Sub-clinician (unassigned)': '—',   Principal: 'R' },
-  'Content assignment':       { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Principal: 'R' },
-  Messages:                   { 'Patient (own)': 'C R (own thread)', 'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R (own patients)', 'Sub-clinician (unassigned)': '—', Principal: 'R' },
-  'Clinician accounts':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'C R U (deactivate only)' },
-  'Audit log':                { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Principal: 'R' },
-  'Content item':             { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Principal: 'C R U' },
-  'Testimonial moderation':   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Principal: 'C R U' },
-  Workshop:                   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Principal: 'C R U' },
+  //                            | Patient (own)      | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Helpdesk | Principal                 |
+  'Own profile':              { 'Patient (own)': 'R U',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Helpdesk: 'R U',   Principal: 'R U' },
+  'Patient profile':          { 'Patient (own)': 'R U (self)',     'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Helpdesk: 'C R U P',   Principal: 'C R U P' },
+  'Patient assignment':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '—',   Principal: 'C R U' },
+  'Diagnosis / care plan':    { 'Patient (own)': '**R**',          'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: '**—**',   Principal: 'C R U' },
+  'Assessment — `visible{}`': { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: '**—**',   Principal: 'R' },
+  'Assessment — `private{}`': { 'Patient (own)': '**—**',          'Patient (other)': '**—**', 'Sub-clinician (assigned)': 'C R U',        'Sub-clinician (unassigned)': '**—**', Helpdesk: '**—**',   Principal: 'R' },
+  Appointments:               { 'Patient (own)': 'R J',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U J',          'Sub-clinician (unassigned)': '—',   Helpdesk: '—',   Principal: 'R' },
+  'Content assignment':       { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: 'C R U',   Principal: 'R' },
+  Messages:                   { 'Patient (own)': 'C R (own thread)', 'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R (own patients)', 'Sub-clinician (unassigned)': '—', Helpdesk: '**—**',   Principal: 'R' },
+  'Clinician accounts':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '**—**',   Principal: 'C R U (deactivate only)' },
+  'Audit log':                { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '—',   Principal: 'R' },
+  'Content item':             { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Helpdesk: 'C R U',   Principal: 'C R U' },
+  'Testimonial moderation':   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Helpdesk: '—',   Principal: 'C R U' },
+  Workshop:                   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Helpdesk: '—',   Principal: 'C R U' },
 };
 
 const CELL_LETTERS: Record<string, Action> = {
@@ -71,6 +71,7 @@ const COLUMNS: readonly MatrixColumn[] = [
   'Patient (other)',
   'Sub-clinician (assigned)',
   'Sub-clinician (unassigned)',
+  'Helpdesk',
   'Principal',
 ];
 const ACTIONS: readonly Action[] = ['create', 'read', 'update', 'join-call', 'reset-password'];
@@ -118,6 +119,17 @@ const PRINCIPAL_CLINICIAN: Principal = {
   clinicianId: 'CLI#9',
 };
 
+// 2026-08-31. Linked by `clinicianId` like both clinician roles — a
+// helpdesk account is a `CLI#` row in the clinician pool — but with no
+// care relationship to anything, which is why `resourceFor` puts an
+// unrelated patient and an unrelated clinician on its resource below.
+const HELPDESK: Principal = {
+  subjectId: 'sub-helpdesk-3',
+  role: 'helpdesk',
+  accountStatus: 'active',
+  clinicianId: 'CLI#3',
+};
+
 function principalFor(column: MatrixColumn): Principal {
   switch (column) {
     case 'Patient (own)':
@@ -126,6 +138,8 @@ function principalFor(column: MatrixColumn): Principal {
     case 'Sub-clinician (assigned)':
     case 'Sub-clinician (unassigned)':
       return SUB_CLINICIAN;
+    case 'Helpdesk':
+      return HELPDESK;
     case 'Principal':
       return PRINCIPAL_CLINICIAN;
   }
@@ -148,6 +162,11 @@ function resourceFor(row: MatrixRow, column: MatrixColumn): Resource {
       return { ...base, assignedClinicianId: 'CLI#1' };
     case 'Sub-clinician (unassigned)':
       return { ...base, assignedClinicianId: 'CLI#2' };
+    // Same shape as `Principal`'s, and for the same reason: the doc gives
+    // helpdesk one column, so a resource that happens to name some other
+    // patient or clinician must not move them out of it.
+    case 'Helpdesk':
+      return { ...base, ownerPatientId: 'PAT#2', assignedClinicianId: 'CLI#1' };
     case 'Principal':
       return { ...base, ownerPatientId: 'PAT#2', assignedClinicianId: 'CLI#1' };
   }

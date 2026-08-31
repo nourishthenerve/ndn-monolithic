@@ -3,11 +3,18 @@
 // in its own file so a test importing it does not drag the component's
 // untested JSX into coverage instrumentation.
 
+/**
+ * The three roles `POST /clinicians` accepts. `'helpdesk'` (2026-08-31) is
+ * an administrative account with no clinical reach — see
+ * docs/plan/04-data-model-rbac.md's `Helpdesk` column.
+ */
+export type ClinicianFormRole = 'principal' | 'sub' | 'helpdesk';
+
 /** What the create form collects. */
 export interface CreateClinicianFormFields {
   readonly email: string;
   readonly displayName: string;
-  readonly role: 'principal' | 'sub';
+  readonly role: ClinicianFormRole;
   /** Blank means "generate one" — see `buildCreateClinicianRequestBody`. */
   readonly password: string;
 }
@@ -16,7 +23,7 @@ export interface CreateClinicianFormFields {
 export interface CreateClinicianRequestBody {
   readonly email: string;
   readonly displayName: string;
-  readonly role: 'principal' | 'sub';
+  readonly role: ClinicianFormRole;
   readonly password?: string;
 }
 

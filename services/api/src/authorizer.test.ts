@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createAuthorizer,
+  HELPDESK_GROUP,
   PRINCIPAL_CLINICIAN_GROUP,
   type AuthorizerDecisionLog,
   type DirectoryEntry,
@@ -86,6 +87,56 @@ describe('the authorizer allows a verified subject with a record', () => {
     });
 
     expect((await authorize(event('Bearer good-token'))).context.role).toBe('principal-clinician');
+  });
+
+  // 2026-08-31: the third clinician-pool group.
+  it('resolves to helpdesk on the helpdesk group claim', async () => {
+    const { authorize } = build({
+      verifier: verifierReturning({
+        pool: 'clinician',
+        subjectId: CLINICIAN_SUB,
+        groups: [HELPDESK_GROUP],
+      }),
+      directory: directoryReturning({ recordId: CLINICIAN_SUB, accountStatus: 'active' }),
+    });
+
+    const result = await authorize(event('Bearer good-token'));
+    expect(result.context.role).toBe('helpdesk');
+    // Linked by `clinicianId` like both clinician roles — its record is a
+    // `CLI#` row, and `authz.ts` rejects a helpdesk principal without one.
+    expect(result.context.clinicianId).toBe(CLINICIAN_SUB);
+    expect(result.context.patientId).toBeUndefined();
+  });
+
+  it('prefers principal-clinician when a token somehow carries both groups', async () => {
+    // Not a state this codebase creates — `POST /clinicians` grants
+    // exactly one group per account — but if an administrator ever grants
+    // both by hand, the wider role must win. Resolving to `helpdesk`
+    // would silently strip the principal of every clinical permission,
+    // which is a far worse surprise than the reverse.
+    const { authorize } = build({
+      verifier: verifierReturning({
+        pool: 'clinician',
+        subjectId: CLINICIAN_SUB,
+        groups: [HELPDESK_GROUP, PRINCIPAL_CLINICIAN_GROUP],
+      }),
+      directory: directoryReturning({ recordId: CLINICIAN_SUB, accountStatus: 'active' }),
+    });
+
+    expect((await authorize(event('Bearer good-token'))).context.role).toBe('principal-clinician');
+  });
+
+  it('ignores a helpdesk group claim on a patient-pool token', async () => {
+    const { authorize } = build({
+      verifier: verifierReturning({
+        pool: 'patient',
+        subjectId: PATIENT_SUB,
+        groups: [HELPDESK_GROUP],
+      }),
+      directory: directoryReturning({ recordId: PATIENT_SUB, accountStatus: 'approved' }),
+    });
+
+    expect((await authorize(event('Bearer forged-groups'))).context.role).toBe('patient');
   });
 
   it('carries a non-operative status through rather than denying it — can() owns that call', async () => {

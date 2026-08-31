@@ -82,7 +82,20 @@ const PATIENT_CONTEXT = {
   patientId: 'patient-sub',
 };
 
-function build(overrides: { flagEnabled?: boolean; nextCreateResult?: 'created' | 'exists' } = {}) {
+function build(
+  overrides: {
+    flagEnabled?: boolean;
+    nextCreateResult?: 'created' | 'exists';
+    /**
+     * A Cognito user that already exists in the pool before the test
+     * begins — `AdminCreateUser` refuses this email, and `AdminGetUser`
+     * resolves it to this subject id. Whether a `PAT#` record exists
+     * behind it is the test's own business (that is the difference
+     * between a real duplicate and an orphan).
+     */
+    existingCognitoUser?: { email: string; subjectId: string };
+  } = {},
+) {
   const flagSource = new InMemoryFlagSource();
   flagSource.set('patients.administration.enabled', overrides.flagEnabled ?? true);
   const flags = new CachedFlagReader({ source: flagSource, clock, ttlMs: FLAG_CACHE_TTL_MS });
@@ -93,9 +106,12 @@ function build(overrides: { flagEnabled?: boolean; nextCreateResult?: 'created' 
 
   let nextSub = 0;
   const emailToSub = new Map<string, string>();
+  if (overrides.existingCognitoUser) {
+    emailToSub.set(overrides.existingCognitoUser.email, overrides.existingCognitoUser.subjectId);
+  }
   const createPatientUser: AdminCreatePatientPort = {
     createUser: vi.fn(async (email: string) => {
-      if (overrides.nextCreateResult === 'exists') {
+      if (overrides.nextCreateResult === 'exists' || emailToSub.has(email)) {
         return { outcome: 'exists' } as const;
       }
       const subjectId = `sub-${(nextSub += 1)}`;
@@ -214,13 +230,98 @@ describe('POST /patients', () => {
     expect(JSON.stringify(stored)).not.toContain('Fixed-Passw0rd!');
   });
 
-  it('409s when the email already has a Cognito account', async () => {
+  it('409s when the email already has a Cognito account and a patient record behind it', async () => {
+    const { handler, repository } = build({
+      existingCognitoUser: { email: VALID_BODY.email, subjectId: 'sub-existing' },
+    });
+    await repository.register(
+      {
+        subjectId: 'sub-existing',
+        personal: { fullName: 'Already Here', email: VALID_BODY.email, marketingOptIn: false },
+        clinical: {},
+      },
+      { subjectId: 'principal-sub', role: 'principal-clinician', requestId: 'r', sourceIpHash: 'h' },
+    );
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients', { principal: PRINCIPAL_CONTEXT, body: VALID_BODY }),
+    );
+
+    expect(response.statusCode).toBe(409);
+  });
+
+  it('409s when AdminCreateUser and AdminGetUser disagree about the same pool', async () => {
+    // `nextCreateResult: 'exists'` with nothing seeded — the username is
+    // taken but no lookup can resolve it. No ordinary state produces this,
+    // and the refusal is deliberate: there is no subject id to trust, so
+    // there is nothing safe to write a record against.
     const { handler } = build({ nextCreateResult: 'exists' });
     const response = await invoke(
       handler,
       eventFor('POST /patients', { principal: PRINCIPAL_CONTEXT, body: VALID_BODY }),
     );
     expect(response.statusCode).toBe(409);
+  });
+
+  // Found live, 2026-08-31. The `undefined`-marshalling bug above left a
+  // real Cognito user behind with no `PAT#` record: an account that could
+  // not sign in, could not be found by `GET /patients?email=`, did not
+  // appear on the dashboard, and permanently blocked its own email. The
+  // operator was told "an account with this email already exists" and then
+  // "no patient account was found with that email address" — both true,
+  // and together useless.
+  it('completes an orphaned Cognito user rather than refusing it forever', async () => {
+    const { handler, repository, setPatientPassword, createPatientUser } = build({
+      existingCognitoUser: { email: VALID_BODY.email, subjectId: 'sub-orphaned' },
+    });
+    // The orphan's defining property: a Cognito user, and no record.
+    expect(await repository.findById('sub-orphaned')).toBeUndefined();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients', { principal: PRINCIPAL_CONTEXT, body: VALID_BODY }),
+    );
+
+    expect(response.statusCode).toBe(201);
+    expect(createPatientUser.createUser).toHaveBeenCalledWith(VALID_BODY.email);
+    // The *existing* subject is completed — never a second Cognito user,
+    // and never a record keyed by anything but the sub that already holds
+    // this email.
+    expect(setPatientPassword.setPassword).toHaveBeenCalledWith('sub-orphaned', 'Fixed-Passw0rd!');
+    const body = JSON.parse(response.body) as { item: { id: string }; password: string };
+    expect(body.item.id).toBe('sub-orphaned');
+    expect(body.password).toBe('Fixed-Passw0rd!');
+    expect(await repository.findById('sub-orphaned')).toMatchObject({
+      account_status: 'pending',
+      personal: { fullName: 'New Patient' },
+    });
+  });
+
+  it('never resets a live patient password while healing — the record check is what separates the two', async () => {
+    // The mirror of the test above, and the reason healing is guarded
+    // rather than unconditional: `PatientRepository.register` is
+    // idempotent and returns an existing record untouched, so an
+    // unguarded fall-through would hand back a real patient's record
+    // alongside a freshly-set password.
+    const { handler, repository, setPatientPassword } = build({
+      existingCognitoUser: { email: VALID_BODY.email, subjectId: 'sub-live' },
+    });
+    await repository.register(
+      {
+        subjectId: 'sub-live',
+        personal: { fullName: 'Live Patient', email: VALID_BODY.email, marketingOptIn: false },
+        clinical: {},
+      },
+      { subjectId: 'principal-sub', role: 'principal-clinician', requestId: 'r', sourceIpHash: 'h' },
+    );
+
+    await invoke(
+      handler,
+      eventFor('POST /patients', { principal: PRINCIPAL_CONTEXT, body: VALID_BODY }),
+    );
+
+    expect(setPatientPassword.setPassword).not.toHaveBeenCalled();
   });
 
   // Found live, 2026-08-31: leaving every optional field blank made the
