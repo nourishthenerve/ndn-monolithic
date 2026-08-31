@@ -65,6 +65,9 @@ const personalPatchSchema = z
   .object({
     fullName: z.string().min(1).optional(),
     phone: z.string().min(1).optional(),
+    // 2026-08-31: a patient may keep their own address current, the same
+    // as their phone — both are `personal{}` by patient.ts's own rule.
+    address: z.string().min(1).optional(),
     marketingOptIn: z.boolean().optional(),
   })
   .strict();
@@ -83,16 +86,24 @@ const patientOwnPatchBodySchema = z
     message: 'personal patch must include at least one field',
   });
 
+// 2026-08-31: `tag` is on the clinician patch and deliberately **not**
+// on `patientOwnPatchBodySchema`. A patient must not be able to retag
+// themselves: the tag decides which patients a `visitor` account can see
+// (docs/runbooks/role-model.md), so it is an authorisation input, and an
+// authorisation input the subject can edit is not one. `.strict()` above
+// is what makes that a 400 rather than a silent strip.
 const clinicianPatchBodySchema = z
   .object({
     personal: personalPatchSchema.optional(),
     clinical: clinicalPatchSchema.optional(),
+    tag: z.enum(['IIC', 'NDN']).optional(),
   })
   .strict()
   .refine(
     (body) =>
       (body.personal !== undefined && Object.keys(body.personal).length > 0) ||
-      (body.clinical !== undefined && Object.keys(body.clinical).length > 0),
+      (body.clinical !== undefined && Object.keys(body.clinical).length > 0) ||
+      body.tag !== undefined,
     { message: 'at least one field must be given' },
   );
 

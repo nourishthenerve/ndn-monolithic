@@ -54,8 +54,12 @@ export interface CaseloadEntry {
   readonly patientId: string;
   readonly fullName: string;
   readonly accountStatus: PatientAccountStatus;
+  readonly tag?: string;
   readonly assignedClinicianId?: string;
   readonly assignedClinicianName?: string;
+  /** Sent to a `visitor` only — their whole view is name, address and a count. */
+  readonly address?: string;
+  readonly completedAppointments?: number;
 }
 
 export interface CaseloadCounts {
@@ -68,6 +72,21 @@ interface CaseloadPage {
   readonly nextCursor?: string;
   readonly counts?: CaseloadCounts;
 }
+
+/**
+ * The roles that may hold a patient's care — `TREATING_CLINICIAN_ROLES`
+ * in @ndn/shared-types, restated here rather than imported.
+ *
+ * `apps/web` deliberately does not depend on `@ndn/shared-types` (every
+ * API shape this app reads is restated locally and narrowed to the fields
+ * a component renders — see `PatientAccountStatus` above), and adding the
+ * dependency for one array would pull the whole authorisation vocabulary
+ * into a bundle that needs none of it. **The server is the boundary
+ * regardless**: `AssignmentRepository` refuses a non-treating target with
+ * `CLINICIAN_NOT_AVAILABLE` whatever this list says, so a drift here
+ * costs a rejected click, not an unsafe assignment.
+ */
+const TREATING_CLINICIAN_ROLES: readonly string[] = ['principal', 'sub'];
 
 /** One assignable colleague, from `GET /clinicians`. Deactivated ones are filtered out before they reach the dropdown. */
 interface AssignableClinician {
@@ -112,6 +131,8 @@ export interface CaseloadViewStrings {
   readonly restoreButton: string;
   readonly suspendConfirm: string;
   readonly statusError: string;
+  readonly addressColumnLabel: string;
+  readonly appointmentsColumnLabel: string;
 }
 
 export interface CaseloadViewProps {
@@ -200,14 +221,27 @@ export function CaseloadView({
   const [pendingPatientId, setPendingPatientId] = useState<string | undefined>();
   const [assignFailed, setAssignFailed] = useState(false);
   /**
-   * 2026-08-31: helpdesk reads this dashboard but is denied the `Patient
-   * assignment` row outright, so the assign column is not merely
-   * inoperative for them — it is an offer the API will always refuse, and
-   * the whole column is dropped rather than shown broken. `undefined`
-   * (token unreadable) keeps the column, on this file's own "hide only on
-   * a positive answer" rule.
+   * 2026-08-31: this table's columns are not the same for everyone, so
+   * the role is state rather than a boolean.
+   *
+   *   * **principal** — everything: status, clinician, assign/reassign,
+   *     remove/restore access.
+   *   * **helpdesk** — reads the list and opens records, but is denied
+   *     the `Patient assignment` row outright, so the assign and remove
+   *     columns are dropped rather than shown broken; every press would
+   *     be a 403.
+   *   * **visitor** — a different table entirely: name, address, and how
+   *     many appointments happened. No status, no clinician, no links —
+   *     the server sends them none of those fields, and this renders
+   *     none.
+   *
+   * `undefined` (token unreadable) is treated as the principal's view, on
+   * this file's own "hide only on a positive answer" rule: the server
+   * refuses anything the caller may not do.
    */
-  const [canAssign, setCanAssign] = useState(true);
+  const [viewerRole, setViewerRole] = useState<'principal' | 'helpdesk' | 'visitor'>('principal');
+  const canAssign = viewerRole === 'principal';
+  const isVisitor = viewerRole === 'visitor';
   /**
    * Suspending a patient is `Patient assignment`'s own `update` —
    * Principal-only, exactly like assignment itself, and deliberately not
@@ -268,11 +302,12 @@ export function CaseloadView({
     let cancelled = false;
     const loadClinicians = async () => {
       const state = await client.resolve();
-      if (!cancelled && state.status === 'signed-in' && state.session.viewerRole === 'helpdesk') {
-        setCanAssign(false);
+      const role = state.status === 'signed-in' ? state.session.viewerRole : undefined;
+      if (!cancelled && (role === 'helpdesk' || role === 'visitor')) {
+        setViewerRole(role);
         // No colleague list either: `GET /clinicians` is Principal-only
-        // and would 403, and there is nothing left on this page for the
-        // answer to feed.
+        // and would 403, and there is nothing left on either of these
+        // views for the answer to feed.
         return;
       }
       const accessToken = await client.authorization();
@@ -289,7 +324,12 @@ export function CaseloadView({
           return;
         }
         const payload = (await response.json()) as {
-          items?: readonly { id: string; displayName: string; account_status: string }[];
+          items?: readonly {
+            id: string;
+            displayName: string;
+            role: string;
+            account_status: string;
+          }[];
         };
         if (cancelled) {
           return;
@@ -301,6 +341,15 @@ export function CaseloadView({
             // `CLINICIAN_NOT_AVAILABLE`, so offering them here would be
             // offering an action guaranteed to fail.
             .filter((clinician) => clinician.account_status === 'active')
+            // 2026-08-31, reported: the dropdown listed helpdesk (and
+            // now visitor) accounts. They are `Clinician` records in the
+            // same directory and they are `active`, so a status filter
+            // alone let them through — but neither treats anyone, and
+            // `AssignmentRepository` refuses both with
+            // `CLINICIAN_NOT_AVAILABLE`. Offering an option the server is
+            // guaranteed to reject is the bug; the server-side check is
+            // the boundary and is what actually prevents it.
+            .filter((clinician) => TREATING_CLINICIAN_ROLES.includes(clinician.role))
             .map(({ id, displayName }) => ({ id, displayName })),
         );
       } catch {
@@ -439,8 +488,17 @@ export function CaseloadView({
         <thead>
           <tr>
             <th scope="col">{strings.patientColumnLabel}</th>
-            <th scope="col">{strings.statusColumnLabel}</th>
-            <th scope="col">{strings.clinicianColumnLabel}</th>
+            {isVisitor ? (
+              <>
+                <th scope="col">{strings.addressColumnLabel}</th>
+                <th scope="col">{strings.appointmentsColumnLabel}</th>
+              </>
+            ) : (
+              <>
+                <th scope="col">{strings.statusColumnLabel}</th>
+                <th scope="col">{strings.clinicianColumnLabel}</th>
+              </>
+            )}
             {canAssign && <th scope="col">{strings.assignColumnLabel}</th>}
             {canAssign && <th scope="col">{strings.removeColumnLabel}</th>}
           </tr>
@@ -452,14 +510,29 @@ export function CaseloadView({
             return (
               <tr key={item.patientId}>
                 <td>
-                  {/* The dashboard's only way into a named patient — the
-                      screen that did not exist until today. */}
-                  <a href={`${recordHrefBase}?id=${encodeURIComponent(item.patientId)}`}>
-                    {item.fullName || strings.openRecordLabel}
-                  </a>
+                  {/* A visitor gets plain text: the record page is denied
+                      to them, so a link would be an invitation to a 403.
+                      For everyone else this is the dashboard's only way
+                      into a named patient. */}
+                  {isVisitor ? (
+                    item.fullName
+                  ) : (
+                    <a href={`${recordHrefBase}?id=${encodeURIComponent(item.patientId)}`}>
+                      {item.fullName || strings.openRecordLabel}
+                    </a>
+                  )}
                 </td>
-                <td>{statusLabel(item.accountStatus)}</td>
-                <td>{item.assignedClinicianName ?? strings.unassignedLabel}</td>
+                {isVisitor ? (
+                  <>
+                    <td>{item.address ?? ''}</td>
+                    <td>{item.completedAppointments ?? 0}</td>
+                  </>
+                ) : (
+                  <>
+                    <td>{statusLabel(item.accountStatus)}</td>
+                    <td>{item.assignedClinicianName ?? strings.unassignedLabel}</td>
+                  </>
+                )}
                 {canAssign && (
                 <td>
                   {clinicians.length === 0 ? (

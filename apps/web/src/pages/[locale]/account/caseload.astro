@@ -41,7 +41,7 @@ const heading = t('caseload.heading', undefined, locale);
   <RequireAuth
     client:only="react"
     loadingLabel={t('account.loading', undefined, locale)}
-    allowRoles={['principal-clinician', 'helpdesk']}
+    allowRoles={['principal-clinician', 'helpdesk', 'visitor']}
   >
     <Fragment slot="signedOut">
       <p>
@@ -86,6 +86,8 @@ const heading = t('caseload.heading', undefined, locale);
         restoreButton: t('caseload.restoreButton', undefined, locale),
         suspendConfirm: t('caseload.suspendConfirm', undefined, locale),
         statusError: t('caseload.statusError', undefined, locale),
+        addressColumnLabel: t('caseload.addressColumn', undefined, locale),
+        appointmentsColumnLabel: t('caseload.appointmentsColumn', undefined, locale),
       }}
     />
     <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />

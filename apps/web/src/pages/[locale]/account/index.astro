@@ -83,7 +83,7 @@ const heading = t('account.heading', undefined, locale);
         </li>
       </ul>
     </nav>
-    <RequireAuth client:only="react" allowRoles={['principal-clinician', 'helpdesk']}>
+    <RequireAuth client:only="react" allowRoles={['principal-clinician', 'helpdesk', 'visitor']}>
       <nav aria-label={t('account.staffToolsHeading', undefined, locale)}>
         <ul>
           <li>
@@ -91,6 +91,12 @@ const heading = t('account.heading', undefined, locale);
               {t('account.dashboardLink', undefined, locale)}
             </Link>
           </li>
+        </ul>
+      </nav>
+    </RequireAuth>
+    <RequireAuth client:only="react" allowRoles={['principal-clinician', 'helpdesk']}>
+      <nav aria-label={t('account.patientAdminLink', undefined, locale)}>
+        <ul>
           <li>
             <Link href={`/${locale}/account/patient-admin`}>
               {t('account.patientAdminLink', undefined, locale)}
@@ -105,6 +111,11 @@ const heading = t('account.heading', undefined, locale);
           <li>
             <Link href={`/${locale}/account/clinician-admin`}>
               {t('account.clinicianAdminLink', undefined, locale)}
+            </Link>
+          </li>
+          <li>
+            <Link href={`/${locale}/account/authoring`}>
+              {t('account.authoringLink', undefined, locale)}
             </Link>
           </li>
         </ul>

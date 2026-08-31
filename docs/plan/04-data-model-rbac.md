@@ -21,22 +21,22 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 
 **RBAC matrix** (C=create R=read U=update J=join-call P=reset-password D=**never**, — = denied):
 
-| Entity | Patient (own) | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Helpdesk | Principal |
-|---|---|---|---|---|---|---|
-| Own profile | R U | — | R U | — | R U | R U |
-| Patient profile | R U (self) | — | R U | — | C R U P | C R U P |
-| Patient assignment | — | — | — | — | — | C R U |
-| Diagnosis / care plan | **R** | — | C R U | — | **—** | C R U |
-| Assessment — `visible{}` | R | — | C R U | — | **—** | C R U |
-| **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | C R U |
-| Appointments | R J | — | C R U J | — | **R** | C R U J |
-| Content assignment | R | — | C R U | — | C R U | C R U |
-| Messages | C R (own thread) | — | C R (own patients) | — | **—** | C R |
-| Clinician accounts | — | — | — | — | **—** | C R U (deactivate only) |
-| Audit log | — | — | — | — | — | R |
-| Content item | — | — | C R U | C R U | C R U | C R U |
-| Testimonial moderation | — | — | C R U | C R U | — | C R U |
-| Workshop | — | — | C R U | C R U | — | C R U |
+| Entity | Patient (own) | Patient (other) | Sub-clinician (assigned) | Sub-clinician (unassigned) | Helpdesk | Visitor | Principal |
+|---|---|---|---|---|---|---|---|
+| Own profile | R U | — | R U | — | R U | R U | R U |
+| Patient profile | R U (self) | — | R U | — | C R U P | **R (IIC-tagged only)** | C R U P |
+| Patient assignment | — | — | — | — | — | — | C R U |
+| Diagnosis / care plan | **R** | — | C R U | — | **—** | **—** | C R U |
+| Assessment — `visible{}` | R | — | C R U | — | **—** | **—** | C R U |
+| **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | **—** | C R U |
+| Appointments | R J | — | C R U J | — | **R** | **R (count only)** | C R U J |
+| Content assignment | R | — | C R U | — | C R U | — | C R U |
+| Messages | C R (own thread) | — | C R (own patients) | — | **—** | **—** | C R |
+| Clinician accounts | — | — | — | — | **—** | — | C R U (deactivate only) |
+| Audit log | — | — | — | — | — | — | R |
+| Content item | — | — | **R** | **R** | **R** | — | C R U |
+| Testimonial moderation | — | — | C R U | C R U | — | — | C R U |
+| Workshop | — | — | **R** | **R** | — | — | C R U |
 
 **2026-08-31 adds the `Helpdesk` column.** The owner: *"Besides principal clinician and clinician I also want to create an account for helpdesk person who will be able to either create a new patient account/registration or edit/upload content to existing patients including providing them new temporary password. This account will be able to login using the clinician sign in button."*
 
@@ -61,6 +61,21 @@ The table above was written when the principal was modelled as an **overseer** �
 The exclusive powers are unchanged and now complete: only `Principal` holds `Patient assignment` (approve, reassign, and — new the same day — suspend and restore a patient) and `Clinician accounts` (create, deactivate, reactivate). Suspending a patient rides `Patient assignment`'s own `update` rather than `Patient profile`'s, precisely because `Patient profile: U` is held by helpdesk: "correct a phone number" and "revoke this person's access" must not be the same permission.
 
 "Other clinician would be able to update his details" is the `Own profile` row, which has been in this table since TASK 2.1.1 with no endpoint behind it. `PATCH /clinicians/me` is that endpoint.
+
+**2026-08-31 (third amendment) — the `Visitor` column, and authoring narrowed to the principal.** The owner: *"I need a visitor account as well who can see basic name and address and number of appointments happened via clinician sign in way for all IIC tagged patients"*, and *"for blogs and webinar there is no way to upload it with tags/keywords - it will only be possible via principal clinician account."*
+
+**`Visitor` is the narrowest column in the table, and the only one narrowed by *data* rather than by a cell.** Every other role's reach is settled entirely by the matrix; a visitor's is settled by the matrix *and* by `Patient.tag`. `can()` answers "may a visitor read a patient profile at all" — yes — and `caseload-repository.ts` answers "which ones" by skipping every patient not tagged `IIC`. Splitting it that way is deliberate: the matrix is a table of role-to-entity permissions and has no vocabulary for "rows where a field equals a value", and inventing one to express a single case would make every other cell harder to read. The cost is that the tag filter is enforced in one repository rather than in the policy layer, so it is named here and stated in that file's own header, not left to be discovered.
+
+Two cells are narrower than "read a patient profile" implies, and both are enforced by projection rather than by the matrix, for the same reason:
+
+* `Patient profile: R` reaches only `personal.fullName` and `personal.address` for this column. Not email, not phone, not `clinical{}`, not `account_status`, not who the patient is assigned to.
+* `Appointments: R` reaches only a **count** of appointments whose status is `completed` — never a time, never a clinician, never a record. "Number of appointments happened" is the whole of what was asked for and the whole of what is returned.
+
+A visitor writes nothing anywhere, and holds no cell on any other row. `Own profile: R U` is the one exception, and only so the same "your details / change your password" page every other signed-in role uses works for them too.
+
+**Authoring narrowed to `Principal`.** `Content item` and `Workshop` were `C R U` for both sub-clinician columns, and `Content item` for `Helpdesk` as well. The owner's instruction is explicit — uploading a blog or a webinar "will only be possible via principal clinician account" — so `C` and `U` move to `Principal` alone. `R` stays everywhere it was: a clinician who cannot author a content item still has to be able to *list* content in order to assign it to a patient (`Content assignment`, unchanged), and a read that was already granted is not what the instruction narrows.
+
+This is the first time a permission in this table has been *taken away* from a role that held it, rather than added. It is recorded as a narrowing on purpose: `authz.test.ts`'s independent copy of this table is what makes the change fail loudly in both directions, and the two authoring endpoints' own "is 403 for a sub-clinician" tests are new, not adjusted.
 
 **The clinician-private boundary is enforced at the repository layer** — a projection function strips `private{}` before data can reach any patient-facing serialiser. Not in the handler, not in the view: one chokepoint, 100% test coverage, negative test per endpoint forever (NFR-06).
 

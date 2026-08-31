@@ -30,13 +30,16 @@ import { AppError } from './errors.js';
  * Fixed so it cannot recur: `satisfies` rejects a value that is not a
  * `Role`, and the exhaustiveness check below rejects a `Role` that is
  * missing from the list. Adding a role without editing this line is now
- * a compile error rather than a production 401.
+ * a compile error rather than a production 401 — and it earned its keep
+ * within the hour: `'visitor'`, added later the same day, failed the
+ * build here before it could reach anything.
  */
 const ROLES = [
   'patient',
   'sub-clinician',
   'principal-clinician',
   'helpdesk',
+  'visitor',
 ] as const satisfies readonly Role[];
 
 /** Compile-time proof that `ROLES` covers `Role` — see the note above. `never` here means a role is missing. */

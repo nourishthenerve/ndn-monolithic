@@ -10,13 +10,14 @@ There are four roles now, and until today the answer to "who may do what" was sc
 
 The matrix is still the authority — this file is a reader's guide to it, plus the decisions that are not cells.
 
-## The four roles
+## The five roles
 
 | | Signs in with | Cognito group | May exist |
 |---|---|---|---|
 | **Patient** | patient button | — (separate pool) | many |
 | **Sub-clinician** | clinician button | none | many |
 | **Helpdesk** | clinician button | `helpdesk` | many |
+| **Visitor** | clinician button | `visitor` | many |
 | **Principal** | clinician button | `principal-clinician` | **exactly one** |
 
 A role is derived in exactly one place on each side, and the two mirror each other step for step: `authorizer.ts`'s `roleFor` (pool → group, from a *verified* token) and `apps/web/src/auth/token-claims.ts`'s `viewerRoleFromAccessToken` (pool → group, from the token the browser already holds, for rendering only). Any drift between them shows up as a page offered and then refused, or hidden from someone entitled to it — which is why the client's copy is written to match rather than to be clever.
@@ -31,7 +32,22 @@ Read the matrix column by column, not row by row. In prose:
 
 **Helpdesk** — the patient's administrative proxy. Register a patient account, issue a temporary password, read and correct any patient's details, read any patient's appointments, upload and assign content. **No clinical content of any kind** — diagnoses, care plans, assessments and messages are denied outright. No assignment, no clinician administration, no audit log.
 
-**Principal** — everything a sub-clinician can do, on every patient, plus everything helpdesk can do, plus the four exclusive powers: assign and reassign a patient, suspend and restore a patient, create and deactivate clinician accounts, and read the audit log.
+**Visitor** — a partner organisation's read-only account, and the narrowest role in the system. It sees one screen: the patients tagged `IIC`, by **name and address**, with a count of the appointments that **actually happened** (`completed` — never scheduled, cancelled or no-show). No email, no phone, no status, no clinician, no clinical content, no links into anything, and no write of any kind. Plus its own name and password, like everyone else.
+
+**Principal** — everything a sub-clinician can do, on every patient, plus everything helpdesk can do, plus **authoring blog posts and workshops**, plus the four exclusive powers: assign and reassign a patient, suspend and restore a patient, create and deactivate clinician accounts, and read the audit log.
+
+## Patient tags, and the one rule the matrix does not hold
+
+Every patient carries a `tag` — `NDN` (the clinic's own) or `IIC` (the partner programme) — set when the account is created and changeable afterwards only by staff, never by the patient themselves. It is top-level on the record rather than inside `personal{}` or `clinical{}`: it is neither something the patient gave us nor something held on a clinical basis, but an operational fact the practice assigns, exactly like `account_status`. It is also load-bearing for authorisation, which is a further reason not to bury it in a bag of fields a future erasure pass may empty.
+
+**A visitor's reach is narrowed by that field, not by a matrix cell**, and this is the single place in the system where that is true. `can()` answers "may a visitor read a patient profile at all"; `caseload-repository.ts` answers "which ones" by skipping every record not tagged `IIC`. The matrix has no vocabulary for "rows where a field equals a value", and inventing one to serve a single case would make every other cell harder to read — so the split is deliberate, and named here rather than left to be discovered.
+
+Two properties of that filter matter and are tested:
+
+- a non-matching patient is **skipped, not redacted** — a blanked row would still disclose that the patient exists;
+- an **untagged** record (written before tagging existed) is not `IIC`. Absence is never read as membership.
+
+The tag a visitor may see is a constant, not a request parameter. There is nowhere in the request to ask for another programme's patients. If a second partner ever needs an account, the tag becomes a field on their own `CLI#` record — still never read from the request.
 
 ## The three decisions that are not cells
 
@@ -68,20 +84,39 @@ It could not ride `Patient profile`'s `update`, because helpdesk holds that one.
 
 ## Where each role lands in the UI
 
-| Page | Patient | Sub-clinician | Helpdesk | Principal |
-|---|---|---|---|---|
-| `/account` | your details, password | your details, password | + staff links | + staff links, clinician accounts |
-| `/account/patient` (own details) | ✓ | — | — | — |
-| `/account/change-password` (own name + password) | password only | ✓ | ✓ | ✓ |
-| `/account/caseload` (dashboard) | — | — | list, counts, open a record | + assign/reassign, + remove/restore access |
-| `/account/patient-record?id=` | — | — | ✓ | ✓ |
-| `/account/patient-admin` | — | — | ✓ | ✓ |
-| `/account/clinician-admin` | — | — | — | ✓ |
+| Page | Patient | Sub-clinician | Helpdesk | Visitor | Principal |
+|---|---|---|---|---|---|
+| `/account` | your details, password | your details, password | + staff links | dashboard link only | everything |
+| `/account/patient` (own details) | ✓ | — | — | — | — |
+| `/account/change-password` (own name + password) | password only | ✓ | ✓ | ✓ | ✓ |
+| `/account/caseload` (dashboard) | — | — | list, counts, open a record | **name, address, appointments attended** | + assign/reassign, remove/restore |
+| `/account/patient-record?id=` | — | — | ✓ | — | ✓ |
+| `/account/patient-admin` | — | — | ✓ | — | ✓ |
+| `/account/clinician-admin` | — | — | — | — | ✓ |
+| `/account/authoring` (blog, workshops) | — | — | — | — | ✓ |
+
+The dashboard is one route rendering two different tables. A visitor gets name / address / appointments-attended, with the patient's name as **plain text rather than a link** — the record page is denied to them, so a link would be an invitation to a 403. Everyone else gets status / clinician, and the principal gets the two action columns on top.
 
 Hiding is presentation only, and hides **on a positive answer alone**: a token whose claims cannot be read renders the content and lets the server refuse, because hiding a page from the one person entitled to it is far worse than briefly offering one the API will turn away. Every route behind every page re-derives the role from a verified token and checks the matrix, unchanged.
+
+## Authoring: the first permission ever taken away
+
+`Content item` and `Workshop` were `C R U` for both sub-clinician columns, and `Content item` for helpdesk too. The owner: uploading a blog or a webinar "will only be possible via principal clinician account", so `C` and `U` are now `Principal`'s alone.
+
+`R` stays exactly where it was, and that is not an oversight: a clinician who cannot author a content item still has to be able to *list* content in order to assign it to a patient (`Content assignment`, unchanged).
+
+This is the first time a cell in this table has been narrowed rather than widened. `authz.test.ts`'s independent copy of the doc is what makes that fail loudly in both directions, and the "is 403 for a sub-clinician" test on the content endpoint is a rewrite of the "accepts a sub-clinician" test that stood there before — the change is visible in the diff rather than buried in a new file.
+
+The API itself needed nothing: `POST /content` and `POST /workshops` have carried keywords, translations and publish/unpublish since TASK 1.3.2 and 1.5.1. What never existed was a way to reach them — every blog post and workshop on the live site was written by calling the API by hand. `/account/authoring` is that surface, create-only for now (editing needs a list, a loaded draft and a diff — a screen in its own right, and a bad version of it beside a good create form would be worse than not building it yet).
 
 ## The bug that made helpdesk look broken
 
 `request-principal.ts` validates the authorizer's context with its own hardcoded `ROLES` list, and `'helpdesk'` was never added to it. Every helpdesk request therefore failed Zod validation and returned **401 before any handler ran** — the dashboard, the patient pages, everything. Nothing caught it: the array is a literal tuple, so widening `Role` was not a type error, and the matrix suite exercises `can()` directly rather than through that boundary.
 
-It is now `satisfies readonly Role[]` plus a compile-time exhaustiveness check, so adding a role without editing that list is a build failure rather than a production 401.
+It is now `satisfies readonly Role[]` plus a compile-time exhaustiveness check, so adding a role without editing that list is a build failure rather than a production 401. It earned its keep within the hour: `'visitor'`, added later the same day, failed the build there before it could reach anything.
+
+## One more, reported the same day: the assign dropdown offered helpdesk
+
+`GET /clinicians` returns the whole directory, and the dropdown filtered it by `account_status === 'active'` alone. A helpdesk (and now a visitor) account is a `Clinician` record in that directory and *is* active, so both were offered as people to assign a patient to — and neither treats anyone.
+
+Fixed on both sides, and the server side is the one that matters: `AssignmentRepository` now refuses a non-treating target with `CLINICIAN_NOT_AVAILABLE` (`TREATING_CLINICIAN_ROLES`, checked alongside the status it already checked), so an assignment to a helpdesk account is impossible rather than merely un-offered. The dropdown filter is the courtesy on top.

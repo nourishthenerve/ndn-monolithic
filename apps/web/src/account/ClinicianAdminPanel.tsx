@@ -65,7 +65,7 @@ type DirectoryStatus = 'loading' | 'ready' | 'forbidden' | 'error';
 
 /** A `<select>` hands back a plain string; this is the one place it becomes a role, closed-set and defaulting to the least-privileged value. */
 function asFormRole(value: string): ClinicianFormRole {
-  return value === 'principal' || value === 'helpdesk' ? value : 'sub';
+  return value === 'principal' || value === 'helpdesk' || value === 'visitor' ? value : 'sub';
 }
 
 const EMPTY_CREATE_FIELDS: CreateClinicianFormFields = {
@@ -93,6 +93,7 @@ export interface ClinicianAdminPanelStrings {
   readonly rolePrincipalLabel: string;
   readonly roleSubLabel: string;
   readonly roleHelpdeskLabel: string;
+  readonly roleVisitorLabel: string;
   readonly passwordFieldLabel: string;
   readonly passwordFieldHint: string;
   readonly createButton: string;
@@ -339,6 +340,8 @@ export function ClinicianAdminPanel({
         return strings.rolePrincipalLabel;
       case 'helpdesk':
         return strings.roleHelpdeskLabel;
+      case 'visitor':
+        return strings.roleVisitorLabel;
       case 'sub':
         return strings.roleSubLabel;
     }
@@ -382,6 +385,7 @@ export function ClinicianAdminPanel({
             >
               <option value="sub">{strings.roleSubLabel}</option>
               <option value="helpdesk">{strings.roleHelpdeskLabel}</option>
+              <option value="visitor">{strings.roleVisitorLabel}</option>
               <option value="principal">{strings.rolePrincipalLabel}</option>
             </select>
           </p>

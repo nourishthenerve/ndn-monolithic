@@ -8,6 +8,8 @@ function fields(overrides: Partial<CreatePatientFormFields> = {}): CreatePatient
     email: 'patient@example.com',
     fullName: 'Test Patient',
     phone: '',
+    address: '',
+    tag: 'NDN',
     marketingOptIn: false,
     referralSource: '',
     presentingCondition: '',
@@ -24,6 +26,9 @@ describe('buildCreatePatientRequestBody', () => {
       email: 'patient@example.com',
       fullName: 'Test Patient',
       marketingOptIn: true,
+      // 2026-08-31: the tag joined the always-present set — see the tag
+      // case below for why it has no "omitted" state.
+      tag: 'NDN',
     });
   });
 
@@ -52,5 +57,20 @@ describe('buildCreatePatientRequestBody', () => {
       referralSource: 'GP referral',
       presentingCondition: 'Post-stroke rehabilitation',
     });
+  });
+
+  // 2026-08-31: the tag is the one field with no "not given" state — it
+  // always travels, because an absent tag on a record means "created
+  // before tagging existed", which a patient created today is not.
+  it('always sends a tag, even the default', () => {
+    expect(buildCreatePatientRequestBody(fields()).tag).toBe('NDN');
+    expect(buildCreatePatientRequestBody(fields({ tag: 'IIC' })).tag).toBe('IIC');
+  });
+
+  it('omits a blank address entirely, and trims one that is given', () => {
+    expect(buildCreatePatientRequestBody(fields({ address: '   ' }))).not.toHaveProperty('address');
+    expect(buildCreatePatientRequestBody(fields({ address: ' 1 Example Street ' })).address).toBe(
+      '1 Example Street',
+    );
   });
 });

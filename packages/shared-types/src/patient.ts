@@ -22,6 +22,13 @@ export interface PatientPersonal {
   fullName: string;
   email: string;
   phone?: string;
+  /**
+   * 2026-08-31. `personal{}` by this file's own rule — a postal address
+   * has no clinical retention basis, it is here because the patient gave
+   * it to us, which also makes it one of the fields a future lawful
+   * erasure would reach (R-04).
+   */
+  address?: string;
   marketingOptIn: boolean;
 }
 
@@ -50,6 +57,23 @@ export interface PatientClinical {
  */
 export type PatientAccountStatus = 'pending' | 'approved' | 'declined' | 'suspended';
 
+/**
+ * 2026-08-31: which programme a patient came in through. `NDN` is the
+ * clinic's own; `IIC` is the partner organisation whose patients its
+ * `visitor` accounts may see (docs/runbooks/role-model.md).
+ *
+ * Top-level on `Patient`, not inside `personal{}` or `clinical{}`, and
+ * this is not a dodge of that file rule: a tag is neither something the
+ * patient gave us nor something held on a clinical basis — it is an
+ * operational fact the practice assigns, exactly like `account_status`
+ * and `assigned_clinician_id`, which sit at the same level for the same
+ * reason. It is also, unlike either sub-object, load-bearing for
+ * *authorisation* (a visitor sees `IIC` and nothing else), which is a
+ * further reason it must not live in a bag of fields an erasure pass may
+ * one day empty.
+ */
+export type PatientTag = 'IIC' | 'NDN';
+
 export interface Patient extends BaseRecord {
   /** The Cognito `sub` — see services/api/src/dynamo-principal-directory.ts for why the two are the same value. */
   id: string;
@@ -58,6 +82,16 @@ export interface Patient extends BaseRecord {
   account_status: PatientAccountStatus;
   /** Set by TASK 2.5.1's assignment, absent until then. Every relationship check in `can()` tests against it. */
   assigned_clinician_id?: string;
+  /**
+   * Optional on the type, not on the form: every patient created from
+   * 2026-08-31 carries one (`POST /patients` defaults it to `NDN` when a
+   * caller omits it), and records written before that date have none.
+   * Absent is therefore "created before tagging existed", which is
+   * treated as not-`IIC` everywhere it matters — a visitor sees an
+   * explicitly `IIC`-tagged patient or nobody, never a patient whose tag
+   * was merely never set.
+   */
+  tag?: PatientTag;
   /** Reserved for the caseload search TASK 2.5.3 builds. Empty on a newly-created record. */
   keywords: string[];
 }

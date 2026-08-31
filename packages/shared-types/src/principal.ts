@@ -12,20 +12,35 @@
 // services/api/src/authz.ts and reads services/api/src/authz-matrix.ts.
 
 /**
- * `'helpdesk'` (2026-08-31): an administrative account in the *clinician*
- * pool — it signs in through the same button a clinician does — with no
- * clinical reach at all. It exists to create patient accounts, issue
- * temporary passwords, and upload and assign content; it is denied
- * diagnoses, care plans, assessments and messages outright. See
- * docs/plan/04-data-model-rbac.md's `Helpdesk` column, which is the
- * authority; services/api/src/authz-matrix.ts transcribes it.
+ * Two roles added 2026-08-31, both living in the *clinician* pool — they
+ * sign in through the same button a clinician does — and both with no
+ * clinical reach whatsoever. Neither is a kind of clinician:
+ * `Clinician.role` gains the same values so the record and the token
+ * agree, and the "exactly one principal" invariant is untouched (many of
+ * either may exist).
  *
- * It is a `Role`, not a kind of clinician: `Clinician.role` gains the same
- * value so the record and the token agree, but nothing about the
- * "exactly one principal" invariant changes — many helpdesk accounts may
- * exist.
+ *   * `'helpdesk'` — the patient's administrative proxy. Creates patient
+ *     accounts, issues temporary passwords, reads and corrects any
+ *     patient's details, reads their appointments, uploads and assigns
+ *     content. Denied diagnoses, care plans, assessments and messages
+ *     outright.
+ *   * `'visitor'` — a partner organisation's read-only account, and the
+ *     narrowest role in the system. It sees one thing: the patients
+ *     tagged for its own programme, by name and address, with a count of
+ *     the appointments that actually happened. It writes nothing, and it
+ *     is the only role whose *set of patients* is narrowed by data
+ *     (`Patient.tag`) rather than by a matrix column.
+ *
+ * docs/plan/04-data-model-rbac.md's columns are the authority;
+ * services/api/src/authz-matrix.ts transcribes them, and
+ * docs/runbooks/role-model.md reads the whole table back in prose.
  */
-export type Role = 'patient' | 'sub-clinician' | 'principal-clinician' | 'helpdesk';
+export type Role =
+  | 'patient'
+  | 'sub-clinician'
+  | 'principal-clinician'
+  | 'helpdesk'
+  | 'visitor';
 
 /**
  * Deliberately no `'delete'`. docs/plan/04-data-model-rbac.md's matrix has

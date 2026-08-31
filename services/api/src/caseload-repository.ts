@@ -15,8 +15,21 @@
 // status — and this file's two changes follow from it: an unassigned
 // patient is a row with no clinician rather than a row that is skipped,
 // and `listPage` asks the store for the two counts on the first page.
-// Nothing about the authorisation posture changes: still Principal-only,
-// still `'Patient profile'`'s own row, still `projectFor` on every record.
+// Nothing about the authorisation posture changes: still `'Patient
+// profile'`'s own row, still `projectFor` on every record.
+//
+// ## Amendment, 2026-08-31 (later the same day) — the visitor's view
+//
+// This file now holds one authorisation rule that the matrix does not:
+// **a `visitor` sees only `IIC`-tagged patients**, and sees only their
+// name, address and completed-appointment count. `can()` cannot express
+// "rows where a field equals a value", and inventing a way for it to
+// would complicate every other cell to serve one case — so the narrowing
+// lives here, stated in the doc's own `Visitor` cell in words, and
+// enforced by two things in `listPage`: a `continue` that skips a
+// non-matching record entirely (never a redacted row, which would still
+// disclose that the patient exists), and an entry built by omission
+// rather than by trusting a caller not to render what it was sent.
 //
 // Read-only, and deliberately so: the write side of GSI3's projection is
 // `dynamo-store.ts`'s `DynamoAssignmentStore.writeDecision` — the same
@@ -25,13 +38,23 @@
 // identical write. This file has no `write*` method because there is
 // nothing for it to write; a caseload is a *view* of assignment decisions
 // already made elsewhere.
-import type { Patient, PatientAccountStatus, Principal } from '@ndn/shared-types';
+import type { Patient, PatientAccountStatus, PatientTag, Principal } from '@ndn/shared-types';
 
 import type { ClinicianRepository } from './clinician-repository.js';
 import { projectFor } from './projection.js';
 
 /** The matrix row this view's own reads are governed by — the same row 'Own profile'/'Patient profile' style reads use, per step 4. */
 const PATIENT_PROFILE_ENTITY_TYPE = 'patient-profile';
+
+/**
+ * 2026-08-31: the tag a `visitor` account is entitled to see. A constant,
+ * not a parameter, and that is the security property: a visitor cannot
+ * ask for another programme's patients because there is nowhere in the
+ * request to ask. If a second partner ever needs an account, this becomes
+ * a field on the `CLI#` record and is read from the caller's own
+ * directory entry — still never from the request.
+ */
+const VISITOR_TAG: PatientTag = 'IIC';
 
 export interface CaseloadStore {
   /**
@@ -43,12 +66,26 @@ export interface CaseloadStore {
   getPatient(patientId: string): Promise<Patient | undefined>;
   /** How many patients exist, and how many of those are active — the dashboard's own header figures. */
   count(): Promise<CaseloadCounts>;
+  /**
+   * How many of this patient's appointments actually happened —
+   * `appointment_status === 'completed'`, never scheduled, cancelled or
+   * no-show. One bounded Query on the patient's own partition. Called
+   * only for a `visitor`, whose whole view this is; nobody else's page
+   * shows the number, and computing it for everyone would be a query per
+   * patient per dashboard load to render nothing.
+   */
+  countCompletedAppointments(patientId: string): Promise<number>;
 }
 
 export interface CaseloadEntry {
   readonly patientId: string;
   readonly fullName: string;
   readonly accountStatus: PatientAccountStatus;
+  /** 2026-08-31. Absent on records written before tagging existed — see `Patient.tag`. */
+  readonly tag?: PatientTag;
+  /** Present for a `visitor` only: their whole view is name, address and a count. */
+  readonly address?: string;
+  readonly completedAppointments?: number;
   /**
    * Absent for a patient nobody is responsible for yet — a freshly
    * registered `pending` account, or a `declined` one. Before 2026-08-31
@@ -98,6 +135,12 @@ export class CaseloadRepository {
    */
   async listPage(principal: Principal, cursor: string | undefined, limit: number): Promise<CaseloadPage> {
     const { patientIds, nextCursor } = await this.store.queryPage(cursor, limit);
+    // 2026-08-31: the one place a visitor's reach is narrowed, and the
+    // reason this file's header now says the matrix is not the whole
+    // story for that role. `can()` has already answered "may this caller
+    // read a patient profile"; only the record itself can answer "is this
+    // one theirs to see", because the answer is a field on it.
+    const isVisitor = principal.role === 'visitor';
 
     // Per-page cache: several patients on one page routinely share a
     // clinician (GSI3 sorts by clinician within a status rank for exactly
@@ -117,6 +160,14 @@ export class CaseloadRepository {
       if (!patient) {
         continue;
       }
+      // Skipped, not redacted: a visitor must not be able to infer that a
+      // non-IIC patient exists from a row appearing with its fields
+      // blanked out. An untagged record (written before tagging existed)
+      // is not `IIC`, so it is skipped too — absence is never read as
+      // membership.
+      if (isVisitor && patient.tag !== VISITOR_TAG) {
+        continue;
+      }
       const projected = projectFor(principal, patient, {
         entityType: PATIENT_PROFILE_ENTITY_TYPE,
         assignedClinicianId: patient.assigned_clinician_id,
@@ -133,10 +184,28 @@ export class CaseloadRepository {
         }
       }
 
+      if (isVisitor) {
+        // The whole of a visitor's view, built by *omission* rather than
+        // by the caller choosing not to render: no email, no phone, no
+        // clinical field, no status, and no clinician — the fields simply
+        // never leave this method. `Appointments: R (count only)` in the
+        // doc is this line: a number, never a time and never a record.
+        items.push({
+          patientId,
+          fullName: projected.personal?.fullName ?? '',
+          accountStatus: patient.account_status,
+          ...(patient.tag ? { tag: patient.tag } : {}),
+          ...(projected.personal?.address ? { address: projected.personal.address } : {}),
+          completedAppointments: await this.store.countCompletedAppointments(patientId),
+        });
+        continue;
+      }
+
       items.push({
         patientId,
         fullName: projected.personal?.fullName ?? '',
         accountStatus: patient.account_status,
+        ...(patient.tag ? { tag: patient.tag } : {}),
         ...(assignedClinicianId
           ? { assignedClinicianId, assignedClinicianName: clinicianName }
           : {}),

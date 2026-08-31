@@ -1254,6 +1254,46 @@ export class DynamoCaseloadStore implements CaseloadStore {
     }
     return withoutTableKeys<Patient>(result.Item);
   }
+
+  /**
+   * 2026-08-31: how many of this patient's appointments actually
+   * happened. One `Query` on the patient's own partition, bounded by the
+   * `APPT#` sort-key prefix — the same main-table read shape
+   * `DynamoAppointmentStore.listForPatient` already uses, never a `Scan`
+   * and never GSI1 (which is keyed by clinician, and this question has no
+   * clinician in it).
+   *
+   * `appointment_status` is filtered in application code rather than by a
+   * `FilterExpression`, and that is not laziness: a filter would still
+   * read and charge for every row, so the only thing it would save is the
+   * bytes over the wire, and doing it here keeps the definition of
+   * "happened" — `completed`, never `scheduled`, `cancelled` or
+   * `no-show` — visible next to the code that means it.
+   */
+  async countCompletedAppointments(patientId: string): Promise<number> {
+    let count = 0;
+    let startKey: Record<string, unknown> | undefined;
+    do {
+      const result: QueryCommandOutput = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :appointmentPrefix)',
+          ExpressionAttributeValues: {
+            ':patientKey': PATIENT_PK(patientId),
+            ':appointmentPrefix': 'APPT#',
+          },
+          ExclusiveStartKey: startKey,
+        }),
+      );
+      for (const row of result.Items ?? []) {
+        if (row.appointment_status === 'completed') {
+          count += 1;
+        }
+      }
+      startKey = result.LastEvaluatedKey;
+    } while (startKey);
+    return count;
+  }
 }
 
 // TASK 3.2.1: `PK = PAT#<id>` (the same partition every other patient-owned

@@ -133,8 +133,13 @@ describe('createContentAuthoringHandler — authentication and authorisation', (
     expect(await repository.findById('content-1')).toBeUndefined();
   });
 
-  it('accepts a sub-clinician — the matrix grants either clinician role', async () => {
-    const { deps } = buildDeps();
+  // Narrowed 2026-08-31, and this is the first permission this codebase
+  // has ever *taken away* from a role that held it. The owner: uploading a
+  // blog or a webinar "will only be possible via principal clinician
+  // account." `R` is untouched — a clinician who cannot author still has
+  // to list content in order to assign it — so only `C` and `U` moved.
+  it('is 403 for a sub-clinician — authoring is the principal’s alone', async () => {
+    const { deps, repository } = buildDeps();
     const handler = createContentAuthoringHandler(deps);
 
     const result = await handler(
@@ -142,7 +147,8 @@ describe('createContentAuthoringHandler — authentication and authorisation', (
       {} as never,
       undefined as never,
     );
-    expect(result).toMatchObject({ statusCode: 201 });
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(await repository.findById('content-1')).toBeUndefined();
   });
 
   it('accepts the principal clinician', async () => {
