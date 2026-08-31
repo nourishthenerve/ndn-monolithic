@@ -1,0 +1,96 @@
+---
+// 2026-08-31: staff looking at one named patient — the screen the owner's
+// *"the helpdesk should be able to view patient dashboard and patient
+// details"* found missing. `/account/patient` reads `/patients/me` and
+// belongs to the patient themselves; the dashboard listed patients and
+// linked to nothing. This is the missing middle, reached with
+// `?id=<patientId>` from the dashboard.
+//
+// Statically generated and **empty**, same discipline every account page
+// states — what makes it private is that no patient content is in the
+// HTML at all. The `?id=` is read client-side by the island, which is
+// also why this page needs no server rendering to be per-patient.
+//
+// Principal and helpdesk only. `PatientRecordPanel` shows nothing
+// clinical (see its own header), so the two roles see the identical page
+// — a screen whose content silently differed by role would be one nobody
+// could reason about.
+//
+// Deliberately absent from routes.ts, same as every sibling account page
+// — TASK 1.1.3's a11y gate scans registered routes unauthenticated.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { PatientRecordPanel } from '../../../account/PatientRecordPanel.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('patientRecord.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('patientRecord.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    allowRoles={['principal-clinician', 'helpdesk']}
+  >
+    <Fragment slot="signedOut">
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
+      </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('patientRecord.forbidden', undefined, locale)}</p>
+    </Fragment>
+    <PatientRecordPanel
+      client:only="react"
+      dashboardHref={`/${locale}/account/caseload`}
+      strings={{
+        loadingLabel: t('patientRecord.loading', undefined, locale),
+        forbiddenLabel: t('patientRecord.forbidden', undefined, locale),
+        notFoundLabel: t('patientRecord.notFound', undefined, locale),
+        errorLabel: t('patientRecord.error', undefined, locale),
+        missingIdLabel: t('patientRecord.missingId', undefined, locale),
+        detailsHeading: t('patientRecord.detailsHeading', undefined, locale),
+        fullNameLabel: t('patientAdmin.fullNameLabel', undefined, locale),
+        emailLabel: t('patientAdmin.emailLabel', undefined, locale),
+        phoneLabel: t('patientAdmin.phoneLabel', undefined, locale),
+        marketingOptInLabel: t('patientAdmin.marketingOptInLabel', undefined, locale),
+        statusLabel: t('caseload.statusColumn', undefined, locale),
+        assignedClinicianLabel: t('caseload.clinicianColumn', undefined, locale),
+        unassignedLabel: t('caseload.unassigned', undefined, locale),
+        saveButton: t('patientRecord.saveButton', undefined, locale),
+        saving: t('patientRecord.saving', undefined, locale),
+        savedMessage: t('patientRecord.savedMessage', undefined, locale),
+        statusPendingLabel: t('caseload.statusPending', undefined, locale),
+        statusApprovedLabel: t('caseload.statusApproved', undefined, locale),
+        statusDeclinedLabel: t('caseload.statusDeclined', undefined, locale),
+        statusSuspendedLabel: t('caseload.statusSuspended', undefined, locale),
+        appointmentsHeading: t('patientRecord.appointmentsHeading', undefined, locale),
+        appointmentsEmpty: t('patientRecord.appointmentsEmpty', undefined, locale),
+        appointmentsError: t('patientRecord.appointmentsError', undefined, locale),
+        whenColumnLabel: t('patientRecord.whenColumn', undefined, locale),
+        durationColumnLabel: t('patientRecord.durationColumn', undefined, locale),
+        appointmentStatusColumnLabel: t('patientRecord.appointmentStatusColumn', undefined, locale),
+        minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
+        backToDashboard: t('patientRecord.backToDashboard', undefined, locale),
+      }}
+    />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
+  </RequireAuth>
+</BaseLayout>

@@ -68,6 +68,13 @@ const SUB_CLINICIAN_CONTEXT = {
   clinicianId: 'sub-sub',
 };
 
+const HELPDESK_CONTEXT = {
+  subjectId: 'helpdesk-sub',
+  role: 'helpdesk',
+  accountStatus: 'active',
+  clinicianId: 'helpdesk-sub',
+};
+
 const PATIENT_CONTEXT = {
   subjectId: 'patient-sub',
   role: 'patient',
@@ -579,6 +586,96 @@ describe('GET /clinicians', () => {
   });
 });
 
+// 2026-08-31: the `Own profile` row's first endpoint. Every signed-in
+// clinician role holds `R U` there; a patient holds it only on their
+// *own* profile, which this route is not.
+describe('GET/PATCH /clinicians/me', () => {
+  async function seedSelf(repository: ReturnType<typeof build>['repository'], id: string, role: 'principal' | 'sub' | 'helpdesk' = 'sub') {
+    await repository.create(
+      id,
+      { displayName: 'Before', role },
+      { subjectId: 'principal-sub', role: 'principal-clinician', requestId: 'r', sourceIpHash: 'h' },
+    );
+  }
+
+  it.each([
+    ['a sub-clinician', SUB_CLINICIAN_CONTEXT, 'sub-sub'],
+    ['the principal', PRINCIPAL_CONTEXT, 'principal-sub'],
+    ['a helpdesk account', HELPDESK_CONTEXT, 'helpdesk-sub'],
+  ])('lets %s rename themselves', async (_label, principal, id) => {
+    const { handler, repository } = build();
+    await seedSelf(repository, id, id === 'principal-sub' ? 'principal' : 'sub');
+
+    const response = await invoke(
+      handler,
+      eventFor('PATCH /clinicians/me', { principal, body: { displayName: 'After' } }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(await repository.findById(id)).toMatchObject({ displayName: 'After' });
+  });
+
+  it('never lets a rename change role or account status', async () => {
+    const { handler, repository } = build();
+    await seedSelf(repository, 'sub-sub', 'sub');
+
+    await invoke(
+      handler,
+      eventFor('PATCH /clinicians/me', {
+        principal: SUB_CLINICIAN_CONTEXT,
+        // Both fields are ignored by the schema, not merged — the record
+        // below is what proves it, not the absence of a type error.
+        body: { displayName: 'After', role: 'principal', account_status: 'deactivated' },
+      }),
+    );
+
+    expect(await repository.findById('sub-sub')).toMatchObject({
+      displayName: 'After',
+      role: 'sub',
+      account_status: 'active',
+    });
+  });
+
+  it('refuses a patient — they have no clinician record and land in Patient (other)', async () => {
+    const { handler } = build();
+    const response = await invoke(
+      handler,
+      eventFor('PATCH /clinicians/me', {
+        principal: PATIENT_CONTEXT,
+        body: { displayName: 'Nice Try' },
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('400s a blank display name rather than storing one', async () => {
+    const { handler, repository } = build();
+    await seedSelf(repository, 'sub-sub', 'sub');
+    const response = await invoke(
+      handler,
+      eventFor('PATCH /clinicians/me', { principal: SUB_CLINICIAN_CONTEXT, body: { displayName: '' } }),
+    );
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('GET returns the caller\'s own record, and 404s when they have none', async () => {
+    const { handler, repository } = build();
+    const missing = await invoke(
+      handler,
+      eventFor('GET /clinicians/me', { principal: SUB_CLINICIAN_CONTEXT }),
+    );
+    expect(missing.statusCode).toBe(404);
+
+    await seedSelf(repository, 'sub-sub', 'sub');
+    const found = await invoke(
+      handler,
+      eventFor('GET /clinicians/me', { principal: SUB_CLINICIAN_CONTEXT }),
+    );
+    expect(found.statusCode).toBe(200);
+    expect((JSON.parse(found.body) as { item: { id: string } }).item.id).toBe('sub-sub');
+  });
+});
+
 describe('POST /clinicians/{id}/deactivate', () => {
   it('deactivates the record, disables the Cognito user and revokes tokens — all three', async () => {
     const { handler, deactivateClinicianUser, repository } = build();
@@ -693,7 +790,21 @@ describe('POST /clinicians/me/change-password (D-34)', () => {
     expect(changeOwnPassword.changePassword).toHaveBeenCalled();
   });
 
-  it('D-29: denies a patient — self-service password change never extends to patients', async () => {
+  // Rewritten 2026-08-31, not deleted. This test used to assert the
+  // opposite — "D-29: denies a patient" — and the owner's own report is
+  // why it flipped: *"patient after logged in doesnt have access to
+  // update his password."*
+  //
+  // D-29's boundary is not this route. Password *reset* — "I have
+  // forgotten it, let me back in" — is an identity-verification act, and
+  // it is still staff-only over WhatsApp with no recovery flow, no email
+  // link and no OTP (`POST /patients/{id}/reset-password`, Principal and
+  // Helpdesk only). A password *change* proves the current password to
+  // Cognito itself, so whoever can do it already holds the credential:
+  // it verifies no identity because it needs none. Refusing it only left
+  // a patient unable to replace a password that staff had read aloud
+  // over WhatsApp.
+  it('lets a patient change their own password — reset stays staff-only, change never needed to be', async () => {
     const { handler, changeOwnPassword } = build();
 
     const response = await invoke(
@@ -705,8 +816,14 @@ describe('POST /clinicians/me/change-password (D-34)', () => {
       }),
     );
 
-    expect(response.statusCode).toBe(403);
-    expect(changeOwnPassword.changePassword).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(200);
+    // Cognito is handed the caller's own token and their own current
+    // password — it, not this codebase, is what actually decides.
+    expect(changeOwnPassword.changePassword).toHaveBeenCalledWith(
+      'patient-token',
+      'OldPassw0rd!',
+      'NewPassw0rd!',
+    );
   });
 
   it('rejects a missing bearer token as unauthorized, without calling Cognito', async () => {

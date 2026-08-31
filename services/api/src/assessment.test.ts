@@ -214,7 +214,7 @@ describe('POST /patients/{id}/assessments/{assessmentId}', () => {
     expect(response.statusCode).toBe(409);
   });
 
-  it('is 403 for the principal — unlike diagnosis/care-plan, only the assigned sub-clinician may author an assessment (authz-matrix.ts\'s own R-only Principal cell)', async () => {
+  it('lets the principal author an assessment, private half included — they treat patients too', async () => {
     const { handler, assessments } = await build();
     const response = await invoke(
       handler,
@@ -229,8 +229,13 @@ describe('POST /patients/{id}/assessments/{assessmentId}', () => {
         principal: PRINCIPAL_CONTEXT,
       }),
     );
-    expect(response.statusCode).toBe(403);
-    await expect(assessments.getVersion('pat-1', 'mobility-initial', 1)).resolves.toBeUndefined();
+    // Flipped 2026-08-31 with the doc's `Principal` column: the
+    // read-only cell this test guarded rested on the principal being an
+    // overseer who never treats anyone, which is not who the principal
+    // is in this practice. See 04-data-model-rbac.md's second
+    // amendment of that date.
+    expect(response.statusCode).toBe(201);
+    await expect(assessments.getVersion('pat-1', 'mobility-initial', 1)).resolves.toBeDefined();
   });
 
   it('is 403 for an unassigned sub-clinician, before any write', async () => {
@@ -345,7 +350,7 @@ describe('POST /patients/{id}/assessments/{assessmentId}', () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it('is 403, not 404, for the principal against a patient id that does not exist — the principal never reaches create on this row at all', async () => {
+  it('is 403, not 404, for a caller the matrix denies — the refusal must not leak whether the patient exists', async () => {
     const { handler } = await build();
     const response = await invoke(
       handler,
@@ -353,9 +358,15 @@ describe('POST /patients/{id}/assessments/{assessmentId}', () => {
         routeKey: ROUTE_KEY,
         pathParameters: { id: 'nobody', assessmentId: 'mobility-initial' },
         body: { version: 1, visible: { formType: 'mobility', responses: {} } },
-        principal: PRINCIPAL_CONTEXT,
+        principal: UNASSIGNED_SUB_CONTEXT,
       }),
     );
+    // Flipped 2026-08-31 with the doc's `Principal` column (see
+    // 04-data-model-rbac.md's second amendment of that date). The
+    // ordering property this test guards is unchanged and still worth
+    // asserting — it has simply moved to the role the matrix still
+    // denies here. A caller the matrix refuses must not learn from the
+    // status code whether the patient exists.
     expect(response.statusCode).toBe(403);
   });
 });

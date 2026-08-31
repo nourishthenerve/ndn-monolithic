@@ -106,6 +106,12 @@ export interface CaseloadViewStrings {
   readonly working: string;
   readonly assignError: string;
   readonly noCliniciansLabel: string;
+  readonly openRecordLabel: string;
+  readonly removeColumnLabel: string;
+  readonly suspendButton: string;
+  readonly restoreButton: string;
+  readonly suspendConfirm: string;
+  readonly statusError: string;
 }
 
 export interface CaseloadViewProps {
@@ -120,6 +126,15 @@ export interface CaseloadViewProps {
     clinicianId: string,
     alreadyAssigned: boolean,
   ) => Promise<Response>;
+  readonly setPatientActive?: (
+    accessToken: string,
+    patientId: string,
+    active: boolean,
+  ) => Promise<Response>;
+  /** Injectable for tests; defaults to the browser's own `confirm`. Suspension locks a patient out the moment it lands. */
+  readonly confirmSuspend?: (message: string) => boolean;
+  /** Where a patient's name links to — `/{locale}/account/patient-record`, with the id appended. */
+  readonly recordHrefBase: string;
 }
 
 const defaultClient = createSessionClient();
@@ -134,6 +149,18 @@ function defaultFetchPage(cursor: string | undefined, accessToken: string): Prom
 
 function defaultListClinicians(accessToken: string): Promise<Response> {
   return fetch(`${contentApiUrl}/clinicians`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+}
+
+function defaultSetPatientActive(
+  accessToken: string,
+  patientId: string,
+  active: boolean,
+): Promise<Response> {
+  const action = active ? 'restore' : 'suspend';
+  return fetch(`${contentApiUrl}/patients/${encodeURIComponent(patientId)}/${action}`, {
+    method: 'POST',
     headers: { authorization: `Bearer ${accessToken}` },
   });
 }
@@ -158,6 +185,9 @@ export function CaseloadView({
   fetchPage = defaultFetchPage,
   listClinicians = defaultListClinicians,
   assignPatient = defaultAssignPatient,
+  setPatientActive = defaultSetPatientActive,
+  confirmSuspend,
+  recordHrefBase,
 }: CaseloadViewProps): ReactNode {
   const [state, setState] = useState<ViewState>({ status: 'loading' });
   // The cursor that produced the page currently on screen, and the stack
@@ -178,6 +208,14 @@ export function CaseloadView({
    * a positive answer" rule.
    */
   const [canAssign, setCanAssign] = useState(true);
+  /**
+   * Suspending a patient is `Patient assignment`'s own `update` —
+   * Principal-only, exactly like assignment itself, and deliberately not
+   * `Patient profile`'s `update`, which helpdesk holds. So the two
+   * columns appear and disappear together, and one flag is the honest
+   * model of that rather than two that could drift.
+   */
+  const [statusFailed, setStatusFailed] = useState(false);
 
   const load = useCallback(
     async (cursor: string | undefined) => {
@@ -230,7 +268,7 @@ export function CaseloadView({
     let cancelled = false;
     const loadClinicians = async () => {
       const state = await client.resolve();
-      if (!cancelled && state.status === 'signed-in' && state.session.staffRole === 'helpdesk') {
+      if (!cancelled && state.status === 'signed-in' && state.session.viewerRole === 'helpdesk') {
         setCanAssign(false);
         // No colleague list either: `GET /clinicians` is Principal-only
         // and would 403, and there is nothing left on this page for the
@@ -333,6 +371,39 @@ export function CaseloadView({
     }
   };
 
+  const handleSetActive = async (entry: CaseloadEntry, active: boolean) => {
+    if (!active) {
+      const confirmed = confirmSuspend
+        ? confirmSuspend(strings.suspendConfirm)
+        : globalThis.confirm?.(strings.suspendConfirm) !== false;
+      if (!confirmed) {
+        return;
+      }
+    }
+    setStatusFailed(false);
+    setPendingPatientId(entry.patientId);
+    const accessToken = await client.authorization();
+    if (!accessToken) {
+      setPendingPatientId(undefined);
+      setState({ status: 'forbidden' });
+      return;
+    }
+    try {
+      const response = await setPatientActive(accessToken, entry.patientId, active);
+      if (!response.ok) {
+        setStatusFailed(true);
+        return;
+      }
+      // Status decides the row's rank in the index, so the page it belongs
+      // on can change — re-read rather than patch.
+      await load(cursorStack.at(-1));
+    } catch {
+      setStatusFailed(true);
+    } finally {
+      setPendingPatientId(undefined);
+    }
+  };
+
   if (state.status === 'loading') {
     return (
       <p role="status" aria-live="polite">
@@ -362,6 +433,7 @@ export function CaseloadView({
     <>
       {counts && <PatientCounts counts={counts} strings={strings} />}
       {assignFailed && <p role="alert">{strings.assignError}</p>}
+      {statusFailed && <p role="alert">{strings.statusError}</p>}
       <table>
         <caption>{strings.caption}</caption>
         <thead>
@@ -370,6 +442,7 @@ export function CaseloadView({
             <th scope="col">{strings.statusColumnLabel}</th>
             <th scope="col">{strings.clinicianColumnLabel}</th>
             {canAssign && <th scope="col">{strings.assignColumnLabel}</th>}
+            {canAssign && <th scope="col">{strings.removeColumnLabel}</th>}
           </tr>
         </thead>
         <tbody>
@@ -378,7 +451,13 @@ export function CaseloadView({
             const selectId = `assign-${item.patientId}`;
             return (
               <tr key={item.patientId}>
-                <td>{item.fullName}</td>
+                <td>
+                  {/* The dashboard's only way into a named patient — the
+                      screen that did not exist until today. */}
+                  <a href={`${recordHrefBase}?id=${encodeURIComponent(item.patientId)}`}>
+                    {item.fullName || strings.openRecordLabel}
+                  </a>
+                </td>
                 <td>{statusLabel(item.accountStatus)}</td>
                 <td>{item.assignedClinicianName ?? strings.unassignedLabel}</td>
                 {canAssign && (
@@ -425,6 +504,24 @@ export function CaseloadView({
                       </button>
                     </>
                   )}
+                </td>
+                )}
+                {canAssign && (
+                <td>
+                  <button
+                    type="button"
+                    aria-label={`${item.accountStatus === 'suspended' ? strings.restoreButton : strings.suspendButton} — ${item.fullName}`}
+                    disabled={isBusy}
+                    onClick={() =>
+                      void handleSetActive(item, item.accountStatus === 'suspended')
+                    }
+                  >
+                    {isBusy
+                      ? strings.working
+                      : item.accountStatus === 'suspended'
+                        ? strings.restoreButton
+                        : strings.suspendButton}
+                  </button>
                 </td>
                 )}
               </tr>

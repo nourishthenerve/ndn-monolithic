@@ -41,7 +41,7 @@ const heading = t('clinicianAdmin.heading', undefined, locale);
   <RequireAuth
     client:only="react"
     loadingLabel={t('account.loading', undefined, locale)}
-    allowStaffRoles={['principal-clinician']}
+    allowRoles={['principal-clinician']}
   >
     <Fragment slot="signedOut">
       <p>

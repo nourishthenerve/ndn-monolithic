@@ -26,7 +26,7 @@ export interface Session {
    * `undefined` means "could not be determined", which callers must treat
    * as "show it and let the server answer", never as a denial.
    */
-  readonly staffRole: StaffRole | undefined;
+  readonly viewerRole: ViewerRole | undefined;
 }
 
 export type SessionState =
@@ -54,8 +54,8 @@ export interface SessionClient {
   authorization(): Promise<string | undefined>;
 }
 
-import { staffRoleFromAccessToken } from './token-claims.js';
-import type { StaffRole } from './token-claims.js';
+import { viewerRoleFromAccessToken } from './token-claims.js';
+import type { ViewerRole } from './token-claims.js';
 
 type Fetcher = typeof fetch;
 
@@ -86,7 +86,7 @@ export function createSessionClient(options: { fetcher?: Fetcher; now?: () => nu
     session = {
       accessToken,
       expiresAt: now() + expiresIn * 1000,
-      staffRole: staffRoleFromAccessToken(accessToken),
+      viewerRole: viewerRoleFromAccessToken(accessToken),
     };
     return { status: 'signed-in', session };
   }

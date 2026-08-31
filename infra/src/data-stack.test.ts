@@ -799,13 +799,18 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // by the same `ClinicianAdminFunction` as the other clinician-account
     // routes. The same day added `GET /clinicians` — the directory the
     // principal's dashboard and clinician-admin page both read, served by
-    // that same function.
+    // that same function. The same day again added `GET`/`PATCH
+    // /clinicians/me` (a clinician updating their own details — the `Own
+    // profile` row's first endpoint) and `POST /patients/{id}/suspend`
+    // and `/restore` (principal-only removal of a patient, the counterpart
+    // to a clinician's deactivate/reactivate).
     expect(routeKeys('CUSTOM')).toEqual(
       [
         'GET /audit',
         'GET /caseload',
         'GET /caseload/mine',
         'GET /clinicians',
+        'GET /clinicians/me',
         'GET /clinicians/me/calendar',
         'GET /patients',
         'GET /patients/{id}',
@@ -816,6 +821,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'GET /patients/{id}/diagnosis',
         'GET /patients/{id}/messages',
         'GET /testimonials/pending',
+        'PATCH /clinicians/me',
         'PATCH /content/{id}',
         'PATCH /patients/{id}',
         'PATCH /workshops/{id}',
@@ -839,6 +845,8 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /patients/{id}/messages',
         'POST /patients/{id}/reassign',
         'POST /patients/{id}/reset-password',
+        'POST /patients/{id}/restore',
+        'POST /patients/{id}/suspend',
         'POST /testimonials/{id}/publish',
         'POST /testimonials/{id}/reject',
         'POST /workshops',

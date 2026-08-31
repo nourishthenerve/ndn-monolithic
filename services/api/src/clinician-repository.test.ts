@@ -155,6 +155,7 @@ describe('no delete', () => {
       'list',
       'reactivate',
       'transition',
+      'updateDisplayName',
     ]);
   });
 });

@@ -121,7 +121,13 @@ export function createPkcePair(random: () => Buffer = () => randomBytes(32)): {
 // scope it's configured with, so a clinician sign-in has to actually ask
 // for this one or the issued token still comes back without it. `email`
 // requests both `email` and `email_verified` per OIDC, unaffected.
-const PATIENT_SCOPE = 'openid email';
+// 2026-08-31: the patient client now carries `aws.cognito.signin.user.admin`
+// too (auth-stack.ts), so a patient sign-in has to actually request it —
+// an app client only *may* request a scope it is configured with, and a
+// token issued without it cannot call `ChangePassword` no matter how
+// correct the password is. Same trap D-34 fell into on the clinician side
+// and the same fix.
+const PATIENT_SCOPE = 'openid email aws.cognito.signin.user.admin';
 const CLINICIAN_SCOPE = 'openid email aws.cognito.signin.user.admin';
 
 export function authorizeUrl(

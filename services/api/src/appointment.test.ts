@@ -210,7 +210,7 @@ describe('POST /patients/{id}/appointments', () => {
     expect(response.statusCode).toBe(409);
   });
 
-  it('is 403 for the principal — like assessment forms, only the assigned sub-clinician schedules one (authz-matrix.ts\'s own R-only Principal cell)', async () => {
+  it('lets the principal schedule — the practice\'s own practising clinician, not an overseer', async () => {
     const { handler, appointments } = await build();
     const response = await invoke(
       handler,
@@ -221,8 +221,13 @@ describe('POST /patients/{id}/appointments', () => {
         principal: PRINCIPAL_CONTEXT,
       }),
     );
-    expect(response.statusCode).toBe(403);
-    await expect(appointments.listForPatient('pat-1')).resolves.toEqual([]);
+    // Flipped 2026-08-31 with the doc's `Principal` column: the
+    // read-only cell this test guarded rested on the principal being an
+    // overseer who never treats anyone, which is not who the principal
+    // is in this practice. See docs/plan/04-data-model-rbac.md's own
+    // second amendment of that date.
+    expect(response.statusCode).toBe(201);
+    await expect(appointments.listForPatient('pat-1')).resolves.toHaveLength(1);
   });
 
   it('is 403 for an unassigned sub-clinician, before any write', async () => {
@@ -321,7 +326,7 @@ describe('POST /patients/{id}/appointments', () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it('is 403, not 404, for the principal against a patient id that does not exist — the principal never reaches create on this row at all', async () => {
+  it('is 403, not 404, for a caller the matrix denies — the refusal must not leak whether the patient exists', async () => {
     const { handler } = await build();
     const response = await invoke(
       handler,
@@ -329,9 +334,15 @@ describe('POST /patients/{id}/appointments', () => {
         routeKey: SCHEDULE_ROUTE,
         pathParameters: { id: 'nobody' },
         body: { scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
-        principal: PRINCIPAL_CONTEXT,
+        principal: UNASSIGNED_SUB_CONTEXT,
       }),
     );
+    // Flipped 2026-08-31 with the doc's `Principal` column (see
+    // 04-data-model-rbac.md's second amendment of that date). The
+    // ordering property this test guards is unchanged and still worth
+    // asserting — it has simply moved to the role the matrix still
+    // denies here. A caller the matrix refuses must not learn from the
+    // status code whether the patient exists.
     expect(response.statusCode).toBe(403);
   });
 });
@@ -606,7 +617,7 @@ describe('POST /patients/{id}/appointments/{apptId}/cancel', () => {
     expect(body.items[0]?.appointment_status).toBe('cancelled');
   });
 
-  it('is 403 for the principal — the same Appointments row column as create, not a separate grant', async () => {
+  it('lets the principal cancel — the same Appointments row column as create', async () => {
     const { handler } = await build();
     await seedOne(handler);
     const response = await invoke(
@@ -617,7 +628,12 @@ describe('POST /patients/{id}/appointments/{apptId}/cancel', () => {
         principal: PRINCIPAL_CONTEXT,
       }),
     );
-    expect(response.statusCode).toBe(403);
+    // Flipped 2026-08-31 with the doc's `Principal` column: the
+    // read-only cell this test guarded rested on the principal being an
+    // overseer who never treats anyone, which is not who the principal
+    // is in this practice. See docs/plan/04-data-model-rbac.md's own
+    // second amendment of that date.
+    expect(response.statusCode).toBe(200);
   });
 
   it('is 403 for the owning patient — cancelling one\'s own appointment is out of scope for this route', async () => {

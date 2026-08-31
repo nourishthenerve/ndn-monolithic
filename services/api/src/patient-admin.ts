@@ -64,6 +64,8 @@ import { requirePrincipal } from './request-principal.js';
 
 const PATIENT_ADMIN_FLAG = 'patients.administration.enabled';
 const PATIENT_PROFILE_RESOURCE = { entityType: 'patient-profile' } as const;
+/** Suspension/restore's own row — Principal-only, deliberately *not* the profile row helpdesk can update. See the routes' own note. */
+const PATIENT_ASSIGNMENT_RESOURCE = { entityType: 'patient-assignment' } as const;
 
 // Lowest-volume admin surface in the estate, same as clinician-admin.ts's
 // own reasoning for its sample rate — one or two principals, acting per
@@ -340,6 +342,41 @@ export function createPatientAdminHandler(
             }),
           );
           return respond(200, { password });
+        }
+        // 2026-08-31: "Only the principal clinician would be able to
+        // remove the patient/clinician." The clinician half has existed
+        // since TASK 2.4.1 (`deactivate`/`reactivate`); this is the
+        // patient half, and it had no route at all —
+        // `PatientRepository.transition(id, 'suspend')` was written in
+        // TASK 2.2.3 and never once called.
+        //
+        // **Governed by `'patient-assignment'`, not `'patient-profile'`,
+        // and that is the whole point.** Helpdesk holds `update` on a
+        // patient's *profile* — they correct phone numbers — and must not
+        // thereby be able to revoke a patient's access. Those are two
+        // different powers and they need two different cells; the
+        // assignment row is the one that already means "decisions about
+        // this patient's standing in the practice", and it is
+        // Principal-only.
+        //
+        // Suspension is not deletion and not unassignment: the record
+        // stays whole, `assigned_clinician_id` is untouched, and
+        // `restore` puts them back to `approved` under the same clinician.
+        case 'POST /patients/{id}/suspend':
+        case 'POST /patients/{id}/restore': {
+          if (!can(principal, 'update', PATIENT_ASSIGNMENT_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          const id = event.pathParameters?.id;
+          if (!id) {
+            return respond(400, { error: 'ID_REQUIRED' });
+          }
+          const patient = await deps.repository.transition(
+            id,
+            routeKey === 'POST /patients/{id}/suspend' ? 'suspend' : 'restore',
+            actor,
+          );
+          return respond(200, { item: patient });
         }
         case 'GET /patients': {
           if (!can(principal, 'read', PATIENT_PROFILE_RESOURCE).allowed) {

@@ -27,11 +27,11 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 | Patient profile | R U (self) | — | R U | — | C R U P | C R U P |
 | Patient assignment | — | — | — | — | — | C R U |
 | Diagnosis / care plan | **R** | — | C R U | — | **—** | C R U |
-| Assessment — `visible{}` | R | — | C R U | — | **—** | R |
-| **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | R |
-| Appointments | R J | — | C R U J | — | — | R |
-| Content assignment | R | — | C R U | — | C R U | R |
-| Messages | C R (own thread) | — | C R (own patients) | — | **—** | R |
+| Assessment — `visible{}` | R | — | C R U | — | **—** | C R U |
+| **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | C R U |
+| Appointments | R J | — | C R U J | — | **R** | C R U J |
+| Content assignment | R | — | C R U | — | C R U | C R U |
+| Messages | C R (own thread) | — | C R (own patients) | — | **—** | C R |
 | Clinician accounts | — | — | — | — | **—** | C R U (deactivate only) |
 | Audit log | — | — | — | — | — | R |
 | Content item | — | — | C R U | C R U | C R U | C R U |
@@ -49,6 +49,18 @@ The column is **defined by its denials**, and every one of them is deliberate ra
 * **No assignment, and no clinician administration.** `Patient assignment` stays `Principal`-only, so a helpdesk-created account lands in `pending` and waits for the principal to assign a clinician — the same two-step D-29 already established, with the first step now delegable and the second not. `Clinician accounts` is denied for the obvious reason: a role that could create roles could create itself a principal.
 * **No `Audit log`.** Reading who did what to whom is oversight, which is the principal's.
 * **`Testimonial moderation` and `Workshop` denied**, unlike the sub-clinician columns. Nothing in the request asks for them, and marketing surfaces are not helpdesk work; `Content item` is granted only because "edit/upload content to existing patients" cannot be done without it.
+
+**2026-08-31 (second amendment) — "the principal can do anything", and the role model settled end to end.** The owner, after using all three roles for real: *"come up with a sensible role model so that principal can do anything, patient can edit his own details, helpdesk can help patient to do all what patient can do, including providing other details from the dashboard like upcoming appointments etc, and other clinician would be able to update his details… Only the principal clinician would be able to remove the patient/clinician including the option to reassign a patient to a different clinician."*
+
+The table above was written when the principal was modelled as an **overseer** — someone who reads across the practice and delegates the treating. That is not who the principal is here: they are the practice's own practising clinician. So the `Principal` column's read-only cells were not a policy, they were an assumption, and it was wrong. `Assessment` (both halves), `Appointments`, `Content assignment` and `Messages` all move from `R` to the same `C R U` the treating sub-clinician has.
+
+`J` on `Appointments` moves with them, and it is the one grant here that genuinely widens a privacy boundary rather than correcting an assumption. TASK 4.2.1's narrowing — "only an appointment's own two parties can join its call" — was right when the principal was never a party. Now they routinely are, and `can()` resolves a principal to the `Principal` column by role alone, so it cannot tell "this appointment's own clinician" from "any appointment". The choice is therefore between a principal who cannot run a video call with their own patient and a principal who could join another clinician's. With one practising clinician today, the first is a daily obstruction and the second is hypothetical — but it *is* the trade, and **striking `J` from this one cell is how to reverse it** if the practice grows.
+
+**The `Helpdesk` column gains `Appointments: R`, and deliberately nothing else.** The request reads "help patient to do all what patient can do", and taken literally that would extend to the patient's own `R` on diagnoses, care plans and `visible{}` assessments. It is not taken literally, because the example given is administrative ("upcoming appointments etc") and because a helpdesk role that reads clinical records is a sub-clinician with extra steps — the denial *is* the role. Granting clinical read to a front-desk account is also the kind of decision that cannot be undone once exercised, whereas withholding it is three cells to change. Named here so the choice is visible rather than implied: **if helpdesk should see diagnoses and assessments, the cells are `Diagnosis / care plan`, `Assessment — visible{}` and `Messages` on this column.**
+
+The exclusive powers are unchanged and now complete: only `Principal` holds `Patient assignment` (approve, reassign, and — new the same day — suspend and restore a patient) and `Clinician accounts` (create, deactivate, reactivate). Suspending a patient rides `Patient assignment`'s own `update` rather than `Patient profile`'s, precisely because `Patient profile: U` is held by helpdesk: "correct a phone number" and "revoke this person's access" must not be the same permission.
+
+"Other clinician would be able to update his details" is the `Own profile` row, which has been in this table since TASK 2.1.1 with no endpoint behind it. `PATCH /clinicians/me` is that endpoint.
 
 **The clinician-private boundary is enforced at the repository layer** — a projection function strips `private{}` before data can reach any patient-facing serialiser. Not in the handler, not in the view: one chokepoint, 100% test coverage, negative test per endpoint forever (NFR-06).
 

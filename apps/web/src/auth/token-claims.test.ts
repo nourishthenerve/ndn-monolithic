@@ -6,7 +6,9 @@
 // gets its own named case rather than one lumped "bad input" test.
 import { describe, expect, it } from 'vitest';
 
-import { staffRoleFromAccessToken } from './token-claims.js';
+import { clinicianUserPoolIssuer, patientUserPoolIssuer } from '../site-config.js';
+
+import { viewerRoleFromAccessToken } from './token-claims.js';
 
 /** A JWT-shaped string whose payload really is base64url JSON — signature never inspected, so any filler will do. */
 function tokenWithPayload(payload: unknown): string {
@@ -15,23 +17,28 @@ function tokenWithPayload(payload: unknown): string {
   return `header.${base64url}.signature`;
 }
 
-describe('staffRoleFromAccessToken', () => {
+/** A clinician-pool token — the pool decides first, so every group case has to carry the right `iss`. */
+function clinicianToken(payload: Record<string, unknown> = {}): string {
+  return tokenWithPayload({ iss: clinicianUserPoolIssuer, ...payload });
+}
+
+describe('viewerRoleFromAccessToken', () => {
   it('reads principal-clinician off the groups claim', () => {
     expect(
-      staffRoleFromAccessToken(tokenWithPayload({ 'cognito:groups': ['principal-clinician'] })),
+      viewerRoleFromAccessToken(clinicianToken({ 'cognito:groups': ['principal-clinician'] })),
     ).toBe('principal-clinician');
   });
 
   it('reads it when it sits alongside other groups', () => {
     expect(
-      staffRoleFromAccessToken(
-        tokenWithPayload({ 'cognito:groups': ['something-else', 'principal-clinician'] }),
+      viewerRoleFromAccessToken(
+        clinicianToken({ 'cognito:groups': ['something-else', 'principal-clinician'] }),
       ),
     ).toBe('principal-clinician');
   });
 
   it('reads helpdesk off the groups claim', () => {
-    expect(staffRoleFromAccessToken(tokenWithPayload({ 'cognito:groups': ['helpdesk'] }))).toBe(
+    expect(viewerRoleFromAccessToken(clinicianToken({ 'cognito:groups': ['helpdesk'] }))).toBe(
       'helpdesk',
     );
   });
@@ -40,24 +47,46 @@ describe('staffRoleFromAccessToken', () => {
   // this the other way would hide pages the API would have allowed.
   it('prefers principal-clinician over helpdesk when a token carries both', () => {
     expect(
-      staffRoleFromAccessToken(
-        tokenWithPayload({ 'cognito:groups': ['helpdesk', 'principal-clinician'] }),
+      viewerRoleFromAccessToken(
+        clinicianToken({ 'cognito:groups': ['helpdesk', 'principal-clinician'] }),
       ),
     ).toBe('principal-clinician');
   });
 
-  it('is other for a readable token in neither named group', () => {
+  it('is sub-clinician for a clinician-pool token in neither named group', () => {
     expect(
-      staffRoleFromAccessToken(tokenWithPayload({ 'cognito:groups': ['some-other-group'] })),
-    ).toBe('other');
+      viewerRoleFromAccessToken(clinicianToken({ 'cognito:groups': ['some-other-group'] })),
+    ).toBe('sub-clinician');
+  });
+
+  // The pool decides first and absolutely — `authorizer.ts`'s own rule,
+  // and the reason two pools exist. A patient-pool token claiming a staff
+  // group is still a patient here, exactly as it is on the server.
+  it('is patient for a patient-pool token, whatever its groups claim says', () => {
+    expect(
+      viewerRoleFromAccessToken(
+        tokenWithPayload({
+          iss: patientUserPoolIssuer,
+          'cognito:groups': ['principal-clinician', 'helpdesk'],
+        }),
+      ),
+    ).toBe('patient');
+  });
+
+  it('is undefined for a token from neither known pool — not a guess', () => {
+    expect(
+      viewerRoleFromAccessToken(
+        tokenWithPayload({ iss: 'https://cognito-idp.eu-west-2.amazonaws.com/eu-west-2_someoneelse' }),
+      ),
+    ).toBeUndefined();
   });
 
   // Cognito omits the claim entirely rather than sending `[]`, so this is
   // the shape a real sub-clinician's token has — and it is a genuine "no",
   // not a failure to read.
-  it('is other for a readable token with no groups claim at all — a sub-clinician', () => {
-    expect(staffRoleFromAccessToken(tokenWithPayload({ sub: 'abc', token_use: 'access' }))).toBe(
-      'other',
+  it('is sub-clinician for a clinician-pool token with no groups claim at all', () => {
+    expect(viewerRoleFromAccessToken(clinicianToken({ sub: 'abc', token_use: 'access' }))).toBe(
+      'sub-clinician',
     );
   });
 
@@ -73,22 +102,22 @@ describe('staffRoleFromAccessToken', () => {
     // The distinction the callers depend on: `undefined` means "show it
     // and let the server decide"; any role, `'other'` included, is a
     // positive answer a caller may hide on.
-    expect(staffRoleFromAccessToken(token)).toBeUndefined();
+    expect(viewerRoleFromAccessToken(token)).toBeUndefined();
   });
 
   it('decodes a payload needing base64 padding', () => {
     // Base64url drops `=` padding, and lengths that are not a multiple of
     // four are the common case, not the exception — a decoder that only
     // works on tidily-padded input fails on most real tokens.
-    const token = tokenWithPayload({ 'cognito:groups': ['principal-clinician'], sub: 'x' });
+    const token = clinicianToken({ 'cognito:groups': ['principal-clinician'], sub: 'x' });
     expect(token.split('.')[1]).not.toContain('=');
-    expect(staffRoleFromAccessToken(token)).toBe('principal-clinician');
+    expect(viewerRoleFromAccessToken(token)).toBe('principal-clinician');
   });
 
   it('decodes a payload carrying multi-byte UTF-8', () => {
     expect(
-      staffRoleFromAccessToken(
-        tokenWithPayload({ name: 'Zoë — Nourish the Nerve', 'cognito:groups': ['principal-clinician'] }),
+      viewerRoleFromAccessToken(
+        clinicianToken({ name: 'Zoë — Nourish the Nerve', 'cognito:groups': ['principal-clinician'] }),
       ),
     ).toBe('principal-clinician');
   });

@@ -41,7 +41,7 @@ const heading = t('caseload.heading', undefined, locale);
   <RequireAuth
     client:only="react"
     loadingLabel={t('account.loading', undefined, locale)}
-    allowStaffRoles={['principal-clinician', 'helpdesk']}
+    allowRoles={['principal-clinician', 'helpdesk']}
   >
     <Fragment slot="signedOut">
       <p>
@@ -54,6 +54,7 @@ const heading = t('caseload.heading', undefined, locale);
     </Fragment>
     <CaseloadView
       client:only="react"
+      recordHrefBase={`/${locale}/account/patient-record`}
       strings={{
         loadingLabel: t('caseload.loading', undefined, locale),
         forbiddenLabel: t('caseload.forbidden', undefined, locale),
@@ -79,6 +80,12 @@ const heading = t('caseload.heading', undefined, locale);
         working: t('caseload.working', undefined, locale),
         assignError: t('caseload.assignError', undefined, locale),
         noCliniciansLabel: t('caseload.noClinicians', undefined, locale),
+        openRecordLabel: t('caseload.openRecord', undefined, locale),
+        removeColumnLabel: t('caseload.removeColumn', undefined, locale),
+        suspendButton: t('caseload.suspendButton', undefined, locale),
+        restoreButton: t('caseload.restoreButton', undefined, locale),
+        suspendConfirm: t('caseload.suspendConfirm', undefined, locale),
+        statusError: t('caseload.statusError', undefined, locale),
       }}
     />
     <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />

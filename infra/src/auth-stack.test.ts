@@ -260,16 +260,24 @@ describe('AuthStack — the browser clients', () => {
     expect(properties.SupportedIdentityProviders).toEqual(['COGNITO']);
   });
 
-  // D-34 (2026-08-31): the two clients deliberately differ here now —
-  // found live, `ChangePassword` refuses any access token without
-  // `aws.cognito.signin.user.admin`, so the clinician client carries it
-  // and the patient one, with no self-service credential action of any
-  // kind (D-29), stays exactly `openid email`. auth-stack.ts's own
-  // `extraScopes` header on the clinician client has the full story.
-  it(`${PATIENT_USER_POOL_NAME}-web requests only openid and email`, () => {
+  // D-34 (2026-08-31) made the two clients differ — `ChangePassword`
+  // refuses any access token without `aws.cognito.signin.user.admin`, so
+  // the clinician client carried it and the patient one, with no
+  // self-service credential action of any kind, did not.
+  //
+  // **Superseded the same day**: a patient may now change their own
+  // password, so both clients carry the scope. D-29's actual boundary is
+  // untouched and is not this scope — password *reset* (identity
+  // verification, no channel this platform trusts to automate) is still
+  // staff-only over WhatsApp, with no recovery flow, no email link and no
+  // OTP. What the scope enables is replacing a password the caller
+  // already holds, which verifies no identity because it needs none. See
+  // clinician-admin.ts's own route note.
+  it(`${PATIENT_USER_POOL_NAME}-web also requests the admin scope ChangePassword needs`, () => {
     expect(clientNamed(`${PATIENT_USER_POOL_NAME}-web`).AllowedOAuthScopes).toEqual([
       'openid',
       'email',
+      'aws.cognito.signin.user.admin',
     ]);
   });
 
