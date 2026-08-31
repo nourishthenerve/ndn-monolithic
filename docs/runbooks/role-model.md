@@ -120,3 +120,25 @@ It is now `satisfies readonly Role[]` plus a compile-time exhaustiveness check, 
 `GET /clinicians` returns the whole directory, and the dropdown filtered it by `account_status === 'active'` alone. A helpdesk (and now a visitor) account is a `Clinician` record in that directory and *is* active, so both were offered as people to assign a patient to — and neither treats anyone.
 
 Fixed on both sides, and the server side is the one that matters: `AssignmentRepository` now refuses a non-treating target with `CLINICIAN_NOT_AVAILABLE` (`TREATING_CLINICIAN_ROLES`, checked alongside the status it already checked), so an assignment to a helpdesk account is impossible rather than merely un-offered. The dropdown filter is the courtesy on top.
+
+## Two more found the same evening, both silent
+
+### The blog form rejected every ordinary title
+
+Reported as "blog posting is not working". Nothing was in any log — not the authoring Lambda's, not the authorizer's — because **no request was ever sent**. The form required a hand-typed *web address* in slug form and validated it client-side, so "My first post" was refused before the fetch.
+
+Asking a clinician to know what a slug is was the mistake. The title is the thing an author actually has, so the address is now derived from it (`slugify`, folding accents rather than dropping the letter) and shown in an editable field that stops following the title the moment it is edited by hand. The field is no longer `required` in HTML either: an empty one produces this codebase's own explanatory message rather than the browser's "Please fill out this field".
+
+### `PATCH` was never allowed through CORS
+
+Found while chasing the above, and much wider than it. The HTTP API's `corsPreflight.allowMethods` was `[GET, POST]` — and `PATCH` is not a CORS-simple method, so a browser preflights it and refuses to send the real request when the preflight response omits it. **Nothing reaches the API, so nothing appears in any log.**
+
+Every `PATCH` this site makes from a browser was dead the whole time:
+
+- a patient saving their own profile (`PATCH /patients/me`, live since TASK 3.1.1),
+- a clinician correcting a patient's details (new the same day),
+- a clinician renaming themselves (new the same day).
+
+Only handler tests and `curl` ever exercised those routes, and neither preflights. This is the identical silent shape as the API's 2026-08-22 CORS defect, where `allowOrigins` still named only `next.` after the apex cutover — and it was found the same way, by asking why a request had left no trace anywhere.
+
+`allowMethods` is now exactly the methods this API routes, and `data-stack.test.ts` asserts both halves: the list is `['GET', 'POST', 'PATCH']`, and no route uses a method the list omits. A route added with a method nobody adds there now fails a test instead of failing silently in a browser.

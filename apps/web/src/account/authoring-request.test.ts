@@ -9,6 +9,7 @@ import {
   buildCreateWorkshopRequestBody,
   isValidSlug,
   parseKeywords,
+  slugify,
   toUtcInstant,
 } from './authoring-request.js';
 
@@ -130,3 +131,47 @@ describe('buildCreateWorkshopRequestBody', () => {
     ).toBe(12);
   });
 });
+
+// Added after the first real attempt to post a blog failed: the slug was
+// a required, hand-typed field validated against a pattern nobody was
+// told, so an ordinary title was rejected client-side and no request was
+// ever sent. The title is the thing an author actually has.
+describe('slugify', () => {
+  it('turns an ordinary title into a usable slug', () => {
+    expect(slugify('My first post')).toBe('my-first-post');
+    expect(slugify('Winter mobility: 5 tips!')).toBe('winter-mobility-5-tips');
+  });
+
+  it('folds accents rather than dropping the letter', () => {
+    expect(slugify('Zoë’s guide')).toBe('zoe-s-guide');
+  });
+
+  it('never leaves a leading, trailing or doubled hyphen', () => {
+    const slug = slugify('  — Hello,   world!! — ');
+    expect(slug).toBe('hello-world');
+    expect(isValidSlug(slug)).toBe(true);
+  });
+
+  it('caps the length without leaving a trailing hyphen', () => {
+    const slug = slugify(`${'word '.repeat(40)}`);
+    expect(slug.length).toBeLessThanOrEqual(80);
+    expect(slug.endsWith('-')).toBe(false);
+    expect(isValidSlug(slug)).toBe(true);
+  });
+
+  // The day a second locale ships, a title may have no Latin letters at
+  // all. Empty is the honest answer, and the form asks for one by hand —
+  // it is never treated as a valid slug.
+  it('is empty when there is nothing to slugify, and that is not a valid slug', () => {
+    expect(slugify('日本語')).toBe('');
+    expect(slugify('!!!')).toBe('');
+    expect(isValidSlug('')).toBe(false);
+  });
+
+  it('produces something isValidSlug accepts for every ordinary title', () => {
+    for (const title of ['A', 'Two words', 'Number 9', 'Trailing space ', 'Mixed CASE Title']) {
+      expect(isValidSlug(slugify(title))).toBe(true);
+    }
+  });
+});
+

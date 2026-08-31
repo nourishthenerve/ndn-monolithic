@@ -82,6 +82,42 @@ export function isValidSlug(id: string): boolean {
   return SLUG_PATTERN.test(id.trim());
 }
 
+/** A slug is a URL segment; anything longer than this is unreadable and no more unique. */
+const MAX_SLUG_LENGTH = 80;
+
+/**
+ * A title as a person types it, into the URL segment the post will live
+ * at. **Added after the first attempt to use this form failed** — the
+ * slug was a required, hand-typed field validated against a pattern
+ * nobody was told in advance, so a perfectly ordinary title ("My first
+ * post") was rejected before a request was ever sent. Nothing reached the
+ * API at all, which is exactly what "blog posting is not working" looks
+ * like from the outside.
+ *
+ * Asking a clinician to know what a slug is was the mistake. The title is
+ * the thing they actually have; this derives the rest, and the field stays
+ * editable for the times a shorter or clearer URL is wanted.
+ *
+ * Accents are folded rather than dropped (`Zoë` → `zoe`) via NFD
+ * normalisation, so a name keeps its letters instead of losing them.
+ * Returns `''` for a title with no Latin letters or digits at all — a
+ * real possibility the day a second locale ships — which the caller
+ * treats as "ask the author to type one", never as a valid slug.
+ */
+export function slugify(title: string): string {
+  return title
+    .normalize('NFD')
+    // Combining marks, left behind by NFD — this is what turns `é` into `e`
+    // rather than into an empty string.
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, MAX_SLUG_LENGTH)
+    // A trailing hyphen can reappear after the slice.
+    .replace(/-+$/g, '');
+}
+
 /**
  * `<input type="datetime-local">` yields local wall time with no zone
  * (`2026-09-01T10:00`), and the API stores a UTC instant. The conversion

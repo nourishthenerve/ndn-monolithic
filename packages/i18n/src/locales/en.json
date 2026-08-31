@@ -392,7 +392,7 @@
   "authoring.workshopHeading": "New workshop",
   "authoring.workshopIntro": "Announce a workshop. Saved as a draft unless you publish it.",
   "authoring.slugLabel": "Web address",
-  "authoring.slugHint": "Lowercase words joined by hyphens — this becomes the page’s URL and cannot be changed afterwards.",
+  "authoring.slugHint": "Filled in from the title, and used as the page’s URL. Edit it if you want something shorter — it cannot be changed once saved.",
   "authoring.titleLabel": "Title",
   "authoring.excerptLabel": "Short summary",
   "authoring.bodyLabel": "Body",
@@ -408,7 +408,7 @@
   "authoring.successMessage": "Saved.",
   "authoring.conflictError": "Something already exists at that web address. Choose another.",
   "authoring.invalidError": "Please check the form — some fields are missing or invalid.",
-  "authoring.slugError": "The web address must be lowercase words joined by single hyphens, like winter-mobility-tips.",
+  "authoring.slugError": "The web address can’t be worked out from that title. Type one yourself: lowercase words joined by single hyphens, like winter-mobility-tips.",
   "authoring.dateTimeError": "Please give a valid date and time.",
   "authoring.error": "Something went wrong saving this. Please try again.",
   "account.authoringLink": "Blog and workshops"
