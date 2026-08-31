@@ -111,6 +111,19 @@ export function createPkcePair(random: () => Buffer = () => randomBytes(32)): {
   return { verifier, challenge };
 }
 
+// D-34 (2026-08-31): found live — the clinician pool's web client now
+// carries `aws.cognito.signin.user.admin` (auth-stack.ts's own
+// `extraScopes` header has the full story: without it, a signed-in
+// clinician's access token can never call `ChangePassword`, no matter how
+// correct the current password is, and Cognito's own error for that
+// makes it look like the *password* is wrong). This is that scope's
+// counterpart on the request side — an app client only *may* request a
+// scope it's configured with, so a clinician sign-in has to actually ask
+// for this one or the issued token still comes back without it. `email`
+// requests both `email` and `email_verified` per OIDC, unaffected.
+const PATIENT_SCOPE = 'openid email';
+const CLINICIAN_SCOPE = 'openid email aws.cognito.signin.user.admin';
+
 export function authorizeUrl(
   config: AuthTokenConfig,
   pool: PoolKey,
@@ -122,10 +135,7 @@ export function authorizeUrl(
     response_type: 'code',
     client_id: clientId,
     redirect_uri: config.callbackUrl,
-    // Exactly TASK 2.2.1's app-client scopes. Asking for more here fails
-    // at Cognito rather than silently widening anything, but asking for
-    // the right ones means the failure never happens.
-    scope: 'openid email',
+    scope: pool === 'clinician' ? CLINICIAN_SCOPE : PATIENT_SCOPE,
     code_challenge_method: 'S256',
     code_challenge: challenge,
     state,

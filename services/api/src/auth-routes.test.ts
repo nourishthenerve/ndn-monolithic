@@ -118,6 +118,24 @@ describe('GET /auth/signin', () => {
     );
   });
 
+  // Found live, 2026-08-31: without the extra scope, a clinician's own
+  // access token can never call Cognito's `ChangePassword` — it fails
+  // with the identical `NotAuthorizedException` a truly wrong current
+  // password would, regardless of whether the password sent is correct.
+  // auth-stack.ts's own `extraScopes` header on the clinician web client
+  // has the full story; this is that scope's request-side counterpart.
+  it('D-34: asks the clinician pool for the admin scope ChangePassword needs, never the patient pool', async () => {
+    const clinician = await startedSession('clinician');
+    expect(new URL(clinician.start.headers.location ?? '').searchParams.get('scope')).toBe(
+      'openid email aws.cognito.signin.user.admin',
+    );
+
+    const patient = await startedSession('patient');
+    expect(new URL(patient.start.headers.location ?? '').searchParams.get('scope')).toBe(
+      'openid email',
+    );
+  });
+
   it('treats any unrecognised pool as the patient pool', async () => {
     // The value picks a sign-in *page*, never a role — the role comes from
     // the issuer of the token that comes back (2.2.2). The worst a forged

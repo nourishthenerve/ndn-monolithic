@@ -257,8 +257,28 @@ describe('AuthStack — the browser clients', () => {
     const properties = clientNamed(name);
     expect(properties.AllowedOAuthFlows).toEqual(['code']);
     expect(properties.AllowedOAuthFlows).not.toContain('implicit');
-    expect(properties.AllowedOAuthScopes).toEqual(['openid', 'email']);
     expect(properties.SupportedIdentityProviders).toEqual(['COGNITO']);
+  });
+
+  // D-34 (2026-08-31): the two clients deliberately differ here now —
+  // found live, `ChangePassword` refuses any access token without
+  // `aws.cognito.signin.user.admin`, so the clinician client carries it
+  // and the patient one, with no self-service credential action of any
+  // kind (D-29), stays exactly `openid email`. auth-stack.ts's own
+  // `extraScopes` header on the clinician client has the full story.
+  it(`${PATIENT_USER_POOL_NAME}-web requests only openid and email`, () => {
+    expect(clientNamed(`${PATIENT_USER_POOL_NAME}-web`).AllowedOAuthScopes).toEqual([
+      'openid',
+      'email',
+    ]);
+  });
+
+  it(`${CLINICIAN_USER_POOL_NAME}-web also requests the admin scope ChangePassword needs`, () => {
+    expect(clientNamed(`${CLINICIAN_USER_POOL_NAME}-web`).AllowedOAuthScopes).toEqual([
+      'openid',
+      'email',
+      'aws.cognito.signin.user.admin',
+    ]);
   });
 
   it.each(CLIENT_NAMES)('%s redirects to no host other than SITE_ORIGIN', (name) => {

@@ -328,6 +328,10 @@ export class AuthStack extends Stack {
       // than transmitted. Cognito follows it with the
       // `SOFTWARE_TOKEN_MFA` challenge the pool requires.
       authFlows: { userSrp: true },
+      // D-34: the one thing that makes a signed-in clinician's own
+      // `ChangePassword` call possible at all — see `addWebClient`'s own
+      // header on `extraScopes` for why.
+      extraScopes: [OAuthScope.COGNITO_ADMIN],
     });
 
     // D-30 (2026-08-29): a second, narrowly-scoped app client on the same
@@ -509,7 +513,28 @@ export class AuthStack extends Stack {
 
   private addWebClient(
     id: string,
-    options: { userPool: UserPool; clientName: string; authFlows: { user?: true; userSrp?: true } },
+    options: {
+      userPool: UserPool;
+      clientName: string;
+      authFlows: { user?: true; userSrp?: true };
+      /**
+       * D-34 (2026-08-31): found live — Cognito's `ChangePassword` (a
+       * *user* API, not Admin*, `clinician-admin-handler.ts`'s own D-34
+       * amendment) refuses any access token without the
+       * `aws.cognito.signin.user.admin` scope, regardless of whether the
+       * current password sent is correct — it throws the identical
+       * `NotAuthorizedException` either way, so the wrong-password error
+       * this codebase already maps that exception to was actively
+       * misleading. Confirmed live: a token requested with `openid email`
+       * only decodes to `scope: "openid email"`, no admin scope, and
+       * `ChangePassword` fails every time no matter the password.
+       * `extraScopes` exists so only the clinician client carries this —
+       * the patient client stays exactly `openid email`, D-29's "no
+       * self-service of any kind for patients" intact by construction
+       * rather than by a check somewhere remembering to enforce it.
+       */
+      extraScopes?: OAuthScope[];
+    },
   ): UserPoolClient {
     return new UserPoolClient(this, id, {
       userPool: options.userPool,
@@ -529,7 +554,7 @@ export class AuthStack extends Stack {
         // URL fragment — in history, in referrers, in logs — and client
         // credentials is a machine-to-machine flow with no user at all.
         flows: { authorizationCodeGrant: true, implicitCodeGrant: false },
-        scopes: [OAuthScope.OPENID, OAuthScope.EMAIL],
+        scopes: [OAuthScope.OPENID, OAuthScope.EMAIL, ...(options.extraScopes ?? [])],
         // Step 5: `SITE_ORIGIN` and nothing else. No localhost entry, no
         // `next.` alias — a redirect target is an exfiltration route for
         // an authorization code, and the list is the only thing standing

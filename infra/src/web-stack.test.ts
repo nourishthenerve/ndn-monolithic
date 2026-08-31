@@ -406,6 +406,33 @@ describe('WebStack — security headers policy', () => {
     expect(csp).toContain("default-src 'self'");
   });
 
+  // Found live, 2026-08-31: with no `connect-src` at all, CSP fell back to
+  // `default-src 'self'`, silently blocking every authenticated account
+  // panel's own fetch to `contentApiUrl`/`signallingWebSocketUrl` (both
+  // cross-origin `execute-api.amazonaws.com` hosts) — invisible to any
+  // check that isn't a real signed-in browser actually attempting one.
+  it('allows the content API and signalling WebSocket origins for connect-src', () => {
+    const template = synth();
+    const [policy] = Object.values(
+      template.findResources('AWS::CloudFront::ResponseHeadersPolicy'),
+    );
+    const csp = (
+      policy as {
+        Properties: {
+          ResponseHeadersPolicyConfig: {
+            SecurityHeadersConfig: { ContentSecurityPolicy: { ContentSecurityPolicy: string } };
+          };
+        };
+      }
+    ).Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy
+      .ContentSecurityPolicy;
+
+    expect(csp).toContain(
+      "connect-src 'self' https://m4ptz0to5m.execute-api.eu-west-2.amazonaws.com " +
+        'wss://93im3xehxh.execute-api.eu-west-2.amazonaws.com',
+    );
+  });
+
   it('allows the Stripe origins for script-src and frame-src (TASK 1.5.2)', () => {
     const template = synth();
     const [policy] = Object.values(
