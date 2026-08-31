@@ -1152,6 +1152,23 @@ export class DataStack extends Stack {
         resources: ['*'],
       }),
     );
+    // D-34 (2026-08-31): `POST /clinicians/me/change-password`. Same
+    // no-resource-level-scoping exception as `AssociateSoftwareToken`/
+    // `VerifySoftwareToken` above, confirmed the same way those two
+    // were — `ChangePasswordRequest`'s own SDK type
+    // (@aws-sdk/client-cognito-identity-provider's models) has
+    // `PreviousPassword`/`ProposedPassword`/`AccessToken` and no
+    // `UserPoolId` field at all, so there is nothing in the request for
+    // an ARN-scoped IAM condition to match against; `Resource: '*'` is
+    // this action's only valid shape, not a shortcut taken here.
+    clinicianAdminRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ChangeOwnClinicianPassword',
+        effect: Effect.ALLOW,
+        actions: ['cognito-idp:ChangePassword'],
+        resources: ['*'],
+      }),
+    );
     const clinicianAdminIntegration = new HttpLambdaIntegration(
       'ClinicianAdminIntegration',
       clinicianAdminFunction,
@@ -1168,6 +1185,15 @@ export class DataStack extends Stack {
     });
     httpApi.addRoutes({
       path: '/clinicians/{id}/reactivate',
+      methods: [HttpMethod.POST],
+      integration: clinicianAdminIntegration,
+    });
+    // D-34: self-service, any signed-in clinician acting on their own
+    // credential — never a patient, `clinician-admin.ts`'s own role
+    // check enforces that, same "no `authorizer:` override" reasoning
+    // every other route on this integration already states.
+    httpApi.addRoutes({
+      path: '/clinicians/me/change-password',
       methods: [HttpMethod.POST],
       integration: clinicianAdminIntegration,
     });

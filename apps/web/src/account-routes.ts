@@ -73,6 +73,10 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // Principal-only in practice (services/api/src/clinician-admin.ts's own
   // `can()` check), same reasoning as `patient-admin` above.
   { segment: 'clinician-admin', ownerRole: 'clinician' },
+  // D-34: any signed-in clinician's own self-service password change —
+  // clinician-only, not principal-only (services/api/src/clinician-admin.ts's
+  // own role check, not the `can()` matrix — see that file's own header).
+  { segment: 'change-password', ownerRole: 'clinician' },
   // TASK 5.5.3 step 1: any clinician's own upcoming appointments, and the
   // first real inbound link to call.astro from a page other than itself.
   { segment: 'calendar', ownerRole: 'clinician' },

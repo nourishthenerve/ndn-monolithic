@@ -17,6 +17,7 @@ import {
   AdminSetUserPasswordCommand,
   AdminUserGlobalSignOutCommand,
   AssociateSoftwareTokenCommand,
+  ChangePasswordCommand,
   CognitoIdentityProviderClient,
   VerifySoftwareTokenCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
@@ -27,11 +28,13 @@ import {
   type AdminCreateClinicianPort,
   type AdminDeactivateClinicianPort,
   type AdminReactivateClinicianPort,
+  type ChangeOwnPasswordPort,
 } from './clinician-admin.js';
 import { ClinicianRepository } from './clinician-repository.js';
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
 import { DynamoClinicianStore } from './dynamo-store.js';
+import { AppError } from './errors.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
 import { buildOtpauthUri, generateTotpCode } from './totp.js';
 
@@ -216,10 +219,41 @@ const reactivateClinicianUser: AdminReactivateClinicianPort = {
   },
 };
 
+// D-34 (2026-08-31): `ChangePassword`, not an Admin* call — the caller's
+// own access token is the proof of identity, the same reason
+// clinician-admin.ts's own header on `ChangeOwnPasswordPort` gives for
+// reading it off the request rather than routing through `can()`.
+const changeOwnPassword: ChangeOwnPasswordPort = {
+  async changePassword(accessToken, currentPassword, newPassword) {
+    try {
+      await cognitoClient.send(
+        new ChangePasswordCommand({
+          AccessToken: accessToken,
+          PreviousPassword: currentPassword,
+          ProposedPassword: newPassword,
+        }),
+      );
+    } catch (error) {
+      // `NotAuthorizedException` covers both a wrong current password and
+      // an expired/invalid access token — Cognito does not distinguish,
+      // and neither does this codebase: either way, the caller has not
+      // proven they hold the credential they are trying to change.
+      if ((error as { name?: string }).name === 'NotAuthorizedException') {
+        throw new AppError('INCORRECT_CURRENT_PASSWORD', 'ChangePassword: not authorized');
+      }
+      if ((error as { name?: string }).name === 'InvalidPasswordException') {
+        throw new AppError('PASSWORD_POLICY_VIOLATION', 'ChangePassword: new password rejected');
+      }
+      throw error;
+    }
+  },
+};
+
 export const handler = createClinicianAdminHandler({
   repository,
   flags,
   createClinicianUser,
   deactivateClinicianUser,
   reactivateClinicianUser,
+  changeOwnPassword,
 });

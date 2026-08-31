@@ -7,9 +7,11 @@ import {
   type AdminCreateClinicianPort,
   type AdminDeactivateClinicianPort,
   type AdminReactivateClinicianPort,
+  type ChangeOwnPasswordPort,
 } from './clinician-admin.js';
 import { ClinicianRepository, InMemoryClinicianStore } from './clinician-repository.js';
 import type { Clock } from './clock.js';
+import { AppError } from './errors.js';
 import { InMemoryFlagSource, CachedFlagReader, FLAG_CACHE_TTL_MS } from './flags.js';
 
 const clock: Clock = { now: () => new Date('2026-08-22T09:00:00.000Z') };
@@ -24,6 +26,7 @@ function eventFor(
     readonly principal?: Record<string, unknown>;
     readonly pathParameters?: Record<string, string>;
     readonly body?: unknown;
+    readonly headers?: Record<string, string>;
   } = {},
 ): LambdaAuthorizerEvent {
   return {
@@ -31,7 +34,7 @@ function eventFor(
     routeKey,
     rawPath: '/clinicians',
     rawQueryString: '',
-    headers: {},
+    headers: options.headers ?? {},
     pathParameters: options.pathParameters,
     body: options.body ? JSON.stringify(options.body) : undefined,
     isBase64Encoded: false,
@@ -101,12 +104,17 @@ function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
     enable: vi.fn(async () => {}),
   };
 
+  const changeOwnPassword: ChangeOwnPasswordPort = {
+    changePassword: vi.fn(async () => {}),
+  };
+
   const handler = createClinicianAdminHandler({
     repository,
     flags,
     createClinicianUser,
     deactivateClinicianUser,
     reactivateClinicianUser,
+    changeOwnPassword,
     clock,
     generatePassword: vi.fn(() => overrides.password ?? 'Gen3rat3d!Pass'),
   });
@@ -118,6 +126,7 @@ function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
     createClinicianUser,
     deactivateClinicianUser,
     reactivateClinicianUser,
+    changeOwnPassword,
   };
 }
 
@@ -468,5 +477,128 @@ describe('POST /clinicians/{id}/reactivate', () => {
     expect(response.statusCode).toBe(200);
     expect((await repository.findById('sub-1'))?.account_status).toBe('active');
     expect(reactivateClinicianUser.enable).toHaveBeenCalledWith('sub-1');
+  });
+});
+
+describe('POST /clinicians/me/change-password (D-34)', () => {
+  it('changes the password for a signed-in sub-clinician, using the bearer token as the access token', async () => {
+    const { handler, changeOwnPassword } = build();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians/me/change-password', {
+        principal: SUB_CLINICIAN_CONTEXT,
+        headers: { authorization: 'Bearer real-access-token' },
+        body: { currentPassword: 'OldPassw0rd!', newPassword: 'NewPassw0rd!' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(changeOwnPassword.changePassword).toHaveBeenCalledWith(
+      'real-access-token',
+      'OldPassw0rd!',
+      'NewPassw0rd!',
+    );
+  });
+
+  it('changes the password for the principal too — clinician-only, not principal-only', async () => {
+    const { handler, changeOwnPassword } = build();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians/me/change-password', {
+        principal: PRINCIPAL_CONTEXT,
+        headers: { authorization: 'Bearer principal-token' },
+        body: { currentPassword: 'OldPassw0rd!', newPassword: 'NewPassw0rd!' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(changeOwnPassword.changePassword).toHaveBeenCalled();
+  });
+
+  it('D-29: denies a patient — self-service password change never extends to patients', async () => {
+    const { handler, changeOwnPassword } = build();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians/me/change-password', {
+        principal: PATIENT_CONTEXT,
+        headers: { authorization: 'Bearer patient-token' },
+        body: { currentPassword: 'OldPassw0rd!', newPassword: 'NewPassw0rd!' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(403);
+    expect(changeOwnPassword.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing bearer token as unauthorized, without calling Cognito', async () => {
+    const { handler, changeOwnPassword } = build();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians/me/change-password', {
+        principal: SUB_CLINICIAN_CONTEXT,
+        body: { currentPassword: 'OldPassw0rd!', newPassword: 'NewPassw0rd!' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(401);
+    expect(changeOwnPassword.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed body as 400, without calling Cognito', async () => {
+    const { handler, changeOwnPassword } = build();
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians/me/change-password', {
+        principal: SUB_CLINICIAN_CONTEXT,
+        headers: { authorization: 'Bearer t' },
+        body: { currentPassword: '' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(changeOwnPassword.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an incorrect current password as 400 INCORRECT_CURRENT_PASSWORD', async () => {
+    const { handler, changeOwnPassword } = build();
+    changeOwnPassword.changePassword = vi.fn(async () => {
+      throw new AppError('INCORRECT_CURRENT_PASSWORD', 'ChangePassword: not authorized');
+    });
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians/me/change-password', {
+        principal: SUB_CLINICIAN_CONTEXT,
+        headers: { authorization: 'Bearer t' },
+        body: { currentPassword: 'Wrong1!', newPassword: 'NewPassw0rd!' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'INCORRECT_CURRENT_PASSWORD' });
+  });
+
+  it('surfaces a rejected new password as 400 PASSWORD_POLICY_VIOLATION', async () => {
+    const { handler, changeOwnPassword } = build();
+    changeOwnPassword.changePassword = vi.fn(async () => {
+      throw new AppError('PASSWORD_POLICY_VIOLATION', 'ChangePassword: new password rejected');
+    });
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians/me/change-password', {
+        principal: SUB_CLINICIAN_CONTEXT,
+        headers: { authorization: 'Bearer t' },
+        body: { currentPassword: 'OldPassw0rd!', newPassword: 'weak' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'PASSWORD_POLICY_VIOLATION' });
   });
 });
