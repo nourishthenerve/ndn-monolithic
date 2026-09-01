@@ -163,3 +163,24 @@ Two things about this table are enforced outside the matrix and are easy to miss
 - The patient's inability to set their own `tag` is a *field*-level rule, marked `staffOnly` on the template. It matters because the tag is the whole mechanism bounding a visitor's reach: a patient who could tag themselves `IIC` would be handing a visitor account a read of their own record.
 
 Two new powers land on the `Principal` column, both on their own rows and both `Principal`-only: **`Appointment approval`** (a sub-clinician's booking waits for it — see `docs/runbooks/appointments.md`) and nothing else. `Patient notifications` is the one row in the table whose only filled cell belongs to the patient.
+
+## Amendment, 2026-09-01 (second) — what a visitor actually sees, in full
+
+The `Visitor` row of the table above says "reads general and calendar, for `IIC`-tagged patients only". That is true at the level of *sections*; below the section level it is narrower still, and this is the complete list, because a visitor is an outside organisation's account and "what can they see" should be answerable without reading three files.
+
+On the **dashboard list** (`caseload-repository.ts`), one row per `IIC`-tagged patient:
+
+- full name
+- address
+- total number of appointments
+
+On the **assessment form** (`assessment.ts`), for one `IIC`-tagged patient:
+
+- the whole `general{}` section — its answers and its attachments
+- from `calendar{}`: the total number of appointments, and the next appointment with its length. **Nothing else** — not the clinician's scheduling notes, not the count of sessions completed, not how many bookings await the principal's approval.
+
+And nothing at all from `patient{}` or `private{}`, no messages, no diagnosis, no care plan, no account status, no assigned clinician, no email, no phone.
+
+A visitor writes nothing anywhere, on any route, including their own `tag`. The only thing they may change is their own password, through the same page every other signed-in role uses.
+
+Three of those narrowings are not expressible as matrix cells and are enforced in code at one place each — the `IIC` tag filter, the dashboard's field projection, and `VISITOR_CALENDAR_FIELDS`. If the owner ever wants a visitor to see more, those three constants and the one matrix row are the whole surface to change.

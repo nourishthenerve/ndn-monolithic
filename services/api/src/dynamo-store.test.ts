@@ -1034,6 +1034,43 @@ describe('DynamoCaseloadStore', () => {
     client: ddbMock as unknown as DynamoDBDocumentClient,
   });
 
+  // 2026-09-01: the figure a visitor reads on the dashboard. The rule it
+  // counts by is `countsTowardTotal` in `@ndn/shared-types`, shared with
+  // the assessment form's calendar summary — a visitor sees both, for the
+  // same patient, so the two must agree. This asserts the rule against the
+  // real store rather than a fake, because a fake would only restate it.
+  it('countAppointments() counts every appointment that stands, and no others', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { appointment_status: 'completed' },
+        { appointment_status: 'scheduled' },
+        { appointment_status: 'no-show' },
+        // Never happened, and never confirmed — neither is an appointment
+        // this patient has.
+        { appointment_status: 'cancelled' },
+        { appointment_status: 'pending-approval' },
+      ],
+    });
+
+    expect(await store.countAppointments('pat-1')).toBe(3);
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :appointmentPrefix)',
+      ExpressionAttributeValues: { ':patientKey': 'PAT#pat-1', ':appointmentPrefix': 'APPT#' },
+    });
+  });
+
+  it('countAppointments() pages the query rather than reading one page and stopping', async () => {
+    ddbMock
+      .on(QueryCommand)
+      .resolvesOnce({
+        Items: [{ appointment_status: 'completed' }],
+        LastEvaluatedKey: { pk: 'PAT#pat-1', sk: 'APPT#x' },
+      })
+      .resolvesOnce({ Items: [{ appointment_status: 'scheduled' }] });
+
+    expect(await store.countAppointments('pat-1')).toBe(2);
+  });
+
   it('queryPage() queries GSI3 for the fixed caseload key — a Query, never a Scan', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [

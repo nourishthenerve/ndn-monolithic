@@ -47,6 +47,38 @@ export type AppointmentStatus =
 /** The statuses a patient's *booked* appointment is counted by — what the calendar section's "next appointment" reads, and what the join-call window is measured against. A `pending-approval` slot is not yet an appointment anyone should turn up to. */
 export const CONFIRMED_APPOINTMENT_STATUSES: readonly AppointmentStatus[] = ['scheduled'];
 
+/**
+ * 2026-09-01: what "the total number of appointments" means, in one place,
+ * because two surfaces show it to the same person and a visitor seeing two
+ * different totals for one patient would be worse than seeing neither —
+ * the dashboard list (`caseload-repository.ts`) and the assessment form's
+ * calendar section (`assessment.ts`).
+ *
+ * **An appointment counts once it stands.** `scheduled` (booked, ahead),
+ * `completed` (happened) and `no-show` (booked, its time came) are all
+ * appointments this patient has had or has. The two exclusions are the
+ * whole of the definition:
+ *
+ *   * **`cancelled` never happened.** Counting it would let the total
+ *     climb from bookings that were called off, which is the opposite of
+ *     what anyone asking "how many appointments" wants to know.
+ *   * **`pending-approval` is not confirmed yet**, and excluding it does
+ *     a second job for the `Visitor` column: a total that moved as the
+ *     principal worked through an approval queue would leak the practice's
+ *     internal workflow to a partner organisation, one increment at a
+ *     time. A visitor's figure only ever moves when something real does.
+ */
+export const COUNTED_APPOINTMENT_STATUSES: readonly AppointmentStatus[] = [
+  'scheduled',
+  'completed',
+  'no-show',
+];
+
+/** Whether this appointment counts toward "the total number of appointments" — see `COUNTED_APPOINTMENT_STATUSES`. Takes the status alone so a store counting raw rows can call it without building an `Appointment`. */
+export function countsTowardTotal(status: unknown): boolean {
+  return COUNTED_APPOINTMENT_STATUSES.includes(status as AppointmentStatus);
+}
+
 export interface Appointment extends BaseRecord {
   patientId: string;
   clinicianId: string;

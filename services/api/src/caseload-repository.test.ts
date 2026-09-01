@@ -63,10 +63,10 @@ class FakeCaseloadStore implements CaseloadStore {
   }
 
   /** Keyed by patient id — the fixture's stand-in for an `APPT#` partition. */
-  completedAppointments = new Map<string, number>();
+  totalAppointments = new Map<string, number>();
 
-  async countCompletedAppointments(patientId: string) {
-    return this.completedAppointments.get(patientId) ?? 0;
+  async countAppointments(patientId: string) {
+    return this.totalAppointments.get(patientId) ?? 0;
   }
 
   /** The real store counts two GSI3 partitions; here it is the same arithmetic over the fixture. */
@@ -214,7 +214,7 @@ describe('listPage', () => {
         // must never be read as membership.
         buildPatient({ id: 'pat-untagged', tag: undefined }),
       ]);
-      built.store.completedAppointments.set('pat-iic', 3);
+      built.store.totalAppointments.set('pat-iic', 3);
       return built;
     }
 
@@ -237,7 +237,7 @@ describe('listPage', () => {
         accountStatus: 'approved',
         tag: 'IIC',
         address: '1 Example Street',
-        completedAppointments: 3,
+        totalAppointments: 3,
       });
       // The fields a visitor must never receive are absent from the
       // payload, not merely unrendered by a caller.
@@ -256,7 +256,7 @@ describe('listPage', () => {
 
     it('still gives every other role the full entry, count included where it belongs', async () => {
       const { repository, store } = await buildTagged();
-      const countSpy = vi.spyOn(store, 'countCompletedAppointments');
+      const countSpy = vi.spyOn(store, 'countAppointments');
 
       const page = await repository.listPage(PRINCIPAL, undefined, 10);
 
@@ -279,7 +279,7 @@ describe('listPage', () => {
       async count() {
         return { total: 0, active: 0 };
       }
-      async countCompletedAppointments() {
+      async countAppointments() {
         return 0;
       }
     }

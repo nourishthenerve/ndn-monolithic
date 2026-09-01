@@ -128,6 +128,14 @@ export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
         type: 'number',
         derived: true,
       },
+      /**
+       * 2026-09-01: the owner, on the visitor's view — *"i want visitor
+       * read only both total number of appointments and next
+       * appointment."* Every appointment that stands, by
+       * `COUNTED_APPOINTMENT_STATUSES`; distinct from `sessionsCompleted`
+       * below, which counts only the ones that actually happened.
+       */
+      { id: 'totalAppointments', label: 'Appointments in total', type: 'number', derived: true },
       { id: 'sessionsCompleted', label: 'Sessions so far', type: 'number', derived: true },
       {
         id: 'appointmentsAwaitingApproval',

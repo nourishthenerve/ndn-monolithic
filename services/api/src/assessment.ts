@@ -67,6 +67,7 @@
 // nothing derived to accidentally POST back.
 import type {
   Appointment,
+  AssessmentFieldDef,
   AssessmentSectionDef,
   AssessmentValue,
   FieldSet,
@@ -78,6 +79,7 @@ import {
   ASSESSMENT_SECTION_ORDER,
   ASSESSMENT_TAG_FIELD_ID,
   ASSESSMENT_TAG_OPTIONS,
+  countsTowardTotal,
   templateField,
   templateSection,
 } from '@ndn/shared-types';
@@ -191,12 +193,56 @@ function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
   }
 }
 
-/** The four figures the calendar section shows, all of them counted off `APPT#` rows. */
+/** The figures the calendar section shows, all of them counted off `APPT#` rows. */
 interface CalendarSummary {
   readonly nextAppointmentAt?: string;
   readonly nextAppointmentDurationMinutes?: number;
+  /** Every appointment that stands — see `COUNTED_APPOINTMENT_STATUSES`. */
+  readonly totalAppointments: number;
+  /** Only the ones that actually happened. Narrower than `totalAppointments`, and deliberately a separate figure. */
   readonly sessionsCompleted: number;
   readonly appointmentsAwaitingApproval: number;
+}
+
+/**
+ * **The whole of a visitor's calendar reach**, 2026-09-01: the owner, asked
+ * whether a visitor should keep the count-only view or gain the calendar —
+ * *"i want visitor read only both total number of appointments and next
+ * appointment."*
+ *
+ * Read as an enumeration, not an example, which makes this a narrowing of
+ * what the first cut gave them and closes a leak it had opened. A visitor
+ * could read the calendar section's *stored* content, and the only stored
+ * field in it is `schedulingNotes` — clinician-authored free text about a
+ * patient, reaching a partner organisation's account. Nothing asked for
+ * that; it arrived because "may read the calendar section" was implemented
+ * as "may read everything in it".
+ *
+ * So a visitor's calendar is **derived figures only, and only these two**:
+ * no stored responses, no attachments, no `sessionsCompleted`, and no
+ * `appointmentsAwaitingApproval` (the practice's own workflow, and a number
+ * that would move as the principal worked a queue).
+ *
+ * This is the third place a visitor is narrowed by something other than a
+ * matrix cell — `caseload-repository.ts`'s tag filter and field omission
+ * being the first two — and the reason is the same each time: the matrix
+ * says which rows, never which fields of a row.
+ */
+const VISITOR_CALENDAR_FIELDS: readonly string[] = [
+  'totalAppointments',
+  'nextAppointmentAt',
+  'nextAppointmentDurationMinutes',
+];
+
+/** A visitor's summary, built by omission — the fields simply never leave this function. */
+function visitorCalendarSummary(summary: CalendarSummary): Record<string, string | number> {
+  const narrowed: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(summary)) {
+    if (VISITOR_CALENDAR_FIELDS.includes(key) && value !== undefined) {
+      narrowed[key] = value as string | number;
+    }
+  }
+  return narrowed;
 }
 
 /**
@@ -213,9 +259,17 @@ export function summariseCalendar(
 ): CalendarSummary {
   const nowIso = now.toISOString();
   let next: Appointment | undefined;
+  let totalAppointments = 0;
   let sessionsCompleted = 0;
   let appointmentsAwaitingApproval = 0;
   for (const appointment of appointments) {
+    // Counted first and independently of everything below: "how many
+    // appointments" is a different question from "which is next" and from
+    // "how many happened", and each `continue` in the branches that follow
+    // would otherwise silently exclude a row from this total too.
+    if (countsTowardTotal(appointment.appointment_status)) {
+      totalAppointments += 1;
+    }
     if (appointment.appointment_status === 'completed') {
       sessionsCompleted += 1;
       continue;
@@ -242,6 +296,7 @@ export function summariseCalendar(
           nextAppointmentDurationMinutes: next.durationMinutes,
         }
       : {}),
+    totalAppointments,
     sessionsCompleted,
     appointmentsAwaitingApproval,
   };
@@ -313,11 +368,35 @@ function validateAttachments(
   return { ok: true };
 }
 
-/** The template a caller may actually see: sections they can read, and nothing about the ones they cannot. */
-function readableTemplate(readable: ReadonlySet<FieldSet>): readonly AssessmentSectionDef[] {
-  return ASSESSMENT_SECTION_ORDER.map((fieldSet) => templateSection(fieldSet)).filter(
-    (section): section is AssessmentSectionDef => section !== undefined && readable.has(section.fieldSet),
-  );
+/**
+ * The template a caller may actually see: sections they can read, and
+ * nothing about the ones they cannot — not even a field label, which is
+ * why this filters the template rather than letting the form hide things.
+ *
+ * A visitor's calendar section is cut down further, to the two figures
+ * `VISITOR_CALENDAR_FIELDS` names. Without that the form would render
+ * labels for a scheduling note and a session count they are never sent,
+ * which reads as an empty record rather than as an absent permission.
+ */
+function readableTemplate(
+  readable: ReadonlySet<FieldSet>,
+  isVisitor: boolean,
+): readonly AssessmentSectionDef[] {
+  return ASSESSMENT_SECTION_ORDER.map((fieldSet) => templateSection(fieldSet))
+    .filter(
+      (section): section is AssessmentSectionDef =>
+        section !== undefined && readable.has(section.fieldSet),
+    )
+    .map((section) =>
+      isVisitor && section.fieldSet === 'calendar'
+        ? {
+            ...section,
+            fields: section.fields.filter((field: AssessmentFieldDef) =>
+              VISITOR_CALENDAR_FIELDS.includes(field.id),
+            ),
+          }
+        : section,
+    );
 }
 
 export function createAssessmentHandler(
@@ -408,12 +487,14 @@ export function createAssessmentHandler(
       return respond(404, { error: 'RECORD_NOT_FOUND' });
     }
 
+    const isVisitor = principal.role === 'visitor';
+
     // The visitor's second narrowing — see this file's header. `404`, not
     // `403`: a visitor must not be able to infer that a patient outside
     // their programme exists, and this is the same answer a genuinely
     // absent record gives. An untagged record (written before tagging
     // existed) is not `IIC`; absence is never read as membership.
-    if (principal.role === 'visitor' && patient.tag !== VISITOR_TAG) {
+    if (isVisitor && patient.tag !== VISITOR_TAG) {
       return respond(404, { error: 'RECORD_NOT_FOUND' });
     }
 
@@ -436,6 +517,14 @@ export function createAssessmentHandler(
           };
           for (const fieldSet of ASSESSMENT_SECTION_ORDER) {
             const section = version[fieldSet];
+            // A visitor's calendar reach is the derived figures and
+            // nothing else — see `VISITOR_CALENDAR_FIELDS`. The stored
+            // half of that section is a clinician's scheduling note, and
+            // it is omitted here rather than filtered downstream: the key
+            // is never on the object a visitor is sent.
+            if (isVisitor && fieldSet === 'calendar') {
+              continue;
+            }
             if (readable.has(fieldSet) && section !== undefined) {
               shape[fieldSet] = section;
             }
@@ -454,6 +543,7 @@ export function createAssessmentHandler(
       const summary = readable.has('calendar')
         ? summariseCalendar(await deps.appointments.listForPatient(patientId), clock.now())
         : undefined;
+      const shownSummary = summary && isVisitor ? visitorCalendarSummary(summary) : summary;
 
       return respond(200, {
         assessmentId,
@@ -462,11 +552,13 @@ export function createAssessmentHandler(
         // one. `items` being empty says the same thing; this says it in
         // the field the write actually reads.
         currentVersion: versions.at(-1)?.version ?? 0,
-        template: readableTemplate(readable).map((section) =>
+        template: readableTemplate(readable, isVisitor).map((section) =>
           projectFor(principal, section, resourceFor(section.fieldSet)),
         ),
         permissions,
-        ...(summary ? { calendarSummary: projectFor(principal, summary, resourceFor('calendar')) } : {}),
+        ...(shownSummary
+          ? { calendarSummary: projectFor(principal, shownSummary, resourceFor('calendar')) }
+          : {}),
         items,
       });
     }

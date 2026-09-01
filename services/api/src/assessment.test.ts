@@ -758,6 +758,9 @@ describe('the calendar section is derived, not stored', () => {
     expect(body.calendarSummary).toEqual({
       nextAppointmentAt: '2026-09-05T10:00:00.000Z',
       nextAppointmentDurationMinutes: 45,
+      // Two completed + two confirmed-future. The pending one is not
+      // counted, and neither would a cancelled one be.
+      totalAppointments: 4,
       sessionsCompleted: 2,
       appointmentsAwaitingApproval: 1,
     });
@@ -1004,5 +1007,171 @@ describe('a failed version write never widens a visitor\'s reach', () => {
     expect((await patients.findById('pat-1'))?.tag).toBe('IIC');
     const latest = await assessments.latest('pat-1', DEFAULT_ASSESSMENT_ID);
     expect(latest?.general.responses[ASSESSMENT_TAG_FIELD_ID]).toBe('IIC');
+  });
+});
+
+// 2026-09-01, the owner on the visitor's calendar: *"i want visitor read
+// only both total number of appointments and next appointment."* Read as
+// an enumeration, which makes it a narrowing of the first cut as well as
+// an addition — and the narrowing closes a leak, because the only *stored*
+// field in the calendar section is a clinician's scheduling note.
+describe('the visitor\'s calendar is two figures, and nothing else', () => {
+  async function visitorView() {
+    const built = await build({ tag: 'IIC' });
+    const clinician = actorContext(
+      { subjectId: 'sub-1', role: 'sub-clinician' },
+      { requestId: 'r', sourceIp: '198.51.100.2' },
+    );
+    const appointments = new AppointmentRepository(
+      built.appointmentStore,
+      new InMemoryAuditLog(),
+      clock,
+    );
+    // One completed, one confirmed ahead, one cancelled, one pending.
+    for (const [at, requiresApproval] of [
+      ['2026-07-01T10:00:00.000Z', false],
+      ['2026-09-05T10:00:00.000Z', false],
+      ['2026-09-10T10:00:00.000Z', false],
+      ['2026-08-30T10:00:00.000Z', true],
+    ] as const) {
+      await appointments.schedule(
+        { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: at, durationMinutes: 45 },
+        clinician,
+        { requiresApproval },
+      );
+    }
+    const completed = built.appointmentStore.items.find(
+      (a) => a.scheduledAt === '2026-07-01T10:00:00.000Z',
+    );
+    if (completed) {
+      built.appointmentStore.items[built.appointmentStore.items.indexOf(completed)] = {
+        ...completed,
+        appointment_status: 'completed',
+      };
+    }
+    const cancelled = built.appointmentStore.items.find(
+      (a) => a.scheduledAt === '2026-09-10T10:00:00.000Z',
+    );
+    if (cancelled) {
+      built.appointmentStore.items[built.appointmentStore.items.indexOf(cancelled)] = {
+        ...cancelled,
+        appointment_status: 'cancelled',
+      };
+    }
+    // A clinician writes a scheduling note — the one stored field in the
+    // section, and the thing a visitor must not receive.
+    const wrote = await write(built.handler, PRINCIPAL, {
+      calendar: { responses: { schedulingNotes: 'PRIVATE SCHEDULING NOTE' } },
+    });
+    expect(wrote.statusCode).toBe(201);
+    return built;
+  }
+
+  it('gives a visitor exactly the total and the next appointment', async () => {
+    const { handler } = await visitorView();
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: VISITOR }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(read(response).calendarSummary).toEqual({
+      // completed + scheduled; never the cancelled one, never the pending one.
+      totalAppointments: 2,
+      nextAppointmentAt: '2026-09-05T10:00:00.000Z',
+      nextAppointmentDurationMinutes: 45,
+    });
+  });
+
+  it('never sends a visitor the clinician\'s scheduling note', async () => {
+    const { handler } = await visitorView();
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: VISITOR }),
+    );
+    // Asserted against the raw body, not the parsed object: a leak through
+    // the serialiser is exactly what an object-shaped check cannot catch.
+    expect(response.body).not.toContain('PRIVATE SCHEDULING NOTE');
+    expect(response.body).not.toContain('schedulingNotes');
+    for (const item of read(response).items) {
+      expect(Object.hasOwn(item, 'calendar')).toBe(false);
+    }
+  });
+
+  it('does not tell a visitor how many appointments are awaiting approval — that is the practice\'s own workflow', async () => {
+    const { handler } = await visitorView();
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: VISITOR }),
+    );
+    expect(response.body).not.toContain('appointmentsAwaitingApproval');
+    expect(response.body).not.toContain('sessionsCompleted');
+  });
+
+  it('offers a visitor no label for a field they are never sent', async () => {
+    const { handler } = await visitorView();
+    const body = read(
+      await invoke(
+        handler,
+        fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: VISITOR }),
+      ),
+    );
+    const calendar = body.template.find((section) => section.fieldSet === 'calendar') as
+      | { fields: { id: string }[] }
+      | undefined;
+    expect(calendar?.fields.map((field) => field.id).sort()).toEqual([
+      'nextAppointmentAt',
+      'nextAppointmentDurationMinutes',
+      'totalAppointments',
+    ]);
+  });
+
+  it('still gives everyone else the full summary and the stored note', async () => {
+    const { handler } = await visitorView();
+    const body = read(
+      await invoke(
+        handler,
+        fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: PRINCIPAL }),
+      ),
+    );
+    expect(body.calendarSummary).toMatchObject({
+      totalAppointments: 2,
+      sessionsCompleted: 1,
+      appointmentsAwaitingApproval: 1,
+    });
+    expect(body.items[0]?.calendar?.responses.schedulingNotes).toBe('PRIVATE SCHEDULING NOTE');
+  });
+
+  it('counts a no-show toward the total — it was booked and its time came', async () => {
+    const { handler, appointmentStore } = await build({ tag: 'IIC' });
+    const clinician = actorContext(
+      { subjectId: 'sub-1', role: 'sub-clinician' },
+      { requestId: 'r', sourceIp: '198.51.100.2' },
+    );
+    const appointments = new AppointmentRepository(
+      appointmentStore,
+      new InMemoryAuditLog(),
+      clock,
+    );
+    await appointments.schedule(
+      {
+        patientId: 'pat-1',
+        clinicianId: 'cli-1',
+        scheduledAt: '2026-07-01T10:00:00.000Z',
+        durationMinutes: 30,
+      },
+      clinician,
+      { requiresApproval: false },
+    );
+    const only = appointmentStore.items[0];
+    if (only) {
+      appointmentStore.items[0] = { ...only, appointment_status: 'no-show' };
+    }
+    const body = read(
+      await invoke(
+        handler,
+        fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: VISITOR }),
+      ),
+    );
+    expect(body.calendarSummary).toEqual({ totalAppointments: 1 });
   });
 });

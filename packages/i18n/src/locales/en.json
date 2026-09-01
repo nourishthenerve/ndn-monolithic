@@ -164,7 +164,7 @@
   "caseload.suspendConfirm": "Remove this patient’s access? They will not be able to sign in until you restore it. Their records are kept.",
   "caseload.statusError": "That change could not be saved. Please try again.",
   "caseload.addressColumn": "Address",
-  "caseload.appointmentsColumn": "Appointments attended",
+  "caseload.appointmentsColumn": "Appointments in total",
   "patientAdmin.heading": "Patient accounts",
   "patientAdmin.description": "Register a patient after verifying them over WhatsApp, assign them a clinician, or reset a patient's password.",
   "patientAdmin.forbidden": "You do not have access to this page.",

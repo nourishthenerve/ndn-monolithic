@@ -31,7 +31,7 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 | Assessment — `general{}` | **R U** | — | C R U | — | **C R U** | **R (IIC-tagged only)** | C R U |
 | Assessment — `patient{}` | R | — | C R U | — | **C R U** | **—** | C R U |
 | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | **—** | C R U |
-| Assessment — `calendar{}` | R | — | C R U | — | **R** | **R (IIC-tagged only)** | C R U |
+| Assessment — `calendar{}` | R | — | C R U | — | **R** | **R (IIC-tagged, two figures only)** | C R U |
 | Appointments | R J | — | C R U J | — | **R** | **R (count only)** | C R U J |
 | **Appointment approval** | — | — | — | — | — | — | **U** |
 | Patient notifications | **R U (own)** | — | — | — | — | — | — |
@@ -104,7 +104,7 @@ Cell by cell, and each one is the owner's sentence rather than an inference:
 * **`general{}` — `Visitor`: `R`, IIC-tagged only.** *"it will only be able to see the general info contant of only those patients that have been tagged IIC."* This is the second place a visitor's reach is narrowed by *data* rather than by a cell, and it is narrowed the same way the first one is: `can()` answers "may a visitor read a general section at all", and the handler skips every patient whose `tag` is not `IIC`. The tag check is in `assessment.ts` as well as `caseload-repository.ts` because they are two different reads — a visitor who could only be stopped at the list would still reach a record by guessing an id.
 * **`patient{}` — `Patient (own)`: `R`, not `R U`.** "Specific to the patient" is written *about* the patient by staff, and the owner's edit permission for a patient is general info "only". They read it, because a section named for them that they cannot see would be a strange thing to hold, and nothing in the request withholds it.
 * **`private{}` — unchanged, in every cell.** Both clinician columns write it, everybody else is denied outright, including read. R-09's own register entry ("a patient reaches no private assessment field, in any relationship") is asserted against this row exactly as it was.
-* **`calendar{}` — `R` for patient, helpdesk and visitor; `C R U` for both clinician columns.** *"It will be edited by the clinician/principal clinician and helpdesk/visitor/patient will only be able to read it."* Read literally, and the visitor's read is IIC-gated by the same handler check as `general{}`'s.
+* **`calendar{}` — `R` for patient, helpdesk and visitor; `C R U` for both clinician columns.** *"It will be edited by the clinician/principal clinician and helpdesk/visitor/patient will only be able to read it."* Read literally, and the visitor's read is IIC-gated by the same handler check as `general{}`'s — **and narrowed further to two figures**, see below.
 
 **The calendar section stores almost nothing, and that is deliberate.** "When is the next appointment", "how many sessions so far" and "how many are awaiting approval" are all facts about `APPT#` rows, and they are computed from those rows on every read rather than stored alongside them. A stored copy would be a second answer the first time a write half-succeeded, and the `APPT#` rows are already the ones the approval workflow, the clinician calendar and the join-call window read. The only writable field in the section is a free-text scheduling note — which is what `C R U` on this row actually governs. Booking, moving and cancelling stay on the `Appointments` row, where they have always been.
 
@@ -119,3 +119,22 @@ Cell by cell, and each one is the owner's sentence rather than an inference:
 **A declined request becomes `cancelled`, not a fifth status.** Everything that reads `appointment_status` treats "declined before it was confirmed" and "cancelled after it was" identically — not happening, still in the history, skipped by the clinician calendar — and who decided it and when is already in the audit log. A `'declined'` value would be a state every consumer has to learn in order to handle it the same way.
 
 **`Patient notifications` is a row with one column filled in.** The owner: *"When a clinician/principal clinician edits a calender for a given patient it will appear as a notification on patients logged in dashboard."* The feed is a row per event on the patient's own partition, and the only HTTP reach anyone has to it is the patient's own `R U` — read the feed, mark an item read. **The clinician columns are `—` and that is not an omission:** a notification is never created by an HTTP call, it is a side effect of an appointment action that has *already* been authorised on the `Appointments` or `Appointment approval` row. Giving a clinician `C` here would create a second, independently reachable way to put text on a patient's dashboard, which is exactly what this row should not be. The record carries a kind and a time and no prose, so there is no message for anyone to author in the first place.
+
+## 2026-09-01 (second amendment) — the visitor's calendar is two figures
+
+Asked whether a visitor should keep the old count-only view of appointments or gain the calendar section the first cut had given them, the owner: *"i want visitor read only both total number of appointments and next appointment."*
+
+Read as an **enumeration**, not an example — which makes it a narrowing as well as an addition, and the narrowing matters more than the addition.
+
+**What it closes.** The first cut implemented "a visitor may read the calendar section" as "a visitor may read everything in that section". The only *stored* field in the calendar is `schedulingNotes` — free text a clinician writes about a patient — so a partner organisation's read-only account was being sent clinician-authored prose. Nothing asked for that; it arrived as a side effect of a section-level permission being applied to a section that happens to contain one written field. The `Visitor` column has been the narrowest in this table since it was created precisely so this kind of thing has to be argued for, and it was not.
+
+So a visitor's calendar is now **derived figures only, and only two of them**:
+
+* `totalAppointments` — every appointment that stands.
+* `nextAppointmentAt` (with its duration).
+
+And explicitly not: the stored `schedulingNotes`, any attachment, `sessionsCompleted`, or `appointmentsAwaitingApproval`. That last omission is worth its own sentence: a total that moved as the principal worked through an approval queue would leak the practice's internal workflow to an outside account one increment at a time, so a visitor's figure only ever moves when something real does.
+
+This is the **third** narrowing applied to the `Visitor` column outside the matrix, after the tag filter and the field-level projection in `caseload-repository.ts`, and the reason is unchanged each time: the matrix says which *rows* a role may reach, never which *fields* of a row. Each one is therefore named here in words and enforced at one chokepoint in code (`VISITOR_CALENDAR_FIELDS` in `assessment.ts`), not left to be discovered.
+
+**"Total number of appointments" is defined once, in `@ndn/shared-types`.** `COUNTED_APPOINTMENT_STATUSES` is `scheduled`, `completed` and `no-show`: an appointment counts once it stands. `cancelled` never happened, and `pending-approval` is not confirmed. The definition is shared because a visitor sees this figure on **two** screens — the dashboard list and the assessment form — and one patient showing two different totals would be worse than either figure alone. The dashboard's own column moved with it (`countCompletedAppointments` → `countAppointments`, "Appointments attended" → "Appointments in total"), so the two now cannot drift.

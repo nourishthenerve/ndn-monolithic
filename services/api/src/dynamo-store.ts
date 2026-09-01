@@ -30,6 +30,7 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { QueryCommandOutput } from '@aws-sdk/lib-dynamodb';
+import { countsTowardTotal } from '@ndn/shared-types';
 import type {
   Appointment,
   Assessment,
@@ -1268,11 +1269,17 @@ export class DynamoCaseloadStore implements CaseloadStore {
    * `appointment_status` is filtered in application code rather than by a
    * `FilterExpression`, and that is not laziness: a filter would still
    * read and charge for every row, so the only thing it would save is the
-   * bytes over the wire, and doing it here keeps the definition of
-   * "happened" — `completed`, never `scheduled`, `cancelled` or
-   * `no-show` — visible next to the code that means it.
+   * bytes over the wire.
+   *
+   * **2026-09-01: counts every appointment that stands, not only the ones
+   * that happened.** The owner: *"i want visitor read only both total
+   * number of appointments and next appointment."* The rule itself is
+   * `countsTowardTotal` in `@ndn/shared-types`, shared with
+   * `assessment.ts`'s calendar summary rather than restated here — the
+   * two are shown to the same visitor on two screens, and one patient with
+   * two different totals would be worse than either figure alone.
    */
-  async countCompletedAppointments(patientId: string): Promise<number> {
+  async countAppointments(patientId: string): Promise<number> {
     let count = 0;
     let startKey: Record<string, unknown> | undefined;
     do {
@@ -1288,7 +1295,7 @@ export class DynamoCaseloadStore implements CaseloadStore {
         }),
       );
       for (const row of result.Items ?? []) {
-        if (row.appointment_status === 'completed') {
+        if (countsTowardTotal(row.appointment_status)) {
           count += 1;
         }
       }

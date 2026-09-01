@@ -79,7 +79,7 @@ class FakeCaseloadStore implements CaseloadStore {
     return { total: 0, active: 0 };
   }
 
-  async countCompletedAppointments() {
+  async countAppointments() {
     return 0;
   }
 }
