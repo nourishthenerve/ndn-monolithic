@@ -41,12 +41,13 @@ import type {
   Message,
   Patient,
   PatientAccountStatus,
+  PatientNotification,
   Registration,
   Testimonial,
   Workshop,
 } from '@ndn/shared-types';
 
-import type { AppointmentStore } from './appointment-repository.js';
+import type { AppointmentStore, AppointmentTransition } from './appointment-repository.js';
 import type { AssignmentStore } from './assignment-repository.js';
 import type { CaseloadStore } from './caseload-repository.js';
 import type { ClinicianStore } from './clinician-repository.js';
@@ -54,6 +55,7 @@ import type { ContentAssignmentStore } from './content-assignment-repository.js'
 import type { ContentStore } from './content-repository.js';
 import { AppError } from './errors.js';
 import type { MessagePage, MessageStore } from './message-repository.js';
+import type { PatientNotificationStore } from './patient-notification-repository.js';
 import type { RegistrationStore, WorkshopCapacityStore } from './registration-repository.js';
 import type { KeyValueStore } from './store.js';
 import type { WebhookEventStore } from './stripe-webhook.js';
@@ -1606,27 +1608,60 @@ export class DynamoAppointmentStore implements AppointmentStore {
   }
 
   /**
-   * `appointment_status` alone — never `scheduledAt`, so `gsi1pk`/`gsi1sk`
-   * (derived from `clinicianId`/`scheduledAt`) never need re-deriving.
-   * `ReturnValues: 'ALL_NEW'` hands back the updated row in the same
-   * round trip a separate `GetItem` would otherwise cost.
+   * `appointment_status` alone (plus the two approval stamps) — never
+   * `scheduledAt`, so `gsi1pk`/`gsi1sk` (derived from
+   * `clinicianId`/`scheduledAt`) never need re-deriving. `ReturnValues:
+   * 'ALL_NEW'` hands back the updated row in the same round trip a
+   * separate `GetItem` would otherwise cost.
+   *
+   * **`expect` is enforced by the condition expression, not by a read
+   * before the write**, which is what makes an approval race safe: two
+   * principals acting on the same pending request at the same moment
+   * produce one transition and one `APPOINTMENT_STATE_CONFLICT`, never two
+   * transitions where the second overwrites the first.
+   *
+   * A failed condition cannot say *which* clause failed, so the row is
+   * fetched once afterwards to tell "there is no such appointment" from
+   * "it is no longer pending". That read happens only on the failure path
+   * — the happy path is still one round trip.
    */
-  async cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment> {
+  async transition(
+    patientId: string,
+    scheduledAt: string,
+    change: AppointmentTransition,
+  ): Promise<Appointment> {
     const sk = APPOINTMENT_SORT_KEY(scheduledAt);
+    const setsDecision = change.decidedBy !== undefined;
     try {
       const result = await this.client.send(
         new UpdateCommand({
           TableName: this.tableName,
           Key: { pk: PATIENT_PK(patientId), sk },
-          UpdateExpression: 'SET appointment_status = :cancelled, updated_at = :now',
-          ConditionExpression: 'attribute_exists(pk)',
-          ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': now },
+          UpdateExpression: setsDecision
+            ? 'SET appointment_status = :to, updated_at = :now, approvedBy = :by, approvedAt = :now'
+            : 'SET appointment_status = :to, updated_at = :now',
+          ConditionExpression: change.expect
+            ? 'attribute_exists(pk) AND appointment_status = :expected'
+            : 'attribute_exists(pk)',
+          ExpressionAttributeValues: {
+            ':to': change.to,
+            ':now': change.now,
+            ...(setsDecision ? { ':by': change.decidedBy } : {}),
+            ...(change.expect ? { ':expected': change.expect } : {}),
+          },
           ReturnValues: 'ALL_NEW',
         }),
       );
       return withoutTableKeys<Appointment>(result.Attributes ?? {});
     } catch (error) {
       if (error instanceof ConditionalCheckFailedException) {
+        const existing = await this.get(patientId, scheduledAt);
+        if (existing) {
+          throw new AppError(
+            'APPOINTMENT_STATE_CONFLICT',
+            `appointment for patient ${patientId} at ${scheduledAt} is ${existing.appointment_status}, not ${change.expect}`,
+          );
+        }
         throw new AppError(
           'RECORD_NOT_FOUND',
           `no appointment for patient ${patientId} at ${scheduledAt}`,
@@ -1785,5 +1820,107 @@ export class DynamoMessageStore implements MessageStore {
     );
     const items = (result.Items ?? []).map((item) => withoutTableKeys<Message>(item));
     return { items, nextCursor: encodeMessageCursor(result.LastEvaluatedKey) };
+  }
+}
+
+// 2026-09-01: `PAT#<id>` / `NOTIF#<created_at>#<uuid>` — the patient's own
+// in-app dashboard feed. The same time-prefix-plus-uuid sort key
+// `DynamoMessageStore` above and `DynamoAuditLog` already use, and for the
+// identical reason: the timestamp gives the ordering, the suffix only has
+// to make two events in the same millisecond two rows.
+//
+// The suffix *is* `PatientNotification.notificationId`, so the row names
+// its own key and `markRead` needs no parsing to find it again.
+const NOTIFICATION_SORT_KEY = (notificationId: string) => `NOTIF#${notificationId}`;
+const NOTIFICATION_SORT_KEY_PREFIX = 'NOTIF#';
+
+export interface DynamoPatientNotificationStoreOptions {
+  readonly tableName: string;
+  readonly client?: DynamoDBDocumentClient;
+}
+
+export class DynamoPatientNotificationStore implements PatientNotificationStore {
+  private readonly client: DynamoDBDocumentClient;
+  private readonly tableName: string;
+
+  constructor(options: DynamoPatientNotificationStoreOptions) {
+    this.client = options.client ?? defaultDocumentClient();
+    this.tableName = options.tableName;
+  }
+
+  async create(notification: PatientNotification): Promise<void> {
+    const sk = NOTIFICATION_SORT_KEY(notification.notificationId);
+    try {
+      await this.client.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: { ...notification, pk: PATIENT_PK(notification.patientId), sk },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        throw new AppError(
+          'RECORD_ALREADY_EXISTS',
+          `notification collision for patient ${notification.patientId} at ${sk}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * `ScanIndexForward: false` — newest first, which is the only order a
+   * dashboard feed wants and is free here (DynamoDB reads the partition
+   * backwards rather than sorting after the fact). `Limit` bounds the read
+   * itself, so an old account with years of rows costs the same as a new
+   * one; there is no cursor because nothing pages this view.
+   */
+  async listForPatient(patientId: string, limit: number): Promise<PatientNotification[]> {
+    const result = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :notifPrefix)',
+        ExpressionAttributeValues: {
+          ':patientKey': PATIENT_PK(patientId),
+          ':notifPrefix': NOTIFICATION_SORT_KEY_PREFIX,
+        },
+        ScanIndexForward: false,
+        Limit: limit,
+      }),
+    );
+    return (result.Items ?? []).map((item) => withoutTableKeys<PatientNotification>(item));
+  }
+
+  /**
+   * `read` alone. A missing row is `undefined`, not a throw — a patient
+   * dismissing a notice that is no longer there wanted it gone, and the
+   * outcome they asked for is the outcome they have.
+   */
+  async markRead(
+    patientId: string,
+    notificationId: string,
+    now: string,
+  ): Promise<PatientNotification | undefined> {
+    try {
+      const result = await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { pk: PATIENT_PK(patientId), sk: NOTIFICATION_SORT_KEY(notificationId) },
+          // `read` is a DynamoDB reserved word, hence the name placeholder.
+          UpdateExpression: 'SET #read = :true, updated_at = :now',
+          ConditionExpression: 'attribute_exists(pk)',
+          ExpressionAttributeNames: { '#read': 'read' },
+          ExpressionAttributeValues: { ':true': true, ':now': now },
+          ReturnValues: 'ALL_NEW',
+        }),
+      );
+      return withoutTableKeys<PatientNotification>(result.Attributes ?? {});
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 }

@@ -30,7 +30,7 @@
 // name a different clinician's calendar (05-execution-plan.md's own "Do
 // NOT: let the calendar query accept a clinicianId parameter a caller
 // could point at someone else").
-import type { Principal } from '@ndn/shared-types';
+import type { PatientNotificationKind, Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyHandlerV2WithLambdaAuthorizer,
@@ -45,6 +45,7 @@ import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
+import type { PatientNotificationRepository } from './patient-notification-repository.js';
 import type { PatientRepository } from './patient-repository.js';
 import { projectAllFor, projectFor, serialiseResponse, type ResponseBody } from './projection.js';
 import { requirePrincipal } from './request-principal.js';
@@ -65,6 +66,9 @@ function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
 
 const APPOINTMENTS_FLAG = 'appointments.enabled';
 
+/** The `Appointment approval` row — a different row from `Appointments`, and `Principal`-only. See docs/plan/04-data-model-rbac.md's own note on why approving is not a widening of booking. */
+const APPOINTMENT_APPROVAL_ENTITY_TYPE = 'appointment-approval';
+
 const scheduleBodySchema = z
   .object({
     scheduledAt: z.string().datetime(),
@@ -76,6 +80,13 @@ export interface AppointmentDeps {
   /** For the assignment-relationship lookup `can()` needs — never for an appointment read or write, which stays on `appointments` below. */
   readonly patients: PatientRepository;
   readonly appointments: AppointmentRepository;
+  /**
+   * 2026-09-01: the patient's in-app dashboard feed. Written as a side
+   * effect of the four calendar actions below, never by a route of its
+   * own — `authz-matrix.ts`'s `Patient notifications` row grants `C` to
+   * nobody, so this is the only way a notice is ever created.
+   */
+  readonly notifications: PatientNotificationRepository;
   readonly flags: FlagReader;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
@@ -155,7 +166,19 @@ export function createAppointmentHandler(
     const isSchedule = routeKey === 'POST /patients/{id}/appointments';
     const isList = routeKey === 'GET /patients/{id}/appointments';
     const isCancel = routeKey === 'POST /patients/{id}/appointments/{apptId}/cancel';
-    if (!isSchedule && !isList && !isCancel) {
+    const isApprove = routeKey === 'POST /patients/{id}/appointments/{apptId}/approve';
+    const isDecline = routeKey === 'POST /patients/{id}/appointments/{apptId}/decline';
+    const isComplete = routeKey === 'POST /patients/{id}/appointments/{apptId}/complete';
+    const isNoShow = routeKey === 'POST /patients/{id}/appointments/{apptId}/no-show';
+    if (
+      !isSchedule &&
+      !isList &&
+      !isCancel &&
+      !isApprove &&
+      !isDecline &&
+      !isComplete &&
+      !isNoShow
+    ) {
       return respond(404, { error: 'NOT_FOUND' });
     }
 
@@ -180,6 +203,115 @@ export function createAppointmentHandler(
       assignedClinicianId: patient?.assigned_clinician_id,
     } as const;
     const actor = actorFromPrincipal(principal, requestOriginOf(event));
+
+    /**
+     * Every calendar action ends here. **Deliberately not fatal**: the
+     * appointment is already written by the time this runs, and throwing
+     * would report failure for an action that succeeded, leaving the
+     * caller to retry a booking that already exists (and collide with it).
+     * **And deliberately not silent**: the outcome is returned as
+     * `notified`, so a caller is told rather than left to infer it from
+     * the patient's screen. The same shape `POST /patients` uses for the
+     * assessment form it instantiates.
+     */
+    const notify = async (
+      kind: PatientNotificationKind,
+      about: { readonly subjectAt?: string } = {},
+    ): Promise<boolean> => {
+      try {
+        await deps.notifications.notify(patientId, kind, actor, about);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (isApprove || isDecline) {
+      // The `Appointment approval` row, not `Appointments` — a
+      // sub-clinician holds `update` on the latter and is denied here,
+      // which is the entire mechanism behind "any new appointment booked
+      // by the clinician needs to be approved by the principal clinician."
+      if (
+        !can(principal, 'update', {
+          entityType: APPOINTMENT_APPROVAL_ENTITY_TYPE,
+          ownerPatientId: patientId,
+          assignedClinicianId: patient?.assigned_clinician_id,
+        }).allowed
+      ) {
+        return respond(403, { error: 'FORBIDDEN' });
+      }
+      if (!patient) {
+        return respond(404, { error: 'RECORD_NOT_FOUND' });
+      }
+      const apptId = event.pathParameters?.apptId;
+      if (!apptId) {
+        return respond(400, { error: 'ID_REQUIRED' });
+      }
+      try {
+        const decided = isApprove
+          ? await deps.appointments.approve(patientId, apptId, actor)
+          : await deps.appointments.decline(patientId, apptId, actor);
+        const notified = await notify(
+          isApprove ? 'appointment-approved' : 'appointment-cancelled',
+          { subjectAt: decided.scheduledAt },
+        );
+        return respond(200, { item: projectFor(principal, decided, resource), notified });
+      } catch (error) {
+        if (error instanceof AppError && error.code === 'RECORD_NOT_FOUND') {
+          return respond(404, { error: error.code });
+        }
+        // Already approved, already declined, or never pending — the
+        // condition expression refused the write rather than letting a
+        // second decision overwrite the first.
+        if (error instanceof AppError && error.code === 'APPOINTMENT_STATE_CONFLICT') {
+          return respond(409, { error: error.code });
+        }
+        throw error;
+      }
+    }
+
+    // 2026-09-01: marking attendance. On the `Appointments` row's own
+    // `update`, not the approval row — recording that a session happened is
+    // the treating clinician's, and the principal holds the same cell.
+    // Without these two routes `appointment_status` would never once be
+    // `'completed'`, and both the visitor's "number of appointments
+    // happened" and the calendar section's "sessions so far" would read
+    // zero forever — a wrong figure that looks like a right one.
+    if (isComplete || isNoShow) {
+      if (!can(principal, 'update', resource).allowed) {
+        return respond(403, { error: 'FORBIDDEN' });
+      }
+      if (!patient) {
+        return respond(404, { error: 'RECORD_NOT_FOUND' });
+      }
+      const apptId = event.pathParameters?.apptId;
+      if (!apptId) {
+        return respond(400, { error: 'ID_REQUIRED' });
+      }
+      try {
+        const marked = await deps.appointments.markAttended(
+          patientId,
+          apptId,
+          actor,
+          isComplete ? 'completed' : 'no-show',
+        );
+        // No notification: the patient was there (or was not), so telling
+        // them about it on their dashboard is noise. The feed exists for
+        // changes to what is *coming*, which is what the owner asked for.
+        return respond(200, { item: projectFor(principal, marked, resource) });
+      } catch (error) {
+        if (error instanceof AppError && error.code === 'RECORD_NOT_FOUND') {
+          return respond(404, { error: error.code });
+        }
+        // Not `scheduled` — cancelled, still awaiting approval, or already
+        // marked. None of those took place, and none may be recorded as
+        // though they had.
+        if (error instanceof AppError && error.code === 'APPOINTMENT_STATE_CONFLICT') {
+          return respond(409, { error: error.code });
+        }
+        throw error;
+      }
+    }
 
     if (isList) {
       if (!can(principal, 'read', resource).allowed) {
@@ -213,7 +345,10 @@ export function createAppointmentHandler(
       }
       try {
         const cancelled = await deps.appointments.cancel(patientId, apptId, actor);
-        return respond(200, { item: projectFor(principal, cancelled, resource) });
+        const notified = await notify('appointment-cancelled', {
+          subjectAt: cancelled.scheduledAt,
+        });
+        return respond(200, { item: projectFor(principal, cancelled, resource), notified });
       } catch (error) {
         if (error instanceof AppError && error.code === 'RECORD_NOT_FOUND') {
           return respond(404, { error: error.code });
@@ -250,9 +385,24 @@ export function createAppointmentHandler(
       durationMinutes: parsed.data.durationMinutes,
     };
 
+    // 2026-09-01: "any new appointment booked by the clinician needs to be
+    // approved by the principal clinician." The principal is the approver,
+    // so their own booking is confirmed on the spot — approving yourself
+    // is a step with no decision in it, and one that would either be done
+    // reflexively or forgotten, which makes the state mean less rather
+    // than more. Read off `principal.role` rather than off `can()`,
+    // because this is not an authorisation question: both roles are
+    // already authorised to book by the line above, and what differs is
+    // what the booking *is*.
+    const requiresApproval = principal.role !== 'principal-clinician';
+
     try {
-      const created = await deps.appointments.schedule(input, actor);
-      return respond(201, { item: projectFor(principal, created, resource) });
+      const created = await deps.appointments.schedule(input, actor, { requiresApproval });
+      const notified = await notify(
+        requiresApproval ? 'appointment-requested' : 'appointment-approved',
+        { subjectAt: created.scheduledAt },
+      );
+      return respond(201, { item: projectFor(principal, created, resource), notified });
     } catch (error) {
       if (error instanceof AppError && error.code === 'APPOINTMENT_ALREADY_EXISTS') {
         return respond(409, { error: error.code });

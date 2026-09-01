@@ -104,3 +104,50 @@ Cancelling never touches `gsi1pk`/`gsi1sk`, so a cancelled appointment remains a
 ### Cost (TASK 3.4.2)
 
 £0.00 net-new — one more route and one widened (still `PAT#*`-scoped) IAM action on the already-deployed `AppointmentFunction`; no new AWS resource of any kind.
+
+## Amendment, 2026-09-01 — the approval step, and the patient's dashboard feed
+
+The owner: *"any new appointment booked by the clinician needs to be approved by the principal clinician"*, and *"when a clinician/principal clinician edits a calender for a given patient it will appear as a notification on patients logged in dashboard."*
+
+### `pending-approval` is a status, not a request entity
+
+A sub-clinician's booking now lands in `appointment_status: 'pending-approval'`, and only `POST …/{apptId}/approve` moves it to `'scheduled'`. `POST …/{apptId}/decline` moves it to `'cancelled'`.
+
+It is a status on the appointment rather than a parallel `APPTREQ#` row because a booking awaiting approval is **already a claim on a slot**: `AppointmentStore.create`'s `attribute_not_exists` conflict has to see it, or two clinicians could each hold a pending booking for the same instant and only discover it at approval time. A separate request entity would carry the same patient, clinician, time and length, and then have to be kept in step with the row it becomes.
+
+A declined request becomes `cancelled` rather than a fifth status: everything that reads this field treats "declined before it was confirmed" and "cancelled after it was" identically — not happening, still in the history, skipped by the clinician calendar — and who decided it and when is already in the audit log.
+
+### Who approves, and who does not need to
+
+`Appointment approval` is its own matrix row, `Principal`-only, and holds `U` alone — there is nothing to create (the appointment exists) and nothing to read that `Appointments`'s own `R` does not already return. It is a distinct row from `Appointments` for the same reason `Patient assignment` is distinct from `Patient profile`: booking a slot and deciding whether that booking stands are two powers, and the whole point of the request is that one role holds the first and a different role holds the second.
+
+**A principal's own booking is `scheduled` immediately.** The approver approving themselves is a step with no decision in it, and one that would either be done reflexively or forgotten — which makes the state mean less, not more.
+
+### The race, and where it is settled
+
+`expect` goes into the `UpdateItem`'s **condition expression**, not into a read before the write. Two principals acting on the same pending request at the same moment produce one transition and one `APPOINTMENT_STATE_CONFLICT` (`409`), never two transitions where the second silently overwrites the first. A failed condition cannot say *which* clause failed, so the row is fetched once on the failure path to tell "no such appointment" from "no longer pending"; the happy path is still one round trip.
+
+`cancel` is deliberately unconditioned and reaches a `pending-approval` row too: a clinician withdrawing a request they have not had approved yet is the same action as calling off a confirmed session, and refusing the first would leave a request nobody could retract.
+
+### Joining a call
+
+`ws-join.ts` already refused anything that was not `'scheduled'`, so a pending booking was denied from the day the status existed. What changed is the *reason*: it now denies `'not-confirmed'` rather than `'cancelled'`. The boundary is identical; telling a clinician their own pending booking was cancelled would have sent them hunting for a cancellation nobody made.
+
+### The dashboard feed
+
+`PAT#<id>` / `NOTIF#<created_at>#<uuid>`, read by `GET /patients/me/notifications` and dismissed by `POST /patients/me/notifications/{notificationId}/read`. Four kinds — requested, approved, cancelled, calendar-updated — written as a side effect of the calendar actions and of a calendar-section write on the assessment form.
+
+Three properties are worth stating because each is a decision rather than a default:
+
+- **The matrix grants `create` on this row to nobody.** A notice is never created by an HTTP call; it is a consequence of an action already authorised on `Appointments` or `Appointment approval`. `C` here would be a second, independently reachable way to put a notice on a patient's dashboard.
+- **The record carries no prose** — a kind, a time and an actor id. The sentence a patient reads is rendered from `@ndn/i18n` off the kind, which keeps the feed translatable without a migration and keeps text a patient will read out of a row no clinician authored. A kind the browser has no wording for falls back to a generic line, because the API and the site deploy separately.
+- **No audit row, and no `AuditWriter` at all.** An audit row answers "who did what to whom"; a notification is a system-generated echo of an action the repository that performed it has already audited. Auditing the echo would double the log's volume with rows naming the same actor, instant and patient as the row above them. `PatientNotificationRepository` therefore takes no writer — absent, which reads as a decision, rather than passed and ignored, which reads as an oversight — and `audit-wiring.test.ts` names the exemption instead of relaxing its check.
+- **Writing a notice never fails the action that caused it.** The appointment is already written by the time the feed is touched, so a failure there is reported as `notified: false` in the response rather than thrown — the same shape `POST /patients` uses for the assessment form it instantiates.
+
+### Marking attendance
+
+`POST …/{apptId}/complete` and `POST …/{apptId}/no-show`, both on the `Appointments` row's existing `update` — the treating clinician's act, and the principal's, not the approver's.
+
+These close a gap TASK 3.4.2 named and left: it explained that `appointment_status` has four values *because* of `completed`/`no-show` and then built no route for either, so the field had never once held `'completed'` anywhere in this system. Harmless until something counted it. Two things now do — the visitor's "number of appointments happened" (`CaseloadRepository`) and the calendar section's "sessions so far" — and both would have read zero forever, which is worse than an obviously missing figure because it looks like a real one.
+
+Both are conditioned on `expect: 'scheduled'`: an appointment that was cancelled, is still awaiting approval, or has already been marked did not take place and cannot be recorded as though it had. Neither writes a dashboard notice — the feed is for what is coming, not for what the patient was already present at.

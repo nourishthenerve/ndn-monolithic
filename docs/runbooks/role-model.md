@@ -142,3 +142,24 @@ Every `PATCH` this site makes from a browser was dead the whole time:
 Only handler tests and `curl` ever exercised those routes, and neither preflights. This is the identical silent shape as the API's 2026-08-22 CORS defect, where `allowOrigins` still named only `next.` after the apex cutover — and it was found the same way, by asking why a request had left no trace anywhere.
 
 `allowMethods` is now exactly the methods this API routes, and `data-stack.test.ts` asserts both halves: the list is `['GET', 'POST', 'PATCH']`, and no route uses a method the list omits. A route added with a method nobody adds there now fails a test instead of failing silently in a browser.
+
+## Amendment, 2026-09-01 — the assessment form's four sections
+
+The role model itself is unchanged: the same five roles, the same two sign-in buttons, the same pools. What changed is the *granularity* of one entity.
+
+The assessment form used to be two matrix rows (`visible{}`/`private{}`). It is now four — `general{}`, `patient{}`, `private{}`, `calendar{}` — one per section of the owner's own form, because the four sections have four different sets of writers and no arrangement of two rows expresses that. Read the four rows down `docs/plan/04-data-model-rbac.md`'s table rather than across this file; what follows is only what each role's *reach* now amounts to.
+
+| Role | What the assessment form gives them |
+|---|---|
+| Patient | Reads general, patient and calendar. **Writes general only** — the first write permission a patient has ever held on a clinical entity here — and not the `tag` field inside it. |
+| Helpdesk | Reads and writes general and patient. Reads calendar. Denied the clinician section outright, which is the boundary the role exists to draw. |
+| Visitor | Reads general and calendar, **for `IIC`-tagged patients only**. Writes nothing anywhere. |
+| Clinician (assigned) | All four sections, read and write. |
+| Principal clinician | All four sections, read and write, for every patient. |
+
+Two things about this table are enforced outside the matrix and are easy to miss:
+
+- The visitor's tag filter is applied in `assessment.ts` as well as `caseload-repository.ts`. They are two different reads, and a visitor stopped only at the list would still reach a record by guessing an id.
+- The patient's inability to set their own `tag` is a *field*-level rule, marked `staffOnly` on the template. It matters because the tag is the whole mechanism bounding a visitor's reach: a patient who could tag themselves `IIC` would be handing a visitor account a read of their own record.
+
+Two new powers land on the `Principal` column, both on their own rows and both `Principal`-only: **`Appointment approval`** (a sub-clinician's booking waits for it — see `docs/runbooks/appointments.md`) and nothing else. `Patient notifications` is the one row in the table whose only filled cell belongs to the patient.

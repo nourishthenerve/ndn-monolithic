@@ -19,6 +19,7 @@ import type {
   ContentItem,
   Message,
   Patient as RealPatient,
+  PatientNotification,
   Registration,
   Testimonial,
   Workshop,
@@ -38,6 +39,7 @@ import {
   DynamoContentAssignmentStore,
   DynamoContentStore,
   DynamoMessageStore,
+  DynamoPatientNotificationStore,
   DynamoRegistrationStore,
   DynamoStore,
   DynamoTestimonialStore,
@@ -1241,7 +1243,9 @@ describe('DynamoAssessmentStore', () => {
       version: 1,
       patientId: 'pat-1',
       assessmentId: 'mobility-initial',
-      visible: { formType: 'mobility', responses: { painScore: 4 } },
+      general: { responses: { preferredName: 'Sam' }, attachments: [] },
+      patient: { responses: { goals: 'walk unaided' }, attachments: [] },
+      calendar: { responses: {}, attachments: [] },
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
       status: 'active',
@@ -1269,7 +1273,9 @@ describe('DynamoAssessmentStore', () => {
       version: 3,
       patientId: 'pat-1',
       assessmentId: 'check#v-status',
-      visible: { formType: 'check', responses: {} },
+      general: { responses: {}, attachments: [] },
+      patient: { responses: {}, attachments: [] },
+      calendar: { responses: {}, attachments: [] },
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
       status: 'active',
@@ -1290,7 +1296,9 @@ describe('DynamoAssessmentStore', () => {
         version: 1,
         patientId: 'pat-1',
         assessmentId: 'mobility-initial',
-        visible: { formType: 'mobility', responses: {} },
+        general: { responses: {}, attachments: [] },
+        patient: { responses: {}, attachments: [] },
+        calendar: { responses: {}, attachments: [] },
         created_at: '2026-01-01T00:00:00.000Z',
         updated_at: '2026-01-01T00:00:00.000Z',
         status: 'active',
@@ -1306,7 +1314,9 @@ describe('DynamoAssessmentStore', () => {
         version: 2,
         patientId: 'pat-1',
         assessmentId: 'mobility-initial',
-        visible: { formType: 'mobility', responses: { painScore: 2 } },
+        general: { responses: { preferredName: 'Sam' }, attachments: [] },
+        patient: { responses: {}, attachments: [] },
+        calendar: { responses: {}, attachments: [] },
         created_at: '2026-01-01T00:00:00.000Z',
         updated_at: '2026-01-01T00:00:00.000Z',
         status: 'active',
@@ -1314,7 +1324,7 @@ describe('DynamoAssessmentStore', () => {
     });
 
     const result = await store.get('pat-1#mobility-initial#v2');
-    expect(result).toMatchObject({ version: 2, visible: { responses: { painScore: 2 } } });
+    expect(result).toMatchObject({ version: 2, general: { responses: { preferredName: 'Sam' } } });
     expect(ddbMock.commandCalls(GetCommand)[0]?.args[0].input).toMatchObject({
       Key: { pk: 'PAT#pat-1', sk: 'ASSESS#mobility-initial#v2' },
     });
@@ -1494,7 +1504,7 @@ describe('DynamoAppointmentStore', () => {
     expect(result).toEqual([]);
   });
 
-  it('cancel() issues an atomic UpdateItem on appointment_status alone, conditioned on the row existing', async () => {
+  it('transition() issues an atomic UpdateItem on appointment_status alone, conditioned on the row existing', async () => {
     ddbMock.on(UpdateCommand).resolves({
       Attributes: {
         ...buildAppointment({ appointment_status: 'cancelled' }),
@@ -1503,28 +1513,90 @@ describe('DynamoAppointmentStore', () => {
       },
     });
 
-    const result = await store.cancel('pat-1', '2026-09-01T10:00:00.000Z', '2026-08-22T10:00:00.000Z');
+    const result = await store.transition('pat-1', '2026-09-01T10:00:00.000Z', {
+      to: 'cancelled',
+      now: '2026-08-22T10:00:00.000Z',
+    });
     expect(result.appointment_status).toBe('cancelled');
     expect(result).not.toHaveProperty('pk');
 
     expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
       TableName: 'ndn-data',
       Key: { pk: 'PAT#pat-1', sk: 'APPT#2026-09-01T10:00:00.000Z' },
-      UpdateExpression: 'SET appointment_status = :cancelled, updated_at = :now',
+      UpdateExpression: 'SET appointment_status = :to, updated_at = :now',
       ConditionExpression: 'attribute_exists(pk)',
-      ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': '2026-08-22T10:00:00.000Z' },
+      ExpressionAttributeValues: { ':to': 'cancelled', ':now': '2026-08-22T10:00:00.000Z' },
       ReturnValues: 'ALL_NEW',
     });
   });
 
-  it('cancel() throws AppError(RECORD_NOT_FOUND) on a conditional check failure, not the raw SDK exception', async () => {
+  // 2026-09-01: the approval step's own write. `expect` goes into the
+  // condition expression rather than a read-before-write, which is what
+  // makes two principals deciding the same request at the same moment
+  // produce one decision instead of two.
+  it('transition() with expect+decidedBy conditions on the current status and stamps the decider', async () => {
+    ddbMock.on(UpdateCommand).resolves({
+      Attributes: {
+        ...buildAppointment({ appointment_status: 'scheduled' }),
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    await store.transition('pat-1', '2026-09-01T10:00:00.000Z', {
+      to: 'scheduled',
+      expect: 'pending-approval',
+      decidedBy: 'principal-sub',
+      now: '2026-08-22T10:00:00.000Z',
+    });
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      UpdateExpression:
+        'SET appointment_status = :to, updated_at = :now, approvedBy = :by, approvedAt = :now',
+      ConditionExpression: 'attribute_exists(pk) AND appointment_status = :expected',
+      ExpressionAttributeValues: {
+        ':to': 'scheduled',
+        ':expected': 'pending-approval',
+        ':by': 'principal-sub',
+        ':now': '2026-08-22T10:00:00.000Z',
+      },
+    });
+  });
+
+  it('transition() throws AppError(RECORD_NOT_FOUND) when the condition fails and the row is genuinely gone', async () => {
     ddbMock
       .on(UpdateCommand)
       .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+    ddbMock.on(GetCommand).resolves({});
 
     await expect(
-      store.cancel('pat-1', '2026-09-01T10:00:00.000Z', '2026-08-22T10:00:00.000Z'),
-    ).rejects.toThrow(AppError);
+      store.transition('pat-1', '2026-09-01T10:00:00.000Z', {
+        to: 'cancelled',
+        now: '2026-08-22T10:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code: 'RECORD_NOT_FOUND' });
+  });
+
+  it('transition() throws AppError(APPOINTMENT_STATE_CONFLICT) when the row exists but is no longer in the expected status', async () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+    ddbMock.on(GetCommand).resolves({
+      Item: {
+        ...buildAppointment({ appointment_status: 'cancelled' }),
+        pk: 'PAT#pat-1',
+        sk: 'APPT#2026-09-01T10:00:00.000Z',
+      },
+    });
+
+    await expect(
+      store.transition('pat-1', '2026-09-01T10:00:00.000Z', {
+        to: 'scheduled',
+        expect: 'pending-approval',
+        decidedBy: 'principal-sub',
+        now: '2026-08-22T10:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({ code: 'APPOINTMENT_STATE_CONFLICT' });
   });
 
 });
@@ -1697,5 +1769,76 @@ describe('DynamoMessageStore', () => {
     ddbMock.on(QueryCommand).resolves({ Items: [] });
     const result = await store.listForThread('pat-1', undefined, 50);
     expect(result).toEqual({ items: [], nextCursor: undefined });
+  });
+});
+
+// 2026-09-01: `PAT#<id>` / `NOTIF#<created_at>#<uuid>` — the patient's own
+// in-app dashboard feed. Newest-first is the whole point of the read, so
+// `ScanIndexForward: false` is asserted rather than assumed.
+describe('DynamoPatientNotificationStore', () => {
+  const store = new DynamoPatientNotificationStore({
+    tableName: 'ndn-data',
+    client: ddbMock as unknown as DynamoDBDocumentClient,
+  });
+
+  function buildNotification(
+    overrides: Partial<PatientNotification> = {},
+  ): PatientNotification {
+    return {
+      patientId: 'pat-1',
+      notificationId: '2026-08-22T09:00:00.000Z#abc',
+      kind: 'appointment-approved',
+      subjectAt: '2026-09-01T10:00:00.000Z',
+      actorId: 'principal-sub',
+      read: false,
+      created_at: '2026-08-22T09:00:00.000Z',
+      updated_at: '2026-08-22T09:00:00.000Z',
+      status: 'active',
+      ...overrides,
+    };
+  }
+
+  it('create() writes a conditional PutCommand keyed PAT#<id> / NOTIF#<notificationId>', async () => {
+    ddbMock.on(PutCommand).resolves({});
+    await store.create(buildNotification());
+    expect(ddbMock.commandCalls(PutCommand)[0]?.args[0].input).toMatchObject({
+      TableName: 'ndn-data',
+      Item: { pk: 'PAT#pat-1', sk: 'NOTIF#2026-08-22T09:00:00.000Z#abc', kind: 'appointment-approved' },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('listForPatient() queries the patient partition newest-first, bounded, never a Scan', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ ...buildNotification(), pk: 'PAT#pat-1', sk: 'NOTIF#x' }],
+    });
+    const items = await store.listForPatient('pat-1', 20);
+    expect(items[0]).not.toHaveProperty('pk');
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input).toMatchObject({
+      KeyConditionExpression: 'pk = :patientKey AND begins_with(sk, :notifPrefix)',
+      ExpressionAttributeValues: { ':patientKey': 'PAT#pat-1', ':notifPrefix': 'NOTIF#' },
+      ScanIndexForward: false,
+      Limit: 20,
+    });
+  });
+
+  it('markRead() sets `read` through a name placeholder — it is a DynamoDB reserved word', async () => {
+    ddbMock.on(UpdateCommand).resolves({
+      Attributes: { ...buildNotification({ read: true }), pk: 'PAT#pat-1', sk: 'NOTIF#x' },
+    });
+    const updated = await store.markRead('pat-1', '2026-08-22T09:00:00.000Z#abc', 'now');
+    expect(updated?.read).toBe(true);
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      UpdateExpression: 'SET #read = :true, updated_at = :now',
+      ExpressionAttributeNames: { '#read': 'read' },
+      ConditionExpression: 'attribute_exists(pk)',
+    });
+  });
+
+  it('markRead() returns undefined for a row that is gone rather than throwing — the caller wanted it gone', async () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejects(new ConditionalCheckFailedException({ message: 'Condition failed', $metadata: {} }));
+    expect(await store.markRead('pat-1', 'missing', 'now')).toBeUndefined();
   });
 });

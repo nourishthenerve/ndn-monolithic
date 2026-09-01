@@ -521,6 +521,10 @@ describe('DataStack — feature-flag reads', () => {
     // TASK 4.2.1: video.callAuthz.enabled, default off — read inside
     // ws-join.ts, wired through the $default dispatcher.
     'ws-default-handler',
+    // 2026-09-01: the patient's dashboard feed, gated on the same
+    // appointments.enabled flag the calendar routes use — a feed with
+    // nothing able to write to it is not worth a flag of its own.
+    'patient-notification-handler',
     // TASK 4.4.1: video.turn.enabled, default off.
     'turn-credentials-handler',
   ];
@@ -706,8 +710,12 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // the audit reader is deliberately not among them, being the one
     // role that is supposed to read that partition. TASK 3.4.3's
     // reminder-sweep role used to be on this list too — D-32
-    // (2026-08-30) deleted it.
-    expect(denials).toHaveLength(23);
+    // (2026-08-30) deleted it. 2026-09-01 adds the patient-notification
+    // role, which reads and marks read the patient's own dashboard feed
+    // and — alone among the writers in this stack — has no `AUDIT#` write
+    // grant to pair this denial with, because the repository behind it
+    // takes no `AuditWriter` at all.
+    expect(denials).toHaveLength(24);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -725,8 +733,9 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     const denials = statementsWithSid('DenyKeylessTableReads');
 
     // Same role count as the AUDIT# denial above — TASK 3.4.3's
-    // reminder-sweep role used to be on this list too, deleted by D-32.
-    expect(denials).toHaveLength(23);
+    // reminder-sweep role used to be on this list too, deleted by D-32;
+    // 2026-09-01's patient-notification role added.
+    expect(denials).toHaveLength(24);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -853,6 +862,9 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'GET /patients/{id}/content',
         'GET /patients/{id}/diagnosis',
         'GET /patients/{id}/messages',
+        // 2026-09-01: the patient's own dashboard feed. `/me` is the whole
+        // path — there is no `{id}` for anyone to point elsewhere.
+        'GET /patients/me/notifications',
         'GET /testimonials/pending',
         'PATCH /clinicians/me',
         'PATCH /content/{id}',
@@ -868,7 +880,11 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /content/{id}/unpublish',
         'POST /patients',
         'POST /patients/{id}/appointments',
+        'POST /patients/{id}/appointments/{apptId}/approve',
         'POST /patients/{id}/appointments/{apptId}/cancel',
+        'POST /patients/{id}/appointments/{apptId}/complete',
+        'POST /patients/{id}/appointments/{apptId}/decline',
+        'POST /patients/{id}/appointments/{apptId}/no-show',
         'POST /patients/{id}/approve',
         'POST /patients/{id}/assessments/{assessmentId}',
         'POST /patients/{id}/care-plan',
@@ -880,6 +896,7 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /patients/{id}/reset-password',
         'POST /patients/{id}/restore',
         'POST /patients/{id}/suspend',
+        'POST /patients/me/notifications/{notificationId}/read',
         'POST /testimonials/{id}/publish',
         'POST /testimonials/{id}/reject',
         'POST /workshops',

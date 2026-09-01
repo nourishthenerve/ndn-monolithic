@@ -4,7 +4,7 @@
 // `scheduledAt`), and its access patterns are two genuinely different
 // queries (a patient's own list, a clinician's calendar over GSI1), not a
 // single-item `get`/`put` `KeyValueStore<T>` can express.
-import type { Appointment } from '@ndn/shared-types';
+import type { Appointment, AppointmentStatus } from '@ndn/shared-types';
 
 import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
@@ -48,17 +48,38 @@ export interface AppointmentStore {
     to: string,
   ): Promise<Appointment[]>;
   /**
-   * TASK 3.4.2: an atomic `UpdateItem` — `appointment_status` alone, never
-   * `scheduledAt` (rescheduling is cancel-the-old, `POST` a new one, so
-   * the append-only property every entity in this table keeps holds here
-   * without a special case). `gsi1pk`/`gsi1sk` are untouched, so the row
-   * never needs re-deriving them — only the calendar *read*'s own filter
-   * (above) decides a cancelled row no longer matters there. Conditioned
-   * on the row existing (`attribute_exists(pk)` on the real
-   * implementation); throws `RECORD_NOT_FOUND` otherwise, never a silent
+   * TASK 3.4.2: an atomic `UpdateItem` — `appointment_status` alone (plus,
+   * since 2026-09-01, the two approval stamps), never `scheduledAt`
+   * (rescheduling is cancel-the-old, `POST` a new one, so the append-only
+   * property every entity in this table keeps holds here without a special
+   * case). `gsi1pk`/`gsi1sk` are untouched, so the row never needs
+   * re-deriving them — only the calendar *read*'s own filter (above)
+   * decides a cancelled row no longer matters there. Conditioned on the
+   * row existing; throws `RECORD_NOT_FOUND` otherwise, never a silent
    * no-op.
+   *
+   * **2026-09-01 replaces `cancel`.** Approval added two more transitions
+   * of the identical shape, and three near-identical `UpdateItem` methods
+   * would be three places for the condition expression to drift. `expect`
+   * is what makes a transition safe against a concurrent one: approving
+   * an appointment that a second principal has already declined must fail,
+   * not silently reopen it, so the condition is checked *in the write*
+   * rather than in a read before it.
    */
-  cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment>;
+  transition(
+    patientId: string,
+    scheduledAt: string,
+    change: AppointmentTransition,
+  ): Promise<Appointment>;
+}
+
+export interface AppointmentTransition {
+  readonly to: AppointmentStatus;
+  readonly now: string;
+  /** When set, the write applies only if the row is currently in this status — otherwise `APPOINTMENT_STATE_CONFLICT`. */
+  readonly expect?: AppointmentStatus;
+  /** The deciding principal's `sub`, stamped onto `approvedBy`/`approvedAt`. Set for approve and decline; absent for a plain cancel, which is not an approval decision. */
+  readonly decidedBy?: string;
 }
 
 export interface AppointmentInput {
@@ -76,19 +97,31 @@ export class AppointmentRepository {
   ) {}
 
   /**
-   * Only ever reaches this far when `can()` has already granted the
-   * `'Sub-clinician (assigned)'` column (`authz-matrix.ts`'s `Appointments`
-   * row) — this method trusts the caller to have checked, the same
-   * contract every other repository in this codebase keeps.
+   * Only ever reaches this far when `can()` has already granted a column
+   * of `authz-matrix.ts`'s `Appointments` row — this method trusts the
+   * caller to have checked, the same contract every other repository in
+   * this codebase keeps.
+   *
+   * **2026-09-01: the initial status is a parameter, and the caller
+   * decides it from who is booking.** "Any new appointment booked by the
+   * clinician needs to be approved by the principal clinician" — so a
+   * sub-clinician's booking starts `pending-approval` and a principal's
+   * starts `scheduled`, because the approver approving themselves is a
+   * step with no decision in it. The rule lives in `appointment.ts`, next
+   * to the `can()` call that already resolved which role is asking; a
+   * repository deriving it from `actor.role` would be a second place
+   * roles are interpreted, and the whole point of `can()` is that there
+   * is only one.
    */
   async schedule(
     input: AppointmentInput,
     actor: ActorContext,
+    options: { readonly requiresApproval: boolean },
   ): Promise<Unprojected<Appointment>> {
     const now = this.clock.now().toISOString();
     const appointment: Appointment = {
       ...input,
-      appointment_status: 'scheduled',
+      appointment_status: options.requiresApproval ? 'pending-approval' : 'scheduled',
       created_at: now,
       updated_at: now,
       status: 'active',
@@ -134,19 +167,101 @@ export class AppointmentRepository {
   }
 
   /**
-   * Only ever reaches this far when `can()` has already granted the
-   * `'Sub-clinician (assigned)'` column — the identical contract
-   * `schedule` keeps, and the identical column: `Appointments`'s own
-   * `Principal` cell is bare `R`, so the principal cancels nothing
-   * through this method either.
+   * Only ever reaches this far when `can()` has already granted `update`
+   * on the `Appointments` row — the identical contract `schedule` keeps.
+   *
+   * Cancels from any status, `pending-approval` included: a clinician
+   * withdrawing a request they have not had approved yet is the same
+   * action to this row as calling off a confirmed session, and refusing
+   * the first would leave a request nobody could retract.
    */
-  async cancel(
+  cancel(
     patientId: string,
     scheduledAt: string,
     actor: ActorContext,
   ): Promise<Unprojected<Appointment>> {
+    return this.transition(patientId, scheduledAt, actor, { to: 'cancelled' });
+  }
+
+  /**
+   * 2026-09-01. Only ever reaches this far when `can()` has granted
+   * `update` on the **`Appointment approval`** row — a different row from
+   * the one `cancel` above needs, and `Principal`-only, which is the whole
+   * of "any new appointment booked by the clinician needs to be approved
+   * by the principal clinician."
+   *
+   * `expect: 'pending-approval'` is enforced inside the write, so a second
+   * principal approving what a first has already declined gets
+   * `APPOINTMENT_STATE_CONFLICT` rather than quietly resurrecting it.
+   */
+  approve(
+    patientId: string,
+    scheduledAt: string,
+    actor: ActorContext,
+  ): Promise<Unprojected<Appointment>> {
+    return this.transition(patientId, scheduledAt, actor, {
+      to: 'scheduled',
+      expect: 'pending-approval',
+      decidedBy: actor.subjectId,
+    });
+  }
+
+  /**
+   * A declined request becomes `cancelled` — see `AppointmentStatus`'s own
+   * doc on why that is not a fifth state. `expect` is what distinguishes
+   * this from `cancel`: only a booking still awaiting a decision can be
+   * declined, so "decline" can never be used to call off a session that
+   * was already confirmed (that is `cancel`, on the other row).
+   */
+  decline(
+    patientId: string,
+    scheduledAt: string,
+    actor: ActorContext,
+  ): Promise<Unprojected<Appointment>> {
+    return this.transition(patientId, scheduledAt, actor, {
+      to: 'cancelled',
+      expect: 'pending-approval',
+      decidedBy: actor.subjectId,
+    });
+  }
+
+  /**
+   * 2026-09-01. TASK 3.4.2 named `completed`/`no-show` as the reason this
+   * field has four states and then built no route for either, and nothing
+   * has since — so `appointment_status` has never once been `'completed'`
+   * anywhere in this system.
+   *
+   * That was a harmless gap until two features started counting it:
+   * `CaseloadRepository`'s visitor view ("number of appointments happened")
+   * and the assessment form's calendar section ("how many
+   * appointments/sessions has taken place so far"). Both would have read
+   * zero forever, which is worse than an obviously missing figure — it is
+   * a wrong one that looks right.
+   *
+   * `expect: 'scheduled'` on both: an appointment that was cancelled, or
+   * that is still awaiting approval, did not take place and cannot be
+   * marked as though it did.
+   */
+  markAttended(
+    patientId: string,
+    scheduledAt: string,
+    actor: ActorContext,
+    outcome: 'completed' | 'no-show',
+  ): Promise<Unprojected<Appointment>> {
+    return this.transition(patientId, scheduledAt, actor, {
+      to: outcome,
+      expect: 'scheduled',
+    });
+  }
+
+  private async transition(
+    patientId: string,
+    scheduledAt: string,
+    actor: ActorContext,
+    change: Omit<AppointmentTransition, 'now'>,
+  ): Promise<Unprojected<Appointment>> {
     const now = this.clock.now().toISOString();
-    const updated = await this.store.cancel(patientId, scheduledAt, now);
+    const updated = await this.store.transition(patientId, scheduledAt, { ...change, now });
     await this.audit.write(
       auditEventFor(actor, {
         at: now,

@@ -37,6 +37,14 @@ export type JoinDenialReason =
   | 'too-early'
   | 'too-late'
   | 'cancelled'
+  // 2026-09-01. Before the approval step there was one non-`scheduled`
+  // state a live appointment could be in, so `'cancelled'` covered every
+  // status check here honestly. It no longer does: a booking waiting on
+  // the principal is not cancelled, it is not yet an appointment, and
+  // telling its own clinician it was cancelled would send them looking for
+  // a cancellation nobody made. Denied either way — this is about the
+  // sentence the person reads, not about the boundary.
+  | 'not-confirmed'
   | 'not-your-appointment'
   // Not one of the plan's own four named reasons — the plan's own text
   // never considered the flag being off as a state a live join attempt
@@ -221,6 +229,9 @@ export function createJoinMessageHandler(
       return deny('not-your-appointment');
     }
 
+    if (appointment.appointment_status === 'pending-approval') {
+      return deny('not-confirmed');
+    }
     if (appointment.appointment_status !== 'scheduled') {
       return deny('cancelled');
     }

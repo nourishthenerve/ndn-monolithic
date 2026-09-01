@@ -10,7 +10,14 @@
 // shared runtime package between them for this shape.
 import { z } from 'zod';
 
-export type JoinDenialReason = 'too-early' | 'too-late' | 'cancelled' | 'not-your-appointment' | 'not-available';
+export type JoinDenialReason =
+  | 'too-early'
+  | 'too-late'
+  | 'cancelled'
+  /** 2026-09-01: a booking still waiting on the principal clinician's approval — see `ws-join.ts`'s own note on why this is not `'cancelled'`. */
+  | 'not-confirmed'
+  | 'not-your-appointment'
+  | 'not-available';
 
 export type RelayMessageType = 'offer' | 'answer' | 'ice-candidate' | 'leave';
 
@@ -24,7 +31,14 @@ const incomingMessageSchema = z.union([
   z.object({ type: z.literal('joined') }),
   z.object({
     type: z.literal('join-denied'),
-    reason: z.enum(['too-early', 'too-late', 'cancelled', 'not-your-appointment', 'not-available']),
+    reason: z.enum([
+      'too-early',
+      'too-late',
+      'cancelled',
+      'not-confirmed',
+      'not-your-appointment',
+      'not-available',
+    ]),
   }),
   z.object({ type: z.literal('peer-unavailable') }),
   relayMessageSchema,

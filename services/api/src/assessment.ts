@@ -1,50 +1,99 @@
-// TASK 3.3.1: assessment forms — the entity `authz-matrix.ts` has carried
-// two dedicated matrix rows for (`'Assessment — visible{}'`, `'Assessment
-// — private{}'`) since TASK 2.1.1, and `authz.test.ts`'s exhaustive suite
-// has asserted every cell of both since the same task, including the row
-// R-09's own register entry names directly: "a patient reaches no
-// private assessment field, in any relationship." No assessment record
-// has existed for any of that to run against a real handler until now.
+// TASK 3.3.1/3.3.2: assessment forms — the entity `authz-matrix.ts` has
+// carried dedicated matrix rows for since TASK 2.1.1, and `authz.test.ts`'s
+// exhaustive suite has asserted every cell of every one of them since the
+// same task, including the row R-09's own register entry names directly:
+// "a patient reaches no private assessment field, in any relationship."
 //
-// Unlike diagnosis/care-plan's single matrix row with an internal
-// visible/private split (clinical-record.ts, TASK 3.2.1), an assessment
-// is genuinely **two matrix rows for one entity** — `resolveRow`
-// (authz.ts) branches on `fieldSet` for this entity type alone, so every
-// `can()` call here names one explicitly. `create`/`update` reach the
-// `'Assessment — visible{}'` row only: an assigned sub-clinician or the
-// principal can write the visible half, and a `private{}` value on that
-// same write is permitted by construction of the request shape, not a
-// second authorisation call — writing is one action on one record;
-// reading (3.3.2) is where the two-row split actually matters.
+// ## 2026-09-01 — four sections, four sets of writers
 //
-// No `PATCH`: a correction is a new version, not an edit to an existing
-// one, the identical append-only reasoning `clinical-record.ts` already
-// states for diagnosis/care-plan.
+// The owner's form has four sections and four different answers to "who
+// may edit this". The handler's whole shape follows from one consequence
+// of that, which is worth stating before the code rather than leaving to
+// be inferred:
 //
-// TASK 3.3.2: `GET /patients/{id}/assessments/{assessmentId}` — every
-// version, newest first. This is where the two-row split actually
-// matters, and it is built deliberately unlike `clinical-record.ts`'s own
-// read handler: rather than fetching the full record and letting
-// `projectFor` strip `private{}` after the fact, this handler decides
-// *which shape to build* before ever touching `version.private` — a
-// patient's (or anyone denied the private row's) response is built from
-// an object literal that never had a `private` key to begin with, not
-// one that had it and lost it. `can()` is asked twice, once per
-// `fieldSet`, exactly as 3.3.1's own header states for the write side:
-// never once with a fabricated "give me everything" resource. Every
-// object still passes through `projectFor` before `respond()` — for the
-// visible-only shape this is a provable no-op (there is no `private` key
-// present to strip), so it costs nothing and keeps the "every response
-// goes through `projectFor`" discipline this codebase holds everywhere
-// else, rather than carving out a silent exception for this one route.
-import type { Principal } from '@ndn/shared-types';
+// **A caller never sends a whole record, and never receives one either.**
+//
+//   * On the way *out*, the response is built by **omission**: a section
+//     the caller may not read is not fetched into the response object and
+//     then filtered — the object is constructed with only the keys `can()`
+//     allowed, so there is no moment at which a denied section is present
+//     in something that could be logged, thrown, or serialised by mistake.
+//     This is the same construction TASK 3.3.2 already chose for
+//     `private{}` alone, now applied per section. Every object still goes
+//     through `projectFor` before `respond()`, which for the readable
+//     shapes is a provable no-op — it costs nothing and keeps the "every
+//     response goes through `projectFor`" discipline whole rather than
+//     carving out an exception on this one route.
+//   * On the way *in*, the request is a **section-scoped patch**, and the
+//     unnamed sections are carried forward server-side
+//     (`AssessmentRepository.applySectionPatch`). A patient editing their
+//     general info therefore never has to send back — or even possess —
+//     the clinician's section. The alternative shape, "POST the new
+//     version you want", cannot be made safe for a four-writer record: it
+//     forces every writer to round-trip content they cannot read.
+//
+// `can()` is asked **once per section named**, never once with a
+// fabricated "give me everything" resource, and the request is atomic: if
+// any named section is denied the whole write is a 403, so a patch is
+// never half-applied.
+//
+// ## The two narrowings that are not in the matrix
+//
+// Both are named in docs/plan/04-data-model-rbac.md and enforced here,
+// because the matrix has no vocabulary for either:
+//
+//   * **A visitor sees IIC-tagged patients only.** `can()` answers "may a
+//     visitor read a general section at all"; only the patient record
+//     answers "is this one theirs to see". The check is here as well as in
+//     `caseload-repository.ts` because they are two different reads — a
+//     visitor stopped only at the list would still reach a record by
+//     guessing an id. A non-matching patient gets the same `404` a
+//     nonexistent one does: a `403` would confirm the patient exists.
+//   * **A patient may not write the `tag` field** even though they may
+//     write the section it lives in. The tag is the entire mechanism
+//     bounding a visitor's reach, so the subject of the record must not
+//     choose it. Marked `staffOnly` on the template so the form and the
+//     API read the rule from one declaration.
+//
+// ## The calendar section is derived, not stored
+//
+// "When is the next appointment", "how many sessions so far" and "how many
+// are awaiting approval" are facts about `APPT#` rows, computed here on
+// every read and returned as a separate `calendarSummary` — never merged
+// into a version's stored responses. Two copies would be two answers the
+// first time a write half-succeeded, and the `APPT#` rows are already what
+// the approval workflow, the clinician calendar and the join-call window
+// read. Keeping the summary out of `items[]` also means the form has
+// nothing derived to accidentally POST back.
+import type {
+  Appointment,
+  AssessmentSectionDef,
+  AssessmentValue,
+  FieldSet,
+  Patient,
+  PatientTag,
+  Principal,
+} from '@ndn/shared-types';
+import {
+  ASSESSMENT_SECTION_ORDER,
+  ASSESSMENT_TAG_FIELD_ID,
+  ASSESSMENT_TAG_OPTIONS,
+  templateField,
+  templateSection,
+} from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
   APIGatewayProxyHandlerV2WithLambdaAuthorizer,
 } from 'aws-lambda';
 import { z } from 'zod';
 
-import type { AssessmentInput, AssessmentRepository } from './assessment-repository.js';
+import type { AppointmentRepository } from './appointment-repository.js';
+import { isAttachmentKeyInSection } from './assessment-attachments.js';
+import type {
+  AssessmentPatch,
+  AssessmentSectionPatch,
+  AssessmentRepository,
+} from './assessment-repository.js';
 import { actorFromPrincipal, requestOriginOf } from './audit.js';
 import { ASSESSMENT_ENTITY_TYPE } from './authz-matrix.js';
 import { can } from './authz.js';
@@ -52,29 +101,75 @@ import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
+import type { PatientNotificationRepository } from './patient-notification-repository.js';
 import type { PatientRepository } from './patient-repository.js';
 import { projectFor, serialiseResponse, type ResponseBody } from './projection.js';
 import { requirePrincipal } from './request-principal.js';
 
 const ASSESSMENTS_FLAG = 'assessments.enabled';
 
-const assessmentBodySchema = z
+/** The tag a `visitor` account is entitled to see. A constant, not a parameter — the same security property `caseload-repository.ts`'s own copy states: there is nowhere in the request to ask for another programme's patients. */
+const VISITOR_TAG: PatientTag = 'IIC';
+
+const attachmentSchema = z
   .object({
-    version: z.number().int().positive(),
-    visible: z
+    key: z.string().min(1).max(1024),
+    fileName: z.string().min(1).max(200),
+    contentType: z.string().min(1).max(200),
+  })
+  .strict();
+
+/**
+ * `responses` is a merge, `addAttachments` is an append — see
+ * `AssessmentSectionPatch`'s own doc for why a caller can never send an
+ * attachment *list*.
+ */
+const sectionPatchSchema = z
+  .object({
+    responses: z.record(z.string().max(100), z.union([z.string().max(20000), z.number(), z.boolean()])).optional(),
+    addAttachments: z.array(attachmentSchema).max(20).optional(),
+  })
+  .strict();
+
+const patchBodySchema = z
+  .object({
+    /**
+     * The version the caller read and is editing; the server writes
+     * `baseVersion + 1`. `0` means "I saw no form at all", which is the
+     * only value that may instantiate one. Two writers who both read
+     * version 3 both try to write 4, and the second gets a 409 rather
+     * than silently discarding the first one's section — the optimistic
+     * concurrency this entity needs now that four roles write it.
+     */
+    baseVersion: z.number().int().min(0),
+    sections: z
       .object({
-        formType: z.string().min(1),
-        responses: z.record(z.string(), z.unknown()),
+        general: sectionPatchSchema.optional(),
+        patient: sectionPatchSchema.optional(),
+        private: sectionPatchSchema.optional(),
+        calendar: sectionPatchSchema.optional(),
       })
-      .strict(),
-    private: z.object({ clinicianImpression: z.string().min(1) }).strict().optional(),
+      .strict()
+      .refine((sections) => Object.keys(sections).length > 0, {
+        message: 'at least one section must be named',
+      }),
   })
   .strict();
 
 export interface AssessmentDeps {
-  /** For the assignment-relationship lookup `can()` needs — never for an assessment read or write, which stays on `assessments` below. */
+  /** For the assignment-relationship lookup `can()` needs, the visitor tag gate, and the tag write-through — never for an assessment read or write, which stays on `assessments` below. */
   readonly patients: PatientRepository;
   readonly assessments: AssessmentRepository;
+  /** Read-only here: the calendar section's figures are derived from these rows and never written through this handler. Booking stays on the `Appointments` row and its own endpoints. */
+  readonly appointments: AppointmentRepository;
+  /**
+   * "When a clinician/principal clinician edits a calender for a given
+   * patient it will appear as a notification on patients logged in
+   * dashboard." A calendar-section write is one of the two things that
+   * sentence covers — the other is booking, which
+   * `appointment.ts` notifies for.
+   */
+  readonly notifications: PatientNotificationRepository;
   readonly flags: FlagReader;
   readonly clock?: Clock;
   readonly logger?: RequestLogger;
@@ -94,6 +189,135 @@ function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
   } catch {
     return undefined;
   }
+}
+
+/** The four figures the calendar section shows, all of them counted off `APPT#` rows. */
+interface CalendarSummary {
+  readonly nextAppointmentAt?: string;
+  readonly nextAppointmentDurationMinutes?: number;
+  readonly sessionsCompleted: number;
+  readonly appointmentsAwaitingApproval: number;
+}
+
+/**
+ * "Next" is the earliest **confirmed** appointment still in the future — a
+ * `pending-approval` slot is deliberately not one, because until the
+ * principal has approved it there is nothing for the patient to turn up
+ * to, and showing it as their next appointment would be telling them
+ * something that is not yet true. It is surfaced as its own count instead,
+ * which is what the principal's approval queue reads.
+ */
+export function summariseCalendar(
+  appointments: readonly Appointment[],
+  now: Date,
+): CalendarSummary {
+  const nowIso = now.toISOString();
+  let next: Appointment | undefined;
+  let sessionsCompleted = 0;
+  let appointmentsAwaitingApproval = 0;
+  for (const appointment of appointments) {
+    if (appointment.appointment_status === 'completed') {
+      sessionsCompleted += 1;
+      continue;
+    }
+    if (appointment.appointment_status === 'pending-approval') {
+      appointmentsAwaitingApproval += 1;
+      continue;
+    }
+    if (appointment.appointment_status !== 'scheduled' || appointment.scheduledAt <= nowIso) {
+      continue;
+    }
+    // ISO-8601 UTC strings compare correctly as strings (00-conventions.md
+    // — every timestamp is stored that way, with a trailing `Z`), which is
+    // also what makes the sort-key ordering these rows arrive in
+    // meaningful. No Date parsing needed, and none of its timezone edges.
+    if (!next || appointment.scheduledAt < next.scheduledAt) {
+      next = appointment;
+    }
+  }
+  return {
+    ...(next
+      ? {
+          nextAppointmentAt: next.scheduledAt,
+          nextAppointmentDurationMinutes: next.durationMinutes,
+        }
+      : {}),
+    sessionsCompleted,
+    appointmentsAwaitingApproval,
+  };
+}
+
+/** Why a section patch was refused. `forbidden` is a 403; every other value is a 400. */
+type SectionValidation =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly forbidden: true }
+  | { readonly ok: false; readonly forbidden?: false; readonly error: string };
+
+const INVALID = (error: string): SectionValidation => ({ ok: false, error });
+
+/**
+ * A patch's `responses` against the template. The template is the schema:
+ * a field it does not define cannot be written (which is what keeps this
+ * from becoming an arbitrary key/value store on a clinical record), a
+ * derived field cannot be written at all, and a `staffOnly` field cannot
+ * be written by the patient.
+ *
+ * Reading is deliberately *not* symmetric — a stored answer to a field the
+ * template no longer defines is returned as it is, because a record is
+ * history and a template is the current form. Only writes are constrained.
+ */
+function validateResponses(
+  fieldSet: FieldSet,
+  responses: Readonly<Record<string, AssessmentValue>>,
+  isPatient: boolean,
+): SectionValidation {
+  for (const [id, value] of Object.entries(responses)) {
+    const field = templateField(fieldSet, id);
+    if (!field) {
+      return INVALID('UNKNOWN_FIELD');
+    }
+    if (field.derived) {
+      return INVALID('DERIVED_FIELD_NOT_WRITABLE');
+    }
+    if (field.staffOnly && isPatient) {
+      return { ok: false, forbidden: true };
+    }
+    if (field.type === 'number' && typeof value !== 'number') {
+      return INVALID('INVALID_FIELD_TYPE');
+    }
+    if (field.type === 'checkbox' && typeof value !== 'boolean') {
+      return INVALID('INVALID_FIELD_TYPE');
+    }
+    if (field.type !== 'number' && field.type !== 'checkbox' && typeof value !== 'string') {
+      return INVALID('INVALID_FIELD_TYPE');
+    }
+    if (field.type === 'select' && !(field.options ?? []).includes(value as string)) {
+      return INVALID('INVALID_FIELD_OPTION');
+    }
+  }
+  return { ok: true };
+}
+
+/** Every attachment key must be one this patient/form/section could have produced — see assessment-attachments.ts on why the upload check alone is not enough. */
+function validateAttachments(
+  patch: AssessmentSectionPatch,
+  patientId: string,
+  assessmentId: string,
+  fieldSet: FieldSet,
+): SectionValidation {
+  for (const attachment of patch.addAttachments ?? []) {
+    if (!isAttachmentKeyInSection(attachment.key, patientId, assessmentId, fieldSet)) {
+      return INVALID('ATTACHMENT_KEY_OUT_OF_SECTION');
+    }
+  }
+  return { ok: true };
+}
+
+/** The template a caller may actually see: sections they can read, and nothing about the ones they cannot. */
+function readableTemplate(readable: ReadonlySet<FieldSet>): readonly AssessmentSectionDef[] {
+  return ASSESSMENT_SECTION_ORDER.map((fieldSet) => templateSection(fieldSet)).filter(
+    (section): section is AssessmentSectionDef => section !== undefined && readable.has(section.fieldSet),
+  );
 }
 
 export function createAssessmentHandler(
@@ -138,102 +362,261 @@ export function createAssessmentHandler(
       return respond(404, { error: 'NOT_FOUND' });
     }
 
-    const patientId = event.pathParameters?.id;
+    const rawId = event.pathParameters?.id;
     const assessmentId = event.pathParameters?.assessmentId;
-    if (!patientId || !assessmentId) {
+    if (!rawId || !assessmentId) {
       return respond(400, { error: 'ID_REQUIRED' });
     }
+    // `/patients/me/assessments/…` — the identical `/me` resolution
+    // `patient.ts`/`appointment.ts` already give their own patient routes,
+    // needed for the identical reason: a patient's own form page has no
+    // other way to learn its own id.
+    const patientId =
+      rawId === 'me' && principal.role === 'patient' ? (principal.patientId ?? rawId) : rawId;
 
-    // Fetched before `can()`, the same reason clinical-record.ts's own
-    // handler does: the sub-clinician column depends on
+    // Fetched before `can()`, the same reason every other patient-scoped
+    // handler in this codebase does: the sub-clinician column depends on
     // `assigned_clinician_id`, which only the patient record can answer.
-    const patient = await deps.patients.findById(patientId);
-    const resource = {
-      entityType: ASSESSMENT_ENTITY_TYPE,
-      ownerPatientId: patientId,
-      assignedClinicianId: patient?.assigned_clinician_id,
-      fieldSet: 'visible',
-    } as const;
+    const patient: Patient | undefined = await deps.patients.findById(patientId);
+    const resourceFor = (fieldSet: FieldSet) =>
+      ({
+        entityType: ASSESSMENT_ENTITY_TYPE,
+        ownerPatientId: patientId,
+        assignedClinicianId: patient?.assigned_clinician_id,
+        fieldSet,
+      }) as const;
 
-    if (isGet) {
-      if (!can(principal, 'read', resource).allowed) {
-        return respond(403, { error: 'FORBIDDEN' });
-      }
-      if (!patient) {
-        return respond(404, { error: 'RECORD_NOT_FOUND' });
-      }
-      // A second, independent `can()` call against the private row — not
-      // a fabricated "give me everything" resource, and not inferred
-      // from the visible-row decision above, which says nothing about
-      // the private row at all.
-      const mayReadPrivate = can(principal, 'read', {
-        ...resource,
-        fieldSet: 'private',
-      }).allowed;
+    const readable = new Set<FieldSet>(
+      ASSESSMENT_SECTION_ORDER.filter(
+        (fieldSet) => can(principal, 'read', resourceFor(fieldSet)).allowed,
+      ),
+    );
+    const writable = new Set<FieldSet>(
+      ASSESSMENT_SECTION_ORDER.filter(
+        (fieldSet) => can(principal, 'update', resourceFor(fieldSet)).allowed,
+      ),
+    );
 
-      const versions = await deps.assessments.listVersions(patientId, assessmentId);
-      const items = versions
-        .slice()
-        .reverse()
-        .map((version) =>
-          mayReadPrivate
-            ? projectFor(
-                principal,
-                { version: version.version, visible: version.visible, private: version.private },
-                resource,
-              )
-            : projectFor(principal, { version: version.version, visible: version.visible }, resource),
-        );
-      return respond(200, { items });
-    }
-
-    if (!can(principal, 'create', resource).allowed) {
+    // Not a single section, in either direction — there is nothing on this
+    // route for this caller at all. Checked before the record is fetched
+    // so an unrelated caller learns nothing from timing either.
+    if (readable.size === 0 && writable.size === 0) {
       return respond(403, { error: 'FORBIDDEN' });
     }
-    // Unreachable by construction today, kept as defence in depth rather
-    // than removed: `'Assessment — visible{}'`'s own `Principal` cell is
-    // bare `R` (`authz-matrix.ts`, standing since TASK 2.1.1) — only the
-    // `'Sub-clinician (assigned)'` column ever reaches `create` on this
-    // row, and that column can never resolve without `patient` existing
-    // (`assignedClinicianId` is `undefined` for a nonexistent patient,
-    // which can never equal a principal's own non-empty `clinicianId`).
-    // Unlike clinical-record.ts's identical-looking line — where the
-    // principal *does* hold unconditional `create` and this branch is a
-    // real, exercised path — this one only guards against a future
-    // widening of that one matrix cell.
+
     if (!patient) {
       return respond(404, { error: 'RECORD_NOT_FOUND' });
     }
 
-    const parsed = assessmentBodySchema.safeParse(parseJsonBody(event));
-    if (!parsed.success) {
-      return respond(400, { error: 'INVALID_BODY' });
+    // The visitor's second narrowing — see this file's header. `404`, not
+    // `403`: a visitor must not be able to infer that a patient outside
+    // their programme exists, and this is the same answer a genuinely
+    // absent record gives. An untagged record (written before tagging
+    // existed) is not `IIC`; absence is never read as membership.
+    if (principal.role === 'visitor' && patient.tag !== VISITOR_TAG) {
+      return respond(404, { error: 'RECORD_NOT_FOUND' });
     }
-
-    const input: AssessmentInput = {
-      visible: parsed.data.visible,
-      // Conditionally spread — see clinical-record.ts's own identical
-      // comment: zod omits an absent optional key, but a bare property
-      // assignment on this new object literal would still create the key
-      // with value `undefined`, which `Object.keys`/`hasOwnProperty`
-      // would see either way.
-      ...(parsed.data.private ? { private: parsed.data.private } : {}),
-    };
 
     const actor = actorFromPrincipal(principal, requestOriginOf(event));
 
-    try {
-      const created = await deps.assessments.createVersion(
-        patientId,
-        assessmentId,
-        parsed.data.version,
-        actor,
-        input,
+    if (isGet) {
+      const versions = await deps.assessments.listVersions(patientId, assessmentId);
+      const items = versions
+        .slice()
+        .reverse()
+        .map((version) => {
+          // Built by omission: only the readable sections are ever put on
+          // this object, so a denied one is not present to be stripped,
+          // logged or thrown. `projectFor` on the way out is defence in
+          // depth over `private{}` specifically, not the boundary itself.
+          const shape: Record<string, unknown> = {
+            version: version.version,
+            created_at: version.created_at,
+            updated_at: version.updated_at,
+          };
+          for (const fieldSet of ASSESSMENT_SECTION_ORDER) {
+            const section = version[fieldSet];
+            if (readable.has(fieldSet) && section !== undefined) {
+              shape[fieldSet] = section;
+            }
+          }
+          return projectFor(principal, shape, resourceFor('private'));
+        });
+
+      const permissions = ASSESSMENT_SECTION_ORDER.map((fieldSet) =>
+        projectFor(
+          principal,
+          { fieldSet, read: readable.has(fieldSet), write: writable.has(fieldSet) },
+          resourceFor(fieldSet),
+        ),
       );
-      return respond(201, { item: projectFor(principal, created, resource) });
+
+      const summary = readable.has('calendar')
+        ? summariseCalendar(await deps.appointments.listForPatient(patientId), clock.now())
+        : undefined;
+
+      return respond(200, {
+        assessmentId,
+        // `0` means "no form has ever been written for this patient" —
+        // the value a caller sends back as `baseVersion` to instantiate
+        // one. `items` being empty says the same thing; this says it in
+        // the field the write actually reads.
+        currentVersion: versions.at(-1)?.version ?? 0,
+        template: readableTemplate(readable).map((section) =>
+          projectFor(principal, section, resourceFor(section.fieldSet)),
+        ),
+        permissions,
+        ...(summary ? { calendarSummary: projectFor(principal, summary, resourceFor('calendar')) } : {}),
+        items,
+      });
+    }
+
+    const parsed = patchBodySchema.safeParse(parseJsonBody(event));
+    if (!parsed.success) {
+      return respond(400, { error: 'INVALID_BODY' });
+    }
+    // `.filter` on the value, not only the cast: a key present with an
+    // explicit `undefined` would otherwise be "named" — authorised,
+    // validated, and then applied as an empty patch — which is a strange
+    // enough request to refuse to interpret.
+    const named = (Object.entries(parsed.data.sections) as [FieldSet, AssessmentSectionPatch | undefined][])
+      .filter((entry): entry is [FieldSet, AssessmentSectionPatch] => entry[1] !== undefined);
+    if (named.length === 0) {
+      return respond(400, { error: 'INVALID_BODY' });
+    }
+    const isPatient = principal.role === 'patient';
+
+    // Validation before authorisation would leak the template's shape to a
+    // caller with no business reading the section, so every section is
+    // authorised first and the whole request is refused if any one is
+    // denied — a patch is never half-applied.
+    for (const [fieldSet] of named) {
+      if (!writable.has(fieldSet)) {
+        return respond(403, { error: 'FORBIDDEN' });
+      }
+    }
+
+    for (const [fieldSet, patch] of named) {
+      const responses = validateResponses(fieldSet, patch.responses ?? {}, isPatient);
+      if (!responses.ok) {
+        return responses.forbidden
+          ? respond(403, { error: 'FORBIDDEN_FIELD' })
+          : respond(400, { error: responses.error });
+      }
+      const attachments = validateAttachments(patch, patientId, assessmentId, fieldSet);
+      if (!attachments.ok) {
+        return respond(400, { error: attachments.forbidden ? 'FORBIDDEN_FIELD' : attachments.error });
+      }
+    }
+
+    let latest = await deps.assessments.latest(patientId, assessmentId);
+    if (!latest) {
+      // `baseVersion: 0` is the caller saying "I saw no form". Anything
+      // else means their view of this record is stale, or invented.
+      if (parsed.data.baseVersion !== 0) {
+        return respond(409, { error: 'VERSION_CONFLICT' });
+      }
+      // Lazily instantiated for a patient created before the form existed
+      // — `POST /patients` instantiates for every account created since.
+      // Idempotent, so a retried invocation cannot produce two version 1s,
+      // and it happens on a write path only: a `GET` never writes.
+      latest = await deps.assessments.instantiate(patientId, assessmentId, actor, {
+        ...(patient.tag ? { tag: patient.tag } : {}),
+      });
+    } else if (parsed.data.baseVersion !== latest.version) {
+      return respond(409, { error: 'VERSION_CONFLICT' });
+    }
+
+    // `create` for a section this record does not yet have (only
+    // `private{}` can be in that state — see `AssessmentRepository`), and
+    // `update` for one it does. That is what gives the matrix's `C` on
+    // these rows a meaning distinct from `U`: adding the clinician's
+    // section to a form that never had one.
+    for (const [fieldSet] of named) {
+      if (latest[fieldSet] === undefined && !can(principal, 'create', resourceFor(fieldSet)).allowed) {
+        return respond(403, { error: 'FORBIDDEN' });
+      }
+    }
+
+    // The tag's value is checked before anything is written; the
+    // write-through itself happens *after* the version lands, below.
+    const nextTag = parsed.data.sections.general?.responses?.[ASSESSMENT_TAG_FIELD_ID];
+    const tagChange =
+      typeof nextTag === 'string' && nextTag !== patient.tag ? nextTag : undefined;
+    if (tagChange !== undefined && !ASSESSMENT_TAG_OPTIONS.includes(tagChange as PatientTag)) {
+      return respond(400, { error: 'INVALID_FIELD_OPTION' });
+    }
+
+    try {
+      const created = await deps.assessments.applySectionPatch(
+        latest,
+        latest.version + 1,
+        actor,
+        parsed.data.sections as AssessmentPatch,
+      );
+      // **The tag write-through, and it is deliberately after the version,
+      // not before it.** `Patient.tag` is the authority — it is what
+      // `caseload-repository.ts` and this handler's own visitor gate read
+      // — and the general section's copy is what the form shows, so the
+      // two can be out of step if exactly one of these two writes lands.
+      // Which one goes first therefore decides which way a half-failure
+      // errs, and the two directions are not equally bad:
+      //
+      //   * record first: a failed version write leaves `Patient.tag` at
+      //     `IIC` with no form saying so — a visitor account can now read
+      //     a patient nothing recorded a decision about. Over-permissive.
+      //   * version first (this order): a failed record write leaves the
+      //     form saying `IIC` while the record still says `NDN` — the
+      //     visitor still sees nothing, and re-saving fixes it.
+      //     Under-permissive, and visible to whoever is looking at the
+      //     form.
+      //
+      // A 409 from the version write is the realistic case (two staff
+      // editing at once), and it is the one that must not widen anyone's
+      // reach. So the tag moves only once the version it is recorded on
+      // actually exists.
+      if (tagChange !== undefined) {
+        await deps.patients.update(patientId, actor, { tag: tagChange as PatientTag });
+      }
+
+      // "When a clinician/principal clinician edits a calender for a given
+      // patient it will appear as a notification on patients logged in
+      // dashboard." Only the calendar section triggers one — editing the
+      // general or clinician sections is not a calendar change, and a
+      // dashboard that lit up for every field a clinician typed would stop
+      // being read. Notified only when someone *other than the patient*
+      // wrote it, so a patient is never told about their own edit.
+      //
+      // Not fatal, and not silent, for the same reasons the appointment
+      // routes give: the version is already written by this line, and the
+      // caller is told the outcome rather than left to infer it.
+      let notified: boolean | undefined;
+      if (parsed.data.sections.calendar && !isPatient) {
+        notified = await deps.notifications
+          .notify(patientId, 'calendar-updated', actor)
+          .then(() => true)
+          .catch(() => false);
+      }
+      // The response is the caller's own view of what they just wrote,
+      // built by the same omission the `GET` uses — a helpdesk account
+      // writing the general section does not get the clinician's section
+      // back merely because the write succeeded.
+      const shape: Record<string, unknown> = { version: created.version };
+      for (const fieldSet of ASSESSMENT_SECTION_ORDER) {
+        const section = created[fieldSet];
+        if (readable.has(fieldSet) && section !== undefined) {
+          shape[fieldSet] = section;
+        }
+      }
+      return respond(201, {
+        item: projectFor(principal, shape, resourceFor('private')),
+        ...(notified === undefined ? {} : { notified }),
+      });
     } catch (error) {
       if (error instanceof AppError && error.code === 'VERSION_ALREADY_EXISTS') {
-        return respond(409, { error: error.code });
+        // Two writers who read the same version and both computed the same
+        // next one. The loser is told to re-read, not silently merged.
+        return respond(409, { error: 'VERSION_CONFLICT' });
       }
       throw error;
     }

@@ -199,6 +199,19 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // above — one conversation per patient, not open traffic. Displacing
   // nothing.
   '/ndn/message-function',
+  // 2026-09-01: the patient's in-app dashboard feed, behind the same
+  // appointments flag the calendar routes use. The lowest volume of any
+  // function added since caseload — two reads per patient sign-in at most,
+  // and one write per appointment the practice already schedules.
+  // Displacing nothing.
+  '/ndn/patient-notification-function',
+  // 2026-09-01: presigned upload/download URLs for assessment attachments,
+  // behind the assessments flag. Deployed in WebStack (the media bucket
+  // lives there — see that file's own note on the CloudFormation cycle),
+  // and named here because this list is the whole estate's `/ndn/*` roster,
+  // not one stack's. Bounded by "a staff member attaching a file", which is
+  // rarer than any patient-facing route. Displacing nothing.
+  '/ndn/assessment-upload-function',
   // TASK 4.1.1: four functions, not the two the task's own text names
   // (`ws-connect-function`, `ws-disconnect-function`) — `WebSocketLambdaAuthorizer`
   // cannot share `AuthorizerFunction`'s deployed Lambda (see

@@ -10,9 +10,10 @@ import {
   CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider';
 
+import { AssessmentRepository } from './assessment-repository.js';
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
-import { createPatientProfileStore } from './dynamo-store.js';
+import { createPatientProfileStore, DynamoAssessmentStore } from './dynamo-store.js';
 import type {
   AdminCreatePatientPort,
   AdminFindPatientPort,
@@ -125,8 +126,21 @@ const findPatientUser: AdminFindPatientPort = {
   },
 };
 
+// 2026-09-01: the same `ASSESS#<id>#v<n>` rows the assessment function
+// owns, reached from here for exactly one call — `instantiate`, at account
+// creation. This function's IAM gains `PutItem`/`GetItem` on the patient
+// partition it already writes the `PROFILE` row to, and nothing more: it
+// cannot read a version back to a caller, because it has no route that
+// returns one.
+const assessments = new AssessmentRepository(
+  new DynamoAssessmentStore({ tableName }),
+  auditLog,
+  systemClock,
+);
+
 export const handler = createPatientAdminHandler({
   repository,
+  assessments,
   flags,
   audit: auditLog,
   createPatientUser,

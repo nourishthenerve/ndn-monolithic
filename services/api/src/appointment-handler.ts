@@ -8,7 +8,12 @@ import { AppointmentRepository } from './appointment-repository.js';
 import { createAppointmentHandler } from './appointment.js';
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
-import { createPatientProfileStore, DynamoAppointmentStore } from './dynamo-store.js';
+import {
+  createPatientProfileStore,
+  DynamoAppointmentStore,
+  DynamoPatientNotificationStore,
+} from './dynamo-store.js';
+import { PatientNotificationRepository } from './patient-notification-repository.js';
 import { PatientRepository } from './patient-repository.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
 
@@ -29,4 +34,19 @@ const appointments = new AppointmentRepository(
   systemClock,
 );
 
-export const handler = createAppointmentHandler({ patients, appointments, flags });
+// 2026-09-01: the patient's in-app dashboard feed. Written here as a side
+// effect of booking, approving, declining and cancelling — never by a
+// route of its own. No `AuditWriter` is passed because the repository
+// takes none; see its own header on why an echo of an already-audited
+// action is not itself audited.
+const notifications = new PatientNotificationRepository(
+  new DynamoPatientNotificationStore({ tableName }),
+  systemClock,
+);
+
+export const handler = createAppointmentHandler({
+  patients,
+  appointments,
+  notifications,
+  flags,
+});

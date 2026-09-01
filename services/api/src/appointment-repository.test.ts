@@ -1,7 +1,7 @@
 import type { Appointment } from '@ndn/shared-types';
 import { describe, expect, it } from 'vitest';
 
-import type { AppointmentStore } from './appointment-repository.js';
+import type { AppointmentStore, AppointmentTransition } from './appointment-repository.js';
 import { AppointmentRepository } from './appointment-repository.js';
 import { actorContext, InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
@@ -48,14 +48,29 @@ class InMemoryAppointmentStore implements AppointmentStore {
     return this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
   }
 
-  async cancel(patientId: string, scheduledAt: string, now: string): Promise<Appointment> {
+  /** Mirrors `DynamoAppointmentStore.transition`'s own contract: `expect` refuses the write rather than overwriting a decision someone else already made. */
+  async transition(
+    patientId: string,
+    scheduledAt: string,
+    change: AppointmentTransition,
+  ): Promise<Appointment> {
     const item = this.items.find((it) => it.patientId === patientId && it.scheduledAt === scheduledAt);
     if (!item) {
       throw new AppError('RECORD_NOT_FOUND', `no appointment for patient ${patientId} at ${scheduledAt}`);
     }
-    const updated: Appointment = { ...item, appointment_status: 'cancelled', updated_at: now };
-    const index = this.items.indexOf(item);
-    this.items[index] = updated;
+    if (change.expect && item.appointment_status !== change.expect) {
+      throw new AppError(
+        'APPOINTMENT_STATE_CONFLICT',
+        `appointment for patient ${patientId} at ${scheduledAt} is ${item.appointment_status}, not ${change.expect}`,
+      );
+    }
+    const updated: Appointment = {
+      ...item,
+      appointment_status: change.to,
+      updated_at: change.now,
+      ...(change.decidedBy ? { approvedBy: change.decidedBy, approvedAt: change.now } : {}),
+    };
+    this.items[this.items.indexOf(item)] = updated;
     return updated;
   }
 }
@@ -73,6 +88,7 @@ describe('AppointmentRepository.schedule', () => {
     const created = await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     expect(created.appointment_status).toBe('scheduled');
     expect(created.created_at).toBe('2026-08-22T09:00:00.000Z');
@@ -84,6 +100,7 @@ describe('AppointmentRepository.schedule', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     expect(audit.list()).toEqual([
       expect.objectContaining({
@@ -101,6 +118,7 @@ describe('AppointmentRepository.get', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
 
     const found = await repository.get('pat-1', '2026-09-01T10:00:00.000Z');
@@ -118,6 +136,7 @@ describe('AppointmentRepository.get', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     const before = audit.list().length; // schedule() itself already wrote one entry
 
@@ -133,10 +152,12 @@ describe('AppointmentRepository.listForPatient', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-02T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     const items = await repository.listForPatient('pat-1');
     expect(items.map((item) => item.scheduledAt)).toEqual([
@@ -150,10 +171,12 @@ describe('AppointmentRepository.listForPatient', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     await repository.schedule(
       { patientId: 'pat-2', clinicianId: 'cli-1', scheduledAt: '2026-09-01T11:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     const items = await repository.listForPatient('pat-1');
     expect(items).toHaveLength(1);
@@ -167,15 +190,18 @@ describe('AppointmentRepository.listForClinicianCalendar', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-02T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     await repository.schedule(
       { patientId: 'pat-2', clinicianId: 'cli-1', scheduledAt: '2026-09-01T09:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     // A different clinician's appointment, same day — must never appear.
     await repository.schedule(
       { patientId: 'pat-3', clinicianId: 'cli-2', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     const items = await repository.listForClinicianCalendar(
       'cli-1',
@@ -190,6 +216,7 @@ describe('AppointmentRepository.listForClinicianCalendar', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-08-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     const items = await repository.listForClinicianCalendar(
       'cli-1',
@@ -204,6 +231,7 @@ describe('AppointmentRepository.listForClinicianCalendar', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     await repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR);
     const items = await repository.listForClinicianCalendar(
@@ -221,6 +249,7 @@ describe('AppointmentRepository.cancel', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     const cancelled = await repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR);
     expect(cancelled.appointment_status).toBe('cancelled');
@@ -233,6 +262,7 @@ describe('AppointmentRepository.cancel', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     await repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR);
     const items = await repository.listForPatient('pat-1');
@@ -245,6 +275,7 @@ describe('AppointmentRepository.cancel', () => {
     await repository.schedule(
       { patientId: 'pat-1', clinicianId: 'cli-1', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
       ACTOR,
+    { requiresApproval: false },
     );
     await repository.cancel('pat-1', '2026-09-01T10:00:00.000Z', ACTOR);
     expect(audit.list()).toEqual([
@@ -261,3 +292,93 @@ describe('AppointmentRepository.cancel', () => {
   });
 });
 
+// 2026-09-01: "any new appointment booked by the clinician needs to be
+// approved by the principal clinician." The repository's half of that is
+// three things — the initial status is the caller's to choose, only a
+// pending booking can be decided, and a decision is stamped with who made
+// it.
+describe('AppointmentRepository — the approval step', () => {
+  const PRINCIPAL_ACTOR = actorContext(
+    { subjectId: 'sub-principal', role: 'principal-clinician' },
+    { requestId: 'req-2', sourceIp: '198.51.100.9' },
+  );
+  const BOOKING = {
+    patientId: 'pat-1',
+    clinicianId: 'cli-1',
+    scheduledAt: '2026-09-01T10:00:00.000Z',
+    durationMinutes: 30,
+  } as const;
+
+  it('starts a booking pending-approval when the caller says it needs approving', async () => {
+    const { repository } = build();
+    const created = await repository.schedule(BOOKING, ACTOR, { requiresApproval: true });
+    expect(created.appointment_status).toBe('pending-approval');
+    expect(created.approvedBy).toBeUndefined();
+  });
+
+  it('starts a booking scheduled when it does not — the principal is the approver', async () => {
+    const { repository } = build();
+    const created = await repository.schedule(BOOKING, PRINCIPAL_ACTOR, { requiresApproval: false });
+    expect(created.appointment_status).toBe('scheduled');
+  });
+
+  it('approve() confirms a pending booking and stamps who decided it', async () => {
+    const { repository } = build();
+    await repository.schedule(BOOKING, ACTOR, { requiresApproval: true });
+    const approved = await repository.approve('pat-1', BOOKING.scheduledAt, PRINCIPAL_ACTOR);
+    expect(approved.appointment_status).toBe('scheduled');
+    expect(approved.approvedBy).toBe('sub-principal');
+    expect(approved.approvedAt).toBe('2026-08-22T09:00:00.000Z');
+    // Never `scheduledAt` — the GSI1 projection is derived from it, so a
+    // decision that moved the time would strand the index.
+    expect(approved.scheduledAt).toBe(BOOKING.scheduledAt);
+  });
+
+  it('decline() cancels a pending booking rather than inventing a fifth status', async () => {
+    const { repository } = build();
+    await repository.schedule(BOOKING, ACTOR, { requiresApproval: true });
+    const declined = await repository.decline('pat-1', BOOKING.scheduledAt, PRINCIPAL_ACTOR);
+    expect(declined.appointment_status).toBe('cancelled');
+    expect(declined.approvedBy).toBe('sub-principal');
+  });
+
+  it('refuses to approve a booking that is no longer pending — a second decision never overwrites the first', async () => {
+    const { repository } = build();
+    await repository.schedule(BOOKING, ACTOR, { requiresApproval: true });
+    await repository.decline('pat-1', BOOKING.scheduledAt, PRINCIPAL_ACTOR);
+    await expect(
+      repository.approve('pat-1', BOOKING.scheduledAt, PRINCIPAL_ACTOR),
+    ).rejects.toMatchObject({ code: 'APPOINTMENT_STATE_CONFLICT' });
+  });
+
+  it('refuses to decline an already-confirmed appointment — that is cancel, on a different row', async () => {
+    const { repository } = build();
+    await repository.schedule(BOOKING, PRINCIPAL_ACTOR, { requiresApproval: false });
+    await expect(
+      repository.decline('pat-1', BOOKING.scheduledAt, PRINCIPAL_ACTOR),
+    ).rejects.toMatchObject({ code: 'APPOINTMENT_STATE_CONFLICT' });
+  });
+
+  it('cancel() withdraws a pending booking — a request nobody could retract would be a trap', async () => {
+    const { repository } = build();
+    await repository.schedule(BOOKING, ACTOR, { requiresApproval: true });
+    const cancelled = await repository.cancel('pat-1', BOOKING.scheduledAt, ACTOR);
+    expect(cancelled.appointment_status).toBe('cancelled');
+    // No decision stamp: withdrawing a request is not an approval decision.
+    expect(cancelled.approvedBy).toBeUndefined();
+  });
+
+  it('audits every decision against the deciding principal', async () => {
+    const { repository, audit } = build();
+    await repository.schedule(BOOKING, ACTOR, { requiresApproval: true });
+    await repository.approve('pat-1', BOOKING.scheduledAt, PRINCIPAL_ACTOR);
+    expect(audit.list()).toEqual([
+      expect.objectContaining({ action: 'create', actor: 'sub-1' }),
+      expect.objectContaining({
+        action: 'update',
+        actor: 'sub-principal',
+        entityId: 'pat-1#2026-09-01T10:00:00.000Z',
+      }),
+    ]);
+  });
+});

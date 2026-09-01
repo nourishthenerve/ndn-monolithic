@@ -413,6 +413,107 @@ export class WebStack extends Stack {
       });
     }
 
+    // 2026-09-01: the assessment-attachment upload endpoint — "Inside those
+    // 3 sections there will be option to upload audio file, video file,
+    // pictures, word files, pdfs etc."
+    //
+    // **In this stack, not data-stack.ts**, for the reason
+    // `MediaUploadFunction` above spells out: the bucket lives here, and a
+    // DataStack function needing its ARN while this stack's bucket policy
+    // needs that function's role ARN is an unresolvable CloudFormation
+    // cycle. Unlike the workshop uploader, this one *does* need the table
+    // — it resolves `assigned_clinician_id` so `can()` can tell an
+    // assigned clinician from an unassigned one — which is the same
+    // one-directional WebStack → DataStack reference `StripeWebhookFunction`
+    // below already makes. Hence the `props.table` half of the condition.
+    if (props.authorizerFunction && props.table) {
+      const assessmentUploadRole = new Role(this, 'AssessmentUploadFunctionRole', {
+        assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+      });
+
+      const assessmentUploadFunction = new NodejsFunction(this, 'AssessmentUploadFunction', {
+        entry: `${moduleDir}../../services/api/src/assessment-upload-handler.ts`,
+        handler: 'handler',
+        runtime: Runtime.NODEJS_22_X,
+        architecture: Architecture.ARM_64,
+        memorySize: 128,
+        timeout: Duration.seconds(5),
+        role: assessmentUploadRole,
+        environment: {
+          MEDIA_BUCKET_NAME: mediaBucket.bucketName,
+          PRINCIPAL_TABLE_NAME: props.table.tableName,
+          AUDIT_TABLE_NAME: props.table.tableName,
+          ...FLAG_ENVIRONMENT,
+        },
+        logGroup: createLogGroup(
+          this,
+          'AssessmentUploadFunctionLogGroup',
+          logGroupName('assessment-upload-function'),
+          assessmentUploadRole,
+        ),
+      });
+      grantFlagReads(this, assessmentUploadRole);
+
+      // `PutObject` and `GetObject` on the `assessments/` prefix only —
+      // never `workshops/`, and never `DeleteObject`. The same narrowing
+      // `MediaUploadPutWorkshopPosters` above applies to its own prefix,
+      // and the mirror image of it: neither function can reach into the
+      // other's half of the bucket.
+      //
+      // **`GetObject` is here because nothing else serves these files.**
+      // The `/media/*` CloudFront behaviour below hands the bucket to
+      // anyone who knows a path, which is correct for a workshop poster
+      // and would be indefensible for a clinical recording — and it does
+      // not reach this prefix. An attachment is readable only through this
+      // function's presigned GET, behind the same section-level `can()`
+      // check that governs the record it belongs to.
+      assessmentUploadRole.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'AssessmentUploadPutAndGetAttachments',
+          effect: Effect.ALLOW,
+          actions: ['s3:PutObject', 's3:GetObject'],
+          resources: [`${mediaBucket.bucketArn}/assessments/*`],
+        }),
+      );
+      // `GetItem` on the patient partition, and nothing else — this
+      // function reads one field of one row to resolve a care
+      // relationship. It cannot write the assessment record its URLs are
+      // for; that is `AssessmentFunction`'s, on a separate role, and is a
+      // separate authorisation on a separate route.
+      assessmentUploadRole.addToPrincipalPolicy(
+        new PolicyStatement({
+          sid: 'ReadPatientForAttachmentAuthorisation',
+          effect: Effect.ALLOW,
+          actions: ['dynamodb:GetItem'],
+          resources: [props.table.tableArn],
+          conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+        }),
+      );
+      attachDestructiveActionGuardrail(assessmentUploadRole, {
+        buckets: [mediaBucket],
+        tables: [props.table],
+      });
+      attachAuditPartitionReadGuardrail(assessmentUploadRole, props.table);
+
+      const assessmentUploadIntegration = new HttpLambdaIntegration(
+        'AssessmentUploadIntegration',
+        assessmentUploadFunction,
+      );
+      httpApi.addRoutes({
+        path: '/patients/{id}/assessments/{assessmentId}/attachment-upload-url',
+        methods: [HttpMethod.POST],
+        integration: assessmentUploadIntegration,
+      });
+      // `POST`, not `GET`, for a read: the object key would otherwise sit
+      // in a URL, and therefore in every access log between here and the
+      // browser. A key names a patient and a section.
+      httpApi.addRoutes({
+        path: '/patients/{id}/assessments/{assessmentId}/attachment-download-url',
+        methods: [HttpMethod.POST],
+        integration: assessmentUploadIntegration,
+      });
+    }
+
     // TASK 1.5.2 (ADR-0010): the Stripe webhook function/route — placed
     // here (not alongside the checkout function in data-stack.ts) so it's
     // reachable at a stable custom-domain URL (`https://next.nourishthenerve.com/stripe/webhook`,
