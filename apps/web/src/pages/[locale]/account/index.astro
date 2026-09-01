@@ -37,6 +37,7 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link } from '@ndn/ui';
 
+import { PatientNotifications } from '../../../account/PatientNotifications.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
@@ -76,6 +77,16 @@ const heading = t('account.heading', undefined, locale);
             </Link>
           </li>
         </RequireAuth>
+        {/* 2026-09-01: linked for every signed-in identity, unlike the
+            staff tools below. Every role has something to see on this
+            page — a patient their general info, a visitor an IIC
+            patient's, helpdesk two sections, a clinician all four — so
+            there is no role to hide it from. */}
+        <li>
+          <Link href={`/${locale}/account/assessment`}>
+            {t('account.assessmentLink', undefined, locale)}
+          </Link>
+        </li>
         <li>
           <Link href={`/${locale}/account/change-password`}>
             {t('account.changePasswordLink', undefined, locale)}
@@ -83,6 +94,34 @@ const heading = t('account.heading', undefined, locale);
         </li>
       </ul>
     </nav>
+    {/* 2026-09-01: "it will appear as a notification on patients logged in
+        dashboard." This is the page every signed-in identity actually
+        lands on, which is what makes it the dashboard the owner means.
+        Gated to `patient` because the feed is the patient's own and the
+        API refuses everyone else — showing a clinician a permanent
+        "you do not have access to this" panel on their landing page would
+        be noise, not information. */}
+    <RequireAuth client:only="react" allowRoles={['patient']}>
+      <PatientNotifications
+        client:only="react"
+        strings={{
+          heading: t('patientNotifications.heading', undefined, locale),
+          loadingLabel: t('patientNotifications.loading', undefined, locale),
+          forbiddenLabel: t('patientNotifications.forbidden', undefined, locale),
+          errorLabel: t('patientNotifications.error', undefined, locale),
+          emptyLabel: t('patientNotifications.empty', undefined, locale),
+          dismissLabel: t('patientNotifications.dismiss', undefined, locale),
+          forLabel: t('patientNotifications.for', undefined, locale),
+          genericLabel: t('patientNotifications.generic', undefined, locale),
+          kindLabels: {
+            'appointment-requested': t('patientNotifications.appointmentRequested', undefined, locale),
+            'appointment-approved': t('patientNotifications.appointmentApproved', undefined, locale),
+            'appointment-cancelled': t('patientNotifications.appointmentCancelled', undefined, locale),
+            'calendar-updated': t('patientNotifications.calendarUpdated', undefined, locale),
+          },
+        }}
+      />
+    </RequireAuth>
     <RequireAuth client:only="react" allowRoles={['principal-clinician', 'helpdesk', 'visitor']}>
       <nav aria-label={t('account.staffToolsHeading', undefined, locale)}>
         <ul>

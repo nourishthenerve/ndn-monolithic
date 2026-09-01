@@ -36,9 +36,13 @@ export type MatrixRow =
   | 'Patient profile'
   | 'Patient assignment'
   | 'Diagnosis / care plan'
-  | 'Assessment — `visible{}`'
+  | 'Assessment — `general{}`'
+  | 'Assessment — `patient{}`'
   | 'Assessment — `private{}`'
+  | 'Assessment — `calendar{}`'
   | 'Appointments'
+  | 'Appointment approval'
+  | 'Patient notifications'
   | 'Content assignment'
   | 'Messages'
   | 'Clinician accounts'
@@ -120,16 +124,47 @@ export const RBAC_MATRIX: RbacMatrix = {
     Visitor: DENIED,
     Principal: ['create', 'read', 'update'],
   },
-  // | Assessment — `visible{}` | R | — | C R U | — | **—** | **—** | C R U |
-  'Assessment — `visible{}`': {
+  // 2026-09-01: the doc's two assessment rows became four — one per
+  // section of the owner's own form, because "visible" was never a
+  // section, it was "everything that isn't private", and helpdesk's reach
+  // is not a prefix of anyone else's. See the doc's own note; this is the
+  // transcription.
+  //
+  // Two cells here are narrower in practice than they read, and neither
+  // narrowing belongs in this file:
+  //   * `Visitor: R` on `general{}`/`calendar{}` reaches IIC-tagged
+  //     patients only. The matrix has no vocabulary for "rows where a
+  //     field equals a value" — the same reason the doc's own `Patient
+  //     profile` Visitor cell already carries that qualifier in words —
+  //     so assessment.ts applies the tag filter, exactly as
+  //     caseload-repository.ts does for the list.
+  //   * `Patient (own): U` on `general{}` reaches every field of that
+  //     section except `tag`, which `assessment-template.ts` marks
+  //     `staffOnly`. A field is not a matrix row; see the doc's note on
+  //     why this one field is narrower than its section.
+  // | Assessment — `general{}` | **R U** | — | C R U | — | **C R U** | **R (IIC-tagged only)** | C R U |
+  'Assessment — `general{}`': {
+    'Patient (own)': ['read', 'update'],
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': ['create', 'read', 'update'],
+    'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: ['create', 'read', 'update'],
+    Visitor: ['read'],
+    Principal: ['create', 'read', 'update'],
+  },
+  // | Assessment — `patient{}` | R | — | C R U | — | **C R U** | **—** | C R U |
+  'Assessment — `patient{}`': {
     'Patient (own)': ['read'],
     'Patient (other)': DENIED,
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
-    Helpdesk: DENIED,
+    Helpdesk: ['create', 'read', 'update'],
     Visitor: DENIED,
     Principal: ['create', 'read', 'update'],
   },
+  // Unchanged in every cell, 2026-09-01 included — this is the row R-09's
+  // own register entry names, and the one whose attribute name
+  // projection.ts keys its runtime boundary off.
   // | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | **—** | C R U |
   'Assessment — `private{}`': {
     'Patient (own)': DENIED,
@@ -138,6 +173,16 @@ export const RBAC_MATRIX: RbacMatrix = {
     'Sub-clinician (unassigned)': DENIED,
     Helpdesk: DENIED,
     Visitor: DENIED,
+    Principal: ['create', 'read', 'update'],
+  },
+  // | Assessment — `calendar{}` | R | — | C R U | — | **R** | **R (IIC-tagged only)** | C R U |
+  'Assessment — `calendar{}`': {
+    'Patient (own)': ['read'],
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': ['create', 'read', 'update'],
+    'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: ['read'],
+    Visitor: ['read'],
     Principal: ['create', 'read', 'update'],
   },
   // TASK 4.2.1 added `J` (join-call) to the two parties actually on the
@@ -162,6 +207,43 @@ export const RBAC_MATRIX: RbacMatrix = {
     Helpdesk: ['read'],
     Visitor: ['read'],
     Principal: ['create', 'read', 'update', 'join-call'],
+  },
+  // 2026-09-01: "any new appointment booked by the clinician needs to be
+  // approved by the principal clinician." A distinct row from
+  // `Appointments`, for the same reason `Patient assignment` is distinct
+  // from `Patient profile`: booking a slot and deciding whether that
+  // booking stands are two powers, and the entire point of the request is
+  // that one role holds the first and a different role holds the second.
+  //
+  // `U` alone. There is no `C` — the appointment already exists, in
+  // `pending-approval` — and no `R`, because `Appointments`'s own `R`
+  // already returns every appointment with its status, which is the whole
+  // of what a reader would want this row for.
+  // | **Appointment approval** | — | — | — | — | — | — | **U** |
+  'Appointment approval': {
+    'Patient (own)': DENIED,
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': DENIED,
+    'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
+    Visitor: DENIED,
+    Principal: ['update'],
+  },
+  // 2026-09-01: the patient's own in-app dashboard feed. One column
+  // filled in, and the clinician columns' `—` is deliberate rather than an
+  // omission: a notification is never created by an HTTP call, it is a
+  // side effect of an appointment action already authorised on the two
+  // rows above. `C` here would be a second, independently reachable way to
+  // put a notice on a patient's dashboard.
+  // | Patient notifications | **R U (own)** | — | — | — | — | — | — |
+  'Patient notifications': {
+    'Patient (own)': ['read', 'update'],
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': DENIED,
+    'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
+    Visitor: DENIED,
+    Principal: DENIED,
   },
   // | Content assignment | R | — | C R U | — | C R U | — | C R U |
   'Content assignment': {
@@ -260,6 +342,8 @@ export const ENTITY_TYPE_ROWS = {
   diagnosis: 'Diagnosis / care plan',
   'care-plan': 'Diagnosis / care plan',
   appointment: 'Appointments',
+  'appointment-approval': 'Appointment approval',
+  'patient-notification': 'Patient notifications',
   'content-assignment': 'Content assignment',
   message: 'Messages',
   'clinician-account': 'Clinician accounts',
@@ -271,7 +355,15 @@ export const ENTITY_TYPE_ROWS = {
 
 export const ASSESSMENT_ENTITY_TYPE = 'assessment';
 
+/**
+ * One entry per `FieldSet` member, and the `satisfies` is what makes that
+ * exhaustive: adding a section to the form without giving it a row here is
+ * a compile error, never a section that quietly falls through to another
+ * section's permissions.
+ */
 export const ASSESSMENT_ROWS = {
-  visible: 'Assessment — `visible{}`',
+  general: 'Assessment — `general{}`',
+  patient: 'Assessment — `patient{}`',
   private: 'Assessment — `private{}`',
+  calendar: 'Assessment — `calendar{}`',
 } as const satisfies Readonly<Record<FieldSet, MatrixRow>>;

@@ -76,8 +76,23 @@ export type Action = 'create' | 'read' | 'update' | 'join-call' | 'reset-passwor
 export type AccountStatus =
   'pending' | 'approved' | 'declined' | 'suspended' | 'active' | 'deactivated';
 
-/** Which half of an assessment record is being reached — see Resource. */
-export type FieldSet = 'visible' | 'private';
+/**
+ * Which **section** of an assessment record is being reached — see
+ * `Resource`, and `assessment.ts` for the record property each one names.
+ *
+ * 2026-09-01: was `'visible' | 'private'`. The owner's form has four
+ * sections with four different sets of writers, and "visible" could not
+ * distinguish the section a patient may edit from the two they may only
+ * read. Every member here is *exactly* the name of the `Assessment`
+ * property it governs, which is what lets a section-scoped write index the
+ * stored record by the same string `can()` was asked about.
+ *
+ * `'private'` is the clinician-only section ("specific to the clinician").
+ * It keeps that name so that `projection.ts`'s runtime boundary — the one
+ * thing standing between a clinical note and a log line — goes on keying
+ * off the literal attribute name it always has. See assessment.ts's header.
+ */
+export type FieldSet = 'general' | 'patient' | 'private' | 'calendar';
 
 export interface Principal {
   /** The Cognito `sub`. Opaque here — this layer never resolves it. */

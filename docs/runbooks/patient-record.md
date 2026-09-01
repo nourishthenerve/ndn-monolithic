@@ -88,3 +88,17 @@ Returns `{ items: [{ patientId, fullName }] }` — a plain derived list squeezed
 ### Cost (TASK 3.1.2)
 
 £0.00 net-new — one more route and one more IAM statement on the already-deployed `PatientFunction`; no new AWS resource of any kind.
+
+## Amendment, 2026-09-01 — `apps/web` grew a rendered-component test pattern, and it immediately found a bug
+
+Every island in `apps/web/src/account/` had been tested by asserting its *pure helpers* — `join-window.test.ts`'s precedent, restated by `NextAppointmentPanel.test.ts` and `ClinicianCalendar.test.ts`, each with a header saying "deliberately does not render the component — this directory has no jsdom/RTL pattern."
+
+That held while every island showed one role one thing. `AssessmentForm.tsx` does not: it shows five roles five different subsets of one clinical record, and "a patient sees no clinician-section field" is not a property of any helper — it is a property of the tree. So `apps/web` now depends on `@testing-library/react`, which `packages/ui` has used since TASK 1.1.1, and three `*.render.test.tsx` files sit alongside the existing helper tests rather than replacing them.
+
+**Two real bugs surfaced in the first hour of having it, both invisible to every other kind of test:**
+
+1. **An unbounded fetch loop in `ClinicianCalendar` and `NextAppointmentPanel`.** Both took `now = () => new Date()` as an inline default parameter. That arrow has a new identity on every render, it sat in a `useCallback` dependency array, the `useEffect` depending on that callback therefore re-ran every render, and its `setState` caused the next one. Live, this is a component hammering the API for as long as the page is open. The first rendered test of `ClinicianCalendar` did not fail — it **crashed the vitest worker**. Fixed by hoisting the default to a module-level `systemNow`, which has one identity for the lifetime of the module; a regression test asserts the fetch happens exactly once.
+
+2. **Read-only assessment answers were reachable by `getByLabelText`.** The first cut rendered them as `<span id>label</span>: <span aria-labelledby>value</span>`, which makes a non-interactive element claim a form label — so a section a caller may only *read* was indistinguishable from one they may *edit*, to assistive technology and to any test. Now a `<dt>`/`<dd>` pair, the same markup this page's own read-only facts already used.
+
+Neither is exotic. Both are the ordinary cost of having had no way to ask "what does this actually render".

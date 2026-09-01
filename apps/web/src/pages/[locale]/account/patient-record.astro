@@ -60,6 +60,7 @@ const heading = t('patientRecord.heading', undefined, locale);
     <PatientRecordPanel
       client:only="react"
       dashboardHref={`/${locale}/account/caseload`}
+      assessmentHref={`/${locale}/account/assessment`}
       strings={{
         loadingLabel: t('patientRecord.loading', undefined, locale),
         forbiddenLabel: t('patientRecord.forbidden', undefined, locale),
@@ -89,6 +90,7 @@ const heading = t('patientRecord.heading', undefined, locale);
         appointmentStatusColumnLabel: t('patientRecord.appointmentStatusColumn', undefined, locale),
         minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
         backToDashboard: t('patientRecord.backToDashboard', undefined, locale),
+        assessmentLink: t('account.assessmentLink', undefined, locale),
       }}
     />
     <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />

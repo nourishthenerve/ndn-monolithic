@@ -64,6 +64,24 @@ export interface NextAppointmentPanelProps {
 
 const defaultClient = createSessionClient();
 
+/**
+ * Hoisted to module scope, and that is a bug fix rather than tidying.
+ *
+ * As an inline default (`now = () => new Date()`) this identity changed on
+ * every render, so the `useCallback` below was rebuilt every render, so the
+ * `useEffect` depending on it re-ran every render, so its `setState`
+ * triggered another render: **an unbounded fetch loop against the API for
+ * as long as the page was open.** Nothing caught it because this
+ * directory's tests never rendered a component until 2026-09-01; the first
+ * rendered test of this file crashed its worker outright.
+ *
+ * A module-level constant has one identity for the lifetime of the module,
+ * so the effect runs once. A caller injecting its own `now` must pass a
+ * stable reference for the same reason.
+ */
+const systemNow = (): Date => new Date();
+
+
 function defaultFetchAppointments(accessToken: string): Promise<Response> {
   return fetch(`${contentApiUrl}/patients/me/appointments`, {
     headers: { authorization: `Bearer ${accessToken}` },
@@ -90,7 +108,7 @@ export function NextAppointmentPanel({
   locale,
   client = defaultClient,
   fetchAppointments = defaultFetchAppointments,
-  now = () => new Date(),
+  now = systemNow,
 }: NextAppointmentPanelProps): ReactNode {
   const [state, setState] = useState<ViewState>({ status: 'loading' });
 

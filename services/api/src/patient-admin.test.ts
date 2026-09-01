@@ -1,7 +1,8 @@
-import type { Patient } from '@ndn/shared-types';
+import type { Assessment, Patient } from '@ndn/shared-types';
 import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import { describe, expect, it, vi } from 'vitest';
 
+import { AssessmentRepository, DEFAULT_ASSESSMENT_ID } from './assessment-repository.js';
 import { InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
 import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags.js';
@@ -138,8 +139,16 @@ function build(
     }),
   };
 
+  // 2026-09-01: the assessment form instantiated at account creation.
+  const assessments = new AssessmentRepository(
+    new InMemoryStore<Assessment>(),
+    new InMemoryAuditLog(),
+    clock,
+  );
+
   const handler = createPatientAdminHandler({
     repository,
+    assessments,
     flags,
     audit,
     createPatientUser,
@@ -149,7 +158,15 @@ function build(
     clock,
   });
 
-  return { handler, repository, audit, createPatientUser, setPatientPassword, findPatientUser };
+  return {
+    handler,
+    repository,
+    assessments,
+    audit,
+    createPatientUser,
+    setPatientPassword,
+    findPatientUser,
+  };
 }
 
 async function invoke(handler: ReturnType<typeof build>['handler'], event: LambdaAuthorizerEvent) {
@@ -629,5 +646,67 @@ describe('GET /patients', () => {
     const body = JSON.parse(response.body) as { item: { id: string; account_status: string } };
     expect(body.item.id).toBe(id);
     expect(body.item.account_status).toBe('pending');
+  });
+});
+
+// 2026-09-01: "Each patient will have an assessment form that will be
+// loaded from the template the moment his account is being created."
+describe('POST /patients — the assessment form', () => {
+  it('instantiates version 1 for the new account, tagged as the account was', async () => {
+    const { handler, assessments } = build();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients', {
+        principal: PRINCIPAL_CONTEXT,
+        body: {
+          email: 'new@example.com',
+          fullName: 'New Patient',
+          marketingOptIn: false,
+          tag: 'IIC',
+        },
+      }),
+    );
+    expect(response.statusCode).toBe(201);
+    const created = JSON.parse(response.body) as {
+      item: { id: string };
+      assessmentFormCreated: boolean;
+    };
+    expect(created.assessmentFormCreated).toBe(true);
+
+    const form = await assessments.getVersion(created.item.id, DEFAULT_ASSESSMENT_ID, 1);
+    expect(form?.general.responses.tag).toBe('IIC');
+    expect(form?.patient).toEqual({ responses: {}, attachments: [] });
+    // R-09: no clinician section until a clinician writes one.
+    expect(form?.private).toBeUndefined();
+  });
+
+  it('creates the form for a helpdesk-created account too — the form is part of the account, not of who made it', async () => {
+    const { handler, assessments } = build();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients', {
+        principal: HELPDESK_CONTEXT,
+        body: { email: 'new@example.com', fullName: 'New Patient', marketingOptIn: false },
+      }),
+    );
+    expect(response.statusCode).toBe(201);
+    const created = JSON.parse(response.body) as { item: { id: string } };
+    expect(await assessments.getVersion(created.item.id, DEFAULT_ASSESSMENT_ID, 1)).toBeDefined();
+  });
+
+  it('still creates the account when the form write fails, and says so — the form is recoverable, the account would not be', async () => {
+    const { handler, assessments } = build();
+    assessments.instantiate = () => Promise.reject(new Error('dynamo is having a day'));
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'new@example.com', fullName: 'New Patient', marketingOptIn: false },
+      }),
+    );
+    expect(response.statusCode).toBe(201);
+    const body = JSON.parse(response.body) as { assessmentFormCreated: boolean; password: string };
+    expect(body.assessmentFormCreated).toBe(false);
+    expect(body.password).toBe('Fixed-Passw0rd!');
   });
 });

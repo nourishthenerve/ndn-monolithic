@@ -52,6 +52,7 @@ import type {
 } from 'aws-lambda';
 import { z } from 'zod';
 
+import { DEFAULT_ASSESSMENT_ID, type AssessmentRepository } from './assessment-repository.js';
 import { actorFromPrincipal, auditEventFor, requestOriginOf, type AuditWriter } from './audit.js';
 import { can } from './authz.js';
 import { systemClock, type Clock } from './clock.js';
@@ -133,6 +134,13 @@ export interface AdminFindPatientPort {
 
 export interface PatientAdminDeps {
   readonly repository: PatientRepository;
+  /**
+   * 2026-09-01: "Each patient will have an assessment form that will be
+   * loaded from the template the moment his account is being created."
+   * This is that moment — see the `POST /patients` case below for why a
+   * failure here does not fail the account.
+   */
+  readonly assessments: AssessmentRepository;
   readonly flags: FlagReader;
   readonly audit: AuditWriter;
   readonly createPatientUser: AdminCreatePatientPort;
@@ -320,10 +328,40 @@ export function createPatientAdminHandler(
             },
             actor,
           );
+          // 2026-09-01: the assessment form, instantiated from the
+          // template at the moment the account is created.
+          //
+          // **Deliberately not fatal, and deliberately not silent.** The
+          // account is the artifact this endpoint exists to produce, and
+          // it is already fully written by this line — Cognito user,
+          // password set, `PAT#` record. Throwing here would abandon a
+          // usable account for a recoverable reason, and the retry would
+          // not be clean: the orphan guard above would see both the
+          // Cognito user *and* a record and answer 409 forever.
+          //
+          // Recoverable, because a form is not lost by being late. It is
+          // instantiated idempotently, and `assessment.ts`'s own write
+          // path instantiates one lazily for any patient that reaches it
+          // without — which is the same path that already covers every
+          // patient created before this feature existed. Until then `GET`
+          // reports `currentVersion: 0` and the form renders empty, which
+          // is what a fresh form looks like anyway.
+          //
+          // So the outcome is reported instead of swallowed: the caller
+          // is told whether the form was written, rather than having to
+          // infer it from a later screen.
+          let assessmentFormCreated = true;
+          try {
+            await deps.assessments.instantiate(subjectId, DEFAULT_ASSESSMENT_ID, actor, {
+              ...(patient.tag ? { tag: patient.tag } : {}),
+            });
+          } catch {
+            assessmentFormCreated = false;
+          }
           // Returned once, in this response only — never logged, never
           // persisted anywhere this codebase controls. Staff relay it over
           // WhatsApp and it is gone from here.
-          return respond(201, { item: patient, password });
+          return respond(201, { item: patient, password, assessmentFormCreated });
         }
         case 'POST /patients/{id}/reset-password': {
           if (!can(principal, 'reset-password', PATIENT_PROFILE_RESOURCE).allowed) {

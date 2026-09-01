@@ -67,14 +67,21 @@ export interface CaseloadStore {
   /** How many patients exist, and how many of those are active — the dashboard's own header figures. */
   count(): Promise<CaseloadCounts>;
   /**
-   * How many of this patient's appointments actually happened —
-   * `appointment_status === 'completed'`, never scheduled, cancelled or
-   * no-show. One bounded Query on the patient's own partition. Called
-   * only for a `visitor`, whose whole view this is; nobody else's page
-   * shows the number, and computing it for everyone would be a query per
-   * patient per dashboard load to render nothing.
+   * How many appointments this patient has, all told — the shared
+   * `countsTowardTotal` rule (`@ndn/shared-types`), which is `scheduled`,
+   * `completed` and `no-show` and never `cancelled` or
+   * `pending-approval`. One bounded Query on the patient's own partition.
+   *
+   * Called only for a `visitor`, whose whole view this is; nobody else's
+   * page shows the number, and computing it for everyone would be a query
+   * per patient per dashboard load to render nothing.
+   *
+   * **2026-09-01: was `countCompletedAppointments`.** The owner asked for
+   * "total number of appointments", and the rule now lives in
+   * shared-types so this figure and the assessment form's calendar
+   * section cannot drift — a visitor sees both, for the same patient.
    */
-  countCompletedAppointments(patientId: string): Promise<number>;
+  countAppointments(patientId: string): Promise<number>;
 }
 
 export interface CaseloadEntry {
@@ -85,7 +92,8 @@ export interface CaseloadEntry {
   readonly tag?: PatientTag;
   /** Present for a `visitor` only: their whole view is name, address and a count. */
   readonly address?: string;
-  readonly completedAppointments?: number;
+  /** 2026-09-01: every appointment that stands, not only the ones that happened — see `CaseloadStore.countAppointments`. */
+  readonly totalAppointments?: number;
   /**
    * Absent for a patient nobody is responsible for yet — a freshly
    * registered `pending` account, or a `declined` one. Before 2026-08-31
@@ -190,13 +198,15 @@ export class CaseloadRepository {
         // clinical field, no status, and no clinician — the fields simply
         // never leave this method. `Appointments: R (count only)` in the
         // doc is this line: a number, never a time and never a record.
+        // (The visitor's *next appointment* is on the assessment form's
+        // calendar section, not here — this list is one row per patient.)
         items.push({
           patientId,
           fullName: projected.personal?.fullName ?? '',
           accountStatus: patient.account_status,
           ...(patient.tag ? { tag: patient.tag } : {}),
           ...(projected.personal?.address ? { address: projected.personal.address } : {}),
-          completedAppointments: await this.store.countCompletedAppointments(patientId),
+          totalAppointments: await this.store.countAppointments(patientId),
         });
         continue;
       }

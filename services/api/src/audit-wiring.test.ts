@@ -49,16 +49,27 @@ describe('audit wiring', () => {
   // audit event — 4.2.1's join decision is the one place a call-related
   // access decision is recorded, and relaying an already-authorised
   // message is not a second one.
-  const CONNECTION_REPOSITORY_HANDLERS = [
+  //
+  // 2026-09-01 adds a fourth, and it is the same *kind* of exemption
+  // rather than a new kind: `PatientNotificationRepository` takes no
+  // `AuditWriter` parameter at all, so its handler has none to hand it.
+  // The reasoning is in that file's own header — a notification is a
+  // system-generated echo of an action the repository that performed it
+  // has already audited, so auditing the echo would double the log's
+  // volume with rows naming the same actor, instant and patient as the row
+  // above them. Named here rather than caught by relaxing the regex, so
+  // the next entity that drops audit wiring by *omission* still fails.
+  const HANDLERS_WITH_NO_AUDIT_WRITER = [
     'ws-connect-handler.ts',
     'ws-disconnect-handler.ts',
     'ws-relay-handler.ts',
+    'patient-notification-handler.ts',
   ];
 
   it('every handler that constructs a repository hands it the durable writer', () => {
     const offenders = productionSources()
       .filter(({ name }) => name.endsWith('-handler.ts'))
-      .filter(({ name }) => !CONNECTION_REPOSITORY_HANDLERS.includes(name))
+      .filter(({ name }) => !HANDLERS_WITH_NO_AUDIT_WRITER.includes(name))
       .filter(({ source }) => /new \w*Repository\(/.test(source))
       .filter(({ source }) => !source.includes('new DynamoAuditLog('))
       .map(({ name }) => name);
@@ -69,7 +80,7 @@ describe('audit wiring', () => {
   it('finds the handlers it is meant to be checking (the filter above is not vacuous)', () => {
     const checked = productionSources()
       .filter(({ name }) => name.endsWith('-handler.ts'))
-      .filter(({ name }) => !CONNECTION_REPOSITORY_HANDLERS.includes(name))
+      .filter(({ name }) => !HANDLERS_WITH_NO_AUDIT_WRITER.includes(name))
       .filter(({ source }) => /new \w*Repository\(/.test(source))
       .map(({ name }) => name);
 

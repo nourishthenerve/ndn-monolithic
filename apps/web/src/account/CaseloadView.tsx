@@ -59,7 +59,8 @@ export interface CaseloadEntry {
   readonly assignedClinicianName?: string;
   /** Sent to a `visitor` only — their whole view is name, address and a count. */
   readonly address?: string;
-  readonly completedAppointments?: number;
+  /** 2026-09-01: every appointment that stands, not only the ones attended — see `caseload-repository.ts`'s own note. */
+  readonly totalAppointments?: number;
 }
 
 export interface CaseloadCounts {
@@ -525,7 +526,7 @@ export function CaseloadView({
                 {isVisitor ? (
                   <>
                     <td>{item.address ?? ''}</td>
-                    <td>{item.completedAppointments ?? 0}</td>
+                    <td>{item.totalAppointments ?? 0}</td>
                   </>
                 ) : (
                   <>

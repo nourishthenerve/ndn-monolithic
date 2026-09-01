@@ -20,9 +20,13 @@ const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string
   'Patient profile':          { 'Patient (own)': 'R U (self)',     'Patient (other)': '—', 'Sub-clinician (assigned)': 'R U',              'Sub-clinician (unassigned)': '—',   Helpdesk: 'C R U P',   Visitor: '**R (IIC-tagged only)**',   Principal: 'C R U P' },
   'Patient assignment':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '—',   Visitor: '—',   Principal: 'C R U' },
   'Diagnosis / care plan':    { 'Patient (own)': '**R**',          'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: '**—**',   Visitor: '**—**',   Principal: 'C R U' },
-  'Assessment — `visible{}`': { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: '**—**',   Visitor: '**—**',   Principal: 'C R U' },
+  'Assessment — `general{}`': { 'Patient (own)': '**R U**',        'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: '**C R U**',   Visitor: '**R (IIC-tagged only)**',   Principal: 'C R U' },
+  'Assessment — `patient{}`': { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: '**C R U**',   Visitor: '**—**',   Principal: 'C R U' },
   'Assessment — `private{}`': { 'Patient (own)': '**—**',          'Patient (other)': '**—**', 'Sub-clinician (assigned)': 'C R U',        'Sub-clinician (unassigned)': '**—**', Helpdesk: '**—**',   Visitor: '**—**',   Principal: 'C R U' },
+  'Assessment — `calendar{}`':{ 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: '**R**',   Visitor: '**R (IIC-tagged only)**',   Principal: 'C R U' },
   Appointments:               { 'Patient (own)': 'R J',            'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U J',          'Sub-clinician (unassigned)': '—',   Helpdesk: 'R',   Visitor: '**R (count only)**',   Principal: 'C R U J' },
+  'Appointment approval':     { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '—',   Visitor: '—',   Principal: '**U**' },
+  'Patient notifications':    { 'Patient (own)': '**R U (own)**',  'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '—',   Visitor: '—',   Principal: '—' },
   'Content assignment':       { 'Patient (own)': 'R',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': '—',   Helpdesk: 'C R U',   Visitor: '—',   Principal: 'C R U' },
   Messages:                   { 'Patient (own)': 'C R (own thread)', 'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R (own patients)', 'Sub-clinician (unassigned)': '—', Helpdesk: '**—**',   Visitor: '**—**',   Principal: 'C R' },
   'Clinician accounts':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '**—**',   Visitor: '—',   Principal: 'C R U (deactivate only)' },
@@ -82,9 +86,13 @@ const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   'Patient profile': 'patient-profile',
   'Patient assignment': 'patient-assignment',
   'Diagnosis / care plan': 'diagnosis',
-  'Assessment — `visible{}`': 'assessment',
+  'Assessment — `general{}`': 'assessment',
+  'Assessment — `patient{}`': 'assessment',
   'Assessment — `private{}`': 'assessment',
+  'Assessment — `calendar{}`': 'assessment',
   Appointments: 'appointment',
+  'Appointment approval': 'appointment-approval',
+  'Patient notifications': 'patient-notification',
   'Content assignment': 'content-assignment',
   Messages: 'message',
   'Clinician accounts': 'clinician-account',
@@ -95,8 +103,10 @@ const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
 };
 
 const ROW_FIELD_SETS: Partial<Readonly<Record<MatrixRow, FieldSet>>> = {
-  'Assessment — `visible{}`': 'visible',
+  'Assessment — `general{}`': 'general',
+  'Assessment — `patient{}`': 'patient',
   'Assessment — `private{}`': 'private',
+  'Assessment — `calendar{}`': 'calendar',
 };
 
 const PATIENT: Principal = {

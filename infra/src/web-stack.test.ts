@@ -1082,8 +1082,10 @@ describe('WebStack — feature-flag reads', () => {
     );
     // media-upload, TASK 2.2.4's auth-token function (whose flag is
     // `auth.webSignIn.enabled`, the outermost gate on all four `/auth/*`
-    // routes), and the Stripe webhook function.
-    expect(withPrefix).toHaveLength(3);
+    // routes), the Stripe webhook function, and — since 2026-09-01 — the
+    // assessment-attachment upload/download function, which lives here for
+    // the same reason media-upload does (the bucket is in this stack).
+    expect(withPrefix).toHaveLength(4);
 
     const grants = Object.values(template.findResources('AWS::IAM::Policy'))
       .flatMap(
@@ -1096,7 +1098,7 @@ describe('WebStack — feature-flag reads', () => {
       )
       .filter((s) => s.Sid === 'ReadFeatureFlags');
 
-    expect(grants).toHaveLength(3);
+    expect(grants).toHaveLength(4);
     for (const grant of grants) {
       expect(grant.Action).toBe('ssm:GetParameter');
       expect(JSON.stringify(grant.Resource)).toContain('parameter/ndn/flags/*');
@@ -1248,12 +1250,21 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
     ]);
   });
 
-  it('puts exactly the media-upload route (2.5.4) behind the real authorizer', () => {
+  it('puts the media-upload (2.5.4) and assessment-attachment routes behind the real authorizer', () => {
     // TASK 2.5.4 is this API's first route to rely on `defaultAuthorizer`
     // rather than opting out — CDK materialises the authorizer resource
     // only once a route actually binds it, same lazy-binding note
     // data-stack.test.ts's own equivalent test states.
-    expect(routeKeys(synthWithTable(), 'CUSTOM')).toEqual(['POST /workshops/media-upload-url']);
+    //
+    // 2026-09-01 adds the two attachment routes. Both are `POST`,
+    // download included: an object key names a patient and a section, and
+    // a key in a URL is a key in every access log between here and the
+    // browser.
+    expect(routeKeys(synthWithTable(), 'CUSTOM').sort()).toEqual([
+      'POST /patients/{id}/assessments/{assessmentId}/attachment-download-url',
+      'POST /patients/{id}/assessments/{assessmentId}/attachment-upload-url',
+      'POST /workshops/media-upload-url',
+    ]);
     synthWithTable().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
   });
 

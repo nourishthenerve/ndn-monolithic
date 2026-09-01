@@ -92,3 +92,49 @@ Every object literal still passes through `projectFor` before `respond()`, for t
 
 - **The account-page assessment history.** The task's own Files line names `apps/web/src/pages/[locale]/account/patient.astro`, but extending it honestly requires knowing *which* `assessmentId`(s) a given patient has — and no task through 3.3.2 builds a "list my assessment forms" endpoint or catalogue for the frontend to discover that from. `PatientProfile.tsx`/`ClinicalRecordTimeline.tsx` (TASK 3.1.1/3.2.2) both had an unambiguous `/patients/me` or `/patients/me/{kind}` target to fetch; this route has no equivalent without a known `assessmentId` in hand. Building a component that takes an `assessmentId` prop with nothing in `patient.astro` to supply one would be speculative, untestable-by-construction UI — worse than not building it. Left as an honestly-named gap rather than forced into the Files line's letter at the expense of its own intent; closed whenever a form-catalogue task exists to drive it.
 - **pr-env axe + keyboard verification.** Moot without the page extension above — the same honestly-named gap as every prior authenticated page in this codebase, restated once its actual UI exists.
+
+## Amendment, 2026-09-01 — four sections, four sets of writers
+
+The owner specified the form in full: *"this assessment form will have three sections. 1. General info 2. Specific to the patient 3. Specific to the clinician. The patient will be able to edit his general info only. The helpdesk can only edit specific to the patient section as well as general section. The clinician/principal clinican can edit all the sections."* Then, separately: *"Therefore I think we need one more section along with 1. General info, 2. Specific to the patient, 3. Specific to the clinician for calender."*
+
+### Why `visible{}` had to go, and why `private{}` stayed
+
+The old record was `visible{}` + `private{}` — one boundary. The owner has drawn three, and no arrangement of two rows expresses them, because helpdesk's reach is not a prefix of anyone else's: wider than the patient's on `patient{}`, narrower than the clinician's on `private{}`. So the record now has **one property per section, named exactly as `FieldSet` names it**, and `authz-matrix.ts` has four assessment rows instead of two.
+
+`private{}` keeps its name even though the owner calls it "specific to the clinician". The label lives in `assessment-template.ts`; the *attribute* stays `private` because `projection.ts`'s `stripPrivate`, `containsPrivateField` and `redactPrivateText` all key off that literal name, and those three are R-09's runtime boundary — the thing keeping a clinical note out of a log line and out of an error message. Renaming the attribute to match the phrasing would have unhooked all of it silently, and nothing would have failed until something leaked.
+
+### The carry-forward, which is the whole design
+
+A write is a **section-scoped patch**: the caller names only the sections they are changing, and `AssessmentRepository.applySectionPatch` reads the previous version server-side and lays the patch over it. Every unnamed section is carried forward byte-for-byte.
+
+This is not a convenience. The obvious alternative — "POST the new version you want" — cannot be made safe for a four-writer record: a patient editing their general info would have to send back the clinician's section, which they cannot read and therefore cannot send. Every such API ends up either denying the patient the edit or letting a client round-trip a section it never saw. Here a section a caller cannot read is a section they cannot name, cannot resend, and cannot destroy by omitting.
+
+`can()` is asked **once per section named**, and the write is atomic: any denied section refuses the whole patch, so a patch is never half-applied.
+
+### Concurrency
+
+`baseVersion` is the version the caller read; the server writes `baseVersion + 1` and the store's `attribute_not_exists` refuses a collision. Two staff editing the same form both compute the same next version and the second gets a `409`, rather than silently discarding the first one's section. `baseVersion: 0` means "I saw no form", and is the only value that may instantiate one — used by the lazy path for patients created before this feature existed.
+
+### Two narrowings that are not in the matrix
+
+Both are enforced in `assessment.ts` and named in `docs/plan/04-data-model-rbac.md`, because the matrix has no vocabulary for either:
+
+- **A visitor sees `IIC`-tagged patients only.** `can()` answers "may a visitor read a general section at all"; only the patient record answers "is this one theirs to see". The check is here *as well as* in `caseload-repository.ts` because they are two different reads — a visitor stopped only at the list would still reach a record by guessing an id. A non-matching patient gets the same `404` a nonexistent one does; a `403` would confirm the patient exists.
+- **A visitor's calendar section is two derived figures**, `VISITOR_CALENDAR_FIELDS`: the total number of appointments and the next one. Not the stored `schedulingNotes`, not `sessionsCompleted`, not `appointmentsAwaitingApproval`, and not the section's attachments. The template is filtered to match, so the form never renders a label for a value that will not arrive. See `docs/plan/04-data-model-rbac.md`'s second amendment of the same date for why this is a narrowing of the first cut rather than only an addition.
+- **A patient may not write the `tag` field** even though they may write the section it lives in. The tag is the entire mechanism bounding a visitor's reach, so the subject of the record must not choose it. Marked `staffOnly` on the template so the form and the API read the rule from one declaration, and written through to `Patient.tag` — which stays the authority — when staff change it.
+
+### The calendar section is derived
+
+"Next appointment", "sessions so far" and "awaiting approval" are facts about `APPT#` rows. They are computed on every read and returned as a separate `calendarSummary`, never merged into a version's stored responses. Two copies would be two answers the first time a write half-succeeded, and the `APPT#` rows are already what the approval workflow, the clinician calendar and the join-call window read. The only writable field in the section is a free-text scheduling note. Keeping the summary out of `items[]` also means the form has nothing derived to accidentally POST back — and a write naming a derived field is a `400`, not a silent drop.
+
+### Attachments
+
+`POST …/attachment-upload-url` mints a presigned `PutObject` URL; the browser `PUT`s the bytes straight to S3; a section patch then records the key. **The three steps are three separate authorisations**, and the key is what ties them together: it is built entirely from server-held values (the authorised patient id, the form id, the authorised section) plus a uuid, and `assessment.ts` refuses to record any key outside that prefix. A leaked upload URL therefore cannot land an object anywhere the record will acknowledge.
+
+`POST …/attachment-download-url` is the read half, and it is **the only way an assessment attachment is ever served**. The `/media/*` CloudFront behaviour hands the media bucket to anyone with the path — right for a workshop poster, indefensible for a clinical recording — and does not reach the `assessments/` prefix. Downloading needs `read` on the section where uploading needs `update`, which is what lets a patient open a scan a clinician attached to their general info without being able to add one to the clinician's section. It is a `POST`, not a `GET`, because an object key names a patient and a section, and a key in a URL is a key in every access log between here and the browser.
+
+**One bug found while writing the tests, worth recording because both halves of it were individually correct.** The filename sanitiser kept `.`, so a file genuinely named `../notes.pdf` sanitised to `..-notes.pdf` — still containing the `..` that the record-side key check refuses. The upload would have been authorised and the attachment could never have appeared on the record, for a reason nothing would explain. The sanitiser now collapses runs of dots, so every key it mints is one the record will accept.
+
+### Instantiation
+
+`POST /patients` instantiates version 1 from the template immediately after writing the patient record — "the form is loaded from the template the moment his account is being created". It is idempotent, and **a failure does not fail the account**: the account is already fully written by that point, throwing would abandon a usable one for a recoverable reason, and the retry would not be clean (the orphan guard would see both a Cognito user and a record and answer `409` forever). The outcome is reported as `assessmentFormCreated` rather than swallowed, and `assessment.ts`'s own write path instantiates lazily for any patient that reaches it without one — which is also how every patient created before this feature gets a form.

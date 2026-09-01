@@ -239,6 +239,40 @@ describe('appointment state — checked only once authorisation has passed', () 
     expect(result).toEqual({ type: 'join-denied', reason: 'cancelled' });
   });
 
+  // 2026-09-01: the approval step. A booking waiting on the principal is
+  // denied for its own reason, not as a cancellation — the boundary is the
+  // same either way, the sentence the person reads is not, and telling a
+  // clinician their own pending booking was cancelled would send them
+  // hunting for a cancellation nobody made.
+  it('a pending-approval appointment is denied as not-confirmed, not as cancelled', async () => {
+    const { join } = build({
+      appointments: [appointment({ appointment_status: 'pending-approval' })],
+    });
+    const result = await join({
+      connectionId: 'conn-1',
+      connection: PATIENT_CONNECTION,
+      appointmentId: APPOINTMENT_ID,
+      origin: ORIGIN,
+    });
+    expect(result).toEqual({ type: 'join-denied', reason: 'not-confirmed' });
+  });
+
+  it('a pending-approval appointment is denied even inside its own join window', async () => {
+    // The window check runs *after* the status check, so an appointment
+    // whose time has come but whose approval has not is still refused.
+    const { join } = build({
+      appointments: [appointment({ appointment_status: 'pending-approval' })],
+      now: SCHEDULED_AT,
+    });
+    const result = await join({
+      connectionId: 'conn-1',
+      connection: PATIENT_CONNECTION,
+      appointmentId: APPOINTMENT_ID,
+      origin: ORIGIN,
+    });
+    expect(result).toEqual({ type: 'join-denied', reason: 'not-confirmed' });
+  });
+
   it(`${JOIN_WINDOW_OPENS_BEFORE_MINUTES + 1} minutes early is too-early`, async () => {
     const early = new Date(
       new Date(SCHEDULED_AT).getTime() - (JOIN_WINDOW_OPENS_BEFORE_MINUTES + 1) * 60_000,

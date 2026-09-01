@@ -968,6 +968,14 @@ export class DataStack extends Stack {
     // existence check on reset) and `PutItem` (a new `PAT#` profile) on
     // the same `PAT#*` partition — the identical grant `PatientFunction`'s
     // own `ReadWritePatientProfile` statement already carries.
+    //
+    // 2026-09-01: unchanged, and it already covers the `ASSESS#…#v1` row
+    // this function now writes at account creation ("the form is loaded
+    // from the template the moment his account is being created"). Both
+    // rows are on the same `PAT#<sub>` partition, and `LeadingKeys` is a
+    // partition-key condition — IAM cannot express a sort-key one, which
+    // is the same granularity limit every patient-scoped function in this
+    // stack already accepts and names.
     patientAdminRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'ReadWritePatientProfile',
@@ -1636,11 +1644,21 @@ export class DataStack extends Stack {
     // — the identical `ReadPatientAndWrite*` shape `ClinicalRecordFunction`
     // already carries, and the identical partition-key-only granularity
     // limit its own comment names.
+    //
+    // **2026-09-01 adds `Query`**, and only for the calendar section: its
+    // "next appointment", "sessions so far" and "awaiting approval"
+    // figures are derived from this patient's own `APPT#` rows on every
+    // read rather than stored, so this function reads them. It writes no
+    // appointment — booking stays on `AppointmentFunction`, and the
+    // `PutItem` here is bounded to the `ASSESS#`/`NOTIF#` sort keys this
+    // function actually writes by the code, not by IAM, which cannot
+    // express a sort-key condition. That limit is the same one every
+    // patient-scoped function in this stack already accepts.
     assessmentRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'ReadPatientAndWriteAssessments',
         effect: Effect.ALLOW,
-        actions: ['dynamodb:GetItem', 'dynamodb:PutItem'],
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'],
         resources: [this.table.tableArn],
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
       }),
@@ -1769,6 +1787,104 @@ export class DataStack extends Stack {
       path: '/patients/{id}/appointments/{apptId}/cancel',
       methods: [HttpMethod.POST],
       integration: appointmentIntegration,
+    });
+    // 2026-09-01: "any new appointment booked by the clinician needs to be
+    // approved by the principal clinician." Two more segments on the same
+    // integration — the authorisation that makes them principal-only is
+    // `authz-matrix.ts`'s own `Appointment approval` row, not anything at
+    // this layer.
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments/{apptId}/approve',
+      methods: [HttpMethod.POST],
+      integration: appointmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments/{apptId}/decline',
+      methods: [HttpMethod.POST],
+      integration: appointmentIntegration,
+    });
+    // 2026-09-01: marking attendance. TASK 3.4.2 named these two
+    // transitions as the reason `appointment_status` has four states and
+    // built no route for either; the calendar section's "sessions so far"
+    // and the visitor's "number of appointments happened" both count
+    // `'completed'`, so without these they would read zero forever.
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments/{apptId}/complete',
+      methods: [HttpMethod.POST],
+      integration: appointmentIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/{id}/appointments/{apptId}/no-show',
+      methods: [HttpMethod.POST],
+      integration: appointmentIntegration,
+    });
+
+    // 2026-09-01: the patient's in-app dashboard feed — "When a
+    // clinician/principal clinician edits a calender for a given patient it
+    // will appear as a notification on patients logged in dashboard."
+    //
+    // Its own function and role, and the only one in this stack with **no**
+    // `AUDIT#*` write statement: the repository behind it takes no
+    // `AuditWriter` at all, because every event that produces a notice is
+    // already audited by the repository that performed it. A role granted
+    // audit writes it never uses would be a standing capability with no
+    // caller, which is exactly what these per-function roles exist to avoid.
+    const patientNotificationRole = new Role(this, 'PatientNotificationFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const patientNotificationFunction = new NodejsFunction(this, 'PatientNotificationFunction', {
+      entry: `${moduleDir}../../services/api/src/patient-notification-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(10),
+      role: patientNotificationRole,
+      environment: {
+        PRINCIPAL_TABLE_NAME: this.table.tableName,
+        ...FLAG_ENVIRONMENT,
+      },
+      logGroup: createLogGroup(
+        this,
+        'PatientNotificationFunctionLogGroup',
+        props.prLabel
+          ? `/ndn/${props.prLabel}/patient-notification-function`
+          : '/ndn/patient-notification-function',
+        patientNotificationRole,
+      ),
+    });
+    grantFlagReads(this, patientNotificationRole);
+
+    // `Query` (the feed) and `UpdateItem` (mark one read) on `PAT#*`. No
+    // `PutItem`: this function has no route that creates a notice, and the
+    // matrix grants `create` on this row to nobody — the two agree, and the
+    // IAM is what makes the second one true even if the first were edited.
+    patientNotificationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadAndMarkReadPatientNotifications',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query', 'dynamodb:UpdateItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PAT#*'] } },
+      }),
+    );
+    attachDestructiveActionGuardrail(patientNotificationRole, { buckets: [], tables: [this.table] });
+    attachAuditPartitionReadGuardrail(patientNotificationRole, this.table);
+
+    const patientNotificationIntegration = new HttpLambdaIntegration(
+      'PatientNotificationIntegration',
+      patientNotificationFunction,
+    );
+    httpApi.addRoutes({
+      path: '/patients/me/notifications',
+      methods: [HttpMethod.GET],
+      integration: patientNotificationIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/patients/me/notifications/{notificationId}/read',
+      methods: [HttpMethod.POST],
+      integration: patientNotificationIntegration,
     });
 
     // TASK 3.4.3 built the 1-hour reminder sweep here — its own Lambda,
