@@ -149,6 +149,21 @@ export class CaseloadRepository {
     // read a patient profile"; only the record itself can answer "is this
     // one theirs to see", because the answer is a field on it.
     const isVisitor = principal.role === 'visitor';
+    // 2026-09-01: the second such narrowing, and the same shape. A
+    // sub-clinician may now reach this view at all (`caseload.ts` names
+    // their own id on the resource), and the original spec's own sentence
+    // is what bounds it: "will only be able to see those patients that
+    // have been assigned to him."
+    //
+    // Deliberately *not* done by querying GSI1 (clinician→patients)
+    // instead of GSI3. GSI1 would be the cheaper read, but this view's
+    // ordering, its paging cursor and its counts are all GSI3's, and
+    // maintaining a second paginated path for one role would be two
+    // implementations of "the dashboard" that could disagree about what a
+    // page even is. Filtering here keeps one view with one order, and
+    // matches how the visitor's own narrowing already works.
+    const assignedOnlyTo =
+      principal.role === 'sub-clinician' ? principal.clinicianId : undefined;
 
     // Per-page cache: several patients on one page routinely share a
     // clinician (GSI3 sorts by clinician within a status rank for exactly
@@ -174,6 +189,13 @@ export class CaseloadRepository {
       // is not `IIC`, so it is skipped too — absence is never read as
       // membership.
       if (isVisitor && patient.tag !== VISITOR_TAG) {
+        continue;
+      }
+      // Skipped for the same reason and in the same way: a clinician sees
+      // their own patients, and learns nothing about anyone else's — not
+      // even that they exist. An unassigned patient is skipped too, since
+      // `undefined` is nobody's id.
+      if (assignedOnlyTo !== undefined && patient.assigned_clinician_id !== assignedOnlyTo) {
         continue;
       }
       const projected = projectFor(principal, patient, {
@@ -223,7 +245,17 @@ export class CaseloadRepository {
     }
 
     // First page only — see `CaseloadPage.counts`.
-    const counts = cursor === undefined ? await this.store.count() : undefined;
+    //
+    // **Withheld from a filtered viewer**, 2026-09-01. `store.count()`
+    // answers "how many patients exist", which is true of the practice and
+    // not of the rows this caller was shown — a clinician with three
+    // patients would otherwise read "48 patients, 3 active" above a table
+    // of three. For a visitor it would additionally disclose the size of a
+    // directory they are only allowed to see one programme of. Omitted
+    // rather than recomputed: a per-caller count is a scan of the whole
+    // index, which is exactly what this view exists not to do.
+    const filtered = isVisitor || assignedOnlyTo !== undefined;
+    const counts = cursor === undefined && !filtered ? await this.store.count() : undefined;
 
     return { items, nextCursor, ...(counts ? { counts } : {}) };
   }

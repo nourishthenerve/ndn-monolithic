@@ -38,7 +38,7 @@ import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws
 import { Alias, Architecture, Runtime, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
-import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3';
+import { BlockPublicAccess, Bucket, HttpMethods } from 'aws-cdk-lib/aws-s3';
 import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import type { Construct } from 'constructs';
 
@@ -189,6 +189,41 @@ export class WebStack extends Stack {
       // Same TASK 5.2.1 correction as `siteBucket` above, same reasoning.
       removalPolicy: props.ephemeral ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
       autoDeleteObjects: props.ephemeral,
+      // **2026-09-01: the bucket had no CORS rule at all, so every
+      // browser-side upload this codebase has ever offered was dead.**
+      //
+      // A presigned `PutObject` URL points at S3's own hostname, so the
+      // browser's `PUT` is cross-origin and preflighted. With no rule, S3
+      // answers the `OPTIONS` without the allow headers and the browser
+      // refuses to send the real request — the fetch rejects, and the page
+      // can only say "that file could not be uploaded", which is exactly
+      // what the owner saw. Nothing reaches S3, so nothing appears in any
+      // log: the identical silent shape as the API's own two CORS defects
+      // (`allowOrigins` naming only `next.`, then `PATCH` missing from
+      // `allowMethods`), and found the same way — by asking why a request
+      // had left no trace anywhere.
+      //
+      // It went unnoticed because the only prior consumer was TASK 1.5.1's
+      // workshop-poster upload, which the handler tests and `curl` both
+      // exercise without preflighting. The assessment attachments added
+      // 2026-09-01 are the first feature anyone actually used from a
+      // browser.
+      //
+      // Scoped deliberately: the three origins the API's own
+      // `corsPreflight` already names, `PUT` alone (`GET` is not here —
+      // an attachment is fetched through a presigned URL the browser
+      // navigates to, not through XHR, and a poster is served by
+      // CloudFront from the same origin), and `ETag` exposed because that
+      // is the one response header an uploader has any use for.
+      cors: [
+        {
+          allowedOrigins: [SITE_ORIGIN, `https://${WWW_DOMAIN_NAME}`, `https://${DOMAIN_NAME}`],
+          allowedMethods: [HttpMethods.PUT],
+          allowedHeaders: ['content-type'],
+          exposedHeaders: ['ETag'],
+          maxAge: 3000,
+        },
+      ],
     });
     this.mediaBucket = mediaBucket;
 

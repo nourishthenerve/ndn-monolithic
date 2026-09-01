@@ -20,7 +20,6 @@ import { createSampledLogger, type RequestLogger } from './logger.js';
 import { requirePrincipal } from './request-principal.js';
 
 const CASELOAD_FLAG = 'caseload.view.enabled';
-const CASELOAD_RESOURCE = { entityType: 'patient-profile' } as const;
 
 /** DynamoDB's own Query `Limit`, bounded — step 5's "never accumulate a caseload in memory" starts with never asking for an unbounded page. */
 const DEFAULT_PAGE_SIZE = 25;
@@ -82,14 +81,40 @@ export function createCaseloadHandler(
       return respond(401, { error: 'UNAUTHORIZED' });
     }
 
-    // Checked before the query string is even parsed — a caller the
-    // matrix denies must not be able to tell a well-formed request from a
+    // **`assignedClinicianId` is the caller's own id, always.** 2026-09-01:
+    // the owner, on finding a treating clinician had no dashboard at all —
+    // *"clinican doesn't have view to the patient dashboard"*, against the
+    // original spec's *"clinician … will have access to the dashboard but
+    // will only be able to see those patients that have been assigned to
+    // him."*
+    //
+    // Before this, the resource named no clinician, so a sub-clinician
+    // resolved to the `'Sub-clinician (unassigned)'` column and was refused
+    // outright. Naming their own id is the same "self-assigned resource"
+    // trick `GET /clinicians/me/calendar` already uses: a sub-clinician
+    // lands on `'Sub-clinician (assigned)'` and is granted, a principal
+    // lands on `'Principal'` regardless, helpdesk and visitor resolve by
+    // role, and a patient still lands on `'Patient (other)'` and is denied.
+    //
+    // It widens *who may call*, never *what comes back*: which patients a
+    // sub-clinician actually sees is `caseload-repository.ts`'s own filter,
+    // the same layer the visitor's `IIC` narrowing lives in and for the
+    // same reason — the matrix has no vocabulary for "rows where a field
+    // equals a value".
+    //
+    // "Cannot reach another clinician's caseload by any parameter" holds
+    // exactly as before, and now matters more: the id comes from the
+    // verified principal, and this route still has no parameter that names
+    // a clinician — only `cursor`/`limit`.
+    //
+    // Checked before the query string is even parsed — a caller the matrix
+    // denies must not be able to tell a well-formed request from a
     // malformed one by the shape of the refusal (audit-read.ts's own rule).
-    // No clinician-id parameter exists for a sub-clinician to try passing
-    // in the first place: this route has none to scope by, only
-    // `cursor`/`limit` — "cannot reach another clinician's caseload by any
-    // parameter" holds because there is no parameter that names one.
-    if (!can(principal, 'read', CASELOAD_RESOURCE).allowed) {
+    const caseloadResource = {
+      entityType: 'patient-profile',
+      assignedClinicianId: principal.clinicianId,
+    } as const;
+    if (!can(principal, 'read', caseloadResource).allowed) {
       return respond(403, { error: 'FORBIDDEN' });
     }
 

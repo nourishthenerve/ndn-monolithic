@@ -57,6 +57,7 @@ type CreateStatus =
   | 'submitting'
   | 'success'
   | 'conflict'
+  | 'principalExists'
   | 'invalid'
   | 'weakPassword'
   | 'forbidden'
@@ -105,6 +106,8 @@ export interface ClinicianAdminPanelStrings {
   readonly otpauthUriLabel: string;
   readonly clinicianIdLabel: string;
   readonly createConflictError: string;
+  /** 2026-09-01: the singleton-principal refusal, which is not an email clash. */
+  readonly createPrincipalExistsError: string;
   readonly createValidationError: string;
   readonly createWeakPasswordError: string;
   readonly createError: string;
@@ -261,7 +264,16 @@ export function ClinicianAdminPanel({
         return;
       }
       if (response.status === 409) {
-        setStatus('conflict');
+        // 2026-09-01: three different conflicts share this status, and
+        // until now they shared one message too — "an account with this
+        // email address already exists" — which was simply false for two
+        // of them. The owner hit the worst case: adding a second
+        // principal, told their address was taken when it was not, with
+        // the real reason (there can only be one principal clinician)
+        // never shown. Read the code, the same way the 400 branch below
+        // already tells a malformed form from a refused password.
+        const body = (await response.json().catch(() => ({}))) as { error?: string };
+        setStatus(body.error === 'PRINCIPAL_ALREADY_EXISTS' ? 'principalExists' : 'conflict');
         return;
       }
       if (response.status === 400) {
@@ -409,6 +421,9 @@ export function ClinicianAdminPanel({
           <p id="create-clinician-password-hint">{strings.passwordFieldHint}</p>
           {status === 'forbidden' && <p role="alert">{strings.forbidden}</p>}
           {status === 'conflict' && <p role="alert">{strings.createConflictError}</p>}
+          {status === 'principalExists' && (
+            <p role="alert">{strings.createPrincipalExistsError}</p>
+          )}
           {status === 'invalid' && <p role="alert">{strings.createValidationError}</p>}
           {status === 'weakPassword' && <p role="alert">{strings.createWeakPasswordError}</p>}
           {status === 'error' && <p role="alert">{strings.createError}</p>}

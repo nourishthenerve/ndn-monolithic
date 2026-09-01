@@ -81,7 +81,9 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   { segment: 'patient', ownerRole: 'patient' },
   // TASK 2.5.3: the principal clinician's cross-caseload view.
   { segment: 'caseload', ownerRole: 'clinician' },
-  // 2026-08-31: staff looking at one named patient (`?id=`). Registered
+  // 2026-08-31: staff looking at one named patient (`?id=`) — and, since
+  // 2026-09-01, where that patient's assessment form lives, for every
+  // staff role that may reach one. Registered
   // with no id, so the scan sees its "no patient was chosen" state — a
   // real, legible state, and the only one a fixed path can reach. The
   // same limitation `call` below already carries for `?appointmentId=`.
@@ -97,14 +99,6 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   { segment: 'clinician-admin', ownerRole: 'clinician' },
   // 2026-08-31: blog and workshop authoring, principal-only.
   { segment: 'authoring', ownerRole: 'clinician' },
-  // 2026-09-01: the four-section assessment form. `either`, and it is the
-  // only route here that genuinely is: a patient lands on their own form,
-  // staff arrive with `?id=`, and the *server* decides which sections come
-  // back for each. Registered with no id, so the scan sees its "choose a
-  // patient" state for a clinician identity and a real form for a patient
-  // one — the same fixed-path limitation `patient-record` and `call` above
-  // already carry.
-  { segment: 'assessment', ownerRole: 'either' },
   // D-34: any signed-in clinician's own self-service password change —
   // clinician-only, not principal-only (services/api/src/clinician-admin.ts's
   // own role check, not the `can()` matrix — see that file's own header).

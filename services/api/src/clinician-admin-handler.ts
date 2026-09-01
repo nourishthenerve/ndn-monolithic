@@ -11,6 +11,7 @@ import {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminDisableUserCommand,
+  AdminGetUserCommand,
   AdminEnableUserCommand,
   AdminInitiateAuthCommand,
   AdminRespondToAuthChallengeCommand,
@@ -26,6 +27,7 @@ import {
   createClinicianAdminHandler,
   type AdminCreateClinicianPort,
   type AdminDeactivateClinicianPort,
+  type AdminFindClinicianPort,
   type AdminReactivateClinicianPort,
   type ChangeOwnPasswordPort,
 } from './clinician-admin.js';
@@ -281,10 +283,38 @@ const changeOwnPassword: ChangeOwnPasswordPort = {
   },
 };
 
+/**
+ * 2026-09-01: `AdminGetUser` by email, the clinician pool's mirror of
+ * `findPatientUser`. Reached only when `AdminCreateUser` reports the
+ * address is taken, to tell an orphan from a real duplicate.
+ * `UserNotFoundException` is the plain "no such account" answer, not an
+ * error.
+ */
+const findClinicianUser: AdminFindClinicianPort = {
+  async findByEmail(email) {
+    try {
+      const response = await cognitoClient.send(
+        new AdminGetUserCommand({ UserPoolId: clinicianUserPoolId, Username: email }),
+      );
+      const sub = response.UserAttributes?.find((attribute) => attribute.Name === 'sub')?.Value;
+      if (!sub) {
+        throw new Error('AdminGetUser did not return a sub attribute');
+      }
+      return { subjectId: sub };
+    } catch (error) {
+      if ((error as { name?: string }).name === 'UserNotFoundException') {
+        return undefined;
+      }
+      throw error;
+    }
+  },
+};
+
 export const handler = createClinicianAdminHandler({
   repository,
   flags,
   createClinicianUser,
+  findClinicianUser,
   deactivateClinicianUser,
   reactivateClinicianUser,
   changeOwnPassword,

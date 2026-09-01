@@ -291,3 +291,57 @@ describe('listPage', () => {
     expect(page.items).toEqual([]);
   });
 });
+
+// 2026-09-01: "clinican doesn't have view to the patient dashboard."
+//
+// A sub-clinician could not reach this view at all — `caseload.ts` named
+// no clinician on its resource, so they resolved to `'Sub-clinician
+// (unassigned)'` and were refused. They can now, and the original spec's
+// own sentence is what bounds it: "will only be able to see those patients
+// that have been assigned to him."
+describe('a sub-clinician sees their own patients and no others', () => {
+  const SUB_CLINICIAN: Principal = {
+    subjectId: 'sub-1',
+    role: 'sub-clinician',
+    accountStatus: 'active',
+    clinicianId: 'cli-1',
+  };
+
+  const seeded = () =>
+    build([
+      buildPatient({ id: 'pat-mine', assigned_clinician_id: 'cli-1' }),
+      buildPatient({ id: 'pat-theirs', assigned_clinician_id: 'cli-2' }),
+      buildPatient({ id: 'pat-nobody', assigned_clinician_id: undefined }),
+    ]);
+
+  it('returns only the patients assigned to the caller', async () => {
+    const { repository } = await seeded();
+    const page = await repository.listPage(SUB_CLINICIAN, undefined, 25);
+    expect(page.items.map((item) => item.patientId)).toEqual(['pat-mine']);
+  });
+
+  it("skips an unassigned patient — undefined is nobody's id", async () => {
+    const { repository } = await seeded();
+    const page = await repository.listPage(SUB_CLINICIAN, undefined, 25);
+    expect(page.items.some((item) => item.patientId === 'pat-nobody')).toBe(false);
+  });
+
+  it('withholds the practice-wide counts — they describe rows this caller was not shown', async () => {
+    const { repository } = await seeded();
+    const page = await repository.listPage(SUB_CLINICIAN, undefined, 25);
+    // "48 patients, 3 active" above a table of one would be a worse
+    // answer than no header at all.
+    expect(page.counts).toBeUndefined();
+  });
+
+  it('still gives the principal every patient, and the counts', async () => {
+    const { repository } = await seeded();
+    const page = await repository.listPage(PRINCIPAL, undefined, 25);
+    expect(page.items.map((item) => item.patientId).sort()).toEqual([
+      'pat-mine',
+      'pat-nobody',
+      'pat-theirs',
+    ]);
+    expect(page.counts).toBeDefined();
+  });
+});

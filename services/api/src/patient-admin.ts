@@ -132,6 +132,39 @@ export interface AdminFindPatientPort {
   findByEmail(email: string): Promise<{ subjectId: string } | undefined>;
 }
 
+/**
+ * 2026-09-01: suspending a patient disables their Cognito user and revokes
+ * their live tokens; restoring re-enables it.
+ *
+ * **This is what "remove access" was missing.** The owner: *"patient
+ * dashboard - remove access is not working."* Suspension had, until now,
+ * flipped `account_status` on the `PAT#` record and nothing else — so a
+ * suspended patient could still sign in, and their existing session kept
+ * working for up to the authorizer's five-minute result cache
+ * (`route-protection.ts`). After that `can()` did gate them down to
+ * reading their own profile, so the *data* boundary held; but "they can
+ * still log in" is not what anyone means by removing access, and the
+ * record said one thing while the directory said another.
+ *
+ * The clinician half of this has been right since TASK 2.4.1 —
+ * `AdminDisableUser` plus `AdminUserGlobalSignOut`, and
+ * `AdminEnableUser` to undo it. This is the same pair for the patient
+ * pool, and the asymmetry between the two was the bug.
+ *
+ * `revokeTokens` is separate from `disable` because they fail
+ * independently and only one of them is reversible: disabling is the
+ * durable half, and a global sign-out that failed would leave a disabled
+ * account with a live session for the rest of that cache window.
+ *
+ * **No `AdminDeleteUser`, here or anywhere** — C-03 and
+ * 00-conventions.md. A suspended patient is disabled, never removed.
+ */
+export interface AdminSetPatientEnabledPort {
+  disable(subjectId: string): Promise<void>;
+  revokeTokens(subjectId: string): Promise<void>;
+  enable(subjectId: string): Promise<void>;
+}
+
 export interface PatientAdminDeps {
   readonly repository: PatientRepository;
   /**
@@ -146,6 +179,8 @@ export interface PatientAdminDeps {
   readonly createPatientUser: AdminCreatePatientPort;
   readonly setPatientPassword: AdminSetPatientPasswordPort;
   readonly findPatientUser: AdminFindPatientPort;
+  /** 2026-09-01: the directory half of suspend/restore — see `AdminSetPatientEnabledPort`. */
+  readonly setPatientEnabled: AdminSetPatientEnabledPort;
   /** Overridable only so tests can assert against a known value; production never sets this. */
   readonly generatePassword?: () => string;
   readonly clock?: Clock;
@@ -418,12 +453,43 @@ export function createPatientAdminHandler(
           if (!id) {
             return respond(400, { error: 'ID_REQUIRED' });
           }
+          const suspending = routeKey === 'POST /patients/{id}/suspend';
+          // The record first, the directory second, and the order is the
+          // safe one in both directions. Suspending: if the record write
+          // succeeds and the disable fails, the patient is already gated
+          // to their own profile by `can()` — the fix is a retry, not a
+          // hole. Restoring: the record is what `can()` reads, so a
+          // failed enable leaves someone able to reach nothing rather
+          // than able to sign in with no standing.
+          //
+          // `transition` throws `RECORD_NOT_FOUND` for an id that does
+          // not exist, which is why it runs before anything touches the
+          // directory: no Cognito call is made for a patient this
+          // practice has never had.
           const patient = await deps.repository.transition(
             id,
-            routeKey === 'POST /patients/{id}/suspend' ? 'suspend' : 'restore',
+            suspending ? 'suspend' : 'restore',
             actor,
           );
-          return respond(200, { item: patient });
+          // Reported, not swallowed, and deliberately not fatal: the
+          // record has already moved, so throwing here would tell the
+          // operator the suspension failed when the half that gates data
+          // access succeeded. The same shape `POST /patients` uses for
+          // the assessment form it instantiates.
+          let directoryUpdated = true;
+          try {
+            if (suspending) {
+              await deps.setPatientEnabled.disable(id);
+              // Ends every live session immediately, rather than letting
+              // the authorizer's five-minute result cache run down.
+              await deps.setPatientEnabled.revokeTokens(id);
+            } else {
+              await deps.setPatientEnabled.enable(id);
+            }
+          } catch {
+            directoryUpdated = false;
+          }
+          return respond(200, { item: patient, directoryUpdated });
         }
         case 'GET /patients': {
           if (!can(principal, 'read', PATIENT_PROFILE_RESOURCE).allowed) {

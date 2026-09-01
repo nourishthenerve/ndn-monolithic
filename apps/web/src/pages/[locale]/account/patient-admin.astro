@@ -54,6 +54,7 @@ const heading = t('patientAdmin.heading', undefined, locale);
     </Fragment>
     <PatientAdminPanel
       client:only="react"
+      recordHrefBase={`/${locale}/account/patient-record`}
       strings={{
         forbidden: t('patientAdmin.forbidden', undefined, locale),
         createHeading: t('patientAdmin.createHeading', undefined, locale),
@@ -82,6 +83,7 @@ const heading = t('patientAdmin.heading', undefined, locale);
         assignClinicianHint: t('patientAdmin.assignClinicianHint', undefined, locale),
         assignedToLabel: t('patientAdmin.assignedToLabel', undefined, locale),
         assignFailedWarning: t('patientAdmin.assignFailedWarning', undefined, locale),
+        openAssessmentLabel: t('patientAdmin.openAssessment', undefined, locale),
         findHeading: t('patientAdmin.findHeading', undefined, locale),
         findIntro: t('patientAdmin.findIntro', undefined, locale),
         findButton: t('patientAdmin.findButton', undefined, locale),

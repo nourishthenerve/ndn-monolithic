@@ -179,3 +179,15 @@ Revert the branch/PR for the workflow/docs changes — nothing outside the repo 
 - `ndn-ci-readonly` role: `aws --profile ndn-prod iam delete-role-policy --role-name ndn-ci-readonly --policy-name SimulateNdnDeployOnly` then `iam delete-role --role-name ndn-ci-readonly`.
 - Both roles' `sub` claim fix (2026-08-09): reverting to the plain-name subject via `iam update-assume-role-policy` would restore the original `Not authorized` failure — not recommended, the immutable-ID subject is the correct, currently-required format.
 - Dependabot alerts/security-updates: `DELETE /vulnerability-alerts` / `DELETE /automated-security-fixes` via `gh api` — not recommended, both are free and strictly additive security coverage.
+
+## Amendment, 2026-09-01 — publishing content needs a deploy, and now there is a button for it
+
+The owner: *"blog and workshop when saved is not being present inside blog and workshop tabs."*
+
+Nothing was broken. ADR-0017 makes the public site statically generated, so `blog/index.astro` and `workshops/index.astro` build their lists from a single fetch at **build time** (`getStaticPaths`), and the individual post pages are prerendered per slug. Publishing through the authoring UI writes the record to DynamoDB and changes nothing on the site until the next deploy.
+
+Until now the only trigger for the `deploy` job was a push to `main`, so publishing an article required a commit that changed nothing about the code. The job now also accepts `workflow_dispatch` on `main`: the principal saves the post, then runs the CI workflow from the Actions tab. One click, no code change, and no new credential anywhere.
+
+**Why not make the pages dynamic instead.** A client-side list would show the new post and then link to a slug page that does not exist, because those are prerendered too — an item that 404s is worse than one that has not appeared yet. And fetching on the client would cost the blog its SEO, which is the reason the marketing pages are static in the first place. **Why not have the Lambda trigger the deploy.** That needs a GitHub credential inside the API's runtime role, which is a materially larger blast radius than a button in a tab the principal already has open.
+
+The authoring panel now says this on every successful save, rather than leaving "Saved" to be read as "published".

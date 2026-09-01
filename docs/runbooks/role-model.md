@@ -184,3 +184,16 @@ And nothing at all from `patient{}` or `private{}`, no messages, no diagnosis, n
 A visitor writes nothing anywhere, on any route, including their own `tag`. The only thing they may change is their own password, through the same page every other signed-in role uses.
 
 Three of those narrowings are not expressible as matrix cells and are enforced in code at one place each — the `IIC` tag filter, the dashboard's field projection, and `VISITOR_CALENDAR_FIELDS`. If the owner ever wants a visitor to see more, those three constants and the one matrix row are the whole surface to change.
+
+## Amendment, 2026-09-01 (third) — a treating clinician has a dashboard
+
+The original spec has always said *"clinician … will have access to the dashboard but will only be able to see those patients that have been assigned to him."* Neither half was true: `GET /caseload` named no clinician on its resource, so a sub-clinician resolved to the `Sub-clinician (unassigned)` column and was refused outright, and all three staff pages (`caseload`, `patient-record`, and the dashboard link on the account page) omitted the role from their `allowRoles`.
+
+The fix is in two layers, and deliberately so — it is the same shape the `Visitor` column already uses:
+
+- **Who may call** is the matrix. `caseload.ts` now names the caller's own `clinicianId` on the resource, the identical "self-assigned resource" trick `GET /clinicians/me/calendar` uses, so a sub-clinician lands on the granted column. There is still no parameter through which anyone can name a different clinician.
+- **Which rows come back** is `caseload-repository.ts`. A sub-clinician sees rows whose `assigned_clinician_id` is theirs, and an unassigned patient is skipped — `undefined` is nobody's id.
+
+**The practice-wide counts are withheld from any filtered viewer.** `store.count()` answers "how many patients exist", which is true of the practice and not of the rows the caller was shown; a clinician with three patients would otherwise read "48 patients, 3 active" above a table of three. For a visitor it would additionally disclose the size of a directory they may see one programme of.
+
+The assign and remove-access columns are hidden from a clinician client-side too. That is presentation, not authorisation — both routes are `Principal`-only and refuse them regardless — but a column that is offered and then refused is the exact complaint `token-claims.ts` was built to stop, and "sub-clinician" is a positive answer, which is the only kind it hides on.

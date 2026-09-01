@@ -115,10 +115,22 @@ function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
     changePassword: vi.fn(async () => {}),
   };
 
+  // 2026-09-01: reached only when `AdminCreateUser` reports the address is
+  // taken — used to tell an orphaned Cognito user from a real duplicate.
+  // Default: the pool holds nothing under any address, so a duplicate
+  // reported by `createUser` is a *real* duplicate rather than an orphan.
+  // The orphan-healing tests override this per case.
+  const findClinicianUser = {
+    findByEmail: vi.fn(
+      async (): Promise<{ subjectId: string } | undefined> => undefined,
+    ),
+  };
+
   const handler = createClinicianAdminHandler({
     repository,
     flags,
     createClinicianUser,
+    findClinicianUser,
     deactivateClinicianUser,
     reactivateClinicianUser,
     changeOwnPassword,
@@ -131,6 +143,7 @@ function build(overrides: { flagEnabled?: boolean; password?: string } = {}) {
     repository,
     audit,
     createClinicianUser,
+    findClinicianUser,
     deactivateClinicianUser,
     reactivateClinicianUser,
     changeOwnPassword,
@@ -269,11 +282,19 @@ describe('POST /clinicians', () => {
     expect(response.statusCode).toBe(409);
     expect(response.body).not.toMatch(/password/i);
     expect(response.body).not.toMatch(/totp/i);
-    // Still called for the second (rejected) attempt too — this is the
-    // orphaned-Cognito-user failure mode this task's own header accepts,
-    // not a leak: the secret exists in Cognito but is never returned to
-    // anyone, so nobody — including this test — can ever learn it.
-    expect(createClinicianUser.provisionTotp).toHaveBeenCalledTimes(2);
+    // **2026-09-01: nothing is minted for the second attempt at all.**
+    // This assertion used to be `toHaveBeenCalledTimes(2)`, pinning the
+    // orphaned-Cognito-user failure mode D-30 accepted as harmless
+    // ("the secret exists in Cognito but is never returned to anyone").
+    //
+    // It was not harmless. The orphan **occupies the email address**, so
+    // every later attempt with it hit `UsernameExistsException` and was
+    // reported as "an account with this email address already exists" —
+    // which is what the owner saw, for an address that had no account.
+    // The singleton is now checked before anything is created, so a
+    // refused second principal leaves nothing behind.
+    expect(createClinicianUser.createUser).toHaveBeenCalledTimes(1);
+    expect(createClinicianUser.provisionTotp).toHaveBeenCalledTimes(1);
   });
 
   it('never adds a sub-clinician to the principal Cognito group', async () => {
@@ -893,5 +914,122 @@ describe('POST /clinicians/me/change-password (D-34)', () => {
 
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body)).toEqual({ error: 'PASSWORD_POLICY_VIOLATION' });
+  });
+});
+
+// 2026-09-01, all three from one report: "when adding another principal
+// clinician it says an account with this email address already exists
+// though it's not the case."
+describe('creating a second principal', () => {
+  it('refuses with PRINCIPAL_ALREADY_EXISTS, not a duplicate-email conflict', async () => {
+    const { handler } = build();
+    await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'first@example.com', displayName: 'First', role: 'principal' },
+      }),
+    );
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'second@example.com', displayName: 'Second', role: 'principal' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(409);
+    // The code is what the UI reads to choose its message. Before this,
+    // both conflicts were bare 409s and the page had one sentence for
+    // them — the wrong one.
+    expect(JSON.parse(response.body)).toEqual({ error: 'PRINCIPAL_ALREADY_EXISTS' });
+  });
+
+  it('leaves no Cognito user behind, so the address stays usable', async () => {
+    const { handler, createClinicianUser, repository } = build();
+    await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'first@example.com', displayName: 'First', role: 'principal' },
+      }),
+    );
+    vi.mocked(createClinicianUser.createUser).mockClear();
+
+    await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'second@example.com', displayName: 'Second', role: 'principal' },
+      }),
+    );
+    expect(createClinicianUser.createUser).not.toHaveBeenCalled();
+
+    // And the address is still free: the same person can be added as a
+    // clinician, which is the thing the owner was actually blocked from
+    // doing.
+    const retry = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'second@example.com', displayName: 'Second', role: 'sub' },
+      }),
+    );
+    expect(retry.statusCode).toBe(201);
+    expect((await repository.list()).some((c) => c.displayName === 'Second')).toBe(true);
+  });
+
+  it('completes an orphan left by an earlier failure rather than refusing the address forever', async () => {
+    const { handler, createClinicianUser, findClinicianUser } = build();
+    // An address Cognito already holds, with no `CLI#` record behind it —
+    // exactly what a create that died after `AdminCreateUser` leaves.
+    vi.mocked(createClinicianUser.createUser).mockRejectedValueOnce(
+      new AppError('COGNITO_ACCOUNT_ALREADY_EXISTS', 'exists'),
+    );
+    findClinicianUser.findByEmail.mockResolvedValueOnce({ subjectId: 'sub-orphaned' });
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'orphan@example.com', displayName: 'Orphan', role: 'sub' },
+      }),
+    );
+
+    expect(response.statusCode).toBe(201);
+    expect((JSON.parse(response.body) as { item: { id: string } }).item.id).toBe('sub-orphaned');
+  });
+
+  it('still refuses when a live colleague already holds the address', async () => {
+    const { handler, createClinicianUser, findClinicianUser, repository } = build();
+    const created = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'taken@example.com', displayName: 'Taken', role: 'sub' },
+      }),
+    );
+    const existingId = (JSON.parse(created.body) as { item: { id: string } }).item.id;
+    expect(await repository.findById(existingId)).toBeDefined();
+
+    vi.mocked(createClinicianUser.createUser).mockRejectedValueOnce(
+      new AppError('COGNITO_ACCOUNT_ALREADY_EXISTS', 'exists'),
+    );
+    findClinicianUser.findByEmail.mockResolvedValueOnce({ subjectId: existingId });
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /clinicians', {
+        principal: PRINCIPAL_CONTEXT,
+        body: { email: 'taken@example.com', displayName: 'Impostor', role: 'sub' },
+      }),
+    );
+
+    // Healing an orphan must never become taking over an account: this is
+    // a real duplicate, and a fresh password for it is exactly what must
+    // not be handed out.
+    expect(response.statusCode).toBe(409);
+    expect(response.body).not.toMatch(/password/i);
   });
 });

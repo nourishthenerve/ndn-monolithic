@@ -41,7 +41,7 @@ const heading = t('caseload.heading', undefined, locale);
   <RequireAuth
     client:only="react"
     loadingLabel={t('account.loading', undefined, locale)}
-    allowRoles={['principal-clinician', 'helpdesk', 'visitor']}
+    allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk', 'visitor']}
   >
     <Fragment slot="signedOut">
       <p>

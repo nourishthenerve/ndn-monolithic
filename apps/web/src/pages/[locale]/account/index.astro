@@ -77,16 +77,6 @@ const heading = t('account.heading', undefined, locale);
             </Link>
           </li>
         </RequireAuth>
-        {/* 2026-09-01: linked for every signed-in identity, unlike the
-            staff tools below. Every role has something to see on this
-            page — a patient their general info, a visitor an IIC
-            patient's, helpdesk two sections, a clinician all four — so
-            there is no role to hide it from. */}
-        <li>
-          <Link href={`/${locale}/account/assessment`}>
-            {t('account.assessmentLink', undefined, locale)}
-          </Link>
-        </li>
         <li>
           <Link href={`/${locale}/account/change-password`}>
             {t('account.changePasswordLink', undefined, locale)}
@@ -122,7 +112,10 @@ const heading = t('account.heading', undefined, locale);
         }}
       />
     </RequireAuth>
-    <RequireAuth client:only="react" allowRoles={['principal-clinician', 'helpdesk', 'visitor']}>
+    <RequireAuth
+      client:only="react"
+      allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk', 'visitor']}
+    >
       <nav aria-label={t('account.staffToolsHeading', undefined, locale)}>
         <ul>
           <li>
