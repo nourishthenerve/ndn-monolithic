@@ -145,7 +145,7 @@ Both are enforced in `assessment.ts` and named in `docs/plan/04-data-model-rbac.
 
 **The endpoint did not exist at the address the browser was calling.** Proven rather than reasoned about, with the same probe against both:
 
-```
+```text
 POST …/patients/x/assessments/intake-v1/attachment-upload-url  →  404
 GET  …/patients/me/notifications                               →  401
 ```
