@@ -138,3 +138,26 @@ Both are enforced in `assessment.ts` and named in `docs/plan/04-data-model-rbac.
 ### Instantiation
 
 `POST /patients` instantiates version 1 from the template immediately after writing the patient record — "the form is loaded from the template the moment his account is being created". It is idempotent, and **a failure does not fail the account**: the account is already fully written by that point, throwing would abandon a usable one for a recoverable reason, and the retry would not be clean (the orphan guard would see both a Cognito user and a record and answer `409` forever). The outcome is reported as `assessmentFormCreated` rather than swallowed, and `assessment.ts`'s own write path instantiates lazily for any patient that reaches it without one — which is also how every patient created before this feature gets a form.
+
+### Follow-up, 2026-09-02 — the upload endpoints were on the wrong API
+
+*"That file could not be uploaded. Please try again — i'm getting this for any file."*
+
+**The endpoint did not exist at the address the browser was calling.** Proven rather than reasoned about, with the same probe against both:
+
+```
+POST …/patients/x/assessments/intake-v1/attachment-upload-url  →  404
+GET  …/patients/me/notifications                               →  401
+```
+
+A real route on that API answers `401`; these answered `404`.
+
+`NdnWebStack` has **its own `HttpApi`**, separate from `NdnDataStack`'s `ContentHttpApi` — and `ContentHttpApi` is what `site-config.ts` calls `contentApiUrl` and what every island in the site fetches from. The upload function had to live in `NdnWebStack` because it needs the media bucket, which is there (moving it the other way is the CloudFormation cycle `MediaUploadFunction`'s own comment describes). Its routes went on that stack's API with it — and nothing pointed the browser at that API.
+
+Both halves were individually correct. Only the pairing was wrong, which is why nothing in the build, the tests or the types could see it.
+
+The fix is the shape `/auth/*` has used since TASK 2.2.4: a CloudFront behaviour proxying a distinctive prefix to that API, so the browser calls it **same-origin**. The paths moved to `/attachments/{id}/{assessmentId}/{upload,download}-url` — a prefix that cannot shadow anything else, with the ids still in the path so the handler's own parameters are unchanged. Same-origin also means no CORS on that hop at all; the browser's subsequent `PUT` still goes to S3, which has its own rule.
+
+**A new test asserts every route on that stack's API has a CloudFront behaviour covering its path**, because this class of mistake is invisible to everything else. It immediately found a third instance: TASK 1.5.1's `POST /workshops/media-upload-url` has been unreachable since it was written, latent only because nothing in `apps/web` ever called it. That now has a behaviour too — an exact path, not `/workshops/*`, which would shadow the static workshop pages.
+
+**Worth naming: the earlier S3 CORS fix (2026-09-01) was real and necessary, and was not what was breaking this.** It was a second, genuine defect on the same path, found first. The request never got far enough to need it.

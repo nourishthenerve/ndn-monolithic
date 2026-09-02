@@ -183,12 +183,30 @@ function defaultSaveSection(
   });
 }
 
+/**
+ * **Same-origin, and not `contentApiUrl` — 2026-09-02.** These two
+ * endpoints are served by `NdnWebStack`'s own API (the function needs the
+ * media bucket, which lives in that stack) and reach the browser through a
+ * CloudFront behaviour on `/attachments/*`. They were previously built
+ * from `contentApiUrl`, which is `NdnDataStack`'s content API — a
+ * different API, which had never heard of them and answered 404. Every
+ * upload failed, and the page could only say the file could not be
+ * uploaded.
+ *
+ * A relative URL is the point rather than an incidental: same-origin means
+ * no CORS on this hop at all. The subsequent `PUT` still goes cross-origin
+ * to S3, which has its own rule.
+ */
+function attachmentUrl(patientId: string, action: 'upload-url' | 'download-url'): string {
+  return `/attachments/${encodeURIComponent(patientId)}/${ASSESSMENT_ID}/${action}`;
+}
+
 function defaultRequestUploadUrl(
   accessToken: string,
   patientId: string,
   body: unknown,
 ): Promise<Response> {
-  return fetch(`${formUrl(patientId)}/attachment-upload-url`, {
+  return fetch(attachmentUrl(patientId, 'upload-url'), {
     method: 'POST',
     headers: authHeaders(accessToken),
     body: JSON.stringify(body),
@@ -200,7 +218,7 @@ function defaultRequestDownloadUrl(
   patientId: string,
   body: unknown,
 ): Promise<Response> {
-  return fetch(`${formUrl(patientId)}/attachment-download-url`, {
+  return fetch(attachmentUrl(patientId, 'download-url'), {
     method: 'POST',
     headers: authHeaders(accessToken),
     body: JSON.stringify(body),

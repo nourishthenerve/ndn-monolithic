@@ -530,12 +530,36 @@ export class WebStack extends Stack {
       });
       attachAuditPartitionReadGuardrail(assessmentUploadRole, props.table);
 
+      // **`/attachments/*`, not `/patients/*` — 2026-09-02, and the
+      // original paths were unreachable.**
+      //
+      // These routes are on *this* stack's `HttpApi`, because the function
+      // needs the media bucket and the bucket is here (see the cycle this
+      // file's `MediaUploadFunction` comment describes). The browser,
+      // however, calls `site-config.ts`'s `contentApiUrl`, which is
+      // `NdnDataStack`'s **separate** `ContentHttpApi`. So a request to
+      // `POST /patients/…/attachment-upload-url` reached an API that had
+      // never heard of it and answered `404` — every upload failed, and
+      // the page could only say "that file could not be uploaded".
+      //
+      // Proven rather than reasoned about: the same probe returns `401`
+      // for a real DataStack route and `404` for these.
+      //
+      // The fix is the shape `/auth/*` has used since TASK 2.2.4 — a
+      // CloudFront behaviour proxying a distinctive prefix to this API, so
+      // the browser calls it **same-origin**. That also removes the need
+      // for CORS on this API entirely, which it does not have.
+      //
+      // The prefix is `/attachments/` rather than `/patients/` so the
+      // behaviour cannot shadow anything else and reads as what it is; the
+      // ids stay in the path, so the handler's own parameters are
+      // unchanged.
       const assessmentUploadIntegration = new HttpLambdaIntegration(
         'AssessmentUploadIntegration',
         assessmentUploadFunction,
       );
       httpApi.addRoutes({
-        path: '/patients/{id}/assessments/{assessmentId}/attachment-upload-url',
+        path: '/attachments/{id}/{assessmentId}/upload-url',
         methods: [HttpMethod.POST],
         integration: assessmentUploadIntegration,
       });
@@ -543,7 +567,7 @@ export class WebStack extends Stack {
       // in a URL, and therefore in every access log between here and the
       // browser. A key names a patient and a section.
       httpApi.addRoutes({
-        path: '/patients/{id}/assessments/{assessmentId}/attachment-download-url',
+        path: '/attachments/{id}/{assessmentId}/download-url',
         methods: [HttpMethod.POST],
         integration: assessmentUploadIntegration,
       });
@@ -925,6 +949,40 @@ function handler(event) {
           originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
           // The same policy every other behaviour uses. Auth responses get
           // no weaker headers than a blog page.
+          responseHeadersPolicy: securityHeaders,
+        },
+        // 2026-09-02: TASK 1.5.1's workshop-poster presign endpoint, which
+        // had been on this stack's API since it was written with **no way
+        // for a browser to reach it** — the same defect the attachment
+        // endpoints below hit, found by the same test, and latent only
+        // because nothing in `apps/web` ever called it.
+        //
+        // An exact path, not `/workshops/*`: that would shadow the static
+        // workshop pages this distribution serves from S3.
+        '/workshops/media-upload-url': {
+          origin: new HttpOrigin(
+            `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
+          ),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_ALL,
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          responseHeadersPolicy: securityHeaders,
+        },
+        // 2026-09-02: assessment attachments' presign endpoints, proxied
+        // to this stack's own API exactly as `/auth/*` above is — see the
+        // routes' own note for why they cannot live on the content API.
+        // Same-origin, so no CORS is involved on this hop at all; the
+        // browser's subsequent `PUT` goes straight to S3, which has its
+        // own CORS rule (`MediaBucket`).
+        '/attachments/*': {
+          origin: new HttpOrigin(
+            `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
+          ),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_ALL,
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
           responseHeadersPolicy: securityHeaders,
         },
         // TASK 1.5.1: workshop posters, served same-origin from this

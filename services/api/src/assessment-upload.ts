@@ -52,8 +52,15 @@ import type { PatientRepository } from './patient-repository.js';
 import { requirePrincipal } from './request-principal.js';
 
 const ASSESSMENTS_FLAG = 'assessments.enabled';
-const UPLOAD_ROUTE = 'POST /patients/{id}/assessments/{assessmentId}/attachment-upload-url';
-const DOWNLOAD_ROUTE = 'POST /patients/{id}/assessments/{assessmentId}/attachment-download-url';
+// 2026-09-02: `/attachments/…`, not `/patients/…`. These routes live on
+// `NdnWebStack`'s own API — the function needs the media bucket, which is
+// in that stack — while the browser calls `NdnDataStack`'s content API. On
+// the old paths every request reached an API that had never heard of them
+// and answered 404, so every upload failed. They are now proxied
+// same-origin through CloudFront under a distinctive prefix; see
+// infra/src/web-stack.ts's own note.
+const UPLOAD_ROUTE = 'POST /attachments/{id}/{assessmentId}/upload-url';
+const DOWNLOAD_ROUTE = 'POST /attachments/{id}/{assessmentId}/download-url';
 const UPLOAD_LOG_SAMPLE_RATE = 1;
 
 const SECTION_ENUM = ['general', 'patient', 'private', 'calendar'] as const;
