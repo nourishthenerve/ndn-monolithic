@@ -385,23 +385,33 @@ export function createAppointmentHandler(
       durationMinutes: parsed.data.durationMinutes,
     };
 
-    // 2026-09-01: "any new appointment booked by the clinician needs to be
-    // approved by the principal clinician." The principal is the approver,
-    // so their own booking is confirmed on the spot — approving yourself
-    // is a step with no decision in it, and one that would either be done
-    // reflexively or forgotten, which makes the state mean less rather
-    // than more. Read off `principal.role` rather than off `can()`,
-    // because this is not an authorisation question: both roles are
-    // already authorised to book by the line above, and what differs is
-    // what the booking *is*.
-    const requiresApproval = principal.role !== 'principal-clinician';
+    // **Every booking waits for approval, whoever made it.** 2026-09-02,
+    // the owner: *"when I assign an appointment to a patient, it should be
+    // visible to patient dashboard to be approved by principal clinician
+    // before it appears to patient profile — atm it appears to patient
+    // profile right away."*
+    //
+    // The first cut exempted the principal, on the reasoning that the
+    // approver approving themselves is a step with no decision in it. That
+    // was wrong about what the step is *for*. It is not the principal
+    // proving something to themselves — it is the gate that decides when a
+    // booking becomes real **to the patient**, and the owner wants to see
+    // every appointment sitting in that queue before it reaches anyone's
+    // profile. A booking made in error is caught by the same review
+    // whoever typed it.
+    //
+    // So this is no longer read off the role at all, and there is
+    // deliberately nothing left here to get wrong: one status for every
+    // new booking, and one route out of it (`…/approve`).
+    const REQUIRES_APPROVAL = true;
 
     try {
-      const created = await deps.appointments.schedule(input, actor, { requiresApproval });
-      const notified = await notify(
-        requiresApproval ? 'appointment-requested' : 'appointment-approved',
-        { subjectAt: created.scheduledAt },
-      );
+      const created = await deps.appointments.schedule(input, actor, {
+        requiresApproval: REQUIRES_APPROVAL,
+      });
+      const notified = await notify('appointment-requested', {
+        subjectAt: created.scheduledAt,
+      });
       return respond(201, { item: projectFor(principal, created, resource), notified });
     } catch (error) {
       if (error instanceof AppError && error.code === 'APPOINTMENT_ALREADY_EXISTS') {

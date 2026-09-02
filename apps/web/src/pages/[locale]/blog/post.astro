@@ -1,0 +1,53 @@
+---
+// 2026-09-02: the fallback article page — one per locale, prerendered, and
+// able to render *any* published post from `?slug=`.
+//
+// It exists because static output cannot serve a post published after the
+// last build: that post has no file on S3, so its own `/{locale}/blog/{id}`
+// URL is a 404 and there is no server to render it on demand. This page
+// always exists, so a freshly published article is reachable the moment it
+// is saved — which is what the owner asked for ("I want them to go live
+// immediately").
+//
+// **Deliberately `noIndex`, and deliberately not the link anyone sees for
+// a post that has its own page.** `LiveBlogList` routes a post here only
+// while it is missing from the build; after the next deploy the post is
+// prerendered at its real URL and this page is no longer used for it. Two
+// indexable URLs for one article is the trap this shape could set, and the
+// canonical prerendered one is the one that should win.
+//
+// Absent from `routes.ts` on purpose: that registry drives an
+// unauthenticated axe scan of fixed paths, and this page's only real state
+// needs a `?slug=` for a post that exists — the same limitation
+// `blog/[slug]` itself is excluded for.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+
+import { LiveBlogPost } from '../../../blog/LiveBlogPost.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('blog.index.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('blog.index.description', undefined, locale)}
+  noIndex
+>
+  <LiveBlogPost
+    client:only="react"
+    locale={locale}
+    strings={{
+      loading: t('blog.post.loading', undefined, locale),
+      notFound: t('blog.post.notFound', undefined, locale),
+      error: t('blog.post.error', undefined, locale),
+    }}
+  />
+</BaseLayout>
