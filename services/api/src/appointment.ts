@@ -251,10 +251,20 @@ export function createAppointmentHandler(
         const decided = isApprove
           ? await deps.appointments.approve(patientId, apptId, actor)
           : await deps.appointments.decline(patientId, apptId, actor);
-        const notified = await notify(
-          isApprove ? 'appointment-approved' : 'appointment-cancelled',
-          { subjectAt: decided.scheduledAt },
-        );
+        // Approval is the patient's *first* word about this slot, now that
+        // the request itself is silent — and a decline stays silent for the
+        // same reason. `decline` only ever acts on a `pending-approval` row
+        // (`expect` enforces it inside the write), so the patient provably
+        // never heard of it; "your appointment was cancelled" about
+        // something they were never told they had is worse than saying
+        // nothing, and would leak the existence of the request the gate
+        // just rejected.
+        if (!isApprove) {
+          return respond(200, { item: projectFor(principal, decided, resource) });
+        }
+        const notified = await notify('appointment-approved', {
+          subjectAt: decided.scheduledAt,
+        });
         return respond(200, { item: projectFor(principal, decided, resource), notified });
       } catch (error) {
         if (error instanceof AppError && error.code === 'RECORD_NOT_FOUND') {
@@ -344,7 +354,20 @@ export function createAppointmentHandler(
         return respond(400, { error: 'ID_REQUIRED' });
       }
       try {
+        // Read before the write purely to learn the status being left.
+        // `cancel` transitions from any status and returns only the new
+        // row, so the finished appointment cannot say whether the patient
+        // ever knew it existed — and that is exactly the question here. A
+        // clinician withdrawing a still-pending request must not send the
+        // patient a cancellation for a slot the approval gate never let
+        // them see; cancelling a confirmed one must still tell them,
+        // because that one was real and they were relying on it.
+        const before = await deps.appointments.get(patientId, apptId);
+        const wasConfirmed = before?.appointment_status !== 'pending-approval';
         const cancelled = await deps.appointments.cancel(patientId, apptId, actor);
+        if (!wasConfirmed) {
+          return respond(200, { item: projectFor(principal, cancelled, resource) });
+        }
         const notified = await notify('appointment-cancelled', {
           subjectAt: cancelled.scheduledAt,
         });
@@ -409,10 +432,20 @@ export function createAppointmentHandler(
       const created = await deps.appointments.schedule(input, actor, {
         requiresApproval: REQUIRES_APPROVAL,
       });
-      const notified = await notify('appointment-requested', {
-        subjectAt: created.scheduledAt,
-      });
-      return respond(201, { item: projectFor(principal, created, resource), notified });
+      // **No notification. A request is not news to the patient.**
+      // 2026-09-02, the owner: *"I dont want to see 'Your clinician has
+      // requested an appointment. It is waiting to be confirmed.' … I only
+      // want to see confirmed appointments."*
+      //
+      // The first cut announced the request the moment it was made, which
+      // quietly undid the approval gate in the one place it counts.
+      // `summariseCalendar` was already careful about this — a
+      // `pending-approval` slot is deliberately never "your next
+      // appointment", because there is nothing yet to turn up to — and then
+      // the notification told them about it anyway. The gate is only real
+      // if the patient hears nothing until it opens. `…/approve` is what
+      // tells them, and it is now the only thing that does.
+      return respond(201, { item: projectFor(principal, created, resource) });
     } catch (error) {
       if (error instanceof AppError && error.code === 'APPOINTMENT_ALREADY_EXISTS') {
         return respond(409, { error: error.code });

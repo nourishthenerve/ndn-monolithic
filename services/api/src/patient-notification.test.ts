@@ -137,9 +137,7 @@ const READ_ROUTE = 'POST /patients/me/notifications/{notificationId}/read';
 describe('GET /patients/me/notifications', () => {
   it('returns the calling patient\'s own feed, newest first', async () => {
     const { handler, notifications } = build();
-    await notifications.notify('pat-1', 'appointment-requested', CLINICIAN_ACTOR, {
-      subjectAt: '2026-09-01T10:00:00.000Z',
-    });
+    await notifications.notify('pat-1', 'calendar-updated', CLINICIAN_ACTOR);
     await notifications.notify('pat-1', 'appointment-approved', CLINICIAN_ACTOR, {
       subjectAt: '2026-09-01T10:00:00.000Z',
     });
@@ -149,8 +147,38 @@ describe('GET /patients/me/notifications', () => {
     const body = JSON.parse(response.body) as { items: PatientNotification[] };
     expect(body.items.map((item) => item.kind)).toEqual([
       'appointment-approved',
-      'appointment-requested',
+      'calendar-updated',
     ]);
+  });
+
+  // 2026-09-02. `appointment-requested` stopped being written that day, but
+  // the rows already in the owner's own feed would have stayed on screen
+  // forever otherwise — the reported bug was a notification that already
+  // existed, not one about to be created. Suppressing the kind on read is
+  // what clears them without deleting stored rows.
+  it('hides a retired appointment-requested row that predates the change', async () => {
+    const { handler, notifications } = build();
+    await notifications.notify('pat-1', 'appointment-requested', CLINICIAN_ACTOR, {
+      subjectAt: '2026-09-18T13:33:00.000Z',
+    });
+    await notifications.notify('pat-1', 'appointment-approved', CLINICIAN_ACTOR, {
+      subjectAt: '2026-09-18T13:33:00.000Z',
+    });
+
+    const response = await invoke(handler, fakeEvent({ routeKey: LIST_ROUTE }));
+    const body = JSON.parse(response.body) as { items: PatientNotification[] };
+    expect(body.items.map((item) => item.kind)).toEqual(['appointment-approved']);
+  });
+
+  it('hides it even when it is the only thing in the feed, leaving an empty one', async () => {
+    const { handler, notifications } = build();
+    await notifications.notify('pat-1', 'appointment-requested', CLINICIAN_ACTOR, {
+      subjectAt: '2026-09-18T13:33:00.000Z',
+    });
+
+    const response = await invoke(handler, fakeEvent({ routeKey: LIST_ROUTE }));
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ items: [] });
   });
 
   it('never returns another patient\'s feed — there is no parameter through which to name one', async () => {
