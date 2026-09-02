@@ -58,3 +58,15 @@ Sending *every* post through the query-string page would have been simpler and w
 ### What this does not change
 
 Publishing still writes to DynamoDB through the same authoring routes, and the deploy still rebuilds the prerendered pages. The manual `workflow_dispatch` deploy added on 2026-09-01 is now an SEO step rather than a publishing one — worth running so a new article gets its own indexable URL, no longer needed for anyone to *see* it.
+
+### Follow-up, 2026-09-02 — saving now publishes
+
+*"the blog post and workshop when being saved are not being published yet."*
+
+The listing work of 2026-09-01 was correct and was not the problem. Nor was the API: `POST /content` accepts `status` and stores what it is given.
+
+The problem was one unticked checkbox. **"Publish straight away" defaulted to off**, so Save created `status: 'draft'` — and `ContentRepository.list` returns published items only, which is the public read boundary the site has relied on since TASK 1.3.2. So "Save" did exactly what it said and nothing anyone wanted: the post existed, was correct, and no reader could ever reach it. The live listing had nothing to show because there was genuinely nothing published.
+
+Both forms now start with the box **ticked**, and the hint says what that means in both directions. Drafting is still one click away, which is the right way round for a practice that publishes a handful of posts a year: the rare case asks for itself rather than the common one being a trap.
+
+`AuthoringPanel.test.ts` asserts the default and follows it through the request builder to the `status` that actually goes on the wire — the default is the whole bug, and every other link in that chain was already right.

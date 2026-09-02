@@ -39,22 +39,36 @@ import type { BlogFormFields, WorkshopFormFields } from './authoring-request.js'
 
 type SubmitStatus = 'idle' | 'submitting' | 'success' | 'conflict' | 'invalid' | 'forbidden' | 'error';
 
-const EMPTY_BLOG: BlogFormFields = {
+export const EMPTY_BLOG: BlogFormFields = {
   id: '',
   title: '',
   excerpt: '',
   body: '',
   keywords: '',
-  publishNow: false,
+  // **2026-09-02: defaults to publishing.** The owner, twice: "I want them
+  // to go live immediately", then "the blog post and workshop when being
+  // saved are not being published yet."
+  //
+  // Both times the content had saved correctly — as a *draft*, because
+  // this box started unticked and the public read endpoint returns
+  // published items only (`content-repository.ts`). So "Save" did exactly
+  // what it said and nothing anyone wanted: the post existed, and no
+  // reader could ever reach it.
+  //
+  // Drafting is still one click away, which is the right way round for a
+  // clinic that publishes a handful of posts a year — the rare case asks
+  // for itself, rather than the common one being a trap.
+  publishNow: true,
 };
 
-const EMPTY_WORKSHOP: WorkshopFormFields = {
+export const EMPTY_WORKSHOP: WorkshopFormFields = {
   id: '',
   title: '',
   description: '',
   dateTimeLocal: '',
   capacity: '',
-  publishNow: false,
+  // Same default, same reason — see the blog form above.
+  publishNow: true,
 };
 
 export interface AuthoringPanelStrings {

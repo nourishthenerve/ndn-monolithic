@@ -413,7 +413,7 @@
   "authoring.dateTimeLabel": "Date and time",
   "authoring.capacityLabel": "Places (optional)",
   "authoring.publishNowLabel": "Publish straight away",
-  "authoring.publishNowHint": "Leave unticked to save a draft nobody else can see yet.",
+  "authoring.publishNowHint": "Ticked, this goes live on the site as soon as you save. Untick it to keep a draft that nobody else can see yet.",
   "authoring.submitButton": "Save",
   "authoring.submitting": "Saving…",
   "authoring.successMessage": "Saved.",

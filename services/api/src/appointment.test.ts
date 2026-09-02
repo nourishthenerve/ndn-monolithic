@@ -1230,3 +1230,77 @@ describe('a booking reaches the patient only once it is approved', () => {
     expect(items.map((item) => item.appointment_status)).toEqual(['cancelled']);
   });
 });
+
+// 2026-09-02: "even a clinician can approve this appointment. This
+// approval is only reserved to principal clinician."
+//
+// The report was about the *button being offered* — the server has refused
+// every non-principal since the row was added. These assertions exist so
+// that stays true and provable, against every role in the table rather
+// than the two the earlier tests happened to name.
+describe('approval is the principal’s alone, at the route', () => {
+  const APPT_AT = '2026-09-01T10:00:00.000Z';
+
+  async function pending() {
+    const built = await build();
+    const response = await invoke(
+      built.handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(201);
+    return built;
+  }
+
+  it.each([
+    ['the assigned clinician', ASSIGNED_SUB_CONTEXT],
+    ['an unassigned clinician', UNASSIGNED_SUB_CONTEXT],
+    ['helpdesk', { subjectId: 'hd-1', role: 'helpdesk', accountStatus: 'active', clinicianId: 'hd-1' }],
+    ['a visitor', { subjectId: 'vis-1', role: 'visitor', accountStatus: 'active', clinicianId: 'vis-1' }],
+    ['the owning patient', OWNING_PATIENT_CONTEXT],
+  ])('refuses approve from %s, and leaves the booking pending', async (_label, principal) => {
+    const { handler } = await pending();
+    for (const decision of ['approve', 'decline']) {
+      const response = await invoke(
+        handler,
+        fakeEvent({
+          routeKey: `POST /patients/{id}/appointments/{apptId}/${decision}`,
+          pathParameters: { id: 'pat-1', apptId: APPT_AT },
+          principal,
+        }),
+      );
+      expect(response.statusCode).toBe(403);
+    }
+
+    // And the row is untouched — a refused decision must not half-apply.
+    const list = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: PATIENT_LIST_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    const items = (JSON.parse(list.body) as { items: { appointment_status: string }[] }).items;
+    expect(items.map((item) => item.appointment_status)).toEqual(['pending-approval']);
+  });
+
+  it('a clinician cannot reach the same transition through the attendance routes either', async () => {
+    const { handler } = await pending();
+    // `complete` rides `Appointments: update`, which the assigned
+    // clinician does hold — the guard is `expect: 'scheduled'`, so a
+    // pending booking cannot be walked into a confirmed one this way.
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'POST /patients/{id}/appointments/{apptId}/complete',
+        pathParameters: { id: 'pat-1', apptId: APPT_AT },
+      }),
+    );
+    expect(response.statusCode).toBe(409);
+  });
+});

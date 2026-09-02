@@ -36,7 +36,20 @@ const STRINGS: ClinicianCalendarStrings = {
 };
 
 const TOKEN = 'a.b.c';
-const client = { authorization: () => Promise.resolve(TOKEN) } as never;
+
+/**
+ * 2026-09-02: the component now asks `resolve()` for the viewer's role, so
+ * approve/decline are shown to the principal alone. The default fake is
+ * the principal, which is what every pre-existing test below assumes.
+ */
+function clientAs(viewerRole: string | undefined) {
+  return {
+    authorization: () => Promise.resolve(TOKEN),
+    resolve: () => Promise.resolve({ status: 'signed-in', session: { viewerRole } }),
+  } as never;
+}
+
+const client = clientAs('principal-clinician');
 
 function entry(overrides: Partial<CalendarEntry> = {}): CalendarEntry {
   return {
@@ -243,7 +256,12 @@ describe('states that are not a table', () => {
       <ClinicianCalendar
         strings={STRINGS}
         locale="en"
-        client={{ authorization: () => Promise.resolve(undefined) } as never}
+        client={
+          {
+            authorization: () => Promise.resolve(undefined),
+            resolve: () => Promise.resolve({ status: 'signed-out' }),
+          } as never
+        }
       />,
     );
     expect(await screen.findByText(STRINGS.forbiddenLabel)).toBeDefined();
@@ -276,5 +294,75 @@ describe('the fetch runs once, not once per render', () => {
     // turn on the microtask queue by now.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(fetches).toBe(1);
+  });
+});
+
+// 2026-09-02: "even a clinician can approve this appointment. This
+// approval is only reserved to principal clinician."
+//
+// The server always refused — `Appointment approval` grants `update` to
+// `Principal` alone — so nothing unauthorised ever happened. What was
+// wrong is that the buttons were *offered* to anyone who could see a
+// pending row, on the since-abandoned reasoning that a refusal is more
+// legible than an absence.
+describe('who is offered the approval controls', () => {
+  const pendingRow = () => ok([entry({ appointment_status: 'pending-approval' })]);
+
+  it('offers them to the principal', async () => {
+    render(
+      <ClinicianCalendar
+        strings={STRINGS}
+        locale="en"
+        client={clientAs('principal-clinician')}
+        fetchCalendar={pendingRow}
+      />,
+    );
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeDefined();
+  });
+
+  it.each([['sub-clinician'], ['helpdesk'], ['visitor']])(
+    'offers them to nobody else — %s',
+    async (role) => {
+      render(
+        <ClinicianCalendar
+          strings={STRINGS}
+          locale="en"
+          client={clientAs(role)}
+          fetchCalendar={pendingRow}
+        />,
+      );
+      // The row is still there and still says what it is; only the
+      // controls are gone.
+      await screen.findByText('pending-approval');
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Decline' })).toBeNull();
+    },
+  );
+
+  it('still offers them when the token cannot be read — hide on a positive answer, never on a shrug', async () => {
+    render(
+      <ClinicianCalendar
+        strings={STRINGS}
+        locale="en"
+        client={clientAs(undefined)}
+        fetchCalendar={pendingRow}
+      />,
+    );
+    // The server is the boundary; an unreadable token must not hide a
+    // control from the one person entitled to it.
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeDefined();
+  });
+
+  it('leaves attendance marking alone for a clinician — that is theirs, not the principal\'s', async () => {
+    render(
+      <ClinicianCalendar
+        strings={STRINGS}
+        locale="en"
+        client={clientAs('sub-clinician')}
+        fetchCalendar={() => ok([entry()])}
+      />,
+    );
+    // `Appointments: update`, which the treating clinician genuinely holds.
+    expect(await screen.findByRole('button', { name: 'Mark as attended' })).toBeDefined();
   });
 });
