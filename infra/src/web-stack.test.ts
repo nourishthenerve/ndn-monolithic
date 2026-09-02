@@ -1261,8 +1261,8 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
     // a key in a URL is a key in every access log between here and the
     // browser.
     expect(routeKeys(synthWithTable(), 'CUSTOM').sort()).toEqual([
-      'POST /patients/{id}/assessments/{assessmentId}/attachment-download-url',
-      'POST /patients/{id}/assessments/{assessmentId}/attachment-upload-url',
+      'POST /attachments/{id}/{assessmentId}/download-url',
+      'POST /attachments/{id}/{assessmentId}/upload-url',
       'POST /workshops/media-upload-url',
     ]);
     synthWithTable().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
@@ -1413,5 +1413,56 @@ describe('WebStack — the authenticated web shell (TASK 2.2.4)', () => {
     });
     expect(UNMONITORED_LOG_GROUP_NAMES).toContain('/ndn/auth-token-function');
     expect(MONITORED_LOG_GROUP_NAMES).not.toContain('/ndn/auth-token-function');
+  });
+});
+
+// 2026-09-02: **every route on this stack's API must be reachable by the
+// browser**, and until this test existed one was not.
+//
+// This stack has its own `HttpApi`, separate from `NdnDataStack`'s
+// `ContentHttpApi` — which is the one `apps/web/src/site-config.ts` calls
+// `contentApiUrl` and the one every island fetches from. A route added
+// here is therefore invisible to the site unless CloudFront proxies its
+// path to this API, the way `/auth/*` has since TASK 2.2.4.
+//
+// The assessment-attachment endpoints were added here and called at
+// `contentApiUrl`, so every request reached an API that had never heard of
+// them: a flat 404, surfacing only as "that file could not be uploaded".
+// Nothing in the build could see it — both halves were individually
+// correct, and only their pairing was wrong.
+describe('WebStack — every API route is reachable from the site', () => {
+  it('has a CloudFront behaviour covering every route path on this stack’s API', () => {
+    const template = synthWithTable();
+
+    const routePaths = Object.values(template.findResources('AWS::ApiGatewayV2::Route'))
+      .map((route) => String(route.Properties?.RouteKey))
+      .map((key) => key.slice(key.indexOf(' ') + 1))
+      // `$default` and other non-path keys have nothing to proxy.
+      .filter((path) => path.startsWith('/'));
+    expect(routePaths.length).toBeGreaterThan(0);
+
+    const behaviours = Object.values(
+      template.findResources('AWS::CloudFront::Distribution'),
+    ).flatMap((distribution) => {
+      const config = (
+        distribution as {
+          Properties: {
+            DistributionConfig: { CacheBehaviors?: { PathPattern: string }[] };
+          };
+        }
+      ).Properties.DistributionConfig;
+      return (config.CacheBehaviors ?? []).map((behaviour) => behaviour.PathPattern);
+    });
+
+    /** Does a CloudFront `PathPattern` (with its one wildcard) cover this route path? */
+    const covered = (routePath: string) =>
+      behaviours.some((pattern) =>
+        pattern.endsWith('*')
+          ? routePath.startsWith(pattern.slice(0, -1))
+          : pattern === routePath,
+      );
+
+    const unreachable = routePaths.filter((path) => !covered(path));
+    expect(unreachable).toEqual([]);
   });
 });

@@ -62,7 +62,11 @@ const VISITOR = {
   clinicianId: 'vis-1',
 };
 
-const ROUTE = 'POST /patients/{id}/assessments/{assessmentId}/attachment-upload-url';
+// 2026-09-02: `/attachments/…`. These live on WebStack's own API and reach
+// the browser same-origin through CloudFront — the old `/patients/…` paths
+// were registered on a different API from the one the client called, so
+// every request 404'd. See assessment-upload.ts's own note.
+const ROUTE = 'POST /attachments/{id}/{assessmentId}/upload-url';
 const PATH = { id: 'pat-1', assessmentId: 'intake-v1' };
 
 function fakeEvent(overrides: {
@@ -395,7 +399,7 @@ describe('route plumbing', () => {
 // recording — so an assessment attachment is reachable *only* here, behind
 // the same section-level check that governs the record it belongs to.
 describe('downloading an attachment', () => {
-  const DOWNLOAD_ROUTE = 'POST /patients/{id}/assessments/{assessmentId}/attachment-download-url';
+  const DOWNLOAD_ROUTE = 'POST /attachments/{id}/{assessmentId}/download-url';
   const GENERAL_KEY = 'assessments/pat-1/intake-v1/general/fixed-uuid-photo.jpg';
   const PRIVATE_KEY = 'assessments/pat-1/intake-v1/private/fixed-uuid-note.pdf';
 
