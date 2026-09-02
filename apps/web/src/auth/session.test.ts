@@ -1,11 +1,25 @@
+// @vitest-environment jsdom
+//
 // TASK 2.2.4. The two properties that matter here are both about what does
 // *not* happen: no token is written anywhere script can read, and an
 // expired token triggers exactly one refresh rather than a loop.
-import { describe, expect, it, vi } from 'vitest';
+//
+// 2026-09-02: jsdom, and a session-hint cookie in `beforeEach`. `resolve`
+// now short-circuits to `signed-out` without a request when the readable
+// companion cookie `/auth/token` sets is absent — see its own comment for
+// why the site nav made that necessary. Every test below is about what
+// happens when there *is* a session to refresh, so they set the hint; the
+// short-circuit itself has its own tests at the bottom.
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionClient } from './session.js';
 
 const ACCESS_TOKEN = 'header.payload.signature';
+
+/** What `/auth/token` sets alongside the `HttpOnly` refresh cookie. */
+beforeEach(() => {
+  document.cookie = 'ndn_session=1; Path=/';
+});
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body } as unknown as Response;
@@ -165,5 +179,39 @@ describe('the token is not reachable from outside the closure', () => {
     await client.resolve();
 
     expect(Object.keys(globalThis).filter((key) => !before.has(key))).toEqual([]);
+  });
+});
+
+// 2026-09-02: the short-circuit itself. It exists because `SessionNav`
+// made the site's *primary nav* need to know whether anyone is signed in
+// — so before this, every view of every public marketing page paid for an
+// auth round trip on behalf of visitors who are overwhelmingly signed out.
+describe('resolve without a session hint', () => {
+  beforeEach(() => {
+    // Expire the cookie `beforeEach` above sets.
+    document.cookie = 'ndn_session=; Path=/; Max-Age=0';
+  });
+
+  it('reports signed out without asking the server at all', async () => {
+    const { client, fetcher } = build();
+    await expect(client.resolve()).resolves.toEqual({ status: 'signed-out' });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('asks once the hint is present — the hint decides whether to ask, never the answer', async () => {
+    const { client, fetcher } = build();
+    await client.resolve();
+    expect(fetcher).not.toHaveBeenCalled();
+
+    document.cookie = 'ndn_session=1; Path=/';
+    await client.resolve();
+    // `/auth/refresh` is still the only thing that decides: a forged hint
+    // buys a wasted request that answers 401, never a session.
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('still returns no access token, so nothing downstream reads one', async () => {
+    const { client } = build();
+    await expect(client.authorization()).resolves.toBeUndefined();
   });
 });

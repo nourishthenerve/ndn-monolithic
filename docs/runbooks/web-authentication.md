@@ -169,3 +169,23 @@ It is `client:only`, which costs the no-JavaScript case its sign-in link. That i
 ### What did not change
 
 The `SignInLink`s inside each account page's `signedOut` slot are untouched and were never part of this: `RequireAuth` only renders that slot when there is no session, which is exactly the behaviour the nav now has too.
+
+### Follow-up, same day — three things the first cut broke, and what each was
+
+The nav fix above failed CI in ways worth recording, because two of them were caught by guardrails and one of those guardrails was itself wrong.
+
+**1. Twelve axe failures, one per public page.** Astro wraps a `client:only` island in an `<astro-island>` element, and the island was placed directly inside the site-nav `<ul>` — a list whose direct child is not a list item, which axe's `list` rule calls serious (WCAG 1.3.1). Because navigation is shared, it failed every page at once, and none of the failures named the nav.
+
+The island now renders its own `<ul>` beside the site list, which is also the more honest structure: site navigation and account controls are two groups.
+
+A new static check (`components/list-structure.test.ts`) scans built `dist/` for the same mistake. It found a **second** instance immediately — a `RequireAuth` island nested straight inside the account page's own `<ul>`, introduced on 2026-09-01 and never caught, because the only scan that reaches that page is the authenticated nightly one. Both are fixed. The check knows one rule and cannot replace the real axe scan; it covers the rule a component refactor is most likely to break, in seconds rather than in an eleven-minute deployed round trip.
+
+**2. Every public page view started costing an auth request.** The nav has to know whether anyone is signed in, and the refresh cookie is `HttpOnly`, so the only way to ask was `/auth/refresh` — on every page, for visitors who are overwhelmingly signed out. In the ephemeral PR environment, which deploys no auth stack at all, that request never settles, and a test waiting on `networkidle` timed out. That is how it was noticed; the cost was real either way.
+
+`/auth/token` now sets a readable companion cookie carrying `1` and nothing else, written and cleared in lockstep with the refresh cookie. Its **absence** is the one thing script can conclude alone, and skipping a request whose answer is already known is the only thing that conclusion is used for. A present hint means "ask" — `/auth/refresh` still decides, and a forged one buys a wasted request that answers 401.
+
+**3. A guardrail that banned the wrong thing.** `no-browser-storage.test.ts` forbade `document.cookie` outright on auth paths, reasoning that "on an auth path it would be a token in a cookie script can read". That was a proxy for a guarantee the *browser* already enforces: an `HttpOnly` cookie is not in `document.cookie` at all, so a read there cannot return a session token whatever it does with the result.
+
+The rule now bans what actually has to hold — no auth code **writes** a cookie, and none of the three secret cookie names appears in anything script can run — plus a new assertion that the only cookie auth code names is the hint. `localStorage`/`sessionStorage` stay banned site-wide, unchanged.
+
+Worth being explicit that this was a guardrail *narrowed while making a change that it blocked*. The test that justifies it is on the server: `auth-routes.test.ts` asserts every cookie carries `HttpOnly` **except** the one that exists to be read, and that the readable one carries `1` and nothing else.

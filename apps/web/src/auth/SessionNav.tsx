@@ -55,6 +55,15 @@ export interface SessionNavProps {
   readonly strings: SessionNavStrings;
   /** Locale-prefixed account path — the one destination a signed-in visitor is offered here. */
   readonly accountHref: string;
+  /**
+   * Class for the `<ul>` this renders, so the nav can style it like its
+   * own list. The list is rendered *here* rather than in `Nav.astro`
+   * because Astro wraps a `client:only` island in an `<astro-island>`
+   * element: nested inside the site-nav `<ul>` that is a direct child a
+   * list may not have, and axe's `list` rule (serious, WCAG 1.3.1) failed
+   * every public page on it at once.
+   */
+  readonly listClassName?: string;
   readonly client?: SessionClient;
 }
 
@@ -63,6 +72,7 @@ const defaultClient = createSessionClient();
 export function SessionNav({
   strings,
   accountHref,
+  listClassName,
   client = defaultClient,
 }: SessionNavProps): ReactNode {
   const [status, setStatus] = useState<'resolving' | 'signed-in' | 'signed-out'>('resolving');
@@ -100,25 +110,25 @@ export function SessionNav({
 
   if (status === 'signed-in') {
     return (
-      <>
+      <ul className={listClassName}>
         <li>
           <Link href={accountHref}>{strings.account}</Link>
         </li>
         <li>
           <SignOutButton label={strings.signOut} client={client} />
         </li>
-      </>
+      </ul>
     );
   }
 
   return (
-    <>
+    <ul className={listClassName}>
       <li>
         <SignInLink label={strings.patientSignIn} pool="patient" />
       </li>
       <li>
         <SignInLink label={strings.clinicianSignIn} pool="clinician" />
       </li>
-    </>
+    </ul>
   );
 }

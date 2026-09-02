@@ -18,7 +18,9 @@
 import {
   authorizeUrl,
   buildCookie,
+  buildSessionHintCookie,
   clearCookie,
+  clearSessionHintCookie,
   createPkcePair,
   decodeRefreshCookie,
   encodeRefreshCookie,
@@ -144,6 +146,10 @@ export function createAuthRoutes(deps: AuthRoutesDeps) {
                     encodeRefreshCookie(pool, tokens.refreshToken),
                     REFRESH_COOKIE_MAX_AGE_SECONDS,
                   ),
+                  // Written in lockstep with the refresh cookie and with
+                  // the identical lifetime — the two must never disagree
+                  // about whether there is a session worth asking about.
+                  buildSessionHintCookie(REFRESH_COOKIE_MAX_AGE_SECONDS),
                 ]
               : []),
             // The one-time secrets are spent. Leaving them set would mean
@@ -184,6 +190,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps) {
                   encodeRefreshCookie(session.pool, tokens.refreshToken),
                   REFRESH_COOKIE_MAX_AGE_SECONDS,
                 ),
+                buildSessionHintCookie(REFRESH_COOKIE_MAX_AGE_SECONDS),
               ]
             : [],
           body: { accessToken: tokens.accessToken, expiresIn: tokens.expiresIn },
@@ -214,7 +221,15 @@ export function createAuthRoutes(deps: AuthRoutesDeps) {
         return {
           statusCode: 200,
           headers: NO_STORE,
-          cookies: [clearCookie(REFRESH_COOKIE), clearCookie(PKCE_COOKIE), clearCookie(STATE_COOKIE)],
+          cookies: [
+            clearCookie(REFRESH_COOKIE),
+            // Cleared with it, for the same reason it is set with it —
+            // and through its own helper, so it goes out the same shape it
+            // arrived in.
+            clearSessionHintCookie(),
+            clearCookie(PKCE_COOKIE),
+            clearCookie(STATE_COOKIE),
+          ],
           body: {
             status: 'signed-out',
             ...(session ? { logoutUrl: logoutUrl(deps.config, session.pool) } : {}),

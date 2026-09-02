@@ -29,6 +29,30 @@ export const REFRESH_COOKIE = 'ndn_refresh';
 export const PKCE_COOKIE = 'ndn_pkce';
 export const STATE_COOKIE = 'ndn_state';
 
+/**
+ * 2026-09-02: **the only cookie here script is allowed to read, and it
+ * carries nothing.** Its entire content is `1`; its entire meaning is "a
+ * session may exist, so it is worth asking."
+ *
+ * It exists because of what `HttpOnly` costs on the read side. The refresh
+ * cookie is unreadable by script — which is the whole design and is not
+ * changing — so a browser cannot tell "signed out" from "signed in" without
+ * a round trip to `/auth/refresh`. That was fine while only account pages
+ * asked. Once the site *nav* had to know (`auth/SessionNav.tsx`), every
+ * page view on the public marketing site was paying for an auth request,
+ * for visitors who are overwhelmingly signed out — and in an environment
+ * with no auth stack at all (the ephemeral PR environment) that request
+ * never settles, which is how it was noticed.
+ *
+ * **It is a hint, never a credential and never an authorisation.** Absent
+ * means "do not bother asking". Present means "ask" — and `/auth/refresh`
+ * is still the only thing that decides. Forging it buys a wasted request
+ * that answers 401. It is written and cleared in lockstep with the refresh
+ * cookie and carries the identical `Max-Age`, so the two cannot disagree
+ * about whether there is something to ask about.
+ */
+export const SESSION_HINT_COOKIE = 'ndn_session';
+
 /** Matches TASK 2.2.1's `refreshTokenValidity` exactly — a cookie that outlives its token is a lie. */
 export const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
@@ -83,6 +107,33 @@ export function buildCookie(name: string, value: string, maxAgeSeconds: number):
     'Path=/',
     `Max-Age=${maxAgeSeconds}`,
   ].join('; ');
+}
+
+/**
+ * The one cookie built *without* `HttpOnly`, because its whole purpose is
+ * to be read by script — see `SESSION_HINT_COOKIE`. `Secure`, `SameSite`
+ * and `Path` are unchanged: it is readable, not loose.
+ */
+export function buildSessionHintCookie(maxAgeSeconds: number): string {
+  return [
+    `${SESSION_HINT_COOKIE}=1`,
+    'Secure',
+    'SameSite=Lax',
+    'Path=/',
+    `Max-Age=${maxAgeSeconds}`,
+  ].join('; ');
+}
+
+/**
+ * Its own clear, rather than the shared `clearCookie`. That helper stamps
+ * `HttpOnly`, which would work — a browser removes a cookie by name, path
+ * and domain, not by attribute — but it would mean this cookie went out
+ * one shape when set and another when cleared, and the "every cookie but
+ * this one carries HttpOnly" rule in auth-routes.test.ts would have to
+ * carve out an exception to its own exception. Symmetry is cheaper.
+ */
+export function clearSessionHintCookie(): string {
+  return buildSessionHintCookie(0).replace(`${SESSION_HINT_COOKIE}=1`, `${SESSION_HINT_COOKIE}=`);
 }
 
 /** `Max-Age=0` with an empty value — the only way to remove a cookie the browser holds. */
