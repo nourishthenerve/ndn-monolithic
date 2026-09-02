@@ -365,6 +365,52 @@ describe('WebStack — CloudFront distribution', () => {
   });
 });
 
+/**
+ * The policy's CSP as one string.
+ *
+ * It stopped being a plain literal on 2026-09-02, when `connect-src` grew
+ * the media bucket's own origin: the bucket's name is generated, so the
+ * value is a token and CloudFormation renders the property as an
+ * `Fn::Join`.
+ *
+ * A reference is rendered as what it *points at* — `${GetAtt:Logical.Attr}`
+ * — rather than an anonymous placeholder, so a test can assert which
+ * construct supplies an origin, which is the interesting question for a
+ * value that has no literal form to check.
+ */
+function cspOf(template: Template): string {
+  const [policy] = Object.values(template.findResources('AWS::CloudFront::ResponseHeadersPolicy'));
+  const value = (
+    policy as {
+      Properties: {
+        ResponseHeadersPolicyConfig: {
+          SecurityHeadersConfig: { ContentSecurityPolicy: { ContentSecurityPolicy: unknown } };
+        };
+      };
+    }
+  ).Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy
+    .ContentSecurityPolicy;
+
+  const resolve = (node: unknown): string => {
+    if (typeof node === 'string') {
+      return node;
+    }
+    if (node && typeof node === 'object' && 'Fn::Join' in node) {
+      const [separator, parts] = (node as { 'Fn::Join': [string, unknown[]] })['Fn::Join'];
+      return parts.map(resolve).join(separator);
+    }
+    if (node && typeof node === 'object' && 'Fn::GetAtt' in node) {
+      const [logicalId, attribute] = (node as { 'Fn::GetAtt': [string, string] })['Fn::GetAtt'];
+      return `\${GetAtt:${logicalId}.${attribute}}`;
+    }
+    if (node && typeof node === 'object' && 'Ref' in node) {
+      return `\${Ref:${String((node as { Ref: string }).Ref)}}`;
+    }
+    return `\${unresolved:${JSON.stringify(node)}}`;
+  };
+  return resolve(value);
+}
+
 describe('WebStack — security headers policy', () => {
   it('sets HSTS, CSP, nosniff, deny-framing, and a referrer policy', () => {
     const template = synth();
@@ -386,20 +432,7 @@ describe('WebStack — security headers policy', () => {
   });
 
   it('allows the Turnstile origin for script-src and frame-src, and nothing else added to default-src', () => {
-    const template = synth();
-    const [policy] = Object.values(
-      template.findResources('AWS::CloudFront::ResponseHeadersPolicy'),
-    );
-    const csp = (
-      policy as {
-        Properties: {
-          ResponseHeadersPolicyConfig: {
-            SecurityHeadersConfig: { ContentSecurityPolicy: { ContentSecurityPolicy: string } };
-          };
-        };
-      }
-    ).Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy
-      .ContentSecurityPolicy;
+    const csp = cspOf(synth());
 
     expect(csp).toContain("script-src 'self' https://challenges.cloudflare.com");
     expect(csp).toContain('frame-src https://challenges.cloudflare.com');
@@ -412,42 +445,41 @@ describe('WebStack — security headers policy', () => {
   // cross-origin `execute-api.amazonaws.com` hosts) — invisible to any
   // check that isn't a real signed-in browser actually attempting one.
   it('allows the content API and signalling WebSocket origins for connect-src', () => {
-    const template = synth();
-    const [policy] = Object.values(
-      template.findResources('AWS::CloudFront::ResponseHeadersPolicy'),
-    );
-    const csp = (
-      policy as {
-        Properties: {
-          ResponseHeadersPolicyConfig: {
-            SecurityHeadersConfig: { ContentSecurityPolicy: { ContentSecurityPolicy: string } };
-          };
-        };
-      }
-    ).Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy
-      .ContentSecurityPolicy;
-
-    expect(csp).toContain(
+    expect(cspOf(synth())).toContain(
       "connect-src 'self' https://m4ptz0to5m.execute-api.eu-west-2.amazonaws.com " +
         'wss://93im3xehxh.execute-api.eu-west-2.amazonaws.com',
     );
   });
 
+  // Found live, 2026-09-02, one hop further along the same path: with the
+  // upload routes finally reachable, the browser got its presigned URL and
+  // this policy refused the `PUT` to S3 — "Refused to connect because it
+  // violates the document's Content Security Policy". A presigned upload
+  // is cross-origin by design, and the bucket's own CORS rule cannot
+  // authorise what CSP has not named.
+  it('allows the media bucket origin for connect-src, so a presigned upload can reach S3', () => {
+    const [connectSrc] = cspOf(synth()).split('connect-src ')[1]?.split(';') ?? [];
+
+    // `RegionalDomainName`, not `DomainName`: the handler presigns with a
+    // default-region client, so the browser calls the regional host, and a
+    // CSP origin must match the host actually called.
+    expect(connectSrc).toMatch(/https:\/\/\$\{GetAtt:MediaBucket\w*\.RegionalDomainName\}/);
+  });
+
+  // The two `execute-api` hosts are hardcoded because they live in another
+  // stack this one cannot reference. The bucket is this stack's own, and
+  // hardcoding *its* generated name would hand every ephemeral PR
+  // environment production's origin — an origin its own uploads never use,
+  // and one no PR stack has any business naming.
+  it('reads the media bucket origin from the bucket rather than hardcoding production’s', () => {
+    const csp = cspOf(synthEphemeral());
+
+    expect(csp).not.toContain('mediabucketbcbb02ba');
+    expect(csp).toMatch(/\$\{GetAtt:MediaBucket\w*\.RegionalDomainName\}/);
+  });
+
   it('allows the Stripe origins for script-src and frame-src (TASK 1.5.2)', () => {
-    const template = synth();
-    const [policy] = Object.values(
-      template.findResources('AWS::CloudFront::ResponseHeadersPolicy'),
-    );
-    const csp = (
-      policy as {
-        Properties: {
-          ResponseHeadersPolicyConfig: {
-            SecurityHeadersConfig: { ContentSecurityPolicy: { ContentSecurityPolicy: string } };
-          };
-        };
-      }
-    ).Properties.ResponseHeadersPolicyConfig.SecurityHeadersConfig.ContentSecurityPolicy
-      .ContentSecurityPolicy;
+    const csp = cspOf(synth());
 
     expect(csp).toContain('https://js.stripe.com');
     expect(csp).toContain('https://checkout.stripe.com');

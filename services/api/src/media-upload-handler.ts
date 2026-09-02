@@ -19,7 +19,12 @@ const MEDIA_BUCKET_NAME = process.env.MEDIA_BUCKET_NAME ?? '';
 // indefinitely.
 const PRESIGNED_UPLOAD_URL_EXPIRY_SECONDS = 300;
 
-const s3Client = new S3Client({});
+// See `assessment-upload-handler.ts` for why `'WHEN_REQUIRED'` is not
+// optional here: the SDK's default bakes the CRC32 of an *empty* body into
+// the presigned URL as a signed query parameter, and S3 then rejects the
+// real upload for disagreeing with it. Same SDK, same presigning, same bug
+// — this one simply had no caller to find it.
+const s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
 
 // TASK 1.6.2: reads /ndn/flags/<name> from SSM and fails closed — see
 // ssm-flag-source.ts. Replaces the InMemoryFlagSource nothing ever set.

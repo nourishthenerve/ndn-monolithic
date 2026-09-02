@@ -807,6 +807,32 @@ export class WebStack extends Stack {
           // rarely-changing generated ids, and this stack has no live
           // cross-stack reference to either construct to read them from
           // instead.
+          // **Found live, 2026-09-02, once the routes above were finally
+          // reachable:** the browser got its presigned URL and was refused
+          // by this very policy on the next line —
+          //
+          //     Fetch API cannot load https://…s3.eu-west-2.amazonaws.com/…
+          //     Refused to connect because it violates the document's
+          //     Content Security Policy.
+          //
+          // A presigned upload is a *cross-origin* `PUT` straight to S3,
+          // by design — that is the whole point of presigning, and it is
+          // why `mediaBucket` carries its own CORS rule. But CSP governs
+          // what this document may connect to regardless of what the far
+          // end permits, and S3 was never named here. Both fixes were
+          // needed and neither was visible until the one before it landed;
+          // this is the third and last hop on that path.
+          //
+          // Unlike the two `execute-api` ids above — stable, generated
+          // once, in another stack this one cannot reference — the media
+          // bucket is *this* stack's own construct, so it is read from it.
+          // Its name is generated per stack, so every ephemeral PR
+          // environment gets its own correct origin and none of them
+          // inherits production's. `bucketRegionalDomainName` (not
+          // `bucketDomainName`) because `assessment-upload-handler.ts`
+          // presigns with a default-region `S3Client`, which signs the
+          // regional endpoint — and a CSP origin must match the host the
+          // browser actually calls, character for character.
           contentSecurityPolicy:
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
             "script-src 'self' https://challenges.cloudflare.com https://js.stripe.com " +
@@ -814,7 +840,8 @@ export class WebStack extends Stack {
             "'sha256-Ya0pUYrC7nM5Cn/056TyVuEiz6dFGrzmkWzgON0pF0U=' " +
             "'sha256-QzWFZi+FLIx23tnm9SBU4aEgx4x8DsuASP07mfqol/c='; " +
             "connect-src 'self' https://m4ptz0to5m.execute-api.eu-west-2.amazonaws.com " +
-            'wss://93im3xehxh.execute-api.eu-west-2.amazonaws.com; ' +
+            'wss://93im3xehxh.execute-api.eu-west-2.amazonaws.com ' +
+            `https://${mediaBucket.bucketRegionalDomainName}; ` +
             'frame-src https://challenges.cloudflare.com https://checkout.stripe.com; ' +
             "object-src 'none'; frame-ancestors 'none'",
         },
