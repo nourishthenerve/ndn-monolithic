@@ -32,7 +32,7 @@ const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string
   'Clinician accounts':       { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '**—**',   Visitor: '—',   Principal: 'C R U (deactivate only)' },
   'Audit log':                { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '—',   Visitor: '—',   Principal: 'R' },
   'Content item':             { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '**R**',            'Sub-clinician (unassigned)': '**R**', Helpdesk: '**R**',   Visitor: '—',   Principal: 'C R U' },
-  'Testimonial moderation':   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': 'C R U',            'Sub-clinician (unassigned)': 'C R U', Helpdesk: '—',   Visitor: '—',   Principal: 'C R U' },
+  'Testimonial (own)':        { 'Patient (own)': '**C R U D**',    'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',     Helpdesk: '—',   Visitor: '—',   Principal: '—' },
   Workshop:                   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '**R**',            'Sub-clinician (unassigned)': '**R**', Helpdesk: '—',   Visitor: '—',   Principal: 'C R U' },
 };
 
@@ -45,6 +45,8 @@ const CELL_LETTERS: Record<string, Action> = {
   // D-29: reset-password, only ever set on the Patient profile row's
   // Principal column.
   P: 'reset-password',
+  // 2026-09-02: withdraw, only ever set on the Testimonial (own) row.
+  D: 'withdraw',
 };
 
 /**
@@ -79,7 +81,14 @@ const COLUMNS: readonly MatrixColumn[] = [
   'Visitor',
   'Principal',
 ];
-const ACTIONS: readonly Action[] = ['create', 'read', 'update', 'join-call', 'reset-password'];
+const ACTIONS: readonly Action[] = [
+  'create',
+  'read',
+  'update',
+  'join-call',
+  'reset-password',
+  'withdraw',
+];
 
 const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   'Own profile': 'own-profile',
@@ -98,7 +107,7 @@ const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   'Clinician accounts': 'clinician-account',
   'Audit log': 'audit',
   'Content item': 'content-item',
-  'Testimonial moderation': 'testimonial-moderation',
+  'Testimonial (own)': 'testimonial',
   Workshop: 'workshop',
 };
 
@@ -208,7 +217,7 @@ describe('RBAC_MATRIX transcribes docs/plan/04-data-model-rbac.md', () => {
     }
   });
 
-  it('grants nothing outside create/read/update/join-call/reset-password in any cell', () => {
+  it('grants nothing outside the documented action vocabulary in any cell', () => {
     for (const row of ROWS) {
       for (const column of COLUMNS) {
         for (const action of RBAC_MATRIX[row][column]) {
@@ -347,15 +356,20 @@ describe('R-09: a patient reaches no private assessment field, in any relationsh
 });
 
 describe('a sub-clinician reaches nothing belonging to a patient they are not assigned', () => {
-  // TASK 2.5.4's three rows are deliberately excluded: "unassigned" for a
-  // patient-relationship row means "someone else's patient," but Content
-  // item/Testimonial moderation/Workshop carry no patient relationship at
-  // all, so every sub-clinician is "unassigned" on them by construction —
-  // that column is where 2.5.4's "any clinician" grant actually lives, not
-  // a denial this test's premise applies to. See docs/plan/04-data-model-rbac.md's
-  // own note on those three rows.
+  // TASK 2.5.4's marketing rows are deliberately excluded: "unassigned"
+  // for a patient-relationship row means "someone else's patient," but
+  // Content item/Workshop carry no patient relationship at all, so every
+  // sub-clinician is "unassigned" on them by construction — that column is
+  // where 2.5.4's "any clinician" grant actually lives, not a denial this
+  // test's premise applies to. See docs/plan/04-data-model-rbac.md's own
+  // note on those rows.
+  //
+  // `Testimonial (own)` is *not* excluded (2026-09-02). It does carry a
+  // patient relationship, and a sub-clinician is denied every action on it
+  // in both columns — which is the point of the row, so asserting it here
+  // is exactly right rather than a premise mismatch.
   const PATIENT_RELATIONSHIP_ROWS = ROWS.filter(
-    (row) => row !== 'Content item' && row !== 'Testimonial moderation' && row !== 'Workshop',
+    (row) => row !== 'Content item' && row !== 'Workshop',
   );
   for (const row of PATIENT_RELATIONSHIP_ROWS) {
     it(`${row} → deny, for every action`, () => {

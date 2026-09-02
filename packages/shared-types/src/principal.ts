@@ -61,8 +61,24 @@ export type Role =
  * reviewer of `authz-matrix.ts` sees exactly which cell governs handing
  * someone a credential, rather than that reach hiding inside a grant meant
  * for editing a name or a phone number.
+ *
+ * `'withdraw'` (2026-09-02): retracting something already published. It
+ * exists for exactly one cell — a patient's own testimonial — and it is
+ * **not** deletion; 00-conventions.md's no-delete rule still holds and the
+ * row transitions to `withdrawn`. It is separate from `'update'` because
+ * the two answer different questions: editing your words is authorship,
+ * withdrawing them is consent. Publication rests on the author's consent,
+ * and consent that cannot be withdrawn is not consent — so whoever holds
+ * `'update'` on a testimonial must hold this too, and nobody else holds
+ * either.
  */
-export type Action = 'create' | 'read' | 'update' | 'join-call' | 'reset-password';
+export type Action =
+  | 'create'
+  | 'read'
+  | 'update'
+  | 'join-call'
+  | 'reset-password'
+  | 'withdraw';
 
 /**
  * Both lifecycles in one union: a patient is `pending` → `approved` |

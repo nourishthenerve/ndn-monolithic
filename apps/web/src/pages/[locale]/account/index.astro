@@ -146,6 +146,20 @@ const heading = t('account.heading', undefined, locale);
         </ul>
       </nav>
     </RequireAuth>
+    {/* 2026-09-02: the patient's own testimonial. The one authoring
+        surface in this app that is a patient's and nobody else's — see
+        authz-matrix.ts's `Testimonial (own)` row. */}
+    <RequireAuth client:only="react" allowRoles={['patient']}>
+      <nav aria-label={t('account.testimonialLink', undefined, locale)}>
+        <ul>
+          <li>
+            <Link href={`/${locale}/account/testimonial`}>
+              {t('account.testimonialLink', undefined, locale)}
+            </Link>
+          </li>
+        </ul>
+      </nav>
+    </RequireAuth>
     <RequireAuth client:only="react" allowRoles={['principal-clinician', 'helpdesk']}>
       <nav aria-label={t('account.patientAdminLink', undefined, locale)}>
         <ul>

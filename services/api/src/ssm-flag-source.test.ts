@@ -89,7 +89,7 @@ describe('SsmFlagSource', () => {
   it('never logs a parameter value, only its name — values are operator input', async () => {
     ssmMock.on(GetParameterCommand).resolves({ Parameter: { Value: 'definitely-not-a-boolean' } });
 
-    await source().read('testimonials.submission.enabled');
+    await source().read('testimonials.enabled');
 
     expect(String(warnSpy.mock.calls[0]?.[0])).not.toContain('definitely-not-a-boolean');
   });

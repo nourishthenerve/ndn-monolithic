@@ -218,7 +218,7 @@ export function createWorkshopReadHandler(deps: WorkshopReadDeps): APIGatewayPro
     };
 
     // Flag: workshops.enabled — default off, same "invisible until ready"
-    // convention as content.readApi.enabled/testimonials.submission.enabled.
+    // convention as content.readApi.enabled/testimonials.enabled.
     if (!(await deps.flags.isEnabled('workshops.enabled'))) {
       return respond(404, { error: 'NOT_FOUND' });
     }
