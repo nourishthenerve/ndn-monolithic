@@ -1,0 +1,42 @@
+---
+// 2026-09-02: the workshops fallback page — see blog/post.astro's own
+// header for the full reasoning. One prerendered page per locale that
+// renders any published workshop from `?slug=`, so a workshop saved after
+// the last deploy is reachable immediately rather than 404ing until the
+// site is rebuilt.
+//
+// `noIndex`, and never the link for a workshop that has its own
+// prerendered page — the canonical URL should win.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+import { LiveWorkshop } from '../../../workshops/LiveWorkshop.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('workshops.index.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('workshops.index.description', undefined, locale)}
+  noIndex
+>
+  <LiveWorkshop
+    client:only="react"
+    locale={locale}
+    strings={{
+      loading: t('workshops.detail.loading', undefined, locale),
+      notFound: t('workshops.detail.notFound', undefined, locale),
+      error: t('workshops.detail.error', undefined, locale),
+      dateLabel: t('workshops.detail.dateLabel', undefined, locale),
+      posterAltTemplate: t('workshops.index.posterAlt', { title: '{title}' }, locale),
+    }}
+  />
+</BaseLayout>

@@ -30,3 +30,31 @@ None any more. The `ADMIN_API_TOKEN` SSM parameter this section used to document
 ## Cost
 
 £0.00 net-new, per TASK 1.3.2's own line — one more Lambda + a handful of API Gateway routes against infrastructure TASK 1.3.1 already provisioned; SSM Standard parameters are free.
+
+## Amendment, 2026-09-02 — published content goes live immediately
+
+*"when I submit a blog post or workshop via principal clinician and then go to the blog and workshop tab it's still empty. I want them to go live immediately."*
+
+ADR-0017 makes the public site statically generated, so both listings were built from a single fetch at `astro build` time and a post published afterwards was simply not in them. The previous amendment made that *visible* (the authoring panel said so, and the deploy job accepts a manual run); this makes it stop happening.
+
+### The listings reconcile, they do not replace
+
+`blog/index.astro` and `workshops/index.astro` still render the build-time list **into the HTML**, and pass it to an island as a seed (`client:load`, not `client:only` — the distinction is the whole point). The island then fetches the live list and replaces the seed.
+
+Three things a plain fetch-on-mount would have thrown away, all of which matter on the one surface that exists to be found:
+
+- **SEO** — a crawler that runs no JavaScript still sees the posts.
+- **No flash of empty** — the page paints with content, then reconciles.
+- **It survives the API being down** — an unreachable or flag-off content API leaves the build-time list exactly as it was, the same failure mode `content-client.ts` already chose for the build itself.
+
+### Two link shapes, and why that is not a wart
+
+A post that existed at build time has its own prerendered page at `/{locale}/blog/{id}` — a real, canonical, indexed URL. A post published since **cannot**: there is no server to render it and no file on S3 to serve. Those link instead to `/{locale}/blog/post?slug=…`, one prerendered page per locale that resolves any published post client-side (`workshops/workshop?slug=…` is its twin).
+
+It is self-healing: at the next deploy the new post gets its own page, the rebuilt listing links to it normally, and the `?slug=` form stops being used for it. The fallback pages carry `noindex` precisely so the two never compete — two indexable URLs for one article is the trap this shape could otherwise set, and the canonical one should win.
+
+Sending *every* post through the query-string page would have been simpler and was rejected: it trades the site's real article URLs for uniformity.
+
+### What this does not change
+
+Publishing still writes to DynamoDB through the same authoring routes, and the deploy still rebuilds the prerendered pages. The manual `workflow_dispatch` deploy added on 2026-09-01 is now an SEO step rather than a publishing one — worth running so a new article gets its own indexable URL, no longer needed for anyone to *see* it.

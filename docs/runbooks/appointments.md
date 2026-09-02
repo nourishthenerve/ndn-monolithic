@@ -151,3 +151,15 @@ Three properties are worth stating because each is a decision rather than a defa
 These close a gap TASK 3.4.2 named and left: it explained that `appointment_status` has four values *because* of `completed`/`no-show` and then built no route for either, so the field had never once held `'completed'` anywhere in this system. Harmless until something counted it. Two things now do — the visitor's "number of appointments happened" (`CaseloadRepository`) and the calendar section's "sessions so far" — and both would have read zero forever, which is worse than an obviously missing figure because it looks like a real one.
 
 Both are conditioned on `expect: 'scheduled'`: an appointment that was cancelled, is still awaiting approval, or has already been marked did not take place and cannot be recorded as though it had. Neither writes a dashboard notice — the feed is for what is coming, not for what the patient was already present at.
+
+## Amendment, 2026-09-02 — every booking waits for approval
+
+The first cut exempted the principal: their own bookings were `scheduled` on the spot, on the reasoning that the approver approving themselves is a step with no decision in it.
+
+The owner, on seeing exactly that: *"when I assign an appointment to a patient, it should be visible to patient dashboard to be approved by principal clinician before it appears to patient profile — atm it appears to patient profile right away."*
+
+The exemption was wrong about what the step is for. It is not the principal proving something to themselves — it is the gate that decides **when a booking becomes real to the patient**, and a booking typed in error is caught by the same review whoever typed it. `appointment.ts` no longer reads a role to decide: one status for every new booking, one route out of it.
+
+**The approval controls now sit on the patient's record page**, next to that patient's appointments and directly under the form that creates them. That is the page the dashboard clicks through to, and the page the booking was made on — which is what the owner meant by "visible to patient dashboard to be approved". They remain on the clinician calendar too, where a pending request also appears.
+
+They are rendered for whoever can see a pending row rather than hidden by role. `Appointment approval` is `Principal`-only and the API refuses everyone else, so a clinician looking at their own pending request gets a legible refusal rather than a row with no explanation and no control.

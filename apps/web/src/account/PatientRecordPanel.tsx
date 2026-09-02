@@ -77,6 +77,11 @@ export interface PatientRecordPanelStrings {
   readonly durationColumnLabel: string;
   readonly appointmentStatusColumnLabel: string;
   readonly minutesSuffix: string;
+  /** 2026-09-02: the approval queue's own column and controls. */
+  readonly decisionColumnLabel: string;
+  readonly approveButton: string;
+  readonly declineButton: string;
+  readonly decideFailedLabel: string;
   readonly backToDashboard: string;
 }
 
@@ -93,6 +98,13 @@ export interface PatientRecordPanelProps {
     patch: { readonly personal: Record<string, unknown> },
   ) => Promise<Response>;
   readonly fetchAppointments?: (accessToken: string, patientId: string) => Promise<Response>;
+  /** 2026-09-02: `POST …/appointments/{apptId}/{approve|decline}`. Injectable for tests. */
+  readonly decideAppointment?: (
+    accessToken: string,
+    patientId: string,
+    scheduledAt: string,
+    decision: 'approve' | 'decline',
+  ) => Promise<Response>;
 }
 
 const defaultClient = createSessionClient();
@@ -122,6 +134,24 @@ function defaultSavePatient(
   });
 }
 
+/**
+ * The appointment's own id in the path is its `scheduledAt` — the
+ * `{apptId}` segment the API reads. Not the composite
+ * `<patientId>#<scheduledAt>` a *call* is identified by; the two look
+ * alike and are not the same, and the patient id travels in `{id}`.
+ */
+function defaultDecideAppointment(
+  accessToken: string,
+  patientId: string,
+  scheduledAt: string,
+  decision: 'approve' | 'decline',
+): Promise<Response> {
+  return fetch(
+    `${contentApiUrl}/patients/${encodeURIComponent(patientId)}/appointments/${encodeURIComponent(scheduledAt)}/${decision}`,
+    { method: 'POST', headers: { authorization: `Bearer ${accessToken}` } },
+  );
+}
+
 function defaultFetchAppointments(accessToken: string, patientId: string): Promise<Response> {
   return fetch(`${contentApiUrl}/patients/${encodeURIComponent(patientId)}/appointments`, {
     headers: { authorization: `Bearer ${accessToken}` },
@@ -136,6 +166,7 @@ export function PatientRecordPanel({
   fetchPatient = defaultFetchPatient,
   savePatient = defaultSavePatient,
   fetchAppointments = defaultFetchAppointments,
+  decideAppointment = defaultDecideAppointment,
 }: PatientRecordPanelProps): ReactNode {
   const id = patientId ?? patientIdFromLocation();
   const [state, setState] = useState<ViewState>('loading');
@@ -145,6 +176,11 @@ export function PatientRecordPanel({
   const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [appointments, setAppointments] = useState<readonly UpcomingAppointment[] | undefined>();
   const [appointmentsFailed, setAppointmentsFailed] = useState(false);
+  /** The `scheduledAt` of the row currently being decided, so one row's spinner never speaks for another's. */
+  const [deciding, setDeciding] = useState<string | undefined>();
+  const [decideFailed, setDecideFailed] = useState(false);
+  /** Bumped to re-run the appointments effect after a decision lands. */
+  const [appointmentsVersion, setAppointmentsVersion] = useState(0);
 
   const load = useCallback(async () => {
     if (!id) {
@@ -220,7 +256,40 @@ export function PatientRecordPanel({
     return () => {
       cancelled = true;
     };
-  }, [client, fetchAppointments, id, record]);
+  }, [client, fetchAppointments, id, record, appointmentsVersion]);
+
+  /**
+   * Approve or decline one pending booking, then re-read the list.
+   *
+   * A `403` (not the principal) and a `409` (someone decided it first)
+   * land on the same message on purpose: both mean "this row is not yours
+   * to change now", and both are resolved by looking again.
+   */
+  const decide = async (scheduledAt: string, decision: 'approve' | 'decline') => {
+    setDeciding(scheduledAt);
+    setDecideFailed(false);
+    const accessToken = await client.authorization();
+    if (!accessToken) {
+      setDeciding(undefined);
+      setDecideFailed(true);
+      return;
+    }
+    try {
+      const response = await decideAppointment(accessToken, id, scheduledAt, decision);
+      if (!response.ok) {
+        setDecideFailed(true);
+        return;
+      }
+      // Re-read rather than patch the row: approving changes the status,
+      // and the patient's own view of "next appointment" is derived from
+      // it server-side, so the list is the honest source.
+      setAppointmentsVersion((current) => current + 1);
+    } catch {
+      setDecideFailed(true);
+    } finally {
+      setDeciding(undefined);
+    }
+  };
 
   const statusLabel = (accountStatus: PatientAccountStatus): string => {
     switch (accountStatus) {
@@ -372,6 +441,7 @@ export function PatientRecordPanel({
       <section>
         <h2>{strings.appointmentsHeading}</h2>
         {appointmentsFailed && <p role="alert">{strings.appointmentsError}</p>}
+        {decideFailed && <p role="alert">{strings.decideFailedLabel}</p>}
         {!appointmentsFailed && appointments && appointments.length === 0 && (
           <p>{strings.appointmentsEmpty}</p>
         )}
@@ -383,6 +453,7 @@ export function PatientRecordPanel({
                 <th scope="col">{strings.whenColumnLabel}</th>
                 <th scope="col">{strings.durationColumnLabel}</th>
                 <th scope="col">{strings.appointmentStatusColumnLabel}</th>
+                <th scope="col">{strings.decisionColumnLabel}</th>
               </tr>
             </thead>
             <tbody>
@@ -400,6 +471,38 @@ export function PatientRecordPanel({
                     {appointment.durationMinutes} {strings.minutesSuffix}
                   </td>
                   <td>{appointment.appointment_status}</td>
+                  {/* 2026-09-02: the approval queue, on the page where the
+                      booking was made and the page the dashboard clicks
+                      through to — which is what the owner meant by "visible
+                      to patient dashboard to be approved". Every booking now
+                      lands here first, so without a control on this screen
+                      there was nowhere to move it on from.
+
+                      Rendered for whoever can see a pending row rather than
+                      guessed at by role: `Appointment approval` is
+                      Principal-only and the API refuses everyone else, so a
+                      clinician looking at their own pending request gets a
+                      legible refusal instead of a row with no explanation. */}
+                  <td>
+                    {appointment.appointment_status === 'pending-approval' ? (
+                      <>
+                        <button
+                          type="button"
+                          disabled={deciding === appointment.scheduledAt}
+                          onClick={() => void decide(appointment.scheduledAt, 'approve')}
+                        >
+                          {strings.approveButton}
+                        </button>{' '}
+                        <button
+                          type="button"
+                          disabled={deciding === appointment.scheduledAt}
+                          onClick={() => void decide(appointment.scheduledAt, 'decline')}
+                        >
+                          {strings.declineButton}
+                        </button>
+                      </>
+                    ) : null}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -874,7 +874,16 @@ describe('the approval step — POST …/approve and …/decline', () => {
     expect(response.statusCode).toBe(404);
   });
 
-  it('confirms the principal\'s own booking immediately — the approver approving themselves is a step with no decision in it', async () => {
+  // **2026-09-02: was "confirms the principal's own booking immediately".**
+  // The owner: "when I assign an appointment to a patient, it should be
+  // visible to patient dashboard to be approved by principal clinician
+  // before it appears to patient profile."
+  //
+  // The exemption rested on "the approver approving themselves is a step
+  // with no decision in it", which was wrong about what the step is for:
+  // it is the gate that decides when a booking becomes real *to the
+  // patient*, not the principal proving something to themselves.
+  it('holds the principal\'s own booking for approval too — the gate is what the patient sees, not who typed it', async () => {
     const { handler } = await build();
     const response = await invoke(
       handler,
@@ -889,7 +898,7 @@ describe('the approval step — POST …/approve and …/decline', () => {
     expect(
       (JSON.parse(response.body) as { item: { appointment_status: string } }).item
         .appointment_status,
-    ).toBe('scheduled');
+    ).toBe('pending-approval');
   });
 });
 
@@ -928,7 +937,7 @@ describe('the patient dashboard feed', () => {
     expect(notificationStore.items[0]?.read).toBe(false);
   });
 
-  it('records an approval, not a request, when the principal books directly', async () => {
+  it('records a request when the principal books, the same as anyone else', async () => {
     const { handler, notificationStore } = await build();
     await invoke(
       handler,
@@ -939,7 +948,10 @@ describe('the patient dashboard feed', () => {
         principal: PRINCIPAL_CONTEXT,
       }),
     );
-    expect(notificationStore.items.map((item) => item.kind)).toEqual(['appointment-approved']);
+    // Not `appointment-approved`: nothing is confirmed until the approval
+    // step runs, so telling the patient otherwise would be the very thing
+    // the owner objected to.
+    expect(notificationStore.items.map((item) => item.kind)).toEqual(['appointment-requested']);
   });
 
   it('records a cancellation when a booking is called off', async () => {
@@ -958,7 +970,7 @@ describe('the patient dashboard feed', () => {
       fakeEvent({ routeKey: CANCEL_ROUTE, pathParameters: { id: 'pat-1', apptId: APPT_AT } }),
     );
     expect(notificationStore.items.map((item) => item.kind)).toEqual([
-      'appointment-approved',
+      'appointment-requested',
       'appointment-cancelled',
     ]);
   });
@@ -1012,6 +1024,11 @@ describe('marking attendance — POST …/complete and …/no-show', () => {
   const COMPLETE_ROUTE = 'POST /patients/{id}/appointments/{apptId}/complete';
   const NO_SHOW_ROUTE = 'POST /patients/{id}/appointments/{apptId}/no-show';
 
+  /**
+   * Books and then approves — since 2026-09-02 every booking lands
+   * `pending-approval`, so "confirmed" is two steps for everyone, the
+   * principal included.
+   */
   async function bookConfirmed(handler: ReturnType<typeof createAppointmentHandler>) {
     const response = await invoke(
       handler,
@@ -1023,6 +1040,15 @@ describe('marking attendance — POST …/complete and …/no-show', () => {
       }),
     );
     expect(response.statusCode).toBe(201);
+    const approved = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'POST /patients/{id}/appointments/{apptId}/approve',
+        pathParameters: { id: 'pat-1', apptId: APPT_AT },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(approved.statusCode).toBe(200);
   }
 
   it.each([
@@ -1119,5 +1145,88 @@ describe('marking attendance — POST …/complete and …/no-show', () => {
       fakeEvent({ routeKey: COMPLETE_ROUTE, pathParameters: { id: 'pat-1', apptId: APPT_AT } }),
     );
     expect(notificationStore.items).toHaveLength(before);
+  });
+});
+
+// 2026-09-02: the property the owner actually asked for — a booking is
+// invisible to the patient until the principal has approved it. Asserted
+// against what a patient's own surfaces read, not against the raw row.
+describe('a booking reaches the patient only once it is approved', () => {
+  const APPT_AT = '2026-09-05T10:00:00.000Z';
+
+  async function booked(principal: Record<string, unknown>) {
+    const built = await build();
+    const response = await invoke(
+      built.handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+        principal,
+      }),
+    );
+    expect(response.statusCode).toBe(201);
+    return built;
+  }
+
+  it.each([
+    ['the principal', PRINCIPAL_CONTEXT],
+    ['the assigned clinician', ASSIGNED_SUB_CONTEXT],
+  ])('is pending, whoever booked it — %s', async (_label, principal) => {
+    const { handler } = await booked(principal);
+    const list = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: PATIENT_LIST_ROUTE,
+        pathParameters: { id: 'me' },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    const items = (JSON.parse(list.body) as { items: { appointment_status: string }[] }).items;
+    expect(items.map((item) => item.appointment_status)).toEqual(['pending-approval']);
+  });
+
+  it('becomes confirmed only after the principal approves', async () => {
+    const { handler } = await booked(PRINCIPAL_CONTEXT);
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'POST /patients/{id}/appointments/{apptId}/approve',
+        pathParameters: { id: 'pat-1', apptId: APPT_AT },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    const list = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: PATIENT_LIST_ROUTE,
+        pathParameters: { id: 'me' },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    const items = (JSON.parse(list.body) as { items: { appointment_status: string }[] }).items;
+    expect(items.map((item) => item.appointment_status)).toEqual(['scheduled']);
+  });
+
+  it('a declined booking never becomes confirmed', async () => {
+    const { handler } = await booked(ASSIGNED_SUB_CONTEXT);
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: 'POST /patients/{id}/appointments/{apptId}/decline',
+        pathParameters: { id: 'pat-1', apptId: APPT_AT },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    const list = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: PATIENT_LIST_ROUTE,
+        pathParameters: { id: 'me' },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    const items = (JSON.parse(list.body) as { items: { appointment_status: string }[] }).items;
+    expect(items.map((item) => item.appointment_status)).toEqual(['cancelled']);
   });
 });

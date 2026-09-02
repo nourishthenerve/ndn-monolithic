@@ -7,10 +7,11 @@
 // a failed build.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Card, Heading, Link } from '@ndn/ui';
+import { Heading } from '@ndn/ui';
 
 import BaseLayout from '../../../layouts/BaseLayout.astro';
-import { siteName, workshopPosterUrl } from '../../../site-config.js';
+import { siteName } from '../../../site-config.js';
+import { LiveWorkshopList } from '../../../workshops/LiveWorkshopList.js';
 import { fetchPublishedWorkshops } from '../../../workshops/workshop-client.js';
 
 export async function getStaticPaths() {
@@ -42,27 +43,18 @@ const heading = t('workshops.index.heading', undefined, locale);
   description={t('workshops.index.description', undefined, locale)}
 >
   <Heading level={1}>{heading}</Heading>
-  {
-    workshopsForLocale.length === 0 ? (
-      <p>{t('workshops.index.empty', undefined, locale)}</p>
-    ) : (
-      workshopsForLocale.map(({ workshop, detail }) => (
-        <Card>
-          {workshop.posterKey && (
-            <img
-              src={workshopPosterUrl(workshop.posterKey)}
-              alt={t('workshops.index.posterAlt', { title: detail.title }, locale)}
-              width="320"
-              loading="lazy"
-            />
-          )}
-          <Heading level={2}>{detail.title}</Heading>
-          <p>{detail.description}</p>
-          <Link href={`/${locale}/workshops/${workshop.id}`}>
-            {t('workshops.index.viewDetails', undefined, locale)}
-          </Link>
-        </Card>
-      ))
-    )
-  }
+  {/* 2026-09-02: an island seeded with the build-time list, so a workshop
+      published since the last deploy appears without one. `client:load`
+      keeps the seed in the HTML for crawlers and for no-JS readers — see
+      blog/LiveBlogList.tsx's header. */}
+  <LiveWorkshopList
+    client:load
+    locale={locale}
+    initialWorkshops={workshopsForLocale.map(({ workshop }) => workshop)}
+    strings={{
+      empty: t('workshops.index.empty', undefined, locale),
+      viewDetails: t('workshops.index.viewDetails', undefined, locale),
+      posterAltTemplate: t('workshops.index.posterAlt', { title: '{title}' }, locale),
+    }}
+  />
 </BaseLayout>

@@ -7,9 +7,10 @@
 // posts today).
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Card, Heading, Link } from '@ndn/ui';
+import { Heading } from '@ndn/ui';
 
 import { fetchPublishedBlogPosts } from '../../../blog/content-client.js';
+import { LiveBlogList } from '../../../blog/LiveBlogList.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -43,19 +44,22 @@ const heading = t('blog.index.heading', undefined, locale);
   description={t('blog.index.description', undefined, locale)}
 >
   <Heading level={1}>{heading}</Heading>
-  {
-    postsForLocale.length === 0 ? (
-      <p>{t('blog.index.empty', undefined, locale)}</p>
-    ) : (
-      postsForLocale.map(({ post, translation }) => (
-        <Card>
-          <Heading level={2}>{translation.title}</Heading>
-          <p>{translation.excerpt}</p>
-          <Link href={`/${locale}/blog/${post.id}`}>
-            {t('blog.index.readMore', undefined, locale)}
-          </Link>
-        </Card>
-      ))
-    )
-  }
+  {/* 2026-09-02: the list is now an island seeded with the build-time
+      posts, so a post published since the last deploy appears here without
+      one — the owner's "I want them to go live immediately".
+
+      `client:load`, not `client:only`: the seed must be in the HTML for a
+      crawler and for a reader with no JavaScript, which is exactly what a
+      `client:only` island would have thrown away on the site's one page
+      that exists to be found. The fetch reconciles on top of it, and
+      leaves it alone if the API is unreachable. */}
+  <LiveBlogList
+    client:load
+    locale={locale}
+    initialPosts={postsForLocale.map(({ post }) => post)}
+    strings={{
+      empty: t('blog.index.empty', undefined, locale),
+      readMore: t('blog.index.readMore', undefined, locale),
+    }}
+  />
 </BaseLayout>
