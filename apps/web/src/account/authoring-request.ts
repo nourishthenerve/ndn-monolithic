@@ -19,6 +19,8 @@ export interface BlogFormFields {
   readonly body: string;
   /** Free text: comma- or newline-separated, however the author likes to type it. */
   readonly keywords: string;
+  /** Media-bucket key of an uploaded lead image, once one has been uploaded. Absent until then, and absent for a post that has none. */
+  readonly imageKey?: string;
   readonly publishNow: boolean;
 }
 
@@ -29,6 +31,8 @@ export interface WorkshopFormFields {
   /** `<input type="datetime-local">`'s own value — local wall time, no zone. */
   readonly dateTimeLocal: string;
   readonly capacity: string;
+  /** Media-bucket key of an uploaded poster, once one has been uploaded. */
+  readonly posterKey?: string;
   readonly publishNow: boolean;
 }
 
@@ -37,6 +41,7 @@ export interface CreateBlogRequestBody {
   readonly contentType: 'blog';
   readonly status: 'draft' | 'published';
   readonly keywords: readonly string[];
+  readonly imageKey?: string;
   readonly translations: Readonly<Record<string, { title: string; body: string; excerpt: string }>>;
 }
 
@@ -45,6 +50,7 @@ export interface CreateWorkshopRequestBody {
   readonly status: 'draft' | 'published';
   readonly dateTimeUtc: string;
   readonly capacity?: number;
+  readonly posterKey?: string;
   readonly details: Readonly<Record<string, { title: string; description: string }>>;
 }
 
@@ -142,6 +148,10 @@ export function buildCreateBlogRequestBody(fields: BlogFormFields): CreateBlogRe
     contentType: 'blog',
     status: fields.publishNow ? 'published' : 'draft',
     keywords: parseKeywords(fields.keywords),
+    // Omitted rather than sent empty, the same discipline `capacity`
+    // keeps below: the API's schema makes it optional, and "no image" is
+    // a different fact from "an image whose key is the empty string".
+    ...(fields.imageKey ? { imageKey: fields.imageKey } : {}),
     translations: {
       [DEFAULT_LOCALE]: {
         title: fields.title.trim(),
@@ -165,6 +175,7 @@ export function buildCreateWorkshopRequestBody(
     // optional (workshops are announcement-only), so "no limit" and "a
     // limit of nothing" must stay different facts.
     ...(Number.isFinite(capacity) && capacity > 0 ? { capacity } : {}),
+    ...(fields.posterKey ? { posterKey: fields.posterKey } : {}),
     details: {
       [DEFAULT_LOCALE]: {
         title: fields.title.trim(),

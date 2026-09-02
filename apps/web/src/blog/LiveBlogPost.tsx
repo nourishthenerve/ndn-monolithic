@@ -18,7 +18,7 @@ import { Heading } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
-import { blogContentType, contentApiUrl } from '../site-config.js';
+import { blogContentType, contentApiUrl, mediaUrl } from '../site-config.js';
 
 interface Translation {
   readonly title: string;
@@ -28,6 +28,8 @@ interface Translation {
 
 export interface LiveBlogPostRecord {
   readonly id: string;
+  /** 2026-09-02: optional lead image, as a media-bucket key. */
+  readonly imageKey?: string;
   readonly translations: Readonly<Record<string, Translation | undefined>>;
 }
 
@@ -37,6 +39,13 @@ export interface LiveBlogPostStrings {
   readonly loading: string;
   readonly notFound: string;
   readonly error: string;
+  /**
+   * Alt text for the lead image. One string for every post, because the
+   * author is never asked to write one — and a generic-but-true
+   * description beats an empty `alt` on an image that carries meaning, or
+   * a fabricated one that does not describe the picture at all.
+   */
+  readonly imageAlt: string;
 }
 
 export interface LiveBlogPostProps {
@@ -83,6 +92,7 @@ export function LiveBlogPost({
   const id = slug ?? slugFromLocation();
   const [state, setState] = useState<ViewState>('loading');
   const [translation, setTranslation] = useState<Translation | undefined>();
+  const [imageKey, setImageKey] = useState<string | undefined>();
 
   useEffect(() => {
     if (!id) {
@@ -102,12 +112,17 @@ export function LiveBlogPost({
       // list" covers both "no such post" and "not published" — and both
       // should look the same to a reader, which is what the prerendered
       // 404 already does for an unpublished slug.
-      const found = posts.find((post) => post.id === id)?.translations[locale];
+      const post = posts.find((candidate) => candidate.id === id);
+      const found = post?.translations[locale];
       if (!found) {
         setState('notFound');
         return;
       }
       setTranslation(found);
+      // Kept beside the translation rather than derived later: the image
+      // belongs to the post, not to a language, and the post itself is not
+      // held in state.
+      setImageKey(post?.imageKey);
       setState('ready');
     });
     return () => {
@@ -129,9 +144,15 @@ export function LiveBlogPost({
     return <p role="alert">{strings.error}</p>;
   }
 
+  // `mediaUrl` answers `undefined` for a key outside the public prefix, so
+  // a record naming something private renders no image rather than a link
+  // to it. See its own note.
+  const image = imageKey ? mediaUrl(imageKey) : undefined;
+
   return (
     <article>
       <Heading level={1}>{translation.title}</Heading>
+      {image && <img src={image} alt={strings.imageAlt} />}
       {toParagraphs(translation.body).map((paragraph, index) => (
         <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
       ))}

@@ -28,8 +28,39 @@ import type { FlagReader } from './flags.js';
 import { createSampledLogger, type RequestLogger } from './logger.js';
 import { requirePrincipal } from './request-principal.js';
 
-/** infra/src/web-stack.ts's MediaUploadFunctionRole is granted `s3:PutObject` on exactly this prefix — every key this file generates must stay inside it. */
-export const WORKSHOP_MEDIA_PREFIX = 'workshops/';
+/**
+ * **The public-media boundary, and the whole reason these keys are shaped
+ * this way.**
+ *
+ * `web-stack.ts`'s `/media/*` behaviour hands the media bucket to anyone
+ * on the internet, and it does no path rewriting: a request for
+ * `/media/x/y.jpg` asks S3 for the key `media/x/y.jpg`, verbatim. So the
+ * `media/` key prefix *is* the set of publicly readable objects — exactly,
+ * and by construction rather than by care.
+ *
+ * That is what keeps assessment attachments out of it. They are in the
+ * same bucket under `assessments/`, which is not under `media/`, so no URL
+ * that behaviour can serve reaches one. The alternative — rewriting
+ * `/media/…` to strip the prefix at the edge — would have made
+ * `/media/assessments/<key>` serve a clinical recording to the public.
+ * `assessment-upload-handler.ts` already names that as the catastrophic
+ * case; this is the arrangement that makes it unreachable rather than
+ * merely unrouted.
+ *
+ * `infra/src/web-stack.ts` grants `MediaUploadFunctionRole` `s3:PutObject`
+ * on `media/*` and nothing wider, so a key this file generated outside the
+ * prefix would fail to sign rather than quietly land somewhere private.
+ */
+export const PUBLIC_MEDIA_PREFIX = 'media/';
+
+/**
+ * @deprecated 2026-09-02 — kept only so the name still resolves. The
+ * poster prefix is now `media/workshops/`; see `PUBLIC_MEDIA_PREFIX`.
+ */
+export const WORKSHOP_MEDIA_PREFIX = `${PUBLIC_MEDIA_PREFIX}workshops/`;
+
+/** Blog post images. Same bucket, same public prefix, its own folder so the two surfaces stay separable. */
+export const CONTENT_MEDIA_PREFIX = `${PUBLIC_MEDIA_PREFIX}content/`;
 
 const ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 
@@ -58,10 +89,47 @@ function sanitizeFileName(fileName: string): string {
 }
 
 const MEDIA_UPLOAD_LOG_SAMPLE_RATE = 1;
-const MEDIA_UPLOAD_ROUTE = 'POST /workshops/media-upload-url';
 
-/** TASK 2.5.4: the matrix row this route is governed by — `authz-matrix.ts`'s 'Workshop', reused rather than a dedicated row. */
-const WORKSHOP_RESOURCE = { entityType: 'workshop' } as const;
+/**
+ * The two surfaces that can carry an image, each with the row that governs
+ * it, the flag that turns it on, and the folder its keys land in.
+ *
+ * 2026-09-02, the owner: *"principal clinician should be able to upload
+ * media files while creating blog posts and workshops."* Workshops had the
+ * endpoint (TASK 1.5.1) and no caller; blog posts had neither.
+ *
+ * Deliberately one handler over two routes rather than two handlers. The
+ * interesting part of a presign is which row authorises it and which
+ * prefix it may write to, and a table makes both readable side by side —
+ * where a copied file would let them drift, and it is a copied file that
+ * eventually presigns a blog image against the workshop row.
+ */
+const SURFACES = {
+  'POST /workshops/media-upload-url': {
+    // TASK 2.5.4: reused rather than given a dedicated row — a presigned
+    // poster upload has no independent existence from the workshop it is
+    // for. The same reasoning holds for a blog image and its post.
+    resource: { entityType: 'workshop' },
+    flag: 'workshops.enabled',
+    prefix: WORKSHOP_MEDIA_PREFIX,
+  },
+  'POST /content/media-upload-url': {
+    resource: { entityType: 'content-item' },
+    flag: 'content.authoring.enabled',
+    prefix: CONTENT_MEDIA_PREFIX,
+  },
+} as const satisfies Record<
+  string,
+  {
+    readonly resource: { readonly entityType: string };
+    readonly flag: string;
+    readonly prefix: string;
+  }
+>;
+
+type MediaUploadRoute = keyof typeof SURFACES;
+
+export const MEDIA_UPLOAD_ROUTES = Object.keys(SURFACES) as readonly MediaUploadRoute[];
 
 export interface MediaUploadDeps {
   readonly flags: FlagReader;
@@ -83,11 +151,12 @@ export function createMediaUploadHandler(
 
   return async (event) => {
     const start = clock.now();
+    const routeKey = event.requestContext.routeKey;
 
     const respond = (statusCode: number, body: unknown) => {
       logger.logRequest({
         requestId: event.requestContext.requestId,
-        route: MEDIA_UPLOAD_ROUTE,
+        route: routeKey,
         statusCode,
         durationMs: clock.now().getTime() - start.getTime(),
       });
@@ -98,10 +167,19 @@ export function createMediaUploadHandler(
       };
     };
 
-    // Flag: workshops.enabled — same flag the read/authoring endpoints
-    // gate on; a presigned upload URL is only ever useful alongside the
-    // rest of the feature.
-    if (!(await deps.flags.isEnabled('workshops.enabled'))) {
+    // `Object.hasOwn`, not a bare lookup: `routeKey` is request-controlled,
+    // and an inherited property (`'constructor'`, `'toString'`) would
+    // otherwise resolve to a function and be treated as a surface.
+    if (!Object.hasOwn(SURFACES, routeKey)) {
+      return respond(404, { error: 'NOT_FOUND' });
+    }
+    const surface = SURFACES[routeKey as MediaUploadRoute];
+
+    // Flag first, exactly as before: the feature's own flag, because a
+    // presigned upload URL is only ever useful alongside the rest of it.
+    // A rejected or absent principal must produce no presigned URL either,
+    // not even for a key nobody will ever write to — hence this ordering.
+    if (!(await deps.flags.isEnabled(surface.flag))) {
       return respond(404, { error: 'NOT_FOUND' });
     }
 
@@ -111,7 +189,7 @@ export function createMediaUploadHandler(
     } catch {
       return respond(401, { error: 'UNAUTHORIZED' });
     }
-    if (!can(principal, 'create', WORKSHOP_RESOURCE).allowed) {
+    if (!can(principal, 'create', surface.resource).allowed) {
       return respond(403, { error: 'FORBIDDEN' });
     }
 
@@ -120,7 +198,7 @@ export function createMediaUploadHandler(
       return respond(400, { error: 'INVALID_BODY', issues: parsed.error.issues });
     }
 
-    const key = `${WORKSHOP_MEDIA_PREFIX}${generateId()}-${sanitizeFileName(parsed.data.fileName)}`;
+    const key = `${surface.prefix}${generateId()}-${sanitizeFileName(parsed.data.fileName)}`;
     const uploadUrl = await deps.createPresignedPutUrl(key, parsed.data.contentType);
     return respond(201, { uploadUrl, key });
   };

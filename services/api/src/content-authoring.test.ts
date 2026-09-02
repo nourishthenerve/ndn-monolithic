@@ -182,6 +182,61 @@ describe('createContentAuthoringHandler — POST /content', () => {
     expect(parsed.item.keywords).toEqual(['nutrition', 'blog']);
   });
 
+  // 2026-09-02: the lead image, the owner's *"principal clinician should
+  // be able to upload media files while creating blog posts and
+  // workshops."*
+  it('stores an imageKey issued by the presign endpoint', async () => {
+    const { deps } = buildDeps();
+    const handler = createContentAuthoringHandler(deps);
+
+    const result = await handler(
+      fakeEvent({
+        routeKey: 'POST /content',
+        body: { ...validBody, imageKey: 'media/content/id-a.png' },
+      }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 201 });
+    const parsed = JSON.parse((result as { body: string }).body) as { item: ContentItem };
+    expect(parsed.item.imageKey).toBe('media/content/id-a.png');
+  });
+
+  it('stores no imageKey when none is given — most posts have no image', async () => {
+    const { deps } = buildDeps();
+    const handler = createContentAuthoringHandler(deps);
+
+    const result = await handler(
+      fakeEvent({ routeKey: 'POST /content', body: validBody }),
+      {} as never,
+      undefined as never,
+    );
+    const parsed = JSON.parse((result as { body: string }).body) as { item: ContentItem };
+    expect(parsed.item.imageKey).toBeUndefined();
+  });
+
+  // The key is echoed into a `/media/…` URL on a public page, so an
+  // unconstrained string is a caller writing part of that URL. The only
+  // legitimate source is POST /content/media-upload-url.
+  it.each([
+    ['assessments/pat-1/scan.pdf', 'names a private prefix in the same bucket'],
+    ['media/content/../../assessments/pat-1/scan.pdf', 'walks out of the prefix'],
+    ['media/workshops/poster.jpg', 'belongs to the other surface'],
+    ['https://evil.example/x.png', 'is not a key at all'],
+    ['content/hero.png', 'is outside the public media prefix'],
+  ])('refuses an imageKey that %s', async (imageKey) => {
+    const { deps, repository } = buildDeps();
+    const handler = createContentAuthoringHandler(deps);
+
+    const result = await handler(
+      fakeEvent({ routeKey: 'POST /content', body: { ...validBody, imageKey } }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(await repository.findById('content-1')).toBeUndefined();
+  });
+
   it('rejects an invalid body with 400', async () => {
     const { deps } = buildDeps();
     const handler = createContentAuthoringHandler(deps);

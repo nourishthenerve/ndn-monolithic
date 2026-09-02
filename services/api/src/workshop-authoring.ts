@@ -60,6 +60,28 @@ const dateTimeUtcSchema = z.string().refine((value) => !Number.isNaN(Date.parse(
   message: 'dateTimeUtc must be a valid date-time string',
 });
 
+/**
+ * 2026-09-02: narrowed from a bare `z.string().min(1)`.
+ *
+ * The key is echoed straight into a `/media/…` URL on a public page, so an
+ * unconstrained value lets a caller write part of that URL — `../` walks
+ * out of the prefix, and a key naming another folder in the same bucket
+ * (`assessments/…`) would ask the site to publish a link to a clinical
+ * attachment. Neither serves anything today, because `/media/*` maps
+ * one-to-one onto the `media/` prefix, but that is a guarantee living two
+ * files away and this is where the value arrives.
+ *
+ * The only legitimate source is `POST /workshops/media-upload-url`, which
+ * generates the key; this checks the caller is handing one of those back.
+ */
+const posterKeySchema = z
+  .string()
+  .min(1)
+  .max(300)
+  .regex(/^media\/workshops\/[A-Za-z0-9][A-Za-z0-9._-]*$/, {
+    message: 'posterKey must be a key issued by POST /workshops/media-upload-url',
+  });
+
 const createWorkshopBodySchema = z.object({
   id: z.string().min(1),
   status: z.enum(['draft', 'published', 'cancelled']),
@@ -72,7 +94,7 @@ const createWorkshopBodySchema = z.object({
   // if it were ever reached.
   capacity: z.number().int().positive().optional(),
   priceMinorUnits: z.number().int().nonnegative().optional(),
-  posterKey: z.string().min(1).optional(),
+  posterKey: posterKeySchema.optional(),
   details: detailsSchema,
 });
 
@@ -81,7 +103,7 @@ const updateWorkshopBodySchema = z
     dateTimeUtc: dateTimeUtcSchema.optional(),
     capacity: z.number().int().positive().optional(),
     priceMinorUnits: z.number().int().nonnegative().optional(),
-    posterKey: z.string().min(1).optional(),
+    posterKey: posterKeySchema.optional(),
     details: detailsSchema.optional(),
   })
   .refine((patch) => Object.values(patch).some((value) => value !== undefined), {

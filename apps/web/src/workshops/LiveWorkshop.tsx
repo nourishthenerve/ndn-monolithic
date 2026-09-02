@@ -129,11 +129,17 @@ export function LiveWorkshop({
     return <p role="alert">{strings.error}</p>;
   }
 
+  // 2026-09-02: guarded on the *URL* rather than the key. `mediaUrl`
+  // (via `workshopPosterUrl`) answers undefined for a key outside the
+  // public `media/` prefix, so a record naming something private renders
+  // nothing instead of a link to it.
+  const posterSrc = record.posterKey ? workshopPosterUrl(record.posterKey) : undefined;
+
   return (
     <article>
-      {record.posterKey && (
+      {posterSrc && (
         <img
-          src={workshopPosterUrl(record.posterKey)}
+          src={posterSrc}
           alt={strings.posterAltTemplate.replace('{title}', detail.title)}
         />
       )}

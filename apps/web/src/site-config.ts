@@ -68,8 +68,44 @@ export function whatsappChatUrl(number: string): string {
 // correct on every domain this site is ever deployed to (next./apex,
 // staging, an ephemeral PR env), unlike `siteUrl`/`contentApiUrl` above
 // which are absolute and must be updated by hand at G1 cutover.
-export function workshopPosterUrl(posterKey: string): string {
-  return `/media/${posterKey}`;
+//
+// **2026-09-02: the path is the key, not `/media/` plus the key.** That
+// behaviour does no rewriting — `/media/x/y.jpg` asks S3 for the key
+// `media/x/y.jpg` verbatim — so a key that did not already start with
+// `media/` produced a URL for an object that does not exist. Every poster
+// this site could have shown would have 404'd; nothing had, because until
+// today no poster could be uploaded at all (its endpoint was unreachable
+// from a browser).
+//
+// The `media/` prefix therefore *is* the public set. That is what keeps
+// assessment attachments — same bucket, `assessments/` prefix — off the
+// public site: not a rule anyone has to remember, but a URL that no
+// behaviour serves.
+const PUBLIC_MEDIA_PREFIX = 'media/';
+
+/**
+ * A same-origin URL for a public media object, or `undefined` for a key
+ * outside the public prefix.
+ *
+ * Refusing rather than rendering is deliberate. This function's output
+ * goes into an `<img src>` on a public page, so the failure it has to be
+ * safe about is a key naming something that is not public — and a broken
+ * image is a far better outcome than a working link to a clinical
+ * attachment. The API validates the same thing on the way in
+ * (`content-authoring.ts`, `workshop-authoring.ts`); this is the second
+ * half of it, at the point of rendering, because a record written before
+ * that validation existed would otherwise walk straight past it.
+ */
+export function mediaUrl(key: string): string | undefined {
+  if (!key.startsWith(PUBLIC_MEDIA_PREFIX) || key.includes('..')) {
+    return undefined;
+  }
+  return `/${key}`;
+}
+
+/** @deprecated 2026-09-02 — use `mediaUrl`, which is the same thing without the workshop-specific name. */
+export function workshopPosterUrl(posterKey: string): string | undefined {
+  return mediaUrl(posterKey);
 }
 
 // 2026-08-31: the two Cognito user pool ids, so the browser can tell a

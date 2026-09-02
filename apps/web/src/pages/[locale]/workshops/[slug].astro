@@ -56,6 +56,7 @@ const formattedDate = new Intl.DateTimeFormat(locale, {
   dateStyle: 'long',
   timeStyle: 'short',
 }).format(new Date(workshop.dateTimeUtc));
+const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : undefined;
 ---
 
 <BaseLayout
@@ -67,9 +68,11 @@ const formattedDate = new Intl.DateTimeFormat(locale, {
 >
   <article>
     {
-      workshop.posterKey && (
+      /* Guarded on the URL, not the key — `workshopPosterUrl` answers
+         undefined for anything outside the public `media/` prefix. */
+      posterSrc && (
         <img
-          src={workshopPosterUrl(workshop.posterKey)}
+          src={posterSrc}
           alt={t('workshops.index.posterAlt', { title: detail.title }, locale)}
         />
       )

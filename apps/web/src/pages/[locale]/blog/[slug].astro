@@ -12,7 +12,7 @@
 // was unpublished before the last build, simply has no static path here —
 // apps/web/src/pages/404.astro is what a visitor sees instead of a raw
 // CloudFront/S3 403.
-import { supportedLocales } from '@ndn/i18n';
+import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
@@ -20,7 +20,7 @@ import type { BlogPost } from '../../../blog/content-client.js';
 import { fetchPublishedBlogPosts } from '../../../blog/content-client.js';
 import { buildHreflangLinks } from '../../../blog/seo.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
-import { siteName, siteUrl } from '../../../site-config.js';
+import { mediaUrl, siteName, siteUrl } from '../../../site-config.js';
 
 export async function getStaticPaths() {
   const posts = await fetchPublishedBlogPosts();
@@ -48,6 +48,7 @@ const urlForLocale = (l: string) => `${siteUrl}/${l}/blog/${slug}`;
 const canonicalHref = urlForLocale(locale);
 const hreflangLinks = buildHreflangLinks(populatedLocales, urlForLocale);
 const bodyParagraphs = translation.body.split(/\n{2,}/);
+const leadImage = post.imageKey ? mediaUrl(post.imageKey) : undefined;
 ---
 
 <BaseLayout
@@ -59,6 +60,13 @@ const bodyParagraphs = translation.body.split(/\n{2,}/);
 >
   <article>
     <Heading level={1}>{translation.title}</Heading>
+    {
+      /* 2026-09-02: the lead image, at build time. `mediaUrl` answers
+         undefined for a key outside the public `media/` prefix, so a post
+         naming something private renders no image rather than a link to
+         it — the same refusal the live component makes. */
+      leadImage && <img src={leadImage} alt={t('blog.post.imageAlt', undefined, locale)} />
+    }
     {bodyParagraphs.map((paragraph) => <p>{paragraph}</p>)}
   </article>
 </BaseLayout>

@@ -21,6 +21,10 @@ const translationSchema = z.object({
 const blogPostSchema = z.object({
   id: z.string(),
   keywords: z.array(z.string()),
+  // 2026-09-02: the lead image, as a media-bucket key. Optional, and the
+  // schema stays tolerant of its absence because every post written
+  // before today has none — a stricter shape here would empty the blog.
+  imageKey: z.string().optional(),
   translations: z.record(z.string(), translationSchema),
 });
 

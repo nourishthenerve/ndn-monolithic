@@ -124,11 +124,14 @@ export function LiveWorkshopList({
 
   return (
     <>
-      {entries.map(({ workshop, title, description }) => (
+      {entries.map(({ workshop, title, description }) => {
+        // See LiveWorkshop.tsx: guarded on the URL, not the key.
+        const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : undefined;
+        return (
         <Card key={workshop.id}>
-          {workshop.posterKey && (
+          {posterSrc && (
             <img
-              src={workshopPosterUrl(workshop.posterKey)}
+              src={posterSrc}
               alt={posterAltFor(strings.posterAltTemplate, title)}
               width="320"
               loading="lazy"
@@ -138,7 +141,8 @@ export function LiveWorkshopList({
           <p>{description}</p>
           <Link href={hrefFor(locale, workshop.id, prerendered)}>{strings.viewDetails}</Link>
         </Card>
-      ))}
+        );
+      })}
     </>
   );
 }
