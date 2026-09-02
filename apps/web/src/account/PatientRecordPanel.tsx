@@ -181,6 +181,47 @@ export function PatientRecordPanel({
   const [decideFailed, setDecideFailed] = useState(false);
   /** Bumped to re-run the appointments effect after a decision lands. */
   const [appointmentsVersion, setAppointmentsVersion] = useState(0);
+  /**
+   * Whether to offer the approval controls at all.
+   *
+   * **2026-09-02: they used to be offered to anyone who could see a
+   * pending row.** That was a deliberate departure from
+   * `token-claims.ts`'s "hide on a positive answer" rule, argued on the
+   * grounds that a clinician looking at their own pending request should
+   * get a legible refusal rather than a row with no explanation. The owner
+   * disagreed, in much the words they had used once before about the staff
+   * tools: *"even a clinician can approve this appointment. This approval
+   * is only reserved to principal clinician."*
+   *
+   * They are right, and the earlier reasoning had it backwards — a button
+   * that refuses you is not an explanation, it is a worse version of not
+   * being offered one. The status column already says `pending-approval`,
+   * which *is* the explanation.
+   *
+   * **The server was never the problem and has not changed.**
+   * `authz-matrix.ts`'s `Appointment approval` row denies both
+   * sub-clinician columns and grants `update` to `Principal` alone, so an
+   * approve from anyone else has always been a 403. This stops the control
+   * being offered; it was never what stopped it working.
+   *
+   * Starts `true` and narrows only on a *known* non-principal role — an
+   * unreadable token shows the controls and lets the server answer, the
+   * same rule every other gate in this directory follows.
+   */
+  const [mayDecide, setMayDecide] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client.resolve().then((state) => {
+      const role = state.status === 'signed-in' ? state.session.viewerRole : undefined;
+      if (!cancelled && role !== undefined) {
+        setMayDecide(role === 'principal-clinician');
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   const load = useCallback(async () => {
     if (!id) {
@@ -484,7 +525,7 @@ export function PatientRecordPanel({
                       clinician looking at their own pending request gets a
                       legible refusal instead of a row with no explanation. */}
                   <td>
-                    {appointment.appointment_status === 'pending-approval' ? (
+                    {mayDecide && appointment.appointment_status === 'pending-approval' ? (
                       <>
                         <button
                           type="button"

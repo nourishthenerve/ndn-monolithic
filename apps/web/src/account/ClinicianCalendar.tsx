@@ -165,6 +165,30 @@ export function ClinicianCalendar({
   const [state, setState] = useState<ViewState>({ status: 'loading' });
   /** Keyed by the row's own composite id, so one row's outcome never speaks for another's. */
   const [deciding, setDeciding] = useState<Record<string, 'busy' | 'failed'>>({});
+  /**
+   * 2026-09-02: approve/decline are the principal's alone, and are now
+   * hidden rather than offered-then-refused — see
+   * `PatientRecordPanel.tsx`'s own note, which carries the reasoning and
+   * the owner's words. Marking attendance is untouched: that rides
+   * `Appointments: update`, which the treating clinician genuinely holds.
+   *
+   * Starts `true` and narrows only on a known non-principal role, so an
+   * unreadable token still shows the controls and lets the server answer.
+   */
+  const [mayDecide, setMayDecide] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client.resolve().then((state) => {
+      const role = state.status === 'signed-in' ? state.session.viewerRole : undefined;
+      if (!cancelled && role !== undefined) {
+        setMayDecide(role === 'principal-clinician');
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   const load = useCallback(async () => {
     setState({ status: 'loading' });
@@ -265,7 +289,7 @@ export function ClinicianCalendar({
                 {/* A `pending-approval` row gets decisions, never a join
                     link: there is nothing to join until it is confirmed,
                     and `ws-join.ts` would refuse it anyway. */}
-                {item.appointment_status === 'pending-approval' ? (
+                {mayDecide && item.appointment_status === 'pending-approval' ? (
                   <>
                     <button
                       type="button"

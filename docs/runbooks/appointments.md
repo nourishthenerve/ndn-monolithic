@@ -163,3 +163,15 @@ The exemption was wrong about what the step is for. It is not the principal prov
 **The approval controls now sit on the patient's record page**, next to that patient's appointments and directly under the form that creates them. That is the page the dashboard clicks through to, and the page the booking was made on — which is what the owner meant by "visible to patient dashboard to be approved". They remain on the clinician calendar too, where a pending request also appears.
 
 They are rendered for whoever can see a pending row rather than hidden by role. `Appointment approval` is `Principal`-only and the API refuses everyone else, so a clinician looking at their own pending request gets a legible refusal rather than a row with no explanation and no control.
+
+### Follow-up, 2026-09-02 — approval controls are hidden, not merely refused
+
+*"even a clinician can approve this appointment. This approval is only reserved to principal clinician."*
+
+**The server was never wrong.** `authz-matrix.ts`'s `Appointment approval` row denies both sub-clinician columns and grants `update` to `Principal` alone, so an approve from anyone else has always been a 403. Nothing unauthorised happened, and the route-level suite now asserts that against every role in the table — clinician assigned and unassigned, helpdesk, visitor and patient — and checks the booking is still `pending-approval` afterwards, so a refused decision cannot half-apply.
+
+What was wrong is that the **buttons were offered**. The first cut rendered approve/decline for anyone who could see a pending row, arguing that a clinician looking at their own request should get a legible refusal rather than a row with no explanation. That had it backwards: a button that refuses you is a worse version of not being offered one, and the status column already says `pending-approval`, which *is* the explanation. It also contradicted the rule this codebase adopted the first time the owner raised it, about the staff tools — hide on a positive answer.
+
+Both surfaces now gate on the viewer's role: the patient record page and the clinician calendar. Attendance marking is untouched, because `complete`/`no-show` ride `Appointments: update`, which the treating clinician genuinely holds.
+
+An unreadable token still shows the controls and lets the server answer — hiding on a shrug would risk hiding approval from the one person entitled to it.
