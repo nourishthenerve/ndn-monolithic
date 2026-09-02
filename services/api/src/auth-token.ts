@@ -145,6 +145,31 @@ export function authorizeUrl(
     code_challenge_method: 'S256',
     code_challenge: challenge,
     state,
+    // **`prompt=login` — 2026-09-02, and it closes a real hole on a shared
+    // machine.**
+    //
+    // Cognito keeps its own hosted-UI session cookie, independent of this
+    // site's. Without this parameter, `/oauth2/authorize` reuses it: the
+    // redirect bounces straight back with a code and the visitor is signed
+    // in **without being asked for anything**. `signOut`'s own doc in
+    // apps/web/src/auth/session.ts already records that cookie biting once
+    // (2026-08-31), and 2026-09-02 is the second time — the owner, signed
+    // in as the principal clinician, clicked "Patient sign in" and was put
+    // straight into a test patient's account.
+    //
+    // Hiding that link while signed in (`auth/SessionNav.tsx`) fixes the
+    // path they took. It does not fix the worse one: on a clinic machine
+    // where a patient signed in earlier and the browser was closed rather
+    // than signed out, *anyone* clicking "Patient sign in" lands inside
+    // that patient's account, having typed nothing. For a system holding
+    // clinical records that is not a convenience, it is an unlocked door.
+    //
+    // `prompt=login` makes Cognito ask every time, whatever it remembers.
+    // The cost is that a returning user types their password instead of
+    // being signed in silently — which is what "sign in" is supposed to
+    // mean here. **To reverse it, delete this one line**; nothing else
+    // depends on it.
+    prompt: 'login',
   });
   return `${oauthBaseUrl}/oauth2/authorize?${query.toString()}`;
 }

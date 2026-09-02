@@ -109,6 +109,20 @@ describe('GET /auth/signin', () => {
     expect(url.searchParams.get('scope')).toBe('openid email aws.cognito.signin.user.admin');
   });
 
+  // 2026-09-02. Cognito keeps its own hosted-UI session cookie, and
+  // without this it reuses it: the redirect bounces straight back with a
+  // code and the visitor is signed in having typed nothing. That put the
+  // owner — signed in as the principal clinician — inside a test
+  // patient's account with one click, and on a shared clinic machine it
+  // would let anyone into whoever used it last.
+  it.each<['patient' | 'clinician']>([['patient'], ['clinician']])(
+    'asks %s to authenticate rather than reusing Cognito’s own session',
+    async (pool) => {
+      const { start } = await startedSession(pool);
+      expect(new URL(start.headers.location ?? '').searchParams.get('prompt')).toBe('login');
+    },
+  );
+
   it('sends a clinician to the clinician pool', async () => {
     const { start } = await startedSession('clinician');
 

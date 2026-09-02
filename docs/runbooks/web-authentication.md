@@ -145,3 +145,27 @@ That asymmetry is why this is deliberately **not** a new `GET /auth/me`, and not
 It answers "is this the principal" rather than "what is the role" because telling a patient token from a sub-clinician token needs the pool, and the pool is only knowable from `iss` against a user-pool id this bundle does not carry. Every gate the UI actually has is principal-or-not, so that is the only question the module claims to answer.
 
 Change-password stays ungated: clinician-only, not principal-only, and reachable by every signed-in identity from `/account`.
+
+## Amendment, 2026-09-02 — the nav offered sign-in to people who were already signed in
+
+The owner, signed in with principal clinician credentials, clicked "Patient sign in" in the site nav and **landed on a test patient's details**.
+
+### What actually happened
+
+No permission failed. `Nav.astro` is a static Astro component with no notion of a session, and it rendered both sign-in links on every page unconditionally. Clicking one redirects to `/oauth2/authorize` — and Cognito keeps its **own** hosted-UI session cookie, separate from this site's. That cookie was still live from an earlier patient sign-in on the same browser, so Cognito bounced straight back with a code, `/auth/token` exchanged it, and the browser genuinely held that patient's session by the end. The clinician session was replaced, silently, by one click.
+
+`session.ts`'s own `signOut` doc already recorded this cookie biting once, on 2026-08-31: *"a plain `window.location.assign('/')` here would leave Cognito's own hosted-UI session cookie live, so the next sign-in would silently re-authenticate against it."* This is the same cookie, reached a different way.
+
+### Two fixes, because the link was only the half they hit
+
+**1. The nav knows whether there is a session** (`auth/SessionNav.tsx`). Signed in: an account link and a sign-out button. Signed out: the two sign-in links. While resolving: **nothing** — a sign-in link shown for even a moment is one that can be clicked, and the visitor most likely to click it is the one holding a clinician session.
+
+It is `client:only`, which costs the no-JavaScript case its sign-in link. That is not a real loss here: every authenticated page in this site is a `client:only` island behind `RequireAuth`, so a browser that cannot run them cannot use the account area whether or not it can reach the entrance.
+
+**2. `prompt=login` on the authorize URL** (`auth-token.ts`). Hiding the link fixes the path the owner took; it does nothing about the worse one. On a clinic machine where a patient signed in earlier and the browser was closed rather than signed out, *anyone* clicking "Patient sign in" lands inside that patient's account having typed nothing at all — no session of their own required, so no link needs hiding.
+
+`prompt=login` makes Cognito ask every time, whatever it remembers. The cost is that a returning user types their password instead of being signed in silently, which is what "sign in" ought to mean on a system holding clinical records. **It is one line to reverse** if the practice decides otherwise, and the line says so.
+
+### What did not change
+
+The `SignInLink`s inside each account page's `signedOut` slot are untouched and were never part of this: `RequireAuth` only renders that slot when there is no session, which is exactly the behaviour the nav now has too.

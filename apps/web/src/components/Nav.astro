@@ -12,14 +12,24 @@
 // `routes.ts`'s own registry deliberately excludes every authenticated
 // account-shell page (`account-routes.ts`'s header explains why: it's
 // the a11y-scan registration list, not the nav list), and that exclusion
-// was mistaken for "no nav entry needed." The two sign-in links below are
-// added directly here rather than through `routes.ts` — plain links, the
-// same shape `auth/SignInPanel.tsx`'s own `SignInLink` already uses (a
-// real GET, not a click handler; the PKCE cookie needs the request).
+// was mistaken for "no nav entry needed." The sign-in links are added
+// directly here rather than through `routes.ts` — plain links, the same
+// shape `auth/SignInPanel.tsx`'s own `SignInLink` already uses (a real
+// GET, not a click handler; the PKCE cookie needs the request).
+//
+// **2026-09-02: those links are no longer unconditional.** They were
+// rendered on every page whether or not anyone was signed in, and the
+// owner — signed in as the principal clinician — clicked "Patient sign
+// in" and landed on a test patient's details, because Cognito's own
+// hosted-UI cookie for that pool was still live and re-authenticated
+// silently. `auth/SessionNav.tsx` carries the full account; what changes
+// here is that the entries come from an island that knows whether there
+// is a session, and offers sign-out instead when there is.
 import { t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Link } from '@ndn/ui';
 
+import { SessionNav } from '../auth/SessionNav.js';
 import { routes } from '../routes.js';
 import { siteName } from '../site-config.js';
 
@@ -83,12 +93,16 @@ const navStylesCss = `
           </li>
         ))
       }
-      <li>
-        <Link href="/auth/signin">{t('nav.patientSignIn', undefined, locale)}</Link>
-      </li>
-      <li>
-        <Link href="/auth/signin?pool=clinician">{t('nav.clinicianSignIn', undefined, locale)}</Link>
-      </li>
+      <SessionNav
+        client:only="react"
+        accountHref={`/${locale}/account`}
+        strings={{
+          patientSignIn: t('nav.patientSignIn', undefined, locale),
+          clinicianSignIn: t('nav.clinicianSignIn', undefined, locale),
+          account: t('nav.account', undefined, locale),
+          signOut: t('account.signOut', undefined, locale),
+        }}
+      />
     </ul>
   </nav>
 </header>
