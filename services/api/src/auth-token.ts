@@ -29,6 +29,30 @@ export const REFRESH_COOKIE = 'ndn_refresh';
 export const PKCE_COOKIE = 'ndn_pkce';
 export const STATE_COOKIE = 'ndn_state';
 
+/**
+ * 2026-09-02: **the only cookie here script is allowed to read, and it
+ * carries nothing.** Its entire content is `1`; its entire meaning is "a
+ * session may exist, so it is worth asking."
+ *
+ * It exists because of what `HttpOnly` costs on the read side. The refresh
+ * cookie is unreadable by script — which is the whole design and is not
+ * changing — so a browser cannot tell "signed out" from "signed in" without
+ * a round trip to `/auth/refresh`. That was fine while only account pages
+ * asked. Once the site *nav* had to know (`auth/SessionNav.tsx`), every
+ * page view on the public marketing site was paying for an auth request,
+ * for visitors who are overwhelmingly signed out — and in an environment
+ * with no auth stack at all (the ephemeral PR environment) that request
+ * never settles, which is how it was noticed.
+ *
+ * **It is a hint, never a credential and never an authorisation.** Absent
+ * means "do not bother asking". Present means "ask" — and `/auth/refresh`
+ * is still the only thing that decides. Forging it buys a wasted request
+ * that answers 401. It is written and cleared in lockstep with the refresh
+ * cookie and carries the identical `Max-Age`, so the two cannot disagree
+ * about whether there is something to ask about.
+ */
+export const SESSION_HINT_COOKIE = 'ndn_session';
+
 /** Matches TASK 2.2.1's `refreshTokenValidity` exactly — a cookie that outlives its token is a lie. */
 export const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 
@@ -83,6 +107,33 @@ export function buildCookie(name: string, value: string, maxAgeSeconds: number):
     'Path=/',
     `Max-Age=${maxAgeSeconds}`,
   ].join('; ');
+}
+
+/**
+ * The one cookie built *without* `HttpOnly`, because its whole purpose is
+ * to be read by script — see `SESSION_HINT_COOKIE`. `Secure`, `SameSite`
+ * and `Path` are unchanged: it is readable, not loose.
+ */
+export function buildSessionHintCookie(maxAgeSeconds: number): string {
+  return [
+    `${SESSION_HINT_COOKIE}=1`,
+    'Secure',
+    'SameSite=Lax',
+    'Path=/',
+    `Max-Age=${maxAgeSeconds}`,
+  ].join('; ');
+}
+
+/**
+ * Its own clear, rather than the shared `clearCookie`. That helper stamps
+ * `HttpOnly`, which would work — a browser removes a cookie by name, path
+ * and domain, not by attribute — but it would mean this cookie went out
+ * one shape when set and another when cleared, and the "every cookie but
+ * this one carries HttpOnly" rule in auth-routes.test.ts would have to
+ * carve out an exception to its own exception. Symmetry is cheaper.
+ */
+export function clearSessionHintCookie(): string {
+  return buildSessionHintCookie(0).replace(`${SESSION_HINT_COOKIE}=1`, `${SESSION_HINT_COOKIE}=`);
 }
 
 /** `Max-Age=0` with an empty value — the only way to remove a cookie the browser holds. */
@@ -145,6 +196,31 @@ export function authorizeUrl(
     code_challenge_method: 'S256',
     code_challenge: challenge,
     state,
+    // **`prompt=login` — 2026-09-02, and it closes a real hole on a shared
+    // machine.**
+    //
+    // Cognito keeps its own hosted-UI session cookie, independent of this
+    // site's. Without this parameter, `/oauth2/authorize` reuses it: the
+    // redirect bounces straight back with a code and the visitor is signed
+    // in **without being asked for anything**. `signOut`'s own doc in
+    // apps/web/src/auth/session.ts already records that cookie biting once
+    // (2026-08-31), and 2026-09-02 is the second time — the owner, signed
+    // in as the principal clinician, clicked "Patient sign in" and was put
+    // straight into a test patient's account.
+    //
+    // Hiding that link while signed in (`auth/SessionNav.tsx`) fixes the
+    // path they took. It does not fix the worse one: on a clinic machine
+    // where a patient signed in earlier and the browser was closed rather
+    // than signed out, *anyone* clicking "Patient sign in" lands inside
+    // that patient's account, having typed nothing. For a system holding
+    // clinical records that is not a convenience, it is an unlocked door.
+    //
+    // `prompt=login` makes Cognito ask every time, whatever it remembers.
+    // The cost is that a returning user types their password instead of
+    // being signed in silently — which is what "sign in" is supposed to
+    // mean here. **To reverse it, delete this one line**; nothing else
+    // depends on it.
+    prompt: 'login',
   });
   return `${oauthBaseUrl}/oauth2/authorize?${query.toString()}`;
 }

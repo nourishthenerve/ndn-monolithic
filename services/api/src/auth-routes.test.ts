@@ -9,6 +9,8 @@ import {
   parseCookies,
   PKCE_COOKIE,
   REFRESH_COOKIE,
+  REFRESH_COOKIE_MAX_AGE_SECONDS,
+  SESSION_HINT_COOKIE,
   STATE_COOKIE,
   type AuthTokenConfig,
   type OAuthClient,
@@ -108,6 +110,20 @@ describe('GET /auth/signin', () => {
     expect(url.searchParams.get('redirect_uri')).toBe(CONFIG.callbackUrl);
     expect(url.searchParams.get('scope')).toBe('openid email aws.cognito.signin.user.admin');
   });
+
+  // 2026-09-02. Cognito keeps its own hosted-UI session cookie, and
+  // without this it reuses it: the redirect bounces straight back with a
+  // code and the visitor is signed in having typed nothing. That put the
+  // owner — signed in as the principal clinician — inside a test
+  // patient's account with one click, and on a shared clinic machine it
+  // would let anyone into whoever used it last.
+  it.each<['patient' | 'clinician']>([['patient'], ['clinician']])(
+    'asks %s to authenticate rather than reusing Cognito’s own session',
+    async (pool) => {
+      const { start } = await startedSession(pool);
+      expect(new URL(start.headers.location ?? '').searchParams.get('prompt')).toBe('login');
+    },
+  );
 
   it('sends a clinician to the clinician pool', async () => {
     const { start } = await startedSession('clinician');
@@ -295,7 +311,13 @@ describe('POST /auth/signout', () => {
     const response = await routes({ routeKey: 'POST /auth/signout', cookieHeader });
     const cleared = response.cookies.map((cookie) => cookie.slice(0, cookie.indexOf('=')));
 
-    expect(cleared.sort()).toEqual([PKCE_COOKIE, REFRESH_COOKIE, STATE_COOKIE].sort());
+    // 2026-09-02: `SESSION_HINT_COOKIE` joins them. It is cleared in
+    // lockstep with the refresh cookie for the same reason it is set in
+    // lockstep — the two must never disagree about whether there is a
+    // session worth asking about.
+    expect(cleared.sort()).toEqual(
+      [PKCE_COOKIE, REFRESH_COOKIE, STATE_COOKIE, SESSION_HINT_COOKIE].sort(),
+    );
     expect(response.cookies.every((cookie) => cookie.includes('Max-Age=0'))).toBe(true);
   });
 
@@ -352,7 +374,14 @@ describe('POST /auth/signout', () => {
 describe('every cookie this file sets, on every route', () => {
   // Table-driven on purpose: an assertion per attribute means dropping one
   // fails loudly instead of passing a partial match.
-  const REQUIRED_ATTRIBUTES = ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/'];
+  //
+  // **`HttpOnly` moved out of this list on 2026-09-02**, and only because
+  // one cookie is deliberately without it: `SESSION_HINT_COOKIE` exists to
+  // be read by script and carries `1`. Rather than weaken the rule for
+  // everything, the rule is now "every cookie but that one", asserted
+  // separately below — so a future cookie that quietly drops `HttpOnly`
+  // still fails, which is the property this table was for.
+  const REQUIRED_ATTRIBUTES = ['Secure', 'SameSite=Lax', 'Path=/'];
 
   async function allCookies(): Promise<string[]> {
     const session = await startedSession();
@@ -378,6 +407,17 @@ describe('every cookie this file sets, on every route', () => {
     expect(cookies.length).toBeGreaterThan(6);
     for (const cookie of cookies) {
       expect(cookie, cookie).toContain(attribute);
+    }
+  });
+
+  it('carries HttpOnly on every cookie except the one that exists to be read', async () => {
+    const cookies = await allCookies();
+    for (const cookie of cookies) {
+      if (cookie.startsWith(`${SESSION_HINT_COOKIE}=`)) {
+        expect(cookie, cookie).not.toContain('HttpOnly');
+        continue;
+      }
+      expect(cookie, cookie).toContain('HttpOnly');
     }
   });
 
@@ -435,5 +475,37 @@ describe('no response body on any route carries a refresh token', () => {
     expect(JSON.stringify(bodies)).not.toContain(REFRESH_TOKEN);
     expect(JSON.stringify(bodies)).not.toContain('refreshToken');
     expect(JSON.stringify(bodies)).not.toContain('refresh_token');
+  });
+});
+
+// 2026-09-02: the readable companion to the `HttpOnly` refresh cookie.
+// It carries `1` and nothing else; its only job is to let the browser skip
+// a `/auth/refresh` whose answer is already known, which is what stopped
+// every public page view costing an auth round trip once the site nav
+// needed to know whether anyone was signed in.
+describe('the session hint cookie', () => {
+  /** The cookies `POST /auth/token` sets — where the pair is written together. */
+  async function exchangeCookies(): Promise<string[]> {
+    const session = await startedSession();
+    const exchanged = await session.routes({
+      routeKey: 'POST /auth/token',
+      cookieHeader: `${PKCE_COOKIE}=${session.values[PKCE_COOKIE]}; ${STATE_COOKIE}=${session.values[STATE_COOKIE]}`,
+      body: { code: 'code', state: session.values[STATE_COOKIE] },
+    });
+    return exchanged.cookies;
+  }
+
+  const hintOf = (cookies: readonly string[]) =>
+    cookies.find((cookie) => cookie.startsWith(`${SESSION_HINT_COOKIE}=`));
+
+  it('is set alongside the refresh cookie, with the same lifetime', async () => {
+    const cookies = await exchangeCookies();
+    expect(hintOf(cookies)).toContain(`Max-Age=${REFRESH_COOKIE_MAX_AGE_SECONDS}`);
+    expect(cookies.some((cookie) => cookie.startsWith(`${REFRESH_COOKIE}=`))).toBe(true);
+  });
+
+  it('carries no session material — a forged one buys a wasted request, never a session', async () => {
+    const hint = hintOf(await exchangeCookies()) ?? '';
+    expect(hint.startsWith(`${SESSION_HINT_COOKIE}=1;`)).toBe(true);
   });
 });

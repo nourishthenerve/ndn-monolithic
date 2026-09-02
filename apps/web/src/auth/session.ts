@@ -67,6 +67,24 @@ interface TokenResponse {
 /** A minute of headroom, so a token never expires mid-flight on a slow request. */
 const EXPIRY_SKEW_MS = 60_000;
 
+/**
+ * The name of the readable companion cookie `/auth/token` sets. Declared
+ * here rather than imported from `services/api` — `apps/web` depends on
+ * `@ndn/i18n` and `@ndn/ui` and nothing server-side, the same reason every
+ * island in this app declares its own response shapes. The two copies are
+ * held together by `auth-routes.test.ts`, which asserts the literal name
+ * on the wire.
+ */
+const SESSION_HINT_COOKIE = 'ndn_session';
+
+/** The readable half of the cookie pair — see `resolve`. `document` is absent during SSR, where there is no session to have. */
+function hasSessionHint(): boolean {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+  return document.cookie.split(';').some((part) => part.trim().startsWith(`${SESSION_HINT_COOKIE}=`));
+}
+
 export function createSessionClient(options: { fetcher?: Fetcher; now?: () => number } = {}): SessionClient {
   const fetcher = options.fetcher ?? ((...args: Parameters<Fetcher>) => fetch(...args));
   const now = options.now ?? (() => Date.now());
@@ -111,6 +129,27 @@ export function createSessionClient(options: { fetcher?: Fetcher; now?: () => nu
     async resolve() {
       if (session && session.expiresAt - EXPIRY_SKEW_MS > now()) {
         return { status: 'signed-in', session };
+      }
+      // **No hint, no request.** 2026-09-02: the refresh cookie is
+      // `HttpOnly`, so before this there was no way to tell "signed out"
+      // from "signed in" except by asking `/auth/refresh`. That was fine
+      // while only account pages asked; once the site nav had to know
+      // (`SessionNav.tsx`), every view of every public marketing page was
+      // paying for an auth round trip on behalf of visitors who are
+      // overwhelmingly signed out — and in the ephemeral PR environment,
+      // which deploys no auth stack at all, the request never settles.
+      //
+      // `/auth/token` now sets a readable companion cookie carrying `1`
+      // and nothing else, written and cleared in lockstep with the refresh
+      // cookie. Its absence is the one thing script can conclude on its
+      // own, and this is the only thing that conclusion is used for:
+      // skipping a request whose answer is already known.
+      //
+      // It is never trusted in the other direction. A present hint only
+      // means "ask" — `/auth/refresh` still decides, and a forged one buys
+      // a wasted request that answers 401.
+      if (!hasSessionHint()) {
+        return { status: 'signed-out' };
       }
       // **Exactly one refresh in flight, ever.** Two components mounting
       // at once must not each spend the cookie, and a failed refresh must
