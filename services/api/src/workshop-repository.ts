@@ -90,6 +90,18 @@ export class WorkshopRepository {
   }
 
   /** Only ever returns published, not-yet-happened workshops — the public read boundary the public pages rely on. A cancelled or past workshop's row stays findById-able (still never deleted). */
+  /**
+   * Every workshop, whatever its status and whenever it is — the authoring
+   * side's own view. Separate from `findPublishedUpcoming` for the reason
+   * `ContentRepository.findAllByKeyword` states: the published filter is a
+   * boundary, not an option.
+   */
+  async findAll(): Promise<Workshop[]> {
+    const ids = await this.store.listAllIds();
+    const items = await Promise.all(ids.map((id) => this.store.get(id)));
+    return items.filter((item): item is Workshop => item !== undefined);
+  }
+
   async findPublishedUpcoming(): Promise<Workshop[]> {
     const ids = await this.store.listAllIds();
     const items = await Promise.all(ids.map((id) => this.store.get(id)));

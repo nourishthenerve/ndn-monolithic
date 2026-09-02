@@ -483,6 +483,16 @@ export class DataStack extends Stack {
       'ContentAuthoringIntegration',
       contentAuthoringFunction,
     );
+    // 2026-09-02: the authoring side's own list, drafts included —
+    // `Principal`-only via `Content item: update`. A distinct path from
+    // the public `GET /content` so the published-only read boundary stays
+    // one route with one behaviour, rather than a parameter that could
+    // turn it off.
+    httpApi.addRoutes({
+      path: '/content/authored',
+      methods: [HttpMethod.GET],
+      integration: contentAuthoringIntegration,
+    });
     httpApi.addRoutes({
       path: '/content',
       methods: [HttpMethod.POST],
@@ -769,6 +779,11 @@ export class DataStack extends Stack {
       'WorkshopAuthoringIntegration',
       workshopAuthoringFunction,
     );
+    httpApi.addRoutes({
+      path: '/workshops/authored',
+      methods: [HttpMethod.GET],
+      integration: workshopAuthoringIntegration,
+    });
     httpApi.addRoutes({
       path: '/workshops',
       methods: [HttpMethod.POST],

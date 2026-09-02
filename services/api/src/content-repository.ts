@@ -145,6 +145,25 @@ export class ContentRepository {
   }
 
   /**
+   * Every item under this keyword, **whatever its status** — the authoring
+   * side's own view, and deliberately a separate method from the one above
+   * rather than a `status` parameter on it. `findPublishedByKeyword` is the
+   * public read boundary; a boolean that could turn that boundary off is
+   * exactly the shape a mistake takes.
+   *
+   * 2026-09-02: added because a draft was unreachable. Content saved
+   * before the authoring form began publishing by default is `draft`, the
+   * public read skips it by design, and nothing in the UI listed it — so
+   * work that had been written and saved correctly was invisible and
+   * unrecoverable. The route behind this is `Principal`-only.
+   */
+  async findAllByKeyword(keyword: string): Promise<ContentItem[]> {
+    const ids = await this.store.queryIdsByKeyword(keyword);
+    const items = await Promise.all(ids.map((id) => this.store.get(id)));
+    return items.filter((item): item is ContentItem => item !== undefined);
+  }
+
+  /**
    * Edits keywords/translations only — never `status` (00-conventions.md's
    * no-delete rule extends here too: this is not how a post is removed or
    * hidden, see publish/unpublish below). Throws AppError('RECORD_NOT_FOUND')

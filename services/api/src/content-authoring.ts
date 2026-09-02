@@ -148,6 +148,30 @@ export function createContentAuthoringHandler(
 
     try {
       switch (routeKey) {
+        // 2026-09-02: the authoring side's own list, drafts included.
+        //
+        // Gated on `update` rather than `read`: `Content item: R` is held
+        // by every clinician and by helpdesk, and an unpublished draft is
+        // not something the practice has decided to show anyone yet.
+        // `update` is `Principal`-only and is what this list exists to
+        // enable — publishing and unpublishing — so it is the honest cell.
+        //
+        // It exists because a draft was otherwise unreachable: the public
+        // read returns published items only (by design), and nothing in
+        // the UI listed anything else, so a post saved before the form
+        // began publishing by default was invisible and could not be
+        // recovered.
+        case 'GET /content/authored': {
+          if (!can(principal, 'update', CONTENT_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          const keyword = event.queryStringParameters?.keyword;
+          if (!keyword) {
+            return respond(400, { error: 'KEYWORD_REQUIRED' });
+          }
+          const items = await deps.repository.findAllByKeyword(keyword);
+          return respond(200, { items });
+        }
         case 'POST /content': {
           if (!can(principal, 'create', CONTENT_RESOURCE).allowed) {
             return respond(403, { error: 'FORBIDDEN' });

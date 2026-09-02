@@ -76,8 +76,6 @@ export interface AuthoringPanelStrings {
   readonly blogIntro: string;
   readonly workshopHeading: string;
   readonly workshopIntro: string;
-  readonly slugLabel: string;
-  readonly slugHint: string;
   readonly titleLabel: string;
   readonly excerptLabel: string;
   readonly bodyLabel: string;
@@ -143,12 +141,10 @@ export function AuthoringPanel({
    * a URL by hand and watching it be overwritten on the next keystroke of
    * the title would be worse than not deriving it at all.
    */
-  const [blogSlugEdited, setBlogSlugEdited] = useState(false);
 
   const [workshop, setWorkshop] = useState<WorkshopFormFields>(EMPTY_WORKSHOP);
   const [workshopStatus, setWorkshopStatus] = useState<SubmitStatus>('idle');
   const [workshopSlugError, setWorkshopSlugError] = useState(false);
-  const [workshopSlugEdited, setWorkshopSlugEdited] = useState(false);
   const [workshopDateError, setWorkshopDateError] = useState(false);
 
   const handleBlog = async (event: FormEvent<HTMLFormElement>) => {
@@ -172,8 +168,7 @@ export function AuthoringPanel({
       setBlogStatus(status);
       if (status === 'success') {
         setBlog(EMPTY_BLOG);
-        setBlogSlugEdited(false);
-      }
+            }
     } catch {
       setBlogStatus('error');
     }
@@ -205,8 +200,7 @@ export function AuthoringPanel({
       setWorkshopStatus(status);
       if (status === 'success') {
         setWorkshop(EMPTY_WORKSHOP);
-        setWorkshopSlugEdited(false);
-      }
+            }
     } catch {
       setWorkshopStatus('error');
     }
@@ -253,27 +247,25 @@ export function AuthoringPanel({
               value={blog.title}
               onChange={(event) => {
                 const title = event.target.value;
-                setBlog((f) => ({ ...f, title, ...(blogSlugEdited ? {} : { id: slugify(title) }) }));
+                setBlog((f) => ({ ...f, title, id: slugify(title) }));
                 setBlogSlugError(false);
               }}
             />
           </p>
-          <p>
-            <label htmlFor="blog-slug">{strings.slugLabel}</label>
-            <input
-              id="blog-slug"
-              type="text"
-              disabled={blogBusy}
-              aria-describedby="blog-slug-hint"
-              value={blog.id}
-              onChange={(event) => {
-                setBlogSlugEdited(true);
-                setBlog((f) => ({ ...f, id: event.target.value }));
-                setBlogSlugError(false);
-              }}
-            />
-          </p>
-          <p id="blog-slug-hint">{strings.slugHint}</p>
+          {/* 2026-09-02: the web-address field is gone. The owner: "I dont
+              want to set a web address for my blog, it should auto pick one
+              based on the title."
+
+              It was already derived from the title — the box was
+              pre-filled and only had to be touched in the rare case a
+              title yields nothing usable. But a field you are shown is a
+              field you think you must understand, and "web address" on a
+              blog form is a question a clinician has no reason to be
+              asked. It is derived silently now, and the only time the
+              address is mentioned at all is the one case that genuinely
+              needs a human: a title with no letters or digits in it, which
+              the error below asks them to reword rather than to fix by
+              typing a slug. */}
           {blogSlugError && <p role="alert">{strings.slugError}</p>}
           <p>
             <label htmlFor="blog-excerpt">{strings.excerptLabel}</label>
@@ -357,28 +349,13 @@ export function AuthoringPanel({
                 setWorkshop((f) => ({
                   ...f,
                   title,
-                  ...(workshopSlugEdited ? {} : { id: slugify(title) }),
+                  id: slugify(title),
                 }));
                 setWorkshopSlugError(false);
               }}
             />
           </p>
-          <p>
-            <label htmlFor="workshop-slug">{strings.slugLabel}</label>
-            <input
-              id="workshop-slug"
-              type="text"
-              disabled={workshopBusy}
-              aria-describedby="workshop-slug-hint"
-              value={workshop.id}
-              onChange={(event) => {
-                setWorkshopSlugEdited(true);
-                setWorkshop((f) => ({ ...f, id: event.target.value }));
-                setWorkshopSlugError(false);
-              }}
-            />
-          </p>
-          <p id="workshop-slug-hint">{strings.slugHint}</p>
+          {/* Derived from the title, never asked for — see the blog form. */}
           {workshopSlugError && <p role="alert">{strings.slugError}</p>}
           <p>
             <label htmlFor="workshop-description">{strings.descriptionLabel}</label>

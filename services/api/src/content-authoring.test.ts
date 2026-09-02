@@ -46,12 +46,14 @@ const PATIENT_CONTEXT = {
 function fakeEvent(overrides: {
   routeKey: string;
   pathParameters?: Record<string, string>;
+  queryStringParameters?: Record<string, string>;
   body?: unknown;
   principal?: Record<string, unknown>;
 }): LambdaAuthorizerEvent {
   return {
     routeKey: overrides.routeKey,
     pathParameters: overrides.pathParameters,
+    queryStringParameters: overrides.queryStringParameters,
     body: overrides.body === undefined ? undefined : JSON.stringify(overrides.body),
     // TASK 2.1.3: `http.sourceIp` is part of every real API Gateway v2
     // event and is what the audit row's `where` is derived from
@@ -350,5 +352,83 @@ describe('createContentAuthoringHandler — unknown route', () => {
       undefined as never,
     );
     expect(result).toMatchObject({ statusCode: 404 });
+  });
+});
+
+// 2026-09-02: the authoring side's own list. It exists because a draft was
+// unreachable — the public read returns published items only (by design),
+// and nothing listed anything else, so a post saved before the form began
+// publishing by default was invisible and unrecoverable.
+describe('GET /content/authored', () => {
+  async function seeded() {
+    const built = buildDeps();
+    await built.repository.create(SEED_ACTOR, {
+      ...validBody,
+      id: 'a-draft',
+      status: 'draft',
+      keywords: ['blog'],
+    } as never);
+    await built.repository.create(SEED_ACTOR, {
+      ...validBody,
+      id: 'a-published',
+      status: 'published',
+      keywords: ['blog'],
+    } as never);
+    return { ...built, handler: createContentAuthoringHandler(built.deps) };
+  }
+
+  const listEvent = (principal?: Record<string, unknown>) =>
+    fakeEvent({
+      routeKey: 'GET /content/authored',
+      queryStringParameters: { keyword: 'blog' },
+      ...(principal ? { principal } : {}),
+    });
+
+  it('returns drafts as well as published items — that is the whole point', async () => {
+    const { handler } = await seeded();
+    const response = (await handler(listEvent(), {} as never, () => undefined)) as {
+      statusCode: number;
+      body: string;
+    };
+
+    expect(response.statusCode).toBe(200);
+    const ids = (JSON.parse(response.body) as { items: { id: string }[] }).items
+      .map((item) => item.id)
+      .sort();
+    expect(ids).toEqual(['a-draft', 'a-published']);
+  });
+
+  it('leaves the public read published-only — the boundary is a separate route, not a parameter', async () => {
+    const { repository } = await seeded();
+    // The published-only view is what the public handler uses, and this
+    // route does not touch it.
+    expect((await repository.findPublishedByKeyword('blog')).map((i) => i.id)).toEqual([
+      'a-published',
+    ]);
+    expect((await repository.findAllByKeyword('blog')).map((i) => i.id).sort()).toEqual([
+      'a-draft',
+      'a-published',
+    ]);
+  });
+
+  it.each([
+    ['a sub-clinician', SUB_CLINICIAN_CONTEXT],
+    ['a patient', PATIENT_CONTEXT],
+  ])('is 403 for %s — an unpublished draft is nobody else’s to read', async (_l, principal) => {
+    const { handler } = await seeded();
+    const response = (await handler(listEvent(principal), {} as never, () => undefined)) as {
+      statusCode: number;
+    };
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('is 400 without a keyword', async () => {
+    const { handler } = await seeded();
+    const response = (await handler(
+      fakeEvent({ routeKey: 'GET /content/authored' }),
+      {} as never,
+      () => undefined,
+    )) as { statusCode: number };
+    expect(response.statusCode).toBe(400);
   });
 });
