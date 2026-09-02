@@ -29,8 +29,36 @@ on:
 permissions:
   contents: read
 
+# **`github.event_name` is part of the group, and 2026-09-02 is why.**
+#
+# A scheduled run and a push to `main` both have `github.ref ==
+# refs/heads/main`, so they shared this group — and with
+# `cancel-in-progress`, the nightly run starting at 07:23 cancelled the
+# still-running deploy from the merge of PR #162 fourteen seconds later,
+# eight minutes into `cdk deploy`. The merge looked green, the production
+# stack never got the change, and the only trace was "The operation was
+# canceled" inside a job nobody re-reads on a merge that went in.
+#
+# The `account-a11y` job below already carries its own group with this
+# exact scenario spelled out in its comment — "or this job cancel a push's
+# own deploy". That override was necessary but not sufficient: job-level
+# concurrency decides which *jobs* queue against each other, while this
+# workflow-level key is what cancels a whole in-progress **run**, and a
+# cancelled run takes every job in it regardless of the group that job
+# named.
+#
+# Adding the event name keeps every property this group was for — a new
+# push to a branch still supersedes the previous push's run, a PR sync
+# still supersedes its own — and only stops two *different kinds* of
+# trigger from cancelling each other, which they never had reason to do.
+#
+# Residual, named rather than silently accepted: two pushes to `main` in
+# quick succession still cancel the first one's deploy, mid-`cdk deploy`.
+# That is the pre-existing behaviour and is at least *intentional* (deploy
+# the newest commit), but interrupting CloudFormation is not free — see
+# docs/runbooks/rollback.md if a stack is ever found mid-update.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
