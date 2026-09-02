@@ -904,11 +904,140 @@ describe('the approval step — POST …/approve and …/decline', () => {
 
 // 2026-09-01: "When a clinician/principal clinician edits a calender for a
 // given patient it will appear as a notification on patients logged in
-// dashboard." Every route that moves an appointment writes exactly one.
+// dashboard."
+//
+// **Rewritten 2026-09-02 around one rule: a patient hears about an
+// appointment only once it is real to them.** The owner: *"I dont want to
+// see 'Your clinician has requested an appointment. It is waiting to be
+// confirmed.' … I only want to see confirmed appointments."*
+//
+// The original read "every route that moves an appointment writes exactly
+// one notification", which is a tidy rule about *routes* and the wrong rule
+// about *people*. It announced a request the moment it was made — undoing
+// the approval gate in the only place the gate is felt — and, following the
+// same symmetry, would have announced the cancellation of a slot the
+// patient had never been allowed to know about. `summariseCalendar` already
+// had this right for "next appointment"; the feed did not.
 describe('the patient dashboard feed', () => {
   const APPT_AT = '2026-09-01T10:00:00.000Z';
 
-  it('records a request when a sub-clinician books, and an approval when the principal confirms it', async () => {
+  it('says nothing when a sub-clinician books, and announces the approval', async () => {
+    const { handler, notificationStore } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+      }),
+    );
+    expect(notificationStore.items).toEqual([]);
+
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: APPROVE_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_AT },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(notificationStore.items.map((item) => item.kind)).toEqual(['appointment-approved']);
+    // The notice is *about* the appointment's time, not the time it was
+    // written — those are two different facts and the record keeps both.
+    expect(notificationStore.items[0]?.subjectAt).toBe(APPT_AT);
+    expect(notificationStore.items[0]?.patientId).toBe('pat-1');
+    expect(notificationStore.items[0]?.read).toBe(false);
+  });
+
+  it('says nothing when the principal books either — the gate is the same for everyone', async () => {
+    const { handler, notificationStore } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(notificationStore.items).toEqual([]);
+  });
+
+  it('says nothing when a request is declined — the patient never knew it existed', async () => {
+    const { handler, notificationStore } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+      }),
+    );
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: DECLINE_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_AT },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    // "Your appointment was cancelled" about a slot they were never told
+    // they had is worse than silence, and would leak the existence of the
+    // request the gate had just rejected.
+    expect(notificationStore.items).toEqual([]);
+  });
+
+  it('says nothing when a still-pending booking is withdrawn', async () => {
+    const { handler, notificationStore } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    await invoke(
+      handler,
+      fakeEvent({ routeKey: CANCEL_ROUTE, pathParameters: { id: 'pat-1', apptId: APPT_AT } }),
+    );
+    expect(notificationStore.items).toEqual([]);
+  });
+
+  it('announces the cancellation of a confirmed appointment — that one was real', async () => {
+    const { handler, notificationStore } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: APPROVE_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_AT },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    await invoke(
+      handler,
+      fakeEvent({ routeKey: CANCEL_ROUTE, pathParameters: { id: 'pat-1', apptId: APPT_AT } }),
+    );
+    // The patient was told this appointment existed and may have planned
+    // around it. Withdrawing it silently is the one failure worse than
+    // announcing it.
+    expect(notificationStore.items.map((item) => item.kind)).toEqual([
+      'appointment-approved',
+      'appointment-cancelled',
+    ]);
+  });
+
+  it('carries no prose — a kind, a time and an actor id, never a message anyone authored', async () => {
     const { handler, notificationStore } = await build();
     await invoke(
       handler,
@@ -926,65 +1055,6 @@ describe('the patient dashboard feed', () => {
         principal: PRINCIPAL_CONTEXT,
       }),
     );
-    expect(notificationStore.items.map((item) => item.kind)).toEqual([
-      'appointment-requested',
-      'appointment-approved',
-    ]);
-    // The notice is *about* the appointment's time, not the time it was
-    // written — those are two different facts and the record keeps both.
-    expect(notificationStore.items[0]?.subjectAt).toBe(APPT_AT);
-    expect(notificationStore.items[0]?.patientId).toBe('pat-1');
-    expect(notificationStore.items[0]?.read).toBe(false);
-  });
-
-  it('records a request when the principal books, the same as anyone else', async () => {
-    const { handler, notificationStore } = await build();
-    await invoke(
-      handler,
-      fakeEvent({
-        routeKey: SCHEDULE_ROUTE,
-        pathParameters: { id: 'pat-1' },
-        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
-        principal: PRINCIPAL_CONTEXT,
-      }),
-    );
-    // Not `appointment-approved`: nothing is confirmed until the approval
-    // step runs, so telling the patient otherwise would be the very thing
-    // the owner objected to.
-    expect(notificationStore.items.map((item) => item.kind)).toEqual(['appointment-requested']);
-  });
-
-  it('records a cancellation when a booking is called off', async () => {
-    const { handler, notificationStore } = await build();
-    await invoke(
-      handler,
-      fakeEvent({
-        routeKey: SCHEDULE_ROUTE,
-        pathParameters: { id: 'pat-1' },
-        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
-        principal: PRINCIPAL_CONTEXT,
-      }),
-    );
-    await invoke(
-      handler,
-      fakeEvent({ routeKey: CANCEL_ROUTE, pathParameters: { id: 'pat-1', apptId: APPT_AT } }),
-    );
-    expect(notificationStore.items.map((item) => item.kind)).toEqual([
-      'appointment-requested',
-      'appointment-cancelled',
-    ]);
-  });
-
-  it('carries no prose — a kind, a time and an actor id, never a message anyone authored', async () => {
-    const { handler, notificationStore } = await build();
-    await invoke(
-      handler,
-      fakeEvent({
-        routeKey: SCHEDULE_ROUTE,
-        pathParameters: { id: 'pat-1' },
-        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
-      }),
-    );
     expect(Object.keys(notificationStore.items[0] ?? {}).sort()).toEqual([
       'actorId',
       'created_at',
@@ -998,9 +1068,31 @@ describe('the patient dashboard feed', () => {
     ]);
   });
 
-  it('still books the appointment when the feed write fails — and says so', async () => {
+  it('still approves the appointment when the feed write fails — and says so', async () => {
     const { handler, notificationStore } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+      }),
+    );
     notificationStore.create = () => Promise.reject(new Error('dynamo is having a day'));
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: APPROVE_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: APPT_AT },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect((JSON.parse(response.body) as { notified: boolean }).notified).toBe(false);
+  });
+
+  it('reports no `notified` at all on a booking, rather than a misleading false', async () => {
+    const { handler } = await build();
     const response = await invoke(
       handler,
       fakeEvent({
@@ -1009,8 +1101,10 @@ describe('the patient dashboard feed', () => {
         body: { scheduledAt: APPT_AT, durationMinutes: 30 },
       }),
     );
-    expect(response.statusCode).toBe(201);
-    expect((JSON.parse(response.body) as { notified: boolean }).notified).toBe(false);
+    // `notified: false` means "a notification was owed and did not land".
+    // Nothing is owed here, so the field is absent — the two are different
+    // facts and a caller can act on the difference.
+    expect(Object.hasOwn(JSON.parse(response.body) as object, 'notified')).toBe(false);
   });
 });
 

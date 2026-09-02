@@ -467,7 +467,6 @@
   "patientNotifications.dismiss": "Dismiss",
   "patientNotifications.for": "for",
   "patientNotifications.generic": "Something changed about your appointments.",
-  "patientNotifications.appointmentRequested": "Your clinician has requested an appointment. It is waiting to be confirmed.",
   "patientNotifications.appointmentApproved": "Your appointment is confirmed.",
   "patientNotifications.appointmentCancelled": "An appointment has been cancelled.",
   "patientNotifications.calendarUpdated": "Your clinician has updated your calendar.",

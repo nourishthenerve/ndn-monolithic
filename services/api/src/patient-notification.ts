@@ -19,7 +19,7 @@
 // is literally `/patients/me/notifications`. `can()` is still asked — the
 // matrix is the boundary, not the route shape — but a caller who is not a
 // patient has nothing to point at even before it answers.
-import type { Principal } from '@ndn/shared-types';
+import type { PatientNotificationKind, Principal } from '@ndn/shared-types';
 import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
 
 import { can } from './authz.js';
@@ -36,6 +36,21 @@ const NOTIFICATIONS_FLAG = 'appointments.enabled';
 const PATIENT_NOTIFICATION_ENTITY = 'patient-notification';
 
 const NOTIFICATION_LOG_SAMPLE_RATE = 1;
+
+/**
+ * Kinds that are no longer raised and must not be shown, including for
+ * rows written before they were retired.
+ *
+ * `'appointment-requested'` stopped being written on 2026-09-02 (see
+ * `appointment.ts`: a pending request is the exact thing the approval gate
+ * exists to keep from being real to the patient). Suppressing it *here* as
+ * well as at the source is what makes the change take effect for the feeds
+ * that already have one sitting in them — the owner's own dashboard among
+ * them — without deleting stored rows, which is a decision no bug fix
+ * should be making on its own (D-03) and which the audit log would
+ * disagree with anyway.
+ */
+const RETIRED_NOTIFICATION_KINDS: readonly PatientNotificationKind[] = ['appointment-requested'];
 
 export interface PatientNotificationDeps {
   readonly notifications: PatientNotificationRepository;
@@ -101,7 +116,8 @@ export function createPatientNotificationHandler(
         return respond(403, { error: 'FORBIDDEN' });
       }
       const items = await deps.notifications.listForPatient(principal.patientId as string);
-      return respond(200, { items: projectAllFor(principal, items, resource) });
+      const shown = items.filter((item) => !RETIRED_NOTIFICATION_KINDS.includes(item.kind));
+      return respond(200, { items: projectAllFor(principal, shown, resource) });
     }
 
     if (!can(principal, 'update', resource).allowed) {

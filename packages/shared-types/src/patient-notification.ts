@@ -26,11 +26,23 @@ import type { BaseRecord } from './types.js';
  * than rendering nothing (see `PatientNotifications.tsx`).
  */
 export type PatientNotificationKind =
-  /** A clinician has requested a slot; it is not confirmed until the principal approves it. */
+  /**
+   * **Retired 2026-09-02 — never raised again, and never shown.** The kind
+   * remains in the union because rows written before that date still exist
+   * and must still parse; `patient-notification.ts` filters them out of
+   * every patient's feed, so no migration is needed and none is pending.
+   *
+   * The owner: *"I dont want to see 'Your clinician has requested an
+   * appointment. It is waiting to be confirmed.' … I only want to see
+   * confirmed appointments."* A pending request is precisely the thing the
+   * approval gate exists to keep from being real to the patient, and
+   * announcing it on their dashboard undid that gate in the only place
+   * that matters — what the patient is told.
+   */
   | 'appointment-requested'
   /** The principal approved a request — this is the one that means "you have an appointment". */
   | 'appointment-approved'
-  /** A booking was declined before it was ever confirmed, or a confirmed one was cancelled. */
+  /** A confirmed appointment was cancelled. Never raised for a request declined before it was ever confirmed — see `appointment.ts`. */
   | 'appointment-cancelled'
   /** The calendar section's own notes changed, with no appointment moving. */
   | 'calendar-updated';

@@ -119,7 +119,12 @@ const heading = t('account.heading', undefined, locale);
           forLabel: t('patientNotifications.for', undefined, locale),
           genericLabel: t('patientNotifications.generic', undefined, locale),
           kindLabels: {
-            'appointment-requested': t('patientNotifications.appointmentRequested', undefined, locale),
+            // No `appointment-requested`. It is retired (2026-09-02): the
+            // API no longer writes one and filters out the rows that
+            // predate the change, so this label was unreachable. Removing
+            // it also fixes the failure direction — if that filter ever
+            // regressed, the feed falls back to the generic line rather
+            // than resurrecting the sentence the owner asked to be rid of.
             'appointment-approved': t('patientNotifications.appointmentApproved', undefined, locale),
             'appointment-cancelled': t('patientNotifications.appointmentCancelled', undefined, locale),
             'calendar-updated': t('patientNotifications.calendarUpdated', undefined, locale),
