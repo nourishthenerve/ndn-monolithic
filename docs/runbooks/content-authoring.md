@@ -70,3 +70,17 @@ The problem was one unticked checkbox. **"Publish straight away" defaulted to of
 Both forms now start with the box **ticked**, and the hint says what that means in both directions. Drafting is still one click away, which is the right way round for a practice that publishes a handful of posts a year: the rare case asks for itself rather than the common one being a trap.
 
 `AuthoringPanel.test.ts` asserts the default and follows it through the request builder to the `status` that actually goes on the wire — the default is the whole bug, and every other link in that chain was already right.
+
+### Follow-up, 2026-09-02 (second) — no web address to type, and drafts you can actually reach
+
+Two things, from *"what is web address text box in new blog post section and why nothing is appearing here /en/blog?"*
+
+**The web-address field is gone.** It was already derived from the title — the box arrived pre-filled and only needed touching in the rare case a title yields no usable slug. But a field you are shown is a field you think you have to understand, and "web address" on a blog form is a question a clinician has no reason to be asked. The slug is derived silently now, and the address is mentioned only in the one case that genuinely needs a person: a title with no letters or digits at all, where the message asks them to reword the title rather than to type a slug.
+
+**Nothing was appearing because nothing was published.** Querying the live public API returned `{"items":[]}` — literally no published content existed. Everything saved before the publish-by-default fix earlier the same day carries `status: 'draft'`, the public read returns published items only (correctly, and by design since TASK 1.3.2), and **nothing in the account area listed anything else**. So work that had been written and saved perfectly well was invisible, with no screen that would ever show it, no way to publish it, and no way even to confirm it existed.
+
+That is the real defect behind the question, and it is bigger than the one that was asked about: the earlier "static site, publish needs a deploy" explanation was true and was never the reason the page was empty.
+
+`AuthoredContentList` now lists everything the practice has written — blog posts and workshops, whatever their status — with a publish/unpublish control on each row. Its data comes from two new `Principal`-only routes, `GET /content/authored` and `GET /workshops/authored`.
+
+**They are separate routes rather than a `status` parameter on the public read**, and that is deliberate: `findPublishedByKeyword` is a boundary, and a flag that could switch a boundary off is the shape a mistake takes. They are gated on `update` rather than `read` for the same kind of reason — `Content item: R` is held by every clinician and by helpdesk, and an unpublished draft is not something the practice has decided to show anyone yet; `update` is `Principal`-only and is exactly what the list exists to enable.

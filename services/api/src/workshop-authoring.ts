@@ -161,6 +161,16 @@ export function createWorkshopAuthoringHandler(
 
     try {
       switch (routeKey) {
+        // 2026-09-02: the authoring side's own list, unpublished and past
+        // workshops included — see content-authoring.ts's own note on why
+        // this is gated on `update` rather than `read`.
+        case 'GET /workshops/authored': {
+          if (!can(principal, 'update', WORKSHOP_RESOURCE).allowed) {
+            return respond(403, { error: 'FORBIDDEN' });
+          }
+          const items = await deps.repository.findAll();
+          return respond(200, { items });
+        }
         case 'POST /workshops': {
           if (!can(principal, 'create', WORKSHOP_RESOURCE).allowed) {
             return respond(403, { error: 'FORBIDDEN' });

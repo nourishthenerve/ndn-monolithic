@@ -864,8 +864,13 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'GET /patients/{id}/messages',
         // 2026-09-01: the patient's own dashboard feed. `/me` is the whole
         // path — there is no `{id}` for anyone to point elsewhere.
+        // 2026-09-02: the authoring side's own lists, drafts included —
+        // `Principal`-only, and deliberately separate paths so the public
+        // `GET /content` keeps its published-only boundary intact.
+        'GET /content/authored',
         'GET /patients/me/notifications',
         'GET /testimonials/pending',
+        'GET /workshops/authored',
         'PATCH /clinicians/me',
         'PATCH /content/{id}',
         'PATCH /patients/{id}',

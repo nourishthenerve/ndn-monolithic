@@ -14,6 +14,7 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
+import { AuthoredContentList } from '../../../account/AuthoredContentList.js';
 import { AuthoringPanel } from '../../../account/AuthoringPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
@@ -56,8 +57,6 @@ const heading = t('authoring.heading', undefined, locale);
         blogIntro: t('authoring.blogIntro', undefined, locale),
         workshopHeading: t('authoring.workshopHeading', undefined, locale),
         workshopIntro: t('authoring.workshopIntro', undefined, locale),
-        slugLabel: t('authoring.slugLabel', undefined, locale),
-        slugHint: t('authoring.slugHint', undefined, locale),
         titleLabel: t('authoring.titleLabel', undefined, locale),
         excerptLabel: t('authoring.excerptLabel', undefined, locale),
         bodyLabel: t('authoring.bodyLabel', undefined, locale),
@@ -77,6 +76,52 @@ const heading = t('authoring.heading', undefined, locale);
         dateTimeError: t('authoring.dateTimeError', undefined, locale),
         forbidden: t('authoring.forbidden', undefined, locale),
         error: t('authoring.error', undefined, locale),
+      }}
+    />
+
+    {/* 2026-09-02: what has already been written, and its status. Added
+        because a draft was otherwise unreachable — the public read returns
+        published items only, and nothing here listed anything else, so a
+        post saved before the form began publishing by default was
+        invisible with no way to recover it. */}
+    <AuthoredContentList
+      client:only="react"
+      kind="blog"
+      locale={locale}
+      strings={{
+        heading: t('authoredList.blogHeading', undefined, locale),
+        loading: t('authoredList.loading', undefined, locale),
+        forbidden: t('authoredList.forbidden', undefined, locale),
+        error: t('authoredList.error', undefined, locale),
+        empty: t('authoredList.empty', undefined, locale),
+        titleColumn: t('authoredList.titleColumn', undefined, locale),
+        statusColumn: t('authoredList.statusColumn', undefined, locale),
+        actionColumn: t('authoredList.actionColumn', undefined, locale),
+        publish: t('authoredList.publish', undefined, locale),
+        unpublish: t('authoredList.unpublish', undefined, locale),
+        working: t('authoredList.working', undefined, locale),
+        actionFailed: t('authoredList.actionFailed', undefined, locale),
+        viewLabel: t('authoredList.view', undefined, locale),
+      }}
+    />
+    <AuthoredContentList
+      client:only="react"
+      kind="workshop"
+      locale={locale}
+      strings={{
+        heading: t('authoredList.workshopHeading', undefined, locale),
+        loading: t('authoredList.loading', undefined, locale),
+        forbidden: t('authoredList.forbidden', undefined, locale),
+        error: t('authoredList.error', undefined, locale),
+        empty: t('authoredList.empty', undefined, locale),
+        titleColumn: t('authoredList.titleColumn', undefined, locale),
+        statusColumn: t('authoredList.statusColumn', undefined, locale),
+        actionColumn: t('authoredList.actionColumn', undefined, locale),
+        publish: t('authoredList.publish', undefined, locale),
+        unpublish: t('authoredList.unpublish', undefined, locale),
+        working: t('authoredList.working', undefined, locale),
+        actionFailed: t('authoredList.actionFailed', undefined, locale),
+        viewLabel: t('authoredList.view', undefined, locale),
       }}
     />
     <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
