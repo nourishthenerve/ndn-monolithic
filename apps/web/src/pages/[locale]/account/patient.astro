@@ -39,6 +39,7 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
+import { AssessmentForm } from '../../../account/AssessmentForm.js';
 import { ClinicalRecordTimeline } from '../../../account/ClinicalRecordTimeline.js';
 import { NextAppointmentPanel } from '../../../account/NextAppointmentPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
@@ -126,6 +127,43 @@ const heading = t('patientProfile.heading', undefined, locale);
         errorLabel: t('clinicalRecordTimeline.error', undefined, locale),
         emptyLabel: t('clinicalRecordTimeline.carePlanEmpty', undefined, locale),
         versionLabel: t('clinicalRecordTimeline.version', undefined, locale),
+      }}
+    />
+    {/* 2026-09-01: the assessment form, on the page you reach by clicking
+        a patient — the owner's own placement: *"it should appear when we
+        create/register a new patient or when we click a patient in patient
+        dashboard."* It was briefly a top-level nav item, which was wrong:
+        the form is *about a patient*, so it has no meaning without one,
+        and offering it before you have chosen a patient made the first
+        thing it said "choose a patient from the dashboard".
+
+        Here it resolves to the signed-in patient's own form (`me`), so no
+        `?id=` is involved at all. They see the sections the server sends
+        them, which is general info (theirs to edit), the patient section
+        and the calendar (both read-only) — and never the clinician's. */}
+    <AssessmentForm
+      client:only="react"
+      strings={{
+        heading: t('assessment.heading', undefined, locale),
+        loadingLabel: t('assessment.loading', undefined, locale),
+        forbiddenLabel: t('assessment.forbidden', undefined, locale),
+        notFoundLabel: t('assessment.notFound', undefined, locale),
+        errorLabel: t('assessment.error', undefined, locale),
+        missingIdLabel: t('assessment.missingId', undefined, locale),
+        saveLabel: t('assessment.save', undefined, locale),
+        savingLabel: t('assessment.saving', undefined, locale),
+        savedLabel: t('assessment.saved', undefined, locale),
+        conflictLabel: t('assessment.conflict', undefined, locale),
+        saveForbiddenLabel: t('assessment.saveForbidden', undefined, locale),
+        readOnlyLabel: t('assessment.readOnly', undefined, locale),
+        attachmentsHeading: t('assessment.attachmentsHeading', undefined, locale),
+        attachmentsEmpty: t('assessment.attachmentsEmpty', undefined, locale),
+        addFileLabel: t('assessment.addFile', undefined, locale),
+        uploadingLabel: t('assessment.uploading', undefined, locale),
+        uploadFailedLabel: t('assessment.uploadFailed', undefined, locale),
+        downloadLabel: t('assessment.download', undefined, locale),
+        noNextAppointmentLabel: t('assessment.noNextAppointment', undefined, locale),
+        versionLabel: t('assessment.version', undefined, locale),
       }}
     />
     <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />

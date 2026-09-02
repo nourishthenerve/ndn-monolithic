@@ -181,6 +181,16 @@ const createClinicianBodySchema = z.object({
  * see clinician-repository.ts's header for why this ordering, not the
  * reverse the task text states.
  */
+/**
+ * 2026-09-01: `AdminGetUser` by email against the clinician pool, as a
+ * port — the mirror of `AdminFindPatientPort`, added for the same reason
+ * D-29's follow-up added that one: to tell an orphaned Cognito user from a
+ * real duplicate. `undefined` means no account has that address.
+ */
+export interface AdminFindClinicianPort {
+  findByEmail(email: string): Promise<{ subjectId: string } | undefined>;
+}
+
 export interface AdminCreateClinicianPort {
   createUser(email: string): Promise<string>;
   /**
@@ -250,6 +260,8 @@ export interface ClinicianAdminDeps {
   readonly repository: ClinicianRepository;
   readonly flags: FlagReader;
   readonly createClinicianUser: AdminCreateClinicianPort;
+  /** 2026-09-01: used only on the duplicate-email path — see `POST /clinicians`. */
+  readonly findClinicianUser: AdminFindClinicianPort;
   readonly deactivateClinicianUser: AdminDeactivateClinicianPort;
   readonly reactivateClinicianUser: AdminReactivateClinicianPort;
   readonly changeOwnPassword: ChangeOwnPasswordPort;
@@ -400,15 +412,72 @@ export function createClinicianAdminHandler(
           // IAM-authorised operation; clinician-admin-handler.ts's role
           // carries exactly the Admin* grants this file's ports use.
           //
+          // **The singleton check, before anything is minted.** 2026-09-01:
+          // the owner, trying to add a second principal — *"it says an
+          // account with this email address already exists though it's not
+          // the case."*
+          //
+          // It was not the case. `repository.create()` refuses a second
+          // principal (race-free, in the transaction), but by then this
+          // handler had already created the Cognito user — and the comment
+          // that used to sit here called that "simply unusable, nobody
+          // ever learns its password", which missed the part that bites:
+          // **it occupies the email address.** Every retry then hit
+          // `UsernameExistsException` and was reported as a duplicate
+          // account, so the true reason (there is already a principal) was
+          // never once shown, and the address was burned.
+          //
+          // This check is an ordinary read and is deliberately *not* the
+          // guarantee — two concurrent creates can both pass it, and the
+          // transactional write below is what actually holds the
+          // invariant. It exists so the overwhelmingly common case fails
+          // cheaply, honestly, and without leaving anything behind.
+          if (parsed.data.role === 'principal') {
+            const directory = await deps.repository.list();
+            if (directory.some((clinician) => clinician.role === 'principal')) {
+              return respond(409, { error: 'PRINCIPAL_ALREADY_EXISTS' });
+            }
+          }
           // D-30: Cognito artefacts first, the `CLI#` record last — the
           // same ordering `clinician-repository.ts`'s own header already
-          // chose and accepts the same failure mode for ("an orphaned
-          // Cognito user is the failure mode, not an orphaned record").
-          // If `repository.create()` throws below (most likely
-          // `PRINCIPAL_ALREADY_EXISTS`), the password and TOTP secret
-          // already minted are never returned to anyone and the Cognito
-          // user is simply unusable — nobody ever learns its password.
-          const subjectId = await deps.createClinicianUser.createUser(parsed.data.email);
+          // chose.
+          //
+          // **An existing Cognito user is a conflict only when a record
+          // exists behind it**, 2026-09-01 — the identical rule, and the
+          // identical reasoning, `patient-admin.ts` adopted for its own
+          // orphans. When no `CLI#` row exists, this call completes the
+          // provisioning a previous failed attempt started rather than
+          // refusing that address forever. Healing one is safe for the
+          // same reason it is there: an orphaned account has never been
+          // usable by anyone, so there is no session and no colleague to
+          // disturb.
+          //
+          // Deliberately not "always continue on exists": that would let
+          // this route reset a *live* colleague's password and hand it to
+          // whoever called. The `findById` check is what keeps "complete
+          // an orphan" from becoming "take over an account".
+          //
+          // No `AdminDeleteUser` anywhere — a banned identifier repo-wide.
+          // The orphan is completed, never removed.
+          let subjectId: string;
+          try {
+            subjectId = await deps.createClinicianUser.createUser(parsed.data.email);
+          } catch (error) {
+            if (
+              !(error instanceof AppError && error.code === 'COGNITO_ACCOUNT_ALREADY_EXISTS')
+            ) {
+              throw error;
+            }
+            const existingUser = await deps.findClinicianUser.findByEmail(parsed.data.email);
+            // `AdminCreateUser` says the username is taken and
+            // `AdminGetUser` cannot find it — the pool disagreeing with
+            // itself, which no ordinary state produces. Refuse rather than
+            // guess at a subject id to write a record against.
+            if (!existingUser || (await deps.repository.findById(existingUser.subjectId))) {
+              throw error;
+            }
+            subjectId = existingUser.subjectId;
+          }
           // The principal's own choice when they made one, a generated
           // password otherwise — see this file's 2026-08-31 amendment.
           const password = parsed.data.password ?? makePassword();

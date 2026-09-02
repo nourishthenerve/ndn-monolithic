@@ -102,3 +102,21 @@ That held while every island showed one role one thing. `AssessmentForm.tsx` doe
 2. **Read-only assessment answers were reachable by `getByLabelText`.** The first cut rendered them as `<span id>label</span>: <span aria-labelledby>value</span>`, which makes a non-interactive element claim a form label — so a section a caller may only *read* was indistinguishable from one they may *edit*, to assistive technology and to any test. Now a `<dt>`/`<dd>` pair, the same markup this page's own read-only facts already used.
 
 Neither is exotic. Both are the ordinary cost of having had no way to ask "what does this actually render".
+
+## Amendment, 2026-09-01 (second) — where the assessment form lives
+
+It was briefly a top-level nav item, reachable by every signed-in identity. That was wrong, and the owner said so: *"assessment form shouldn't be there at the top level … it should appear when we create/register a new patient or when we click a patient in patient dashboard."*
+
+The form is *about a patient*, so it has no meaning without one — and offering it before a patient was chosen meant the first thing it said was "choose a patient from the dashboard", which is a menu item whose only content is an instruction to go somewhere else.
+
+It now appears in exactly the two places the owner named, plus the one they implied:
+
+| Where | Which patient |
+|---|---|
+| `/account/patient-record?id=…` — clicking a patient on the dashboard | the one in `?id=` |
+| `/account/patient-admin`, after creating an account | a link straight to the new patient's record page |
+| `/account/patient` — a patient's own details page | themselves (`me`) |
+
+`/account/assessment` is gone, along with its `account-routes.ts` entry. Nothing about the API changed: the server still decides which sections come back per role, and the page does not gate it.
+
+**Booking now exists at all.** `POST /patients/{id}/appointments` had no frontend consumer since TASK 3.4.1, so every appointment in the system had to be written by hand — which is what the owner met as *"there is no button to edit / add a new calendar date for appointment"*: the calendar section could show a next appointment and count completed ones, but nothing could create one. `AppointmentBooking.tsx` sits on the record page, under that patient's existing appointments, for the same reason the form does — a booking needs a patient, and the clinician calendar spans all of them.

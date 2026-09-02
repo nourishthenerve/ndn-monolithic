@@ -448,7 +448,26 @@ jobs:
   deploy:
     name: Deploy to production
     needs: [changes, quality]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true'
+    # 2026-09-01: `workflow_dispatch` added, and it is a content fix, not a
+    # convenience. ADR-0017 makes the public site statically generated, so
+    # the blog and workshop indexes are built from a single fetch at build
+    # time (`getStaticPaths`) — which means **publishing a post through the
+    # authoring UI writes it to DynamoDB and nothing on the site changes
+    # until the next deploy.** The owner hit exactly that: "blog and
+    # workshop when saved is not being present inside blog and workshop
+    # tabs."
+    #
+    # Until now the only way to deploy was to push code, so publishing an
+    # article required a commit that changed nothing. This lets the
+    # principal re-publish the site from the Actions tab after saving —
+    # one click, no code change, no new credential anywhere.
+    #
+    # `needs.changes.outputs.code` is not consulted on this path: a manual
+    # run is *asking* for a deploy, and there is by definition no diff
+    # behind it to detect.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true')
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

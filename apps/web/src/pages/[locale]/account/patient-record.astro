@@ -22,6 +22,8 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
+import { AppointmentBooking } from '../../../account/AppointmentBooking.js';
+import { AssessmentForm } from '../../../account/AssessmentForm.js';
 import { PatientRecordPanel } from '../../../account/PatientRecordPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
@@ -46,7 +48,7 @@ const heading = t('patientRecord.heading', undefined, locale);
   <RequireAuth
     client:only="react"
     loadingLabel={t('account.loading', undefined, locale)}
-    allowRoles={['principal-clinician', 'helpdesk']}
+    allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk']}
   >
     <Fragment slot="signedOut">
       <p>
@@ -60,7 +62,6 @@ const heading = t('patientRecord.heading', undefined, locale);
     <PatientRecordPanel
       client:only="react"
       dashboardHref={`/${locale}/account/caseload`}
-      assessmentHref={`/${locale}/account/assessment`}
       strings={{
         loadingLabel: t('patientRecord.loading', undefined, locale),
         forbiddenLabel: t('patientRecord.forbidden', undefined, locale),
@@ -90,7 +91,63 @@ const heading = t('patientRecord.heading', undefined, locale);
         appointmentStatusColumnLabel: t('patientRecord.appointmentStatusColumn', undefined, locale),
         minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
         backToDashboard: t('patientRecord.backToDashboard', undefined, locale),
-        assessmentLink: t('account.assessmentLink', undefined, locale),
+      }}
+    />
+    {/* 2026-09-01: booking, on the page where a patient is already
+        chosen — see AppointmentBooking.tsx on why it is not on the
+        clinician's own calendar. `patientId` is read from the same `?id=`
+        the panel above resolves. */}
+    <AppointmentBooking
+      client:only="react"
+      strings={{
+        heading: t('appointmentBooking.heading', undefined, locale),
+        whenLabel: t('appointmentBooking.when', undefined, locale),
+        durationLabel: t('appointmentBooking.duration', undefined, locale),
+        submitLabel: t('appointmentBooking.submit', undefined, locale),
+        busyLabel: t('appointmentBooking.busy', undefined, locale),
+        successLabel: t('appointmentBooking.success', undefined, locale),
+        pendingNoticeLabel: t('appointmentBooking.pendingNotice', undefined, locale),
+        conflictLabel: t('appointmentBooking.conflict', undefined, locale),
+        forbiddenLabel: t('appointmentBooking.forbidden', undefined, locale),
+        failedLabel: t('appointmentBooking.failed', undefined, locale),
+      }}
+    />
+
+    {/* 2026-09-01: the assessment form, on the page you reach by clicking
+        a patient — the owner's own placement: *"it should appear when we
+        create/register a new patient or when we click a patient in patient
+        dashboard."* It was briefly a top-level nav item, which was wrong:
+        the form is *about a patient*, so it has no meaning without one,
+        and offering it before you have chosen a patient made the first
+        thing it said "choose a patient from the dashboard".
+
+        It reads its own `?id=` from the URL, the same one this page
+        already resolves, so the two always show the same patient. Which
+        sections come back is the server's decision per role — this page
+        does not gate it. */}
+    <AssessmentForm
+      client:only="react"
+      strings={{
+        heading: t('assessment.heading', undefined, locale),
+        loadingLabel: t('assessment.loading', undefined, locale),
+        forbiddenLabel: t('assessment.forbidden', undefined, locale),
+        notFoundLabel: t('assessment.notFound', undefined, locale),
+        errorLabel: t('assessment.error', undefined, locale),
+        missingIdLabel: t('assessment.missingId', undefined, locale),
+        saveLabel: t('assessment.save', undefined, locale),
+        savingLabel: t('assessment.saving', undefined, locale),
+        savedLabel: t('assessment.saved', undefined, locale),
+        conflictLabel: t('assessment.conflict', undefined, locale),
+        saveForbiddenLabel: t('assessment.saveForbidden', undefined, locale),
+        readOnlyLabel: t('assessment.readOnly', undefined, locale),
+        attachmentsHeading: t('assessment.attachmentsHeading', undefined, locale),
+        attachmentsEmpty: t('assessment.attachmentsEmpty', undefined, locale),
+        addFileLabel: t('assessment.addFile', undefined, locale),
+        uploadingLabel: t('assessment.uploading', undefined, locale),
+        uploadFailedLabel: t('assessment.uploadFailed', undefined, locale),
+        downloadLabel: t('assessment.download', undefined, locale),
+        noNextAppointmentLabel: t('assessment.noNextAppointment', undefined, locale),
+        versionLabel: t('assessment.version', undefined, locale),
       }}
     />
     <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />

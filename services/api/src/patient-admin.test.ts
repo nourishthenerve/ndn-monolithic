@@ -3,7 +3,7 @@ import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AssessmentRepository, DEFAULT_ASSESSMENT_ID } from './assessment-repository.js';
-import { InMemoryAuditLog } from './audit.js';
+import { actorContext, InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
 import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags.js';
 import {
@@ -146,8 +146,25 @@ function build(
     clock,
   );
 
+  // 2026-09-01: suspend/restore now disables and re-enables the patient's
+  // Cognito user. Recorded here so a test can assert the directory moved,
+  // not just the record.
+  const enabledCalls: string[] = [];
+  const setPatientEnabled = {
+    disable: async (subjectId: string) => {
+      enabledCalls.push(`disable:${subjectId}`);
+    },
+    revokeTokens: async (subjectId: string) => {
+      enabledCalls.push(`revoke:${subjectId}`);
+    },
+    enable: async (subjectId: string) => {
+      enabledCalls.push(`enable:${subjectId}`);
+    },
+  };
+
   const handler = createPatientAdminHandler({
     repository,
+    setPatientEnabled,
     assessments,
     flags,
     audit,
@@ -166,6 +183,8 @@ function build(
     createPatientUser,
     setPatientPassword,
     findPatientUser,
+    setPatientEnabled,
+    enabledCalls,
   };
 }
 
@@ -708,5 +727,111 @@ describe('POST /patients — the assessment form', () => {
     const body = JSON.parse(response.body) as { assessmentFormCreated: boolean; password: string };
     expect(body.assessmentFormCreated).toBe(false);
     expect(body.password).toBe('Fixed-Passw0rd!');
+  });
+});
+
+// 2026-09-01: "patient dashboard - remove access is not working."
+//
+// Suspension used to flip `account_status` and nothing else, so a
+// "removed" patient could still sign in — the data boundary held (`can()`
+// gates them to their own profile) but the identity one did not. The
+// clinician half has disabled the Cognito user since TASK 2.4.1; the
+// asymmetry was the bug.
+describe('suspend and restore reach the directory, not just the record', () => {
+  async function withPatient() {
+    const built = build();
+    await built.repository.register(
+      {
+        subjectId: 'pat-1',
+        personal: { fullName: 'A Patient', email: 'p@example.com', marketingOptIn: false },
+      },
+      actorContext(
+        { subjectId: 'seed', role: 'principal-clinician' },
+        { requestId: 'r', sourceIp: '198.51.100.1' },
+      ),
+    );
+    return built;
+  }
+
+  it('disables the Cognito user and ends every live session on suspend', async () => {
+    const { handler, enabledCalls } = await withPatient();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({ directoryUpdated: true });
+    // Revoking is what closes the authorizer's five-minute result-cache
+    // window; without it a suspended patient keeps working until it lapses.
+    expect(enabledCalls).toEqual(['disable:pat-1', 'revoke:pat-1']);
+  });
+
+  it('re-enables it on restore', async () => {
+    const { handler, enabledCalls } = await withPatient();
+    await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+      }),
+    );
+    enabledCalls.length = 0;
+
+    await invoke(
+      handler,
+      eventFor('POST /patients/{id}/restore', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+      }),
+    );
+    expect(enabledCalls).toEqual(['enable:pat-1']);
+  });
+
+  it('moves the record first, so a failed directory call still gates data access', async () => {
+    const { handler, repository, setPatientEnabled } = await withPatient();
+    setPatientEnabled.disable = () => Promise.reject(new Error('cognito is having a day'));
+
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+      }),
+    );
+
+    // Reported, not thrown: the half that `can()` reads has already
+    // happened, so calling the whole thing a failure would be false.
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({ directoryUpdated: false });
+    expect((await repository.findById('pat-1'))?.account_status).toBe('suspended');
+  });
+
+  it('touches the directory for nobody when the patient does not exist', async () => {
+    const { handler, enabledCalls } = build();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', {
+        principal: PRINCIPAL_CONTEXT,
+        pathParameters: { id: 'pat-nobody' },
+      }),
+    );
+    expect(response.statusCode).toBe(404);
+    expect(enabledCalls).toEqual([]);
+  });
+
+  it('is 403 for helpdesk — correcting a phone number is not revoking access', async () => {
+    const { handler, enabledCalls } = await withPatient();
+    const response = await invoke(
+      handler,
+      eventFor('POST /patients/{id}/suspend', {
+        principal: HELPDESK_CONTEXT,
+        pathParameters: { id: 'pat-1' },
+      }),
+    );
+    expect(response.statusCode).toBe(403);
+    expect(enabledCalls).toEqual([]);
   });
 });

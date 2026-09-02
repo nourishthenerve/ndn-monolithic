@@ -5,8 +5,11 @@
 // real DynamoDB-backed repository.
 import {
   AdminCreateUserCommand,
+  AdminDisableUserCommand,
+  AdminEnableUserCommand,
   AdminGetUserCommand,
   AdminSetUserPasswordCommand,
+  AdminUserGlobalSignOutCommand,
   CognitoIdentityProviderClient,
 } from '@aws-sdk/client-cognito-identity-provider';
 
@@ -17,6 +20,7 @@ import { createPatientProfileStore, DynamoAssessmentStore } from './dynamo-store
 import type {
   AdminCreatePatientPort,
   AdminFindPatientPort,
+  AdminSetPatientEnabledPort,
   AdminSetPatientPasswordPort,
 } from './patient-admin.js';
 import { createPatientAdminHandler } from './patient-admin.js';
@@ -138,6 +142,34 @@ const assessments = new AssessmentRepository(
   systemClock,
 );
 
+/**
+ * 2026-09-01: the directory half of suspend/restore. `Username` is always
+ * the `sub` — this record's own key — for the identical reason
+ * clinician-admin-handler.ts states for its own pair: a sub works whatever
+ * the pool's alias configuration is, so nothing here depends on
+ * `UsernameAttributes`.
+ *
+ * The patient pool, not the clinician pool. They are separate directories
+ * and a patient's `sub` means nothing in the other one.
+ */
+const setPatientEnabled: AdminSetPatientEnabledPort = {
+  async disable(subjectId) {
+    await cognitoClient.send(
+      new AdminDisableUserCommand({ UserPoolId: patientUserPoolId, Username: subjectId }),
+    );
+  },
+  async revokeTokens(subjectId) {
+    await cognitoClient.send(
+      new AdminUserGlobalSignOutCommand({ UserPoolId: patientUserPoolId, Username: subjectId }),
+    );
+  },
+  async enable(subjectId) {
+    await cognitoClient.send(
+      new AdminEnableUserCommand({ UserPoolId: patientUserPoolId, Username: subjectId }),
+    );
+  },
+};
+
 export const handler = createPatientAdminHandler({
   repository,
   assessments,
@@ -146,4 +178,5 @@ export const handler = createPatientAdminHandler({
   createPatientUser,
   setPatientPassword,
   findPatientUser,
+  setPatientEnabled,
 });

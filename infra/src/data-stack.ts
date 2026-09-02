@@ -1024,6 +1024,15 @@ export class DataStack extends Stack {
           'cognito-idp:AdminCreateUser',
           'cognito-idp:AdminSetUserPassword',
           'cognito-idp:AdminGetUser',
+          // 2026-09-01: suspend/restore. Until now suspension flipped
+          // `account_status` and nothing else, so a "removed" patient
+          // could still sign in — the clinician pool has had exactly
+          // this trio since TASK 2.4.1, and the asymmetry was the bug.
+          // `AdminDeleteUser` is absent here and denied outright by the
+          // guardrail (C-03): a patient is disabled, never removed.
+          'cognito-idp:AdminDisableUser',
+          'cognito-idp:AdminEnableUser',
+          'cognito-idp:AdminUserGlobalSignOut',
         ],
         resources: [patientUserPoolArn],
       }),
@@ -1189,6 +1198,11 @@ export class DataStack extends Stack {
           'cognito-idp:AdminSetUserPassword',
           'cognito-idp:AdminInitiateAuth',
           'cognito-idp:AdminRespondToAuthChallenge',
+          // 2026-09-01: `AdminGetUser`, to tell an orphaned Cognito user
+          // (a create that failed after minting one) from a genuine
+          // duplicate address — the same lookup `patientAdminRole` has
+          // carried since D-29's follow-up, for the same reason.
+          'cognito-idp:AdminGetUser',
         ],
         resources: [clinicianUserPoolArn],
       }),

@@ -113,10 +113,20 @@ describe('GET /caseload', () => {
     expect(body.items).toEqual([]);
   });
 
-  it('is 403 for a sub-clinician caller', async () => {
+  // **2026-09-01: was `403`.** The owner: "clinican doesn't have view to
+  // the patient dashboard." This route named no clinician on its resource,
+  // so a sub-clinician resolved to `'Sub-clinician (unassigned)'` and was
+  // refused outright — against the original spec's own "clinician … will
+  // have access to the dashboard but will only be able to see those
+  // patients that have been assigned to him."
+  //
+  // Naming the caller's own id grants the read; `caseload-repository.ts`'s
+  // filter is what bounds which rows come back, and its own suite asserts
+  // that half.
+  it('is 200 for a sub-clinician — they have a caseload of their own to see', async () => {
     const { handler } = build();
     const response = await invoke(handler, eventFor({ principal: SUB_CLINICIAN_CONTEXT }));
-    expect(response.statusCode).toBe(403);
+    expect(response.statusCode).toBe(200);
   });
 
   it('is 403 for a patient caller', async () => {
@@ -125,13 +135,23 @@ describe('GET /caseload', () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it('is 403 for a sub-clinician regardless of any query parameter passed — there is no clinician-scoping parameter to exploit', async () => {
+  // The premise survives the change above, and matters more now that the
+  // read is granted: the clinician id comes from the verified principal,
+  // and this route still has no parameter that names one. A caller cannot
+  // point it at a colleague's caseload because there is nowhere to try.
+  it('scopes to the caller alone — no query parameter names a clinician', async () => {
     const { handler } = build();
     const response = await invoke(
       handler,
-      eventFor({ principal: SUB_CLINICIAN_CONTEXT, queryStringParameters: { cursor: 'x', limit: '5' } }),
+      eventFor({
+        principal: SUB_CLINICIAN_CONTEXT,
+        queryStringParameters: { clinicianId: 'cli-someone-else', cursor: '', limit: '5' },
+      }),
     );
-    expect(response.statusCode).toBe(403);
+    expect(response.statusCode).toBe(200);
+    // Their own caseload, which in this fixture is empty — never the
+    // patient the parameter tried to name.
+    expect((JSON.parse(response.body) as { items: unknown[] }).items).toEqual([]);
   });
 
   it('is 401 with no verified principal', async () => {

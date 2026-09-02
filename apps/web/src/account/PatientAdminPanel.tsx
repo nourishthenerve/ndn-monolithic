@@ -138,6 +138,8 @@ export interface PatientAdminPanelStrings {
   readonly assignClinicianHint: string;
   readonly assignedToLabel: string;
   readonly assignFailedWarning: string;
+  /** 2026-09-01: the link from a just-created account to its assessment form. */
+  readonly openAssessmentLabel: string;
   readonly findHeading: string;
   readonly findIntro: string;
   readonly findButton: string;
@@ -160,6 +162,12 @@ export interface PatientAdminPanelStrings {
 
 export interface PatientAdminPanelProps {
   readonly strings: PatientAdminPanelStrings;
+  /**
+   * 2026-09-01. Locale-prefixed and *without* the `?id=`, which this panel
+   * appends from the id the create call returned — a pre-built href would
+   * mean two places computing the same query string from the same value.
+   */
+  readonly recordHrefBase: string;
   readonly client?: SessionClient;
   /** Injectable for tests; defaults to a real same-origin-authorised fetch against `contentApiUrl`. */
   readonly createPatient?: (accessToken: string, body: CreatePatientRequestBody) => Promise<Response>;
@@ -235,6 +243,7 @@ function OneTimePassword({
 
 export function PatientAdminPanel({
   strings,
+  recordHrefBase,
   client = defaultClient,
   createPatient = defaultCreatePatient,
   resetPassword = defaultResetPassword,
@@ -601,6 +610,17 @@ export function PatientAdminPanel({
               </p>
             )}
             {createResult.assignmentFailed && <p>{strings.assignFailedWarning}</p>}
+            {/* 2026-09-01: "it should appear when we create/register a new
+                patient." The form is instantiated server-side the moment
+                the account is written, so what is missing at this point is
+                not the form but a way to reach it — this is that. Straight
+                to the new patient's own record page, where the form now
+                lives, with the id this panel already has in hand. */}
+            <p>
+              <a href={`${recordHrefBase}?id=${encodeURIComponent(createResult.id)}`}>
+                {strings.openAssessmentLabel}
+              </a>
+            </p>
           </div>
         )}
       </section>

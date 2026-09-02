@@ -78,20 +78,11 @@ export interface PatientRecordPanelStrings {
   readonly appointmentStatusColumnLabel: string;
   readonly minutesSuffix: string;
   readonly backToDashboard: string;
-  /** 2026-09-01: the link through to this patient's four-section assessment form. */
-  readonly assessmentLink: string;
 }
 
 export interface PatientRecordPanelProps {
   readonly strings: PatientRecordPanelStrings;
   readonly dashboardHref: string;
-  /**
-   * 2026-09-01. Locale-prefixed and *without* the `?id=`, which this
-   * component appends from the id it already resolved — passing a
-   * pre-built href would mean two places compute the same query string
-   * from the same value.
-   */
-  readonly assessmentHref: string;
   /** Injectable for tests; defaults to the `?id=` on the current URL. */
   readonly patientId?: string;
   readonly client?: SessionClient;
@@ -140,7 +131,6 @@ function defaultFetchAppointments(accessToken: string, patientId: string): Promi
 export function PatientRecordPanel({
   strings,
   dashboardHref,
-  assessmentHref,
   patientId,
   client = defaultClient,
   fetchPatient = defaultFetchPatient,
@@ -312,12 +302,6 @@ export function PatientRecordPanel({
     <>
       <p>
         <a href={dashboardHref}>{strings.backToDashboard}</a>
-        {' · '}
-        {/* The clinical surfaces stay off this page (see this file's own
-            header) — this is a link to one, not a copy of it, and what the
-            reader is allowed to see once there is the assessment API's own
-            per-section decision, not this link's. */}
-        <a href={`${assessmentHref}?id=${encodeURIComponent(id)}`}>{strings.assessmentLink}</a>
       </p>
 
       <section>

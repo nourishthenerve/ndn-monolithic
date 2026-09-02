@@ -240,7 +240,9 @@ export function CaseloadView({
    * this file's own "hide only on a positive answer" rule: the server
    * refuses anything the caller may not do.
    */
-  const [viewerRole, setViewerRole] = useState<'principal' | 'helpdesk' | 'visitor'>('principal');
+  const [viewerRole, setViewerRole] = useState<
+    'principal' | 'sub-clinician' | 'helpdesk' | 'visitor'
+  >('principal');
   const canAssign = viewerRole === 'principal';
   const isVisitor = viewerRole === 'visitor';
   /**
@@ -304,11 +306,21 @@ export function CaseloadView({
     const loadClinicians = async () => {
       const state = await client.resolve();
       const role = state.status === 'signed-in' ? state.session.viewerRole : undefined;
-      if (!cancelled && (role === 'helpdesk' || role === 'visitor')) {
+      // 2026-09-01 adds `sub-clinician`. A treating clinician reaches this
+      // page now, and until this line they were treated as the principal
+      // (the `undefined` default), so the assign and remove-access columns
+      // rendered for someone the server refuses both to. That is precisely
+      // the "offering an action and then refusing it" that
+      // `token-claims.ts` exists to stop — and a positive answer is the
+      // only kind it hides on, which "sub-clinician" is.
+      if (
+        !cancelled &&
+        (role === 'sub-clinician' || role === 'helpdesk' || role === 'visitor')
+      ) {
         setViewerRole(role);
         // No colleague list either: `GET /clinicians` is Principal-only
-        // and would 403, and there is nothing left on either of these
-        // views for the answer to feed.
+        // and would 403, and there is nothing left on any of these views
+        // for the answer to feed.
         return;
       }
       const accessToken = await client.authorization();

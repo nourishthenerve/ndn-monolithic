@@ -77,6 +77,8 @@ export interface AuthoringPanelStrings {
   readonly submitButton: string;
   readonly submitting: string;
   readonly successMessage: string;
+  /** 2026-09-01: when a saved item actually reaches the public site — see the success branch. */
+  readonly publishDelayNotice: string;
   readonly conflictError: string;
   readonly invalidError: string;
   readonly slugError: string;
@@ -202,7 +204,18 @@ export function AuthoringPanel({
       {status === 'conflict' && <p role="alert">{strings.conflictError}</p>}
       {status === 'invalid' && <p role="alert">{strings.invalidError}</p>}
       {status === 'error' && <p role="alert">{strings.error}</p>}
-      {status === 'success' && <p role="status">{strings.successMessage}</p>}
+      {status === 'success' && (
+        <p role="status">
+          {strings.successMessage}{' '}
+          {/* 2026-09-01: the site is statically generated (ADR-0017), so a
+              saved post is in the database but not yet on the public page
+              — it appears at the next deploy. Saying so here is the
+              difference between "it saved" and "it worked", which is what
+              the owner was reading it as when nothing showed up under the
+              blog tab. */}
+          {strings.publishDelayNotice}
+        </p>
+      )}
     </>
   );
 
