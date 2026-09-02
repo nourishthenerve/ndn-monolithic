@@ -89,3 +89,27 @@ That is a real improvement to the product and a real loss to this suite. The cli
 **It cannot be fixed by adding a principal fixture.** Exactly one principal clinician may exist, enforced transactionally (`clinician-repository.ts`'s singleton marker row), so a principal test identity would have to *be* the owner's own live account, with its real password in CI secrets. That is not a trade worth making for an axe scan on three pages.
 
 What remains true of those pages' accessibility is what was true before this suite existed: semantic HTML by construction — real `<table>`/`<caption>`/`scope="col"`, `role="status"`/`role="alert"` regions, real `<button>`s disabled rather than hidden, and every form control carrying its own label or `aria-label`. Verified by review, not by axe. Stated here rather than left to be discovered.
+
+## Amendment, 2026-09-02 — the nightly run had been failing for three nights, for two unrelated reasons
+
+Both were found together and neither was caused by the change that happened to be merging at the time.
+
+### 1. The sign-in setup assumed MFA it no longer gets
+
+`account-a11y.setup.ts` was written when the clinician pool was `Mfa.REQUIRED`, so after submitting the password it went straight to filling a TOTP challenge. **On 2026-08-31 the owner relaxed the pool to `Mfa.OPTIONAL`** — "I don't want 2FA as of now" — applied directly against the live pool after the real principal account was locked out of an `MFA_SETUP` challenge it could not complete (`infra/src/auth-stack.ts`'s own amendment).
+
+An identity with no enrolled device is now signed straight through to the callback. The setup sat waiting for a field that would never appear, timed out at 45 seconds, and every nightly run since has failed at the same line — the test was wrong, not the pool.
+
+The challenge is now **probed for** rather than assumed. What is deliberately *not* relaxed: the assertion that the run reaches `/en/account` with a real session is unchanged, and it is the one that proves sign-in worked. The setup is now agnostic about *how* Cognito got there, not about whether it did — and if MFA ever goes back to `REQUIRED`, the challenge simply reappears and that branch runs again.
+
+The setup also gets its own 90-second timeout. The config's 45s is sized for an axe scan of a loaded page; this test does a full OAuth round trip against production, and it was already close.
+
+### 2. The nightly run was cancelling production deploys
+
+Worse, and completely separate. A scheduled run and a push to `main` both have `github.ref == refs/heads/main`, so they shared the workflow-level concurrency group — and `cancel-in-progress: true` meant the 07:23 nightly cancelled the still-running deploy from the merge of PR #162 fourteen seconds later, eight minutes into `cdk deploy`.
+
+**The merge showed green and the production stack never received the change.** The only trace was "The operation was canceled" inside a job nobody re-reads after a merge has gone in.
+
+The `account-a11y` job already carried its own concurrency group with this exact scenario in its comment — *"or this job cancel a push's own deploy"*. That override was necessary but not sufficient: a job-level group decides which jobs queue against each other, while the workflow-level key cancels a whole in-progress **run**, and a cancelled run takes every job in it whatever group those jobs named. The trigger is now part of the workflow-level group.
+
+**If a nightly failure ever coincides with a merge, check the deploy job before assuming the two are related.** They were not, and the deploy was the one that mattered.

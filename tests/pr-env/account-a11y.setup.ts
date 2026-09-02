@@ -18,6 +18,12 @@ import { getClinicianTestIdentity, PRODUCTION_BASE_URL } from './account-env.js'
 const authFile = 'test-results/.auth/clinician.json';
 
 setup('sign in as the clinician test identity', async ({ page }) => {
+  // A full OAuth round trip against production — redirect out to Cognito,
+  // two form submissions, redirect back, then this site's own `/auth/token`
+  // exchange. The config's 45s covers an axe scan of an already-loaded
+  // page comfortably and covered this only just; the MFA branch below made
+  // it marginal enough to be worth stating rather than leaving to chance.
+  setup.setTimeout(90_000);
   const identity = getClinicianTestIdentity();
 
   // `GET /auth/signin` is not locale-prefixed (web-authentication.md's own
@@ -58,16 +64,39 @@ setup('sign in as the clinician test identity', async ({ page }) => {
   await page.keyboard.press('Tab');
   await page.getByRole('button', { name: /sign in/i }).first().click();
 
-  // ADR-0004: the clinician pool is password + REQUIRED TOTP, never email
-  // OTP — computable from a stored secret with no external mailbox,
-  // unlike the patient pool (see account-env.ts's own comment on why only
-  // this identity is wired up today).
-  const code = await generate({ secret: identity.totpSecret });
+  // ADR-0004 had the clinician pool at password + **REQUIRED** TOTP, and
+  // this step was written to match: compute a code from the stored secret
+  // (no external mailbox needed, unlike the patient pool — see
+  // account-env.ts) and fill the challenge.
+  //
+  // **That stopped being true on 2026-08-31**, when the owner relaxed the
+  // pool to `Mfa.OPTIONAL` ("I don't want 2FA as of now") after the real
+  // principal account was locked out of an `MFA_SETUP` challenge it could
+  // not complete — see infra/src/auth-stack.ts's own amendment. An
+  // identity with no enrolled device is now signed straight through to
+  // the callback, so this step sat waiting 45 seconds for a field that
+  // was never going to appear, and the nightly run has failed every night
+  // since. It is the test that was wrong, not the pool.
+  //
+  // So the challenge is **probed for, not assumed**. Note what is *not*
+  // relaxed: the assertion below is unchanged, and it is the one that
+  // matters — the run only passes if it reaches `/en/account` with a real
+  // session behind it. This makes the setup agnostic about *how* Cognito
+  // got there, not about whether it did. If MFA is ever set back to
+  // `REQUIRED`, the challenge simply appears again and this branch runs.
   const codeField = page.getByLabel(/enter code|code|authenticator|one-time/i).first();
-  await codeField.click();
-  await codeField.pressSequentially(code, { delay: 20 });
-  await page.keyboard.press('Tab');
-  await page.getByRole('button', { name: /sign in|continue|submit/i }).first().click();
+  const mfaChallenged = await codeField
+    .waitFor({ state: 'visible', timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (mfaChallenged) {
+    const code = await generate({ secret: identity.totpSecret });
+    await codeField.click();
+    await codeField.pressSequentially(code, { delay: 20 });
+    await page.keyboard.press('Tab');
+    await page.getByRole('button', { name: /sign in|continue|submit/i }).first().click();
+  }
 
   // SignInPanel.tsx's AuthCallback does `location.replace('/en/account')`
   // only once `/auth/token`'s exchange actually succeeds — waiting for
