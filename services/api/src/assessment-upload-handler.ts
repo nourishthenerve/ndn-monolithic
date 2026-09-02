@@ -29,7 +29,28 @@ const MEDIA_BUCKET_NAME = process.env.MEDIA_BUCKET_NAME ?? '';
 // authorisation on a second route (assessment.ts).
 const PRESIGNED_UPLOAD_URL_EXPIRY_SECONDS = 300;
 
-const s3Client = new S3Client({});
+// `requestChecksumCalculation: 'WHEN_REQUIRED'` is load-bearing, and its
+// absence was a live bug (2026-09-02, the third defect found on this one
+// upload path).
+//
+// Since v3.729 the SDK defaults this to `'WHEN_SUPPORTED'`, which adds a
+// flexible checksum to every `PutObject`. For a normal in-process upload
+// that is a free integrity check. For a **presigned** one it is a trap: the
+// checksum is computed over the command's body, which here is empty, and
+// then signed *into the URL as a query parameter*:
+//
+//     x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32
+//
+// `AAAAAA==` is base64 of four zero bytes — the CRC32 of nothing at all.
+// The browser then `PUT`s the real file against a URL that has already
+// promised S3 the file is empty, and S3 does exactly what it should: it
+// compares, disagrees, and rejects. The URL is unusable for its only
+// purpose, and it is unusable the moment it is minted.
+//
+// `'WHEN_REQUIRED'` omits the checksum for operations that do not demand
+// one, so the URL commits to nothing about a body it was never shown.
+// Verified by presigning both ways and reading the query string back.
+const s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
 const flags = createSsmFlagReader();
 
 const tableName = process.env.PRINCIPAL_TABLE_NAME ?? '';

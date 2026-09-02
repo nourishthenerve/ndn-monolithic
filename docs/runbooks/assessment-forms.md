@@ -161,3 +161,30 @@ The fix is the shape `/auth/*` has used since TASK 2.2.4: a CloudFront behaviour
 **A new test asserts every route on that stack's API has a CloudFront behaviour covering its path**, because this class of mistake is invisible to everything else. It immediately found a third instance: TASK 1.5.1's `POST /workshops/media-upload-url` has been unreachable since it was written, latent only because nothing in `apps/web` ever called it. That now has a behaviour too — an exact path, not `/workshops/*`, which would shadow the static workshop pages.
 
 **Worth naming: the earlier S3 CORS fix (2026-09-01) was real and necessary, and was not what was breaking this.** It was a second, genuine defect on the same path, found first. The request never got far enough to need it.
+
+### Follow-up, 2026-09-02 (later) — two more, further along the same path
+
+With the routes reachable, the browser finally got a presigned URL and hit the next wall, then would have hit one more. **Four independent defects, in series, on one feature.** Each was invisible until the one before it was fixed, because a request that dies at hop one tells you nothing about hop three.
+
+The full path, and what was wrong at each hop:
+
+| Hop | Defect | Found |
+| --- | --- | --- |
+| 1. Browser → API | Routes on a different `HttpApi` than the one the site calls | 2026-09-02 |
+| 2. Browser → S3 (preflight) | Bucket had no CORS rule at all | 2026-09-01 |
+| 3. Browser → S3 (connect) | CSP `connect-src` never named the bucket | 2026-09-02 |
+| 4. S3 validates the `PUT` | Presigned URL committed to the checksum of an empty body | 2026-09-02 |
+
+**Hop 3** was the reported one: `Refused to connect because it violates the document's Content Security Policy`. A presigned upload is cross-origin *by design* — that is what presigning is for — and the bucket's own CORS rule cannot authorise what CSP has not named. The two `execute-api` origins in that directive are hardcoded because they belong to another stack; the bucket is `NdnWebStack`'s own construct, so its origin is read from it (`bucketRegionalDomainName`, matching the regional host a default-region `S3Client` signs). That also means every ephemeral PR environment names its own bucket rather than inheriting production's.
+
+**Hop 4** had not been reported yet, and would have been next. The URL in the console carried its own evidence:
+
+```text
+x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32
+```
+
+`AAAAAA==` is base64 of four zero bytes — the CRC32 of the empty string. Since v3.729 the AWS SDK defaults `requestChecksumCalculation` to `'WHEN_SUPPORTED'`, adding a flexible checksum to every `PutObject`. When the request is *presigned*, the body does not exist yet, so the checksum is computed over nothing and signed into the URL as a query parameter. The URL promises S3 the object is empty before the user has chosen a file; whatever is uploaded disagrees, and S3 rejects it. Correctly. Every file, always.
+
+`requestChecksumCalculation: 'WHEN_REQUIRED'` omits it. Confirmed by presigning both ways and reading the query string back, which is also what `presigner-wiring.test.ts` now does — it asserts the SDK behaviour (so the premise is checked, not assumed), asserts both production handlers set the option, and asserts it is finding the handlers it means to guard. `media-upload-handler.ts` had the identical bug; it simply had no caller to reveal it.
+
+**The lesson, stated plainly:** for three rounds on the blog bug and two here, the failure was diagnosed from the outside — a plausible cause identified, fixed, and reported as *the* cause without confirming the request got past it. A `curl` of the endpoint, and a read of the presigned URL's own query string, each took seconds and each named the real defect immediately. **When a request fails, find out how far it got before designing the fix.**
