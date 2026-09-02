@@ -98,6 +98,19 @@ describe('buildCreateBlogRequestBody', () => {
     expect(buildCreateBlogRequestBody(fields).status).toBe('draft');
     expect(buildCreateBlogRequestBody({ ...fields, publishNow: true }).status).toBe('published');
   });
+
+  // 2026-09-02: the lead image. Omitted rather than sent empty, the same
+  // discipline `capacity` keeps — "no image" and "an image whose key is
+  // the empty string" are different facts, and only one of them is true.
+  it('carries an uploaded image key, and omits the field entirely without one', () => {
+    expect(buildCreateBlogRequestBody({ ...fields, imageKey: 'media/content/id-a.png' }).imageKey).toBe(
+      'media/content/id-a.png',
+    );
+    expect(Object.hasOwn(buildCreateBlogRequestBody(fields), 'imageKey')).toBe(false);
+    expect(Object.hasOwn(buildCreateBlogRequestBody({ ...fields, imageKey: '' }), 'imageKey')).toBe(
+      false,
+    );
+  });
 });
 
 describe('buildCreateWorkshopRequestBody', () => {
@@ -129,6 +142,18 @@ describe('buildCreateWorkshopRequestBody', () => {
       buildCreateWorkshopRequestBody({ ...fields, capacity: ' 12 ' }, '2026-09-01T09:00:00.000Z')
         .capacity,
     ).toBe(12);
+  });
+
+  it('carries an uploaded poster key, and omits the field entirely without one', () => {
+    expect(
+      buildCreateWorkshopRequestBody(
+        { ...fields, posterKey: 'media/workshops/id-a.jpg' },
+        '2026-09-01T09:00:00.000Z',
+      ).posterKey,
+    ).toBe('media/workshops/id-a.jpg');
+    expect(
+      buildCreateWorkshopRequestBody(fields, '2026-09-01T09:00:00.000Z'),
+    ).not.toHaveProperty('posterKey');
   });
 });
 

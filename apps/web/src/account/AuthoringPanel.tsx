@@ -36,6 +36,8 @@ import {
   toUtcInstant,
 } from './authoring-request.js';
 import type { BlogFormFields, WorkshopFormFields } from './authoring-request.js';
+import { MediaUploadField } from './MediaUploadField.js';
+import type { MediaUploadFieldStrings } from './MediaUploadField.js';
 
 type SubmitStatus = 'idle' | 'submitting' | 'success' | 'conflict' | 'invalid' | 'forbidden' | 'error';
 
@@ -84,6 +86,8 @@ export interface AuthoringPanelStrings {
   readonly keywordsHint: string;
   readonly dateTimeLabel: string;
   readonly capacityLabel: string;
+  /** The image control's own wording, shared by both forms — one image field, one vocabulary. */
+  readonly media: MediaUploadFieldStrings;
   readonly publishNowLabel: string;
   readonly publishNowHint: string;
   readonly submitButton: string;
@@ -105,6 +109,16 @@ export interface AuthoringPanelProps {
   /** Injectable for tests; defaults to a real same-origin-authorised fetch against `contentApiUrl`. */
   readonly createBlog?: (accessToken: string, body: unknown) => Promise<Response>;
   readonly createWorkshop?: (accessToken: string, body: unknown) => Promise<Response>;
+  /** Injectable for tests, exactly as the two create calls are — the upload path deserves the same treatment. */
+  readonly requestBlogImageUrl?: (
+    accessToken: string,
+    body: { fileName: string; contentType: string },
+  ) => Promise<Response>;
+  readonly requestWorkshopImageUrl?: (
+    accessToken: string,
+    body: { fileName: string; contentType: string },
+  ) => Promise<Response>;
+  readonly putFile?: (uploadUrl: string, file: File) => Promise<Response>;
 }
 
 const defaultClient = createSessionClient();
@@ -131,6 +145,9 @@ export function AuthoringPanel({
   client = defaultClient,
   createBlog = post('/content'),
   createWorkshop = post('/workshops'),
+  requestBlogImageUrl,
+  requestWorkshopImageUrl,
+  putFile,
 }: AuthoringPanelProps): ReactNode {
   const [blog, setBlog] = useState<BlogFormFields>(EMPTY_BLOG);
   const [blogStatus, setBlogStatus] = useState<SubmitStatus>('idle');
@@ -311,6 +328,21 @@ export function AuthoringPanel({
               ))}
             </ul>
           )}
+          {/* 2026-09-02: the lead image. Placed after the words and before
+              the publish decision, which is the order the choice is
+              actually made in — an author writes the post, then decides
+              whether it needs a picture, then decides whether it goes
+              live. */}
+          <MediaUploadField
+            strings={strings.media}
+            presignPath="/content/media-upload-url"
+            client={client}
+            disabled={blogBusy}
+            value={blog.imageKey}
+            onUploaded={(imageKey) => setBlog((f) => ({ ...f, imageKey }))}
+            requestUploadUrl={requestBlogImageUrl}
+            putFile={putFile}
+          />
           <p>
             <label htmlFor="blog-publish">
               <input
@@ -394,6 +426,16 @@ export function AuthoringPanel({
               onChange={(event) => setWorkshop((f) => ({ ...f, capacity: event.target.value }))}
             />
           </p>
+          <MediaUploadField
+            strings={strings.media}
+            presignPath="/workshops/media-upload-url"
+            client={client}
+            disabled={workshopBusy}
+            value={workshop.posterKey}
+            onUploaded={(posterKey) => setWorkshop((f) => ({ ...f, posterKey }))}
+            requestUploadUrl={requestWorkshopImageUrl}
+            putFile={putFile}
+          />
           <p>
             <label htmlFor="workshop-publish">
               <input

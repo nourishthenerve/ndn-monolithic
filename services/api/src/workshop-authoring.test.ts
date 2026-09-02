@@ -238,7 +238,7 @@ describe('createWorkshopAuthoringHandler — PATCH /workshops/{id}', () => {
       fakeEvent({
         routeKey: 'PATCH /workshops/{id}',
         pathParameters: { id: 'workshop-1' },
-        body: { capacity: 30, posterKey: 'workshops/poster-1.jpg' },
+        body: { capacity: 30, posterKey: 'media/workshops/poster-1.jpg' },
       }),
       {} as never,
       undefined as never,
@@ -246,7 +246,34 @@ describe('createWorkshopAuthoringHandler — PATCH /workshops/{id}', () => {
     expect(result).toMatchObject({ statusCode: 200 });
     const parsed = JSON.parse((result as { body: string }).body) as { item: Workshop };
     expect(parsed.item.capacity).toBe(30);
-    expect(parsed.item.posterKey).toBe('workshops/poster-1.jpg');
+    expect(parsed.item.posterKey).toBe('media/workshops/poster-1.jpg');
+  });
+
+  // 2026-09-02: `posterKey` was `z.string().min(1)`, so any string reached
+  // the record and then a public `<img src>`. The only legitimate source is
+  // `POST /workshops/media-upload-url`, which issues keys under
+  // `media/workshops/`; everything else is a caller composing part of a URL
+  // on a public page.
+  it.each([
+    ['assessments/pat-1/scan.pdf', 'names a private prefix in the same bucket'],
+    ['media/workshops/../../assessments/pat-1/scan.pdf', 'walks out of the prefix'],
+    ['media/content/hero.png', 'belongs to the other surface'],
+    ['https://evil.example/x.jpg', 'is not a key at all'],
+  ])('refuses a posterKey that %s', async (posterKey) => {
+    const { deps, repository } = buildDeps();
+    await repository.create(SEED_ACTOR, validBody as never);
+    const handler = createWorkshopAuthoringHandler(deps);
+
+    const result = await handler(
+      fakeEvent({
+        routeKey: 'PATCH /workshops/{id}',
+        pathParameters: { id: 'workshop-1' },
+        body: { posterKey },
+      }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
   });
 
   it('returns 404 for an id that does not exist', async () => {

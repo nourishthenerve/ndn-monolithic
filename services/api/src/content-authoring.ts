@@ -58,11 +58,36 @@ const translationsSchema = z
     { message: 'translations keys must be a supported locale' },
   );
 
+/**
+ * 2026-09-02: the lead image, as a media-bucket object key.
+ *
+ * Constrained to the public prefix rather than accepted as any string. The
+ * key is echoed straight into a `/media/…` URL on a public page, so an
+ * unconstrained value is a caller writing part of that URL: `../` walks
+ * out of the prefix, and a key naming another folder in the same bucket
+ * (`assessments/…`) would ask the site to publish a link to a clinical
+ * attachment. Neither would *serve* anything today — `/media/*` maps
+ * one-to-one onto the `media/` prefix — but "it is unreachable for a
+ * reason two files away" is not the guarantee to rely on for that.
+ *
+ * The value only ever originates from `POST /content/media-upload-url`,
+ * which generates it; this validates that the caller is handing back one
+ * of those rather than something they composed.
+ */
+const imageKeySchema = z
+  .string()
+  .min(1)
+  .max(300)
+  .regex(/^media\/content\/[A-Za-z0-9][A-Za-z0-9._-]*$/, {
+    message: 'imageKey must be a key issued by POST /content/media-upload-url',
+  });
+
 const createContentBodySchema = z.object({
   id: z.string().min(1),
   contentType: z.literal('blog'),
   status: z.enum(['draft', 'published', 'unpublished']),
   keywords: z.array(z.string().min(1)),
+  imageKey: imageKeySchema.optional(),
   translations: translationsSchema,
 });
 
@@ -70,10 +95,15 @@ const updateContentBodySchema = z
   .object({
     keywords: z.array(z.string().min(1)).optional(),
     translations: translationsSchema.optional(),
+    imageKey: imageKeySchema.optional(),
   })
-  .refine((patch) => patch.keywords !== undefined || patch.translations !== undefined, {
-    message: 'at least one of keywords or translations must be given',
-  });
+  .refine(
+    (patch) =>
+      patch.keywords !== undefined ||
+      patch.translations !== undefined ||
+      patch.imageKey !== undefined,
+    { message: 'at least one of keywords, translations or imageKey must be given' },
+  );
 
 function parseJsonBody(event: APIGatewayProxyEventV2): unknown {
   if (!event.body) {

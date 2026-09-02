@@ -418,17 +418,34 @@ export class WebStack extends Stack {
       });
       grantFlagReads(this, mediaUploadRole);
 
-      // Scoped to the workshops/ prefix only (media-upload.ts's
-      // WORKSHOP_MEDIA_PREFIX) — TASK 1.5.1's own DoD: "the runtime role
+      // Scoped to the `media/` prefix only (media-upload.ts's
+      // `PUBLIC_MEDIA_PREFIX`) — TASK 1.5.1's own DoD: "the runtime role
       // gets PutObject only, never DeleteObject," narrowed further than
       // the guardrail's own bucket-wide Deny to the one prefix this
       // function's presigned URLs ever target.
+      //
+      // **2026-09-02: `media/`, not `workshops/`, and the change is a fix
+      // rather than a widening.** `/media/*` below does no path rewriting,
+      // so a request for `/media/workshops/x.jpg` asks S3 for the key
+      // `media/workshops/x.jpg` — while this function had been minting
+      // `workshops/x.jpg`. Every poster it could ever have issued would
+      // have 404'd, latent only because the route was unreachable from a
+      // browser until today.
+      //
+      // The alternative fix — rewriting the URI at the edge to strip
+      // `/media` — was rejected, and it is worth saying why: it would have
+      // made `/media/assessments/<key>` serve a clinical recording to
+      // anyone who guessed one. Assessment attachments live in this same
+      // bucket under `assessments/`, and what keeps them unreachable is
+      // precisely that `/media/*` maps one-to-one onto a prefix they are
+      // not under. This grant is that boundary in IAM: the function can
+      // only write where the public can read, and nowhere else.
       mediaUploadRole.addToPrincipalPolicy(
         new PolicyStatement({
-          sid: 'MediaUploadPutWorkshopPosters',
+          sid: 'MediaUploadPutPublicMedia',
           effect: Effect.ALLOW,
           actions: ['s3:PutObject'],
-          resources: [`${mediaBucket.bucketArn}/workshops/*`],
+          resources: [`${mediaBucket.bucketArn}/media/*`],
         }),
       );
       // TASK 1.5.1 step 1: "Attach 0.3.2's attachDestructiveActionGuardrail
@@ -441,10 +458,24 @@ export class WebStack extends Stack {
       // authorizer, shared from DataStack) applies. No new IAM grant
       // needed for that: `can()` is a pure function of the principal the
       // authorizer already resolved, not a second AWS call.
+      const mediaUploadIntegration = new HttpLambdaIntegration(
+        'MediaUploadIntegration',
+        mediaUploadFunction,
+      );
       httpApi.addRoutes({
         path: '/workshops/media-upload-url',
         methods: [HttpMethod.POST],
-        integration: new HttpLambdaIntegration('MediaUploadIntegration', mediaUploadFunction),
+        integration: mediaUploadIntegration,
+      });
+      // 2026-09-02: the same presigner for blog images — the owner,
+      // *"principal clinician should be able to upload media files while
+      // creating blog posts and workshops."* One function over two routes;
+      // `media-upload.ts`'s `SURFACES` table is what decides which matrix
+      // row authorises each and which folder its keys land in.
+      httpApi.addRoutes({
+        path: '/content/media-upload-url',
+        methods: [HttpMethod.POST],
+        integration: mediaUploadIntegration,
       });
     }
 
@@ -987,6 +1018,22 @@ function handler(event) {
         // An exact path, not `/workshops/*`: that would shadow the static
         // workshop pages this distribution serves from S3.
         '/workshops/media-upload-url': {
+          origin: new HttpOrigin(
+            `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
+          ),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_ALL,
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          responseHeadersPolicy: securityHeaders,
+        },
+        // 2026-09-02: the blog-image presign endpoint, same function and
+        // the same reasoning as its workshop twin above. Also an exact
+        // path — `/content/*` would shadow nothing today, since blog reads
+        // go cross-origin to the content API, but naming one route is the
+        // narrower claim and the site's own `/en/blog/…` pages are one
+        // rename away from wanting that space.
+        '/content/media-upload-url': {
           origin: new HttpOrigin(
             `${httpApi.httpApiId}.execute-api.${Stack.of(this).region}.amazonaws.com`,
           ),

@@ -89,7 +89,7 @@ export class InMemoryContentStore implements ContentStore {
 export type CreateContentInput = Omit<ContentItem, 'created_at' | 'updated_at'>;
 
 /** Patchable by TASK 1.3.2's `PATCH /content/:id` — never `status` (publish/unpublish own that transition exclusively). */
-export type UpdateContentInput = Partial<Pick<ContentItem, 'keywords' | 'translations'>>;
+export type UpdateContentInput = Partial<Pick<ContentItem, 'keywords' | 'translations' | 'imageKey'>>;
 
 // TASK 1.3.2: every item is implicitly discoverable by its own
 // `contentType` (e.g. every blog post by the keyword "blog") — reuses

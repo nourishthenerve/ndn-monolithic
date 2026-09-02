@@ -84,3 +84,43 @@ That is the real defect behind the question, and it is bigger than the one that 
 `AuthoredContentList` now lists everything the practice has written — blog posts and workshops, whatever their status — with a publish/unpublish control on each row. Its data comes from two new `Principal`-only routes, `GET /content/authored` and `GET /workshops/authored`.
 
 **They are separate routes rather than a `status` parameter on the public read**, and that is deliberate: `findPublishedByKeyword` is a boundary, and a flag that could switch a boundary off is the shape a mistake takes. They are gated on `update` rather than `read` for the same kind of reason — `Content item: R` is held by every clinician and by helpdesk, and an unpublished draft is not something the practice has decided to show anyone yet; `update` is `Principal`-only and is exactly what the list exists to enable.
+
+## Images on blog posts and workshops (2026-09-02)
+
+> *"principal clinician should be able to upload media files while creating blog posts and workshops."*
+
+A post or workshop may carry one optional image. Both forms use the same control (`MediaUploadField.tsx`), and both go through the same Lambda (`media-upload.ts`) over two routes.
+
+| | Blog post | Workshop |
+| --- | --- | --- |
+| Presign route | `POST /content/media-upload-url` | `POST /workshops/media-upload-url` |
+| Matrix row | `Content item` | `Workshop` |
+| Flag | `content.authoring.enabled` | `workshops.enabled` |
+| Key prefix | `media/content/` | `media/workshops/` |
+| Record field | `ContentItem.imageKey` | `Workshop.posterKey` |
+
+Accepted: JPEG, PNG, WebP, up to 5 MB. The size limit is browser-side only — a presigned `PutObject` carries no size condition — so it is a courtesy that turns a slow upload into a sentence, not a guarantee.
+
+### The upload happens when the file is chosen, not when the form is submitted
+
+Choosing a file presigns and `PUT`s immediately; the form stores only the returned **key**. So the image is in the bucket before the record that references it is written. Those two can fail independently, and this ordering makes the failure that matters — a published post pointing at an object that was never uploaded — impossible rather than unlikely.
+
+### The `media/` prefix is the public boundary
+
+`web-stack.ts`'s `/media/*` CloudFront behaviour serves the media bucket to anyone, and **it does no path rewriting**: a request for `/media/x/y.jpg` asks S3 for the key `media/x/y.jpg`, verbatim. So the `media/` key prefix *is* the set of publicly readable objects — exactly, and by construction.
+
+That is what keeps assessment attachments out of it. They are in the same bucket under `assessments/`, which is not under `media/`, so no URL that behaviour can serve reaches one.
+
+**Two latent defects were found here, both fixed on 2026-09-02:**
+
+1. **Workshop posters would have 404'd.** The uploader wrote `workshops/<key>`, and `workshopPosterUrl` built `/media/workshops/<key>` — which asks for `media/workshops/<key>`. Never observed, because until #168 no browser could reach the upload endpoint at all, so no poster had ever been uploaded.
+
+2. **The obvious fix was the dangerous one.** Stripping `/media` at the edge would have made the URLs line up — and made `/media/assessments/<key>` serve a clinical recording to anyone who guessed a key. Moving the *keys* under `media/` fixes the same mismatch and makes the private prefix unreachable rather than merely unrouted.
+
+Three things now enforce it, at three layers:
+
+- **IAM** — `MediaUploadPutPublicMedia` grants `s3:PutObject` on `media/*` only, so the presigner cannot mint a URL writing anywhere private.
+- **Validation** — `imageKey`/`posterKey` are regex-constrained to keys the presign endpoints issue, so a caller cannot hand back a key they composed.
+- **Rendering** — `mediaUrl()` returns `undefined` for anything outside the prefix, so a record written before that validation existed renders no image rather than a link to a private object.
+
+`web-stack.test.ts`'s *"the public media boundary"* block fails if the `/media/*` behaviour ever gains a rewrite function, or if the upload role's grant widens.

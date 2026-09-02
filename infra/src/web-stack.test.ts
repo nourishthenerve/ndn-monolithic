@@ -523,7 +523,7 @@ describe('WebStack — media upload Lambda (TASK 1.5.1 / 2.5.4)', () => {
     const policies = template.findResources('AWS::IAM::Policy');
     const uploadPolicy = Object.values(policies).find((policy) =>
       JSON.stringify((policy as { Properties: unknown }).Properties).includes(
-        'MediaUploadPutWorkshopPosters',
+        'MediaUploadPutPublicMedia',
       ),
     ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
     const sids = uploadPolicy.Properties.PolicyDocument.Statement.map(
@@ -532,20 +532,24 @@ describe('WebStack — media upload Lambda (TASK 1.5.1 / 2.5.4)', () => {
     expect(sids).not.toContain('ReadAdminApiToken');
   });
 
-  it('grants s3:PutObject scoped to the workshops/ prefix only, and denies s3:DeleteObject* via the guardrail', () => {
+  it('grants s3:PutObject scoped to the public media/ prefix only, and denies s3:DeleteObject* via the guardrail', () => {
     const template = synthWithTable();
     const policies = template.findResources('AWS::IAM::Policy');
     const uploadPolicy = Object.values(policies).find((policy) =>
       JSON.stringify((policy as { Properties: unknown }).Properties).includes(
-        'MediaUploadPutWorkshopPosters',
+        'MediaUploadPutPublicMedia',
       ),
     ) as { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } };
 
     const putStatement = uploadPolicy.Properties.PolicyDocument.Statement.find(
-      (statement) => statement.Sid === 'MediaUploadPutWorkshopPosters',
+      (statement) => statement.Sid === 'MediaUploadPutPublicMedia',
     );
     expect(putStatement?.Action).toBe('s3:PutObject');
-    expect(JSON.stringify(putStatement?.Resource)).toContain('/workshops/*');
+    // 2026-09-02: `media/*`, which is exactly what `/media/*` serves.
+    // Not `workshops/*` — that key would 404 on the public site — and not
+    // the bucket, which would let this function write into `assessments/`.
+    expect(JSON.stringify(putStatement?.Resource)).toContain('/media/*');
+    expect(JSON.stringify(putStatement?.Resource)).not.toContain('/assessments');
 
     const denyStatement = uploadPolicy.Properties.PolicyDocument.Statement.find(
       (statement) => statement.Effect === 'Deny',
@@ -1295,6 +1299,9 @@ describe('WebStack — route protection (TASK 2.2.2)', () => {
     expect(routeKeys(synthWithTable(), 'CUSTOM').sort()).toEqual([
       'POST /attachments/{id}/{assessmentId}/download-url',
       'POST /attachments/{id}/{assessmentId}/upload-url',
+      // 2026-09-02: the blog-image presign, the same function and the same
+      // authorizer as its workshop twin.
+      'POST /content/media-upload-url',
       'POST /workshops/media-upload-url',
     ]);
     synthWithTable().resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
@@ -1462,6 +1469,60 @@ describe('WebStack — the authenticated web shell (TASK 2.2.4)', () => {
 // them: a flat 404, surfacing only as "that file could not be uploaded".
 // Nothing in the build could see it — both halves were individually
 // correct, and only their pairing was wrong.
+// 2026-09-02: the boundary that keeps clinical attachments off the public
+// internet, asserted rather than trusted to comments.
+//
+// `/media/*` is a public CloudFront behaviour onto the media bucket, and it
+// does **no path rewriting** — `/media/x/y.jpg` asks S3 for the key
+// `media/x/y.jpg`, verbatim. So the `media/` key prefix is exactly the set
+// of publicly readable objects. Assessment attachments live in the same
+// bucket under `assessments/`, outside that prefix, and that is the whole
+// of why no URL reaches one.
+//
+// The tempting "fix" for the poster 404 found today was to strip `/media`
+// at the edge instead. That would have made `/media/assessments/<key>`
+// serve a clinical recording to anyone who guessed a key. These tests fail
+// if anyone tries it.
+describe('WebStack — the public media boundary', () => {
+  it('serves /media/* with no path-rewriting function attached', () => {
+    const template = synth();
+    const [distribution] = Object.values(
+      template.findResources('AWS::CloudFront::Distribution'),
+    ) as { Properties: { DistributionConfig: { CacheBehaviors?: Record<string, unknown>[] } } }[];
+    const media = (distribution?.Properties.DistributionConfig.CacheBehaviors ?? []).find(
+      (behaviour) => behaviour.PathPattern === '/media/*',
+    );
+
+    expect(media).toBeDefined();
+    // A function here would rewrite the URI, and the only rewrite anyone
+    // would write is one that strips `/media` — which is the exposure.
+    expect(media?.FunctionAssociations).toBeUndefined();
+    expect(media?.LambdaFunctionAssociations).toBeUndefined();
+    expect(media?.OriginPath).toBeUndefined();
+  });
+
+  it('lets the media uploader write only where the public can read', () => {
+    // `synthWithTable`: the uploader is gated on `props.authorizerFunction`,
+    // which only the full stack has.
+    const template = synthWithTable();
+    const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+      (policy) =>
+        (
+          policy as { Properties: { PolicyDocument: { Statement: Record<string, unknown>[] } } }
+        ).Properties.PolicyDocument.Statement,
+    );
+    const put = statements.find((statement) => statement.Sid === 'MediaUploadPutPublicMedia');
+
+    expect(put).toBeDefined();
+    const resource = JSON.stringify(put?.Resource);
+    // Inside the public prefix, and nowhere else. A bucket-wide grant
+    // would let the presigner mint a URL writing into `assessments/`.
+    expect(resource).toContain('/media/*');
+    expect(resource).not.toContain('/assessments');
+    expect(resource).not.toMatch(/"\/\*"/);
+  });
+});
+
 describe('WebStack — every API route is reachable from the site', () => {
   it('has a CloudFront behaviour covering every route path on this stack’s API', () => {
     const template = synthWithTable();
