@@ -10,6 +10,7 @@
 // narrower. The two checks the matrix cannot express — the record's own
 // live status, and a named window around `scheduledAt` — are this file's
 // own job.
+import { appointmentEndsAt } from '@ndn/shared-types';
 import type { AccountStatus, Appointment, Principal, Role } from '@ndn/shared-types';
 
 import { APPOINTMENT_ENTITY_TYPE } from './appointment-repository.js';
@@ -40,10 +41,16 @@ import type { Unprojected } from './projection.js';
  * Note this drops the 10-minute early grace deliberately, because the
  * instruction is explicit about where the window starts. Reinstating it is
  * one subtraction here and the same one in
- * `apps/web/src/account/appointment-window.ts`.
+ * `apps/web/src/account/join-window.ts`.
+ *
+ * **2026-09-03, later the same day:** the arithmetic moved to
+ * `appointmentEndsAt` (`@ndn/shared-types`), which is now the single
+ * server-side answer to "when is this appointment over". Kept as a named
+ * export here because *this* file is where that instant means "the join
+ * window shuts", and three call sites already read it under that name.
  */
 export function joinWindowClosesAt(scheduledAt: string, durationMinutes: number): number {
-  return new Date(scheduledAt).getTime() + durationMinutes * 60_000;
+  return appointmentEndsAt(scheduledAt, durationMinutes);
 }
 
 const CALL_AUTHZ_FLAG: FlagName = 'video.callAuthz.enabled';

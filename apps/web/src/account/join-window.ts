@@ -48,6 +48,46 @@ export function joinPhase(scheduledAt: Date, durationMinutes: number, now: Date)
   return 'open';
 }
 
+/**
+ * Whether a listed appointment is still worth showing a join control for:
+ * it has not started yet, or it is happening right now.
+ *
+ * **This is the fix for the bug the owner reported.** *"When the item of
+ * appointment arrived the 'join the call' button simply didnt appear for
+ * both the patient as well as the clinician. The dashboard simply started
+ * showing the next appointment item."*
+ *
+ * Both lists decided which appointment to show by asking whether
+ * `scheduledAt` was still in the future. It stops being so at the exact
+ * instant the join window opens, so each list dropped the appointment at
+ * the precise moment the button was due to appear and moved on to the next
+ * one. Neither the patient nor the clinician could ever reach the link,
+ * and nothing about the screen explained why — the appointment simply was
+ * not there any more.
+ *
+ * Takes the raw `scheduledAt` string rather than a `Date` because that is
+ * what a list row carries, and an unparseable one has to be answerable:
+ * it counts as **over**, the deny-by-default reading every other parse of
+ * this field in this codebase takes. `joinPhase` alone could not give that
+ * answer — `NaN` comparisons are all false, so a malformed row would fall
+ * through to `'open'` and offer a link the server is certain to refuse.
+ *
+ * Mirrors `isAppointmentOver` in `@ndn/shared-types`, restated rather than
+ * imported for the reason `CaseloadView.tsx`'s own note gives: `apps/web`
+ * deliberately does not depend on that package.
+ */
+export function isLiveOrUpcoming(
+  scheduledAt: string,
+  durationMinutes: number,
+  now: Date,
+): boolean {
+  const start = new Date(scheduledAt);
+  if (Number.isNaN(start.getTime())) {
+    return false;
+  }
+  return joinPhase(start, durationMinutes, now) !== 'expired';
+}
+
 /** `<patientId>#<scheduledAt>` — mirrors `ws-join.ts`'s own `parseAppointmentId`, needing only the second half here. `undefined` for anything that doesn't parse to a real date, the same deny-by-default reading a malformed id gets everywhere else this shape is parsed. */
 export function parseScheduledAt(appointmentId: string): Date | undefined {
   const separator = appointmentId.indexOf('#');

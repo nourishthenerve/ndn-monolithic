@@ -13,6 +13,12 @@ import en from './locales/en.json' with { type: 'json' };
 // declare.
 export * from './notifications/index.js';
 
+// 2026-09-03: the one date/time renderer every screen shares. Re-exported
+// from the root for the same reason the notification registry above is —
+// `exports` declares no subpath, and a second `toLocaleString()` call site
+// is exactly the drift this file exists to end. See datetime.ts.
+export * from './datetime.js';
+
 export type Locale = 'en'; // extended additively when a language is named (LL-08)
 
 export const defaultLocale: Locale = 'en';

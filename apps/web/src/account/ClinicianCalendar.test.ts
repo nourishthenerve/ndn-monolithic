@@ -5,7 +5,12 @@
 // directly instead.
 import { describe, expect, it } from 'vitest';
 
-import { CALENDAR_WINDOW_DAYS, calendarWindow, callHref } from './ClinicianCalendar.js';
+import {
+  CALENDAR_LOOKBACK_HOURS,
+  CALENDAR_WINDOW_DAYS,
+  calendarWindow,
+  callHref,
+} from './ClinicianCalendar.js';
 import type { CalendarEntry } from './ClinicianCalendar.js';
 
 function entry(overrides: Partial<CalendarEntry> = {}): CalendarEntry {
@@ -19,16 +24,38 @@ function entry(overrides: Partial<CalendarEntry> = {}): CalendarEntry {
 }
 
 describe('calendarWindow', () => {
-  it('spans from now to CALENDAR_WINDOW_DAYS ahead', () => {
+  it('spans from CALENDAR_LOOKBACK_HOURS behind to CALENDAR_WINDOW_DAYS ahead', () => {
     const now = new Date('2026-09-01T00:00:00.000Z');
     expect(calendarWindow(now)).toEqual({
-      from: '2026-09-01T00:00:00.000Z',
+      from: '2026-08-31T12:00:00.000Z',
       to: '2026-10-01T00:00:00.000Z',
     });
   });
 
-  it('mirrors CALENDAR_WINDOW_DAYS, not a magic number', () => {
+  it('mirrors its own constants, not magic numbers', () => {
     expect(CALENDAR_WINDOW_DAYS).toBe(30);
+    expect(CALENDAR_LOOKBACK_HOURS).toBe(12);
+  });
+
+  // 2026-09-03, the clinician half of the reported bug. `from` was `now`,
+  // and the API turns it into a GSI1 range query keyed on `scheduledAt` —
+  // so an appointment left the calendar at the instant it started, which
+  // is the instant its join link becomes valid. A range query cannot ask
+  // "still running", so the window has to open early enough to catch the
+  // *start* of anything that could still be under way.
+  it('still includes an appointment that started before now and is still running', () => {
+    const now = new Date('2026-09-01T10:15:00.000Z');
+    const startedAt = '2026-09-01T10:00:00.000Z';
+    const { from, to } = calendarWindow(now);
+    expect(from <= startedAt).toBe(true);
+    expect(startedAt <= to).toBe(true);
+  });
+
+  it('reaches back further than any plausible appointment length', () => {
+    // The bug returns for long appointments alone if this shrinks below
+    // the longest bookable slot, and nothing bounds `durationMinutes`
+    // server-side — so the lookback is deliberately generous.
+    expect(CALENDAR_LOOKBACK_HOURS * 60).toBeGreaterThan(4 * 60);
   });
 });
 

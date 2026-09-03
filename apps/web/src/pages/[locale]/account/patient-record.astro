@@ -61,6 +61,7 @@ const heading = t('patientRecord.heading', undefined, locale);
     </Fragment>
     <PatientRecordPanel
       client:only="react"
+      locale={locale}
       dashboardHref={`/${locale}/account/caseload`}
       strings={{
         loadingLabel: t('patientRecord.loading', undefined, locale),
@@ -94,6 +95,10 @@ const heading = t('patientRecord.heading', undefined, locale);
         approveButton: t('clinicianCalendar.approve', undefined, locale),
         declineButton: t('clinicianCalendar.decline', undefined, locale),
         decideFailedLabel: t('clinicianCalendar.decideFailed', undefined, locale),
+        /* The same key `/account/calendar` uses — one label for one
+           action, so the two clinician-facing appointment tables cannot
+           drift into calling it different things. */
+        joinCallLabel: t('calendar.joinCall', undefined, locale),
         backToDashboard: t('patientRecord.backToDashboard', undefined, locale),
       }}
     />
