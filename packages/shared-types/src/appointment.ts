@@ -79,6 +79,52 @@ export function countsTowardTotal(status: unknown): boolean {
   return COUNTED_APPOINTMENT_STATUSES.includes(status as AppointmentStatus);
 }
 
+/**
+ * **2026-09-03: an appointment ends when its booked slot ends, and not
+ * one instant before.** The owner: *"when the item of appointment arrived
+ * the 'join the call' button simply didnt appear for both the patient as
+ * well as the clinician. The dashboard simply started showing the next
+ * appointment item."*
+ *
+ * That was one mistake made independently in four places, on both sides of
+ * the wire: `scheduledAt` in the past was read as "this appointment is
+ * over". It is not — it is the *only* moment the appointment is actually
+ * happening. The join window opens exactly then (`ws-join.ts`), so every
+ * surface that used the start as its cut-off dropped each appointment at
+ * the precise instant the button was due to appear, and rolled on to the
+ * next one. The join link was unreachable by construction.
+ *
+ * One definition, here, so the surfaces cannot drift apart again. Named
+ * `appointmentEndsAt` rather than a "window" — it is a fact about the
+ * appointment, and the join window merely happens to be the same span.
+ *
+ * `apps/web` deliberately does not depend on this package (see
+ * `CaseloadView.tsx`'s own note), and mirrors this in
+ * `apps/web/src/account/join-window.ts` — the same restated-not-imported
+ * arrangement the join window itself already has across the two
+ * deployables.
+ */
+export function appointmentEndsAt(scheduledAt: string, durationMinutes: number): number {
+  return new Date(scheduledAt).getTime() + durationMinutes * 60_000;
+}
+
+/**
+ * Whether the booked slot has finished. `>=` on the end, matching
+ * `ws-join.ts`: the last millisecond of a slot is past the end of it.
+ *
+ * An unparseable `scheduledAt` is treated as **over**, which is the
+ * deny-by-default reading every other parse of this field takes — a row
+ * nobody can place in time must not present a live join link.
+ */
+export function isAppointmentOver(
+  scheduledAt: string,
+  durationMinutes: number,
+  now: Date,
+): boolean {
+  const endsAt = appointmentEndsAt(scheduledAt, durationMinutes);
+  return Number.isNaN(endsAt) || now.getTime() >= endsAt;
+}
+
 export interface Appointment extends BaseRecord {
   patientId: string;
   clinicianId: string;

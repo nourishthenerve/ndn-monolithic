@@ -11,6 +11,7 @@
 // filter over already-authorised-to-see data, not the client-side
 // private-field filtering `private-field-boundary.md` warns against
 // (`Appointment` carries no `private{}` field at all, today or planned).
+import { formatDateTime } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
@@ -20,6 +21,7 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
+import { isLiveOrUpcoming } from './join-window.js';
 import { JoinCallCell } from './JoinCallCell.js';
 import { useNow } from './useNow.js';
 
@@ -38,11 +40,20 @@ export interface AppointmentEntry {
   readonly patientId: string;
 }
 
+/**
+ * **2026-09-03: `ready` holds the whole list, not the one row that was
+ * next when the fetch landed.** Which appointment is "next" is a question
+ * about the clock, and this panel already has a ticking one for its
+ * countdown — freezing the answer at fetch time meant a page left open
+ * kept naming an appointment that had finished, and would never roll on to
+ * the following one without a reload. Deriving it per render costs a
+ * `find` over a handful of rows and cannot go stale.
+ */
 type ViewState =
   | { readonly status: 'loading' }
   | { readonly status: 'forbidden' }
   | { readonly status: 'error' }
-  | { readonly status: 'ready'; readonly next: AppointmentEntry | undefined };
+  | { readonly status: 'ready'; readonly items: readonly AppointmentEntry[] };
 
 export interface NextAppointmentPanelStrings {
   readonly heading: string;
@@ -91,12 +102,28 @@ function defaultFetchAppointments(accessToken: string): Promise<Response> {
   });
 }
 
+/**
+ * The first confirmed appointment that has not finished — **including the
+ * one happening right now**, which is the whole of the 2026-09-03 fix.
+ *
+ * This used to read `item.scheduledAt >= nowIso`, and so stopped
+ * recognising an appointment at the exact instant it started, which is the
+ * exact instant its join link becomes valid. The patient watched the panel
+ * skip straight past the call they were waiting for and name the one after
+ * it. See `isLiveOrUpcoming`.
+ *
+ * `find`, not a sort: `GET /patients/me/appointments` returns main-table
+ * sort-key order, which is chronological by `scheduledAt` — the first
+ * match is therefore the earliest one.
+ */
 export function findNext(
   items: readonly AppointmentEntry[],
-  nowIso: string,
+  now: Date,
 ): AppointmentEntry | undefined {
   return items.find(
-    (item) => item.appointment_status === 'scheduled' && item.scheduledAt >= nowIso,
+    (item) =>
+      item.appointment_status === 'scheduled' &&
+      isLiveOrUpcoming(item.scheduledAt, item.durationMinutes, now),
   );
 }
 
@@ -135,11 +162,13 @@ export function NextAppointmentPanel({
         return;
       }
       const payload = (await response.json()) as { items?: readonly AppointmentEntry[] };
-      setState({ status: 'ready', next: findNext(payload.items ?? [], now().toISOString()) });
+      // Stored whole. Which of these is "next" is decided at render time
+      // against the ticking clock — see `ViewState`'s own note.
+      setState({ status: 'ready', items: payload.items ?? [] });
     } catch {
       setState({ status: 'error' });
     }
-  }, [client, fetchAppointments, now]);
+  }, [client, fetchAppointments]);
 
   useEffect(() => {
     void load();
@@ -159,15 +188,25 @@ export function NextAppointmentPanel({
     return <p role="alert">{strings.errorLabel}</p>;
   }
 
+  // Re-derived on every tick of `currentTime`, so the panel hands over to
+  // the following appointment the moment this one ends — no reload.
+  const next = findNext(state.items, currentTime);
+
   return (
     <section aria-labelledby="next-appointment-heading">
       <Heading level={2} id="next-appointment-heading">
         {strings.heading}
       </Heading>
-      {state.next ? (
+      {next ? (
         <p>
-          {new Date(state.next.scheduledAt).toLocaleString()} — {strings.durationLabel}{' '}
-          {state.next.durationMinutes}
+          {/* The stored value is UTC ISO-8601; `<time>` carries it
+              machine-readably while the text renders in the site's own
+              locale, in whatever timezone the reader is actually in.
+              `formatDateTime`, never `toLocaleString()` — see
+              `packages/i18n/src/datetime.ts` for the two screens that
+              disagreed about the same appointment. */}
+          <time dateTime={next.scheduledAt}>{formatDateTime(next.scheduledAt, locale)}</time>{' '}
+          — {strings.durationLabel} {next.durationMinutes}
           {' — '}
           {/* 2026-09-03: the link only exists while the slot does. Before
               it, a countdown; after it, "expired". The three states are
@@ -176,7 +215,7 @@ export function NextAppointmentPanel({
               refused on arrival is worse than no link, because the patient
               has already believed in it. */}
           <JoinCallCell
-            appointment={state.next}
+            appointment={next}
             locale={locale}
             now={currentTime}
             joinCallLabel={strings.joinCallLabel}

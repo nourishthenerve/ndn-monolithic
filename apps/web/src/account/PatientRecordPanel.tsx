@@ -20,12 +20,17 @@
 //
 // Appointments are read-only here even for the principal, who may create
 // them: scheduling belongs with a calendar, not with a details form.
+import { defaultLocale, formatDateTime } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
+
+import { JoinCallCell } from './JoinCallCell.js';
+import { useNow } from './useNow.js';
 
 export type PatientAccountStatus = 'pending' | 'approved' | 'declined' | 'suspended';
 
@@ -82,12 +87,28 @@ export interface PatientRecordPanelStrings {
   readonly approveButton: string;
   readonly declineButton: string;
   readonly decideFailedLabel: string;
+  /**
+   * 2026-09-03: the join column's own heading and link text. **This is the
+   * screen the clinician was actually on when they reported that no join
+   * button appeared.** `/account/calendar` had the link and nothing in the
+   * app pointed at that page; this table listed the same appointments with
+   * no way to reach a call from any of them.
+   */
+  readonly joinCallLabel: string;
   readonly backToDashboard: string;
 }
 
 export interface PatientRecordPanelProps {
   readonly strings: PatientRecordPanelStrings;
   readonly dashboardHref: string;
+  /**
+   * 2026-09-03: for the appointment times in the table below — the one
+   * thing on this page that is not a pre-resolved string. This screen and
+   * the patient's own dashboard were formatting the same instants in two
+   * different browser locales, which is what the owner read as the dates
+   * being different. Optional, defaulting to `defaultLocale`.
+   */
+  readonly locale?: Locale;
   /** Injectable for tests; defaults to the `?id=` on the current URL. */
   readonly patientId?: string;
   readonly client?: SessionClient;
@@ -98,6 +119,12 @@ export interface PatientRecordPanelProps {
     patch: { readonly personal: Record<string, unknown> },
   ) => Promise<Response>;
   readonly fetchAppointments?: (accessToken: string, patientId: string) => Promise<Response>;
+  /**
+   * Injectable for tests; defaults to the real current time. **A caller
+   * passing this must pass a stable reference** — see `useNow.ts`, and the
+   * unbounded fetch loop an inline `() => new Date()` caused here once.
+   */
+  readonly now?: () => Date;
   /** 2026-09-02: `POST …/appointments/{apptId}/{approve|decline}`. Injectable for tests. */
   readonly decideAppointment?: (
     accessToken: string,
@@ -108,6 +135,14 @@ export interface PatientRecordPanelProps {
 }
 
 const defaultClient = createSessionClient();
+
+/**
+ * Module scope, not an inline `() => new Date()` — the same bug fix
+ * `NextAppointmentPanel`/`ClinicianCalendar` carry the note for. A fresh
+ * identity per render inside a hook's dependency array is what turned a
+ * clock into an unbounded fetch loop in this directory once already.
+ */
+const systemNow = (): Date => new Date();
 
 function patientIdFromLocation(): string {
   if (typeof window === 'undefined') {
@@ -161,11 +196,13 @@ function defaultFetchAppointments(accessToken: string, patientId: string): Promi
 export function PatientRecordPanel({
   strings,
   dashboardHref,
+  locale = defaultLocale,
   patientId,
   client = defaultClient,
   fetchPatient = defaultFetchPatient,
   savePatient = defaultSavePatient,
   fetchAppointments = defaultFetchAppointments,
+  now = systemNow,
   decideAppointment = defaultDecideAppointment,
 }: PatientRecordPanelProps): ReactNode {
   const id = patientId ?? patientIdFromLocation();
@@ -209,6 +246,28 @@ export function PatientRecordPanel({
    * same rule every other gate in this directory follows.
    */
   const [mayDecide, setMayDecide] = useState(true);
+  /**
+   * 2026-09-03: whether to offer a join link on this table at all.
+   *
+   * A separate answer from `mayDecide`, because it is a separate cell.
+   * `authz-matrix.ts`'s `Appointments` row grants `join-call` to both
+   * clinician columns and to `Principal`, and withholds it from `Helpdesk`
+   * and `Visitor`, who hold plain `read` — and this page is deliberately
+   * reachable by a helpdesk account. Offering them a link the socket will
+   * refuse would be the same mistake the approval buttons made.
+   *
+   * Same posture as `mayDecide`: starts `true` and narrows only on a
+   * *known* role that cannot join, so an unreadable token shows the link
+   * and lets the server answer.
+   */
+  const [mayJoin, setMayJoin] = useState(true);
+  /**
+   * Ticks; the identity of what it is seeded from does not — see
+   * `useNow.ts`, and the unbounded fetch loop that shape exists to
+   * prevent. The join column has three phases and they change while the
+   * page is open, which is the whole reason a clock is on this screen.
+   */
+  const currentTime = useNow(now);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,6 +275,7 @@ export function PatientRecordPanel({
       const role = state.status === 'signed-in' ? state.session.viewerRole : undefined;
       if (!cancelled && role !== undefined) {
         setMayDecide(role === 'principal-clinician');
+        setMayJoin(role === 'principal-clinician' || role === 'sub-clinician');
       }
     });
     return () => {
@@ -495,17 +555,21 @@ export function PatientRecordPanel({
                 <th scope="col">{strings.durationColumnLabel}</th>
                 <th scope="col">{strings.appointmentStatusColumnLabel}</th>
                 <th scope="col">{strings.decisionColumnLabel}</th>
+                <th scope="col">{strings.joinCallLabel}</th>
               </tr>
             </thead>
             <tbody>
               {appointments.map((appointment) => (
                 <tr key={appointment.scheduledAt}>
                   {/* The stored value is UTC ISO-8601; `<time>` carries it
-                      machine-readably while the text renders in whatever
-                      timezone the reader is actually in. */}
+                      machine-readably while the text renders in the site's
+                      own locale, in whatever timezone the reader is
+                      actually in. `formatDateTime`, never
+                      `toLocaleString()` — see
+                      `packages/i18n/src/datetime.ts`. */}
                   <td>
                     <time dateTime={appointment.scheduledAt}>
-                      {new Date(appointment.scheduledAt).toLocaleString()}
+                      {formatDateTime(appointment.scheduledAt, locale)}
                     </time>
                   </td>
                   <td>
@@ -542,6 +606,31 @@ export function PatientRecordPanel({
                           {strings.declineButton}
                         </button>
                       </>
+                    ) : null}
+                  </td>
+                  {/* 2026-09-03: the join column, and the reason this
+                      table has one at all. The clinician who reported
+                      that no join button appeared was on this page — the
+                      only screen in the app that lists a *named* patient's
+                      appointments — and it offered no way to reach a call
+                      from any row. `/account/calendar` had the link and
+                      nothing pointed at that page.
+
+                      One component with the clinician calendar and the
+                      patient's own panel, so all three show the same three
+                      phases (`JoinCallCell`): a countdown before the slot,
+                      a live link during it, "expired" after. Only on a
+                      `scheduled` row — a pending booking has nothing to
+                      join and `ws-join.ts` would refuse it, and a
+                      cancelled or already-marked one is not happening. */}
+                  <td>
+                    {mayJoin && appointment.appointment_status === 'scheduled' ? (
+                      <JoinCallCell
+                        appointment={{ ...appointment, patientId: id }}
+                        locale={locale}
+                        now={currentTime}
+                        joinCallLabel={strings.joinCallLabel}
+                      />
                     ) : null}
                   </td>
                 </tr>

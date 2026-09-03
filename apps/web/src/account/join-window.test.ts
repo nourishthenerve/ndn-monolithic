@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countdownUntil,
   formatCountdown,
+  isLiveOrUpcoming,
   joinPhase,
   joinWindowClosesAt,
   parseScheduledAt,
@@ -81,6 +82,41 @@ describe('joinPhase', () => {
     // Reinstating a grace period is one subtraction here and the matching
     // one in `ws-join.ts`; recorded so the absence reads as a decision.
     expect(joinPhase(SCHEDULED_AT, DURATION, at('2026-09-10T13:50:00.000Z'))).toBe('before');
+  });
+});
+
+// 2026-09-03: what the two appointment lists ask before deciding whether a
+// row is still worth showing. The bug it exists to end is that both used
+// to ask "is `scheduledAt` still in the future", which goes false at the
+// exact instant the join window opens.
+describe('isLiveOrUpcoming', () => {
+  const ISO = '2026-09-10T14:00:00.000Z';
+
+  it.each([
+    ['a day before', '2026-09-09T14:00:00.000Z', true],
+    ['one millisecond before the start', '2026-09-10T13:59:59.999Z', true],
+    ['exactly at the start — where the old check went wrong', '2026-09-10T14:00:00.000Z', true],
+    ['midway through', '2026-09-10T14:22:00.000Z', true],
+    ['one millisecond before the end', '2026-09-10T14:44:59.999Z', true],
+    ['exactly at the end', '2026-09-10T14:45:00.000Z', false],
+    ['an hour after', '2026-09-10T15:00:00.000Z', false],
+  ])('is %s → %s', (_label, now, expected) => {
+    expect(isLiveOrUpcoming(ISO, DURATION, at(now))).toBe(expected);
+  });
+
+  it('treats an unreadable time as over, never as live', () => {
+    // Deny by default: `NaN` comparisons are all false, so without this
+    // guard a malformed row would read as `open` and present a link the
+    // server is certain to refuse.
+    expect(isLiveOrUpcoming('not-a-date', DURATION, at(ISO))).toBe(false);
+  });
+
+  it('agrees with joinPhase, which is the window the server enforces', () => {
+    for (const now of ['2026-09-10T13:00:00.000Z', ISO, '2026-09-10T14:45:00.000Z']) {
+      expect(isLiveOrUpcoming(ISO, DURATION, at(now))).toBe(
+        joinPhase(new Date(ISO), DURATION, at(now)) !== 'expired',
+      );
+    }
   });
 });
 

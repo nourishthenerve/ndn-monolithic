@@ -109,6 +109,7 @@ const heading = t('account.heading', undefined, locale);
     <RequireAuth client:only="react" allowRoles={['patient']}>
       <PatientNotifications
         client:only="react"
+        locale={locale}
         strings={{
           heading: t('patientNotifications.heading', undefined, locale),
           loadingLabel: t('patientNotifications.loading', undefined, locale),
@@ -141,6 +142,25 @@ const heading = t('account.heading', undefined, locale);
           <li>
             <Link href={`/${locale}/account/caseload`}>
               {t('account.dashboardLink', undefined, locale)}
+            </Link>
+          </li>
+        </ul>
+      </nav>
+    </RequireAuth>
+    {/* 2026-09-03: "My calendar" gets a link, for the same reason the
+        staff tools got theirs on 2026-08-31 — it has been reachable by
+        typed URL only since it shipped, so a clinician looking for the
+        join button had no way to find the one page that had it. Clinicians
+        only: `authz-matrix.ts` grants `Appointments` `join-call` to the
+        two clinician columns and `Principal`, while `Helpdesk`/`Visitor`
+        hold plain `read`, and `GET /clinicians/me/calendar` refuses a
+        patient by construction. */}
+    <RequireAuth client:only="react" allowRoles={['principal-clinician', 'sub-clinician']}>
+      <nav aria-label={t('calendar.heading', undefined, locale)}>
+        <ul>
+          <li>
+            <Link href={`/${locale}/account/calendar`}>
+              {t('calendar.heading', undefined, locale)}
             </Link>
           </li>
         </ul>

@@ -13,6 +13,8 @@
 // separately, so a newly-added kind will reach a browser running the
 // previous build, and "something changed about your appointments" is a
 // better answer than a blank row or a crash.
+import { defaultLocale, formatDateTime } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -46,6 +48,15 @@ export interface PatientNotificationsStrings {
 
 export interface PatientNotificationsProps {
   readonly strings: PatientNotificationsStrings;
+  /**
+   * 2026-09-03: needed for the one thing on this panel that is not a
+   * pre-resolved string — the appointment time inside each notice. Without
+   * it the row fell back to the *browser's* locale, which is how the same
+   * appointment came to read `9/3/2026` here and `03/09/2026` on the
+   * clinician's screen. Optional, defaulting to `defaultLocale`, so no
+   * caller is broken by its arrival.
+   */
+  readonly locale?: Locale;
   readonly client?: SessionClient;
   readonly fetchNotifications?: (accessToken: string) => Promise<Response>;
   readonly markRead?: (accessToken: string, notificationId: string) => Promise<Response>;
@@ -99,6 +110,7 @@ function defaultMarkRead(accessToken: string, notificationId: string): Promise<R
 
 export function PatientNotifications({
   strings,
+  locale = defaultLocale,
   client = defaultClient,
   fetchNotifications = defaultFetchNotifications,
   markRead = defaultMarkRead,
@@ -193,11 +205,13 @@ export function PatientNotifications({
                   {' '}
                   {strings.forLabel}{' '}
                   {/* The stored value is UTC ISO-8601; `<time>` carries it
-                      machine-readably while the text renders in whatever
-                      timezone the reader is actually in. */}
-                  <time dateTime={item.subjectAt}>
-                    {new Date(item.subjectAt).toLocaleString()}
-                  </time>
+                      machine-readably while the text renders in the site's
+                      own locale, in whatever timezone the reader is
+                      actually in. `formatDateTime`, never
+                      `toLocaleString()` — this feed is one of the two
+                      screens the owner compared. See
+                      `packages/i18n/src/datetime.ts`. */}
+                  <time dateTime={item.subjectAt}>{formatDateTime(item.subjectAt, locale)}</time>
                 </>
               )}{' '}
               <button type="button" onClick={() => void dismiss(item.notificationId)}>

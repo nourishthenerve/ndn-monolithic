@@ -72,14 +72,14 @@
 // press something. Two new gates sit in front of the join sequence this
 // component already built:
 //
-//   1. **`too-early`.** The join window opens 10 minutes before
-//      `scheduledAt` (`ws-join.ts`'s own `JOIN_WINDOW_OPENS_BEFORE_MINUTES`,
-//      mirrored below rather than imported — `services/api` and `apps/web`
-//      are two separate deployables). `scheduledAt` itself needs no
+//   1. **`too-early`.** The join window opens at `scheduledAt` itself and
+//      closes at the end of the booked slot (2026-09-03 — `join-window.ts`
+//      mirrors `ws-join.ts` rather than importing it, since `services/api`
+//      and `apps/web` are two separate deployables). `scheduledAt` needs no
 //      separate fetch: it is the second half of `appointmentId`
 //      (`<patientId>#<scheduledAt>`), the identical key shape `ws-join.ts`'s
 //      own `parseAppointmentId` already parses server-side. A caller who
-//      lands here hours early sees a live countdown and never even opens
+//      lands here early sees a live countdown and never even opens
 //      a WebSocket — the join sequence below does not start until the
 //      window is open, `DeviceCheck` has handed off a stream, *and* the
 //      caller has pressed `JoinCallButton`.
@@ -132,9 +132,9 @@ const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 // A patient who joins moments before their clinician is the ordinary
 // case, not a failure — `ws-relay.ts`'s own `peer-unavailable` fires
 // whenever the other party simply has not joined yet. Bounded, named
-// retry of the offer alone (never the join) covers it: ~30 seconds is
-// generous next to the 10-minute-early join window this call could only
-// have been reached inside.
+// retry of the offer alone (never the join) covers it: ~30 seconds is a
+// small fraction of the booked slot this call could only have been
+// reached inside.
 const PEER_RETRY_INTERVAL_MS = 2000;
 const PEER_RETRY_ATTEMPTS = 15;
 

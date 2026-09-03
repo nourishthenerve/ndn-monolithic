@@ -29,6 +29,7 @@
 // The status column says "waiting for approval", the API refuses a
 // sub-clinician's `approve` with a 403, and the message that comes back
 // says so. Offering nothing at all would be the more confusing screen.
+import { formatDateTime } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -112,9 +113,41 @@ const systemNow = (): Date => new Date();
 /** How far ahead this view looks — a fixed window, not a picker; a real date-range control is a future enhancement, not this gap's own scope. */
 export const CALENDAR_WINDOW_DAYS = 30;
 
+/**
+ * **How far *back* it looks, and why it must look back at all.**
+ *
+ * `from` was `now`, and the API turns that straight into a GSI1 range
+ * query (`gsi1sk BETWEEN 'APPT#<from>' AND 'APPT#<to>'`, `dynamo-store.ts`)
+ * keyed on `scheduledAt`. So an appointment left this calendar at the
+ * exact instant it started — which is the exact instant its join link
+ * becomes valid. The owner: *"when the item of appointment arrived the
+ * 'join the call' button simply didnt appear … the dashboard simply
+ * started showing the next appointment item."* On the clinician's side,
+ * that is this line.
+ *
+ * A range query cannot express "still running" — it only knows the start
+ * key — so the window has to open early enough to catch the start of
+ * anything that could still be under way, and the row itself then says
+ * what phase it is in (`JoinCallCell`). Twelve hours is a deliberate
+ * over-estimate: nothing bounds `durationMinutes` server-side
+ * (`appointment.ts` takes any positive integer), so this is a pragmatic
+ * cap rather than a proof, and it is cheap to be generous — the cost of
+ * being too large is a few finished rows on a 30-day calendar, and the
+ * cost of being too small is the bug above coming back for a long
+ * appointment only.
+ *
+ * The finished rows are kept rather than filtered out, and that is worth
+ * a sentence: they carry the "mark as attended"/"no-show" buttons, and a
+ * clinician recording what happened the moment a session ends is the
+ * realistic flow. Before this change those buttons were unreachable after
+ * the appointment began.
+ */
+export const CALENDAR_LOOKBACK_HOURS = 12;
+
 export function calendarWindow(now: Date): { readonly from: string; readonly to: string } {
+  const from = new Date(now.getTime() - CALENDAR_LOOKBACK_HOURS * 60 * 60 * 1000);
   const to = new Date(now.getTime() + CALENDAR_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-  return { from: now.toISOString(), to: to.toISOString() };
+  return { from: from.toISOString(), to: to.toISOString() };
 }
 
 // `callHref` moved to `JoinCallCell.tsx` (2026-09-03) — the two
@@ -287,7 +320,16 @@ export function ClinicianCalendar({
           const rowState = deciding[rowKey];
           return (
             <tr key={rowKey}>
-              <td>{new Date(item.scheduledAt).toLocaleString()}</td>
+              {/* The stored value is UTC ISO-8601; `<time>` carries it
+                  machine-readably while the text renders in the site's own
+                  locale, in whatever timezone the reader is actually in.
+                  `formatDateTime`, never `toLocaleString()` — the two
+                  screens the owner compared were reading the same instants
+                  and disagreeing about them. See
+                  `packages/i18n/src/datetime.ts`. */}
+              <td>
+                <time dateTime={item.scheduledAt}>{formatDateTime(item.scheduledAt, locale)}</time>
+              </td>
               <td>{item.durationMinutes}</td>
               <td>{item.appointment_status}</td>
               <td>

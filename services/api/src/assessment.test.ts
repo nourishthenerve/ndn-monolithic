@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import type { AppointmentStore, AppointmentTransition } from './appointment-repository.js';
 import { AppointmentRepository } from './appointment-repository.js';
 import { AssessmentRepository, DEFAULT_ASSESSMENT_ID } from './assessment-repository.js';
-import { createAssessmentHandler } from './assessment.js';
+import { createAssessmentHandler, summariseCalendar } from './assessment.js';
 import { actorContext, InMemoryAuditLog } from './audit.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
@@ -763,6 +763,59 @@ describe('the calendar section is derived, not stored', () => {
       totalAppointments: 4,
       sessionsCompleted: 2,
       appointmentsAwaitingApproval: 1,
+    });
+  });
+
+  // 2026-09-03. This read `scheduledAt <= nowIso`, so the appointment
+  // stopped being "next" at the instant it *started* — the one moment it
+  // is actually happening, and the moment its join window opens. The
+  // owner's report was about the two lists that made the same mistake; the
+  // calendar section made it too, and would have gone on quietly naming
+  // the wrong appointment.
+  describe('the appointment happening right now', () => {
+    const appointment = (overrides: Partial<Appointment> = {}): Appointment => ({
+      patientId: 'pat-1',
+      clinicianId: 'cli-1',
+      scheduledAt: '2026-09-10T14:00:00.000Z',
+      durationMinutes: 45,
+      appointment_status: 'scheduled',
+      created_at: NOW,
+      updated_at: NOW,
+      status: 'active',
+      ...overrides,
+    });
+
+    it.each([
+      ['at the very start', '2026-09-10T14:00:00.000Z'],
+      ['midway through', '2026-09-10T14:22:00.000Z'],
+      ['one millisecond before the end', '2026-09-10T14:44:59.999Z'],
+    ])('is still the next appointment %s', (_label, now) => {
+      expect(summariseCalendar([appointment()], new Date(now)).nextAppointmentAt).toBe(
+        '2026-09-10T14:00:00.000Z',
+      );
+    });
+
+    it('stops being next the instant its booked slot ends', () => {
+      const summary = summariseCalendar([appointment()], new Date('2026-09-10T14:45:00.000Z'));
+      expect(summary.nextAppointmentAt).toBeUndefined();
+    });
+
+    it('measures the end from the booked length, not a fixed one', () => {
+      const long = [appointment({ durationMinutes: 90 })];
+      expect(summariseCalendar(long, new Date('2026-09-10T15:00:00.000Z')).nextAppointmentAt).toBe(
+        '2026-09-10T14:00:00.000Z',
+      );
+      expect(
+        summariseCalendar(long, new Date('2026-09-10T15:30:00.000Z')).nextAppointmentAt,
+      ).toBeUndefined();
+    });
+
+    it('still prefers the earlier of two live-or-upcoming appointments', () => {
+      const summary = summariseCalendar(
+        [appointment({ scheduledAt: '2026-09-20T10:00:00.000Z' }), appointment()],
+        new Date('2026-09-10T14:22:00.000Z'),
+      );
+      expect(summary.nextAppointmentAt).toBe('2026-09-10T14:00:00.000Z');
     });
   });
 

@@ -80,6 +80,7 @@ import {
   ASSESSMENT_TAG_FIELD_ID,
   ASSESSMENT_TAG_OPTIONS,
   countsTowardTotal,
+  isAppointmentOver,
   templateField,
   templateSection,
 } from '@ndn/shared-types';
@@ -246,18 +247,23 @@ function visitorCalendarSummary(summary: CalendarSummary): Record<string, string
 }
 
 /**
- * "Next" is the earliest **confirmed** appointment still in the future — a
- * `pending-approval` slot is deliberately not one, because until the
- * principal has approved it there is nothing for the patient to turn up
- * to, and showing it as their next appointment would be telling them
- * something that is not yet true. It is surfaced as its own count instead,
- * which is what the principal's approval queue reads.
+ * "Next" is the earliest **confirmed** appointment that has not yet
+ * finished — a `pending-approval` slot is deliberately not one, because
+ * until the principal has approved it there is nothing for the patient to
+ * turn up to, and showing it as their next appointment would be telling
+ * them something that is not yet true. It is surfaced as its own count
+ * instead, which is what the principal's approval queue reads.
+ *
+ * **2026-09-03: "not yet finished", not "still in the future".** This read
+ * `scheduledAt <= nowIso` and so retired an appointment the moment it
+ * *began* — the one moment it is actually happening. See
+ * `isAppointmentOver`'s own note for the four places that made the same
+ * mistake and what it cost.
  */
 export function summariseCalendar(
   appointments: readonly Appointment[],
   now: Date,
 ): CalendarSummary {
-  const nowIso = now.toISOString();
   let next: Appointment | undefined;
   let totalAppointments = 0;
   let sessionsCompleted = 0;
@@ -278,13 +284,18 @@ export function summariseCalendar(
       appointmentsAwaitingApproval += 1;
       continue;
     }
-    if (appointment.appointment_status !== 'scheduled' || appointment.scheduledAt <= nowIso) {
+    if (
+      appointment.appointment_status !== 'scheduled' ||
+      isAppointmentOver(appointment.scheduledAt, appointment.durationMinutes, now)
+    ) {
       continue;
     }
     // ISO-8601 UTC strings compare correctly as strings (00-conventions.md
     // — every timestamp is stored that way, with a trailing `Z`), which is
     // also what makes the sort-key ordering these rows arrive in
-    // meaningful. No Date parsing needed, and none of its timezone edges.
+    // meaningful. Still no Date parsing *here*: the "has it finished" test
+    // above needs the duration and so has to leave string space, but
+    // picking the earliest of two candidates does not.
     if (!next || appointment.scheduledAt < next.scheduledAt) {
       next = appointment;
     }
