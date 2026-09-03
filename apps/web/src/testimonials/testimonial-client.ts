@@ -14,8 +14,17 @@ const attributionSchema = z.object({
   name: z.string().optional(),
 });
 
+// **No `id`** (2026-09-03). `GET /testimonials` projects to the words and
+// the credit and nothing else — `testimonial-read.ts`'s
+// `toPublicTestimonial` — because a testimonial's id is derived from its
+// author's patient id and this is an unauthenticated endpoint.
+//
+// This schema still required it, so every response failed `safeParse` and
+// the page rendered its empty state with a live API returning a real
+// testimonial. Found live: a patient published one and the public page
+// stayed empty. Nothing caught it because the fixtures in this file's own
+// test were written against the old shape and kept an `id`.
 const testimonialSchema = z.object({
-  id: z.string(),
   quote: z.record(z.string(), z.string()),
   attribution: attributionSchema,
 });

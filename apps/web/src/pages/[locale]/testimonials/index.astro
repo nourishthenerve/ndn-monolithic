@@ -15,10 +15,11 @@
 // already known and the consent is theirs to give and to take back.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Card, Heading } from '@ndn/ui';
+import { Heading } from '@ndn/ui';
 
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
+import { LiveTestimonialList } from '../../../testimonials/LiveTestimonialList.js';
 import { fetchPublishedTestimonials } from '../../../testimonials/testimonial-client.js';
 
 export async function getStaticPaths() {
@@ -33,12 +34,6 @@ const { testimonials } = Astro.props as {
 
 const heading = t('testimonials.index.heading', undefined, locale);
 
-function attributionLabel(testimonial: (typeof testimonials)[number]): string {
-  if (testimonial.attribution.display === 'anonymous') {
-    return t('testimonials.form.attributionDisplay.anonymous', undefined, locale);
-  }
-  return testimonial.attribution.name ?? '';
-}
 ---
 
 <BaseLayout
@@ -49,19 +44,24 @@ function attributionLabel(testimonial: (typeof testimonials)[number]): string {
   <Heading level={1}>{heading}</Heading>
   <p>{t('testimonials.index.intro', undefined, locale)}</p>
 
-  {
-    testimonials.length === 0 ? (
-      <p>{t('testimonials.index.empty', undefined, locale)}</p>
-    ) : (
-      testimonials.map((testimonial) => (
-        <Card>
-          <blockquote>
-            <p>{testimonial.quote[locale] ?? Object.values(testimonial.quote)[0]}</p>
-            <footer>{attributionLabel(testimonial)}</footer>
-          </blockquote>
-        </Card>
-      ))
-    )
-  }
+  {/* 2026-09-03: an island seeded with the build-time testimonials, so one
+      a patient publishes appears here without waiting for a deploy — the
+      owner's *"it published testimonial by logging in as patient but then
+      when I went to testimonial page it's empty."*
+
+      `client:load`, not `client:only`: the seed must be in the HTML for a
+      crawler and for a reader with no JavaScript, which is exactly what a
+      `client:only` island would throw away on a page whose whole job is to
+      be found and read. Same shape, and same reasoning, as the blog
+      listing. */}
+  <LiveTestimonialList
+    client:load
+    locale={locale}
+    initialTestimonials={testimonials}
+    strings={{
+      empty: t('testimonials.index.empty', undefined, locale),
+      anonymous: t('testimonials.form.attributionDisplay.anonymous', undefined, locale),
+    }}
+  />
 
 </BaseLayout>
