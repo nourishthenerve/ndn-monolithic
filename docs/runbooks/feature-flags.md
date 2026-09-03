@@ -62,8 +62,7 @@ Every name in `FlagName` (`services/api/src/flags.ts`) is a valid parameter suff
 |---|---|
 | `content.readApi.enabled` | `GET /content` — the public blog read API |
 | `content.authoring.enabled` | blog authoring/publish/unpublish |
-| `testimonials.submission.enabled` | public testimonial submission |
-| `testimonials.moderationQueue.enabled` | the admin moderation queue |
+| `testimonials.enabled` | a patient writing their own testimonial (2026-09-02: replaced `testimonials.submission.enabled` and `testimonials.moderationQueue.enabled`) |
 | `workshops.enabled` | workshop read + authoring |
 | `payments.stripeCheckout.enabled` | Stripe Checkout session creation (also gated on LL-03) |
 | `sms.enabled`, `sms.killSwitchEngaged` | SMS sending (no sender wired yet — M2.2) |

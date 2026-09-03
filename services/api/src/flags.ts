@@ -15,8 +15,12 @@ export type FlagName =
   | 'sms.killSwitchEngaged'
   | 'content.readApi.enabled'
   | 'content.authoring.enabled'
-  | 'testimonials.submission.enabled'
-  | 'testimonials.moderationQueue.enabled'
+  // 2026-09-02: one flag, replacing `testimonials.submission.enabled` and
+  // `testimonials.moderationQueue.enabled`. The first gated an anonymous
+  // public form that no longer exists; the second gated a moderation queue
+  // that no longer exists. What is left — a patient writing their own
+  // testimonial — is one feature with one switch.
+  | 'testimonials.enabled'
   | 'workshops.enabled'
   | 'payments.stripeCheckout.enabled'
   // TASK 2.1.3: gates the principal clinician's `GET /audit?date=` only.

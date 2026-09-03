@@ -48,7 +48,7 @@ export type MatrixRow =
   | 'Clinician accounts'
   | 'Audit log'
   | 'Content item'
-  | 'Testimonial moderation'
+  | 'Testimonial (own)'
   | 'Workshop';
 
 /** The doc's table columns, verbatim. */
@@ -303,15 +303,37 @@ export const RBAC_MATRIX: RbacMatrix = {
     Visitor: DENIED,
     Principal: ['create', 'read', 'update'],
   },
-  // | Testimonial moderation | — | — | C R U | C R U | — | — | C R U |
-  'Testimonial moderation': {
-    'Patient (own)': DENIED,
+  // | **Testimonial (own)** | **C R U D** | — | — | — | — | — | — |
+  //
+  // **The only row in this table a patient writes, and the only one the
+  // principal is denied** (2026-09-02). The owner: *"for patients, when
+  // logged in, should have option to upload maximum one testimonial with
+  // option to update it. otherwise, submit a testimonial shouldn't be
+  // available for public and all kinds of clinicians."*
+  //
+  // Every clinician column is `DENIED`, the principal's included — which
+  // reverses the 2026-08-31 amendment's "the principal can do anything"
+  // for this one row, deliberately. A testimonial is a patient's own words
+  // about their care; a practice that can write, edit or approve those
+  // words is not collecting testimonials. The principal's authority over
+  // the practice stops at the patient's own account of it.
+  //
+  // `'withdraw'` rather than a second `'update'`: editing your words is
+  // authorship, retracting them is consent, and consent that cannot be
+  // withdrawn is not consent. It is not deletion — the row transitions to
+  // `withdrawn` (00-conventions.md's no-delete rule).
+  //
+  // Note there is no `Testimonial (other)` row and no moderation row. The
+  // public read (`GET /testimonials`) is unauthenticated and never reaches
+  // `can()` at all, exactly as it always has.
+  'Testimonial (own)': {
+    'Patient (own)': ['create', 'read', 'update', 'withdraw'],
     'Patient (other)': DENIED,
-    'Sub-clinician (assigned)': ['create', 'read', 'update'],
-    'Sub-clinician (unassigned)': ['create', 'read', 'update'],
+    'Sub-clinician (assigned)': DENIED,
+    'Sub-clinician (unassigned)': DENIED,
     Helpdesk: DENIED,
     Visitor: DENIED,
-    Principal: ['create', 'read', 'update'],
+    Principal: DENIED,
   },
   // | Workshop | — | — | **R** | **R** | — | — | C R U |
   Workshop: {
@@ -349,7 +371,7 @@ export const ENTITY_TYPE_ROWS = {
   'clinician-account': 'Clinician accounts',
   audit: 'Audit log',
   'content-item': 'Content item',
-  'testimonial-moderation': 'Testimonial moderation',
+  testimonial: 'Testimonial (own)',
   workshop: 'Workshop',
 } as const satisfies Readonly<Record<string, MatrixRow>>;
 

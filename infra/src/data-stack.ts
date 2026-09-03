@@ -57,7 +57,6 @@ import {
   PATIENT_USER_POOL_ID,
   SITE_ORIGIN,
   STRIPE_SECRET_KEY_PARAMETER_NAME,
-  TURNSTILE_SECRET_PARAMETER_NAME,
   WWW_DOMAIN_NAME,
 } from './config.js';
 import { FLAG_ENVIRONMENT, grantFlagReads } from './flag-parameters.js';
@@ -457,7 +456,20 @@ export class DataStack extends Stack {
       // not routed has no business being advertised as allowed.
       corsPreflight: {
         allowOrigins: [SITE_ORIGIN, `https://${WWW_DOMAIN_NAME}`, `https://${DOMAIN_NAME}`],
-        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST, CorsHttpMethod.PATCH],
+        // 2026-09-02 adds PUT and DELETE, for `/testimonials/mine`. Caught
+        // by data-stack.test.ts's own "routes no HTTP method the CORS
+        // preflight does not allow" check — which exists because this
+        // exact gap has now shipped twice: `allowOrigins` naming only
+        // `next.`, then `PATCH` missing while a route used it. Both times
+        // the browser was refused at the preflight and nothing reached a
+        // log.
+        allowMethods: [
+          CorsHttpMethod.GET,
+          CorsHttpMethod.POST,
+          CorsHttpMethod.PATCH,
+          CorsHttpMethod.PUT,
+          CorsHttpMethod.DELETE,
+        ],
         allowHeaders: ['content-type', 'authorization'],
       },
       // TASK 2.2.2: **protected unless it says otherwise.** Every route on
@@ -515,111 +527,94 @@ export class DataStack extends Stack {
     });
 
     // TASK 1.4.2: testimonials — same table (docs/plan/05-execution-plan.md's
-    // own cost line: "same table, no new resource type"), two more
-    // functions/roles. TestimonialSubmissionFunction is the public write
-    // path (Turnstile + rate-limited, see services/api/src/testimonial-submission.ts)
-    // reachable by a live browser fetch, hence the CORS config on httpApi
-    // above; TestimonialModerationFunction serves the public published-only
-    // read plus the clinician-gated moderation queue and publish/reject
-    // actions (TASK 2.5.4) — see testimonial-moderation.ts's own header for
-    // why the queue moved off `GET /testimonials` onto its own path.
-    const testimonialSubmissionLogGroupName = props.prLabel
-      ? `/ndn/${props.prLabel}/testimonial-submission-function`
-      : '/ndn/testimonial-submission-function';
+    // own cost line: "same table, no new resource type").
+    //
+    // **2026-09-02: two functions, both rewritten.** The owner: *"submit a
+    // testimonial shouldn't be available for public and all kinds of
+    // clinicians … there is no concept of review a testimonial."*
+    //
+    // Gone: `TestimonialSubmissionFunction` — the anonymous public write
+    // path, with its Turnstile secret grant and its rate limiter — and
+    // three moderation routes (`/testimonials/pending`,
+    // `/{id}/publish`, `/{id}/reject`). All of it existed because the
+    // author was a stranger. The author is now a signed-in patient.
+    //
+    // What remains is a public read (`TestimonialReadFunction`, no
+    // principal, no flag, published-only) and a patient-authenticated
+    // singleton (`TestimonialAuthoringFunction`, `/testimonials/mine`).
+    const testimonialReadLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/testimonial-read-function`
+      : '/ndn/testimonial-read-function';
 
-    const testimonialSubmissionRole = new Role(this, 'TestimonialSubmissionFunctionRole', {
+    const testimonialReadRole = new Role(this, 'TestimonialReadFunctionRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
     });
 
-    const testimonialSubmissionFunction = new NodejsFunction(
-      this,
-      'TestimonialSubmissionFunction',
-      {
-        entry: `${moduleDir}../../services/api/src/testimonial-submission-handler.ts`,
-        handler: 'handler',
-        runtime: Runtime.NODEJS_22_X,
-        architecture: Architecture.ARM_64,
-        memorySize: 128,
-        timeout: Duration.seconds(10),
-        role: testimonialSubmissionRole,
-        environment: {
-          TESTIMONIAL_TABLE_NAME: this.table.tableName,
-          AUDIT_TABLE_NAME: this.table.tableName,
-          TURNSTILE_SECRET_PARAMETER_NAME,
-          ...FLAG_ENVIRONMENT,
-        },
-        logGroup: createLogGroup(
-          this,
-          'TestimonialSubmissionFunctionLogGroup',
-          testimonialSubmissionLogGroupName,
-          testimonialSubmissionRole,
-        ),
+    const testimonialReadFunction = new NodejsFunction(this, 'TestimonialReadFunction', {
+      entry: `${moduleDir}../../services/api/src/testimonial-read-handler.ts`,
+      handler: 'handler',
+      runtime: Runtime.NODEJS_22_X,
+      architecture: Architecture.ARM_64,
+      memorySize: 128,
+      timeout: Duration.seconds(5),
+      role: testimonialReadRole,
+      environment: {
+        TESTIMONIAL_TABLE_NAME: this.table.tableName,
+        AUDIT_TABLE_NAME: this.table.tableName,
       },
-    );
-
-    grantFlagReads(this, testimonialSubmissionRole);
-
-    // Precise write actions only — same reasoning ContentAuthoringWrite
-    // documents above: DynamoContentStore/DynamoTestimonialStore's real
-    // writes go through TransactWriteCommand (needs both actions), never
-    // table.grantWriteData()'s broader DeleteItem-including grant.
-    testimonialSubmissionRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'TestimonialSubmissionWrite',
-        effect: Effect.ALLOW,
-        actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'],
-        resources: [this.table.tableArn],
-      }),
-    );
-    attachDestructiveActionGuardrail(testimonialSubmissionRole, {
-      buckets: [],
-      tables: [this.table],
-    });
-    attachAuditPartitionReadGuardrail(testimonialSubmissionRole, this.table);
-    testimonialSubmissionRole.addToPrincipalPolicy(
-      new PolicyStatement({
-        sid: 'ReadTurnstileSecret',
-        effect: Effect.ALLOW,
-        actions: ['ssm:GetParameter'],
-        resources: [
-          Stack.of(this).formatArn({
-            service: 'ssm',
-            resource: 'parameter',
-            resourceName: TURNSTILE_SECRET_PARAMETER_NAME.replace(/^\//, ''),
-          }),
-        ],
-      }),
-    );
-
-    httpApi.addRoutes({
-      path: '/testimonials',
-      methods: [HttpMethod.POST],
-      authorizer: PUBLIC_ROUTE,
-      integration: new HttpLambdaIntegration(
-        'TestimonialSubmissionIntegration',
-        testimonialSubmissionFunction,
+      logGroup: createLogGroup(
+        this,
+        'TestimonialReadFunctionLogGroup',
+        testimonialReadLogGroupName,
+        testimonialReadRole,
       ),
     });
 
-    const testimonialModerationLogGroupName = props.prLabel
-      ? `/ndn/${props.prLabel}/testimonial-moderation-function`
-      : '/ndn/testimonial-moderation-function';
+    // Read only, and no write statement at all — the moderation
+    // transitions this role used to need are gone, so the public-facing
+    // function can no longer change a testimonial's status even in
+    // principle. No `grantFlagReads` either: the read takes no flag.
+    this.table.grantReadData(testimonialReadRole);
+    attachDestructiveActionGuardrail(testimonialReadRole, {
+      buckets: [],
+      tables: [this.table],
+    });
+    attachAuditPartitionReadGuardrail(testimonialReadRole, this.table);
 
-    const testimonialModerationRole = new Role(this, 'TestimonialModerationFunctionRole', {
+    // `GET /testimonials` is genuinely public (PUBLIC_ROUTE) — the real
+    // Lambda authorizer denies outright on a missing bearer token, so a
+    // route an anonymous visitor must reach cannot sit behind it. That was
+    // TASK 2.5.4's reason for splitting the queue onto its own path; the
+    // queue no longer exists, and this route is the whole function.
+    httpApi.addRoutes({
+      path: '/testimonials',
+      methods: [HttpMethod.GET],
+      authorizer: PUBLIC_ROUTE,
+      integration: new HttpLambdaIntegration(
+        'TestimonialReadIntegration',
+        testimonialReadFunction,
+      ),
+    });
+
+    const testimonialAuthoringLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/testimonial-authoring-function`
+      : '/ndn/testimonial-authoring-function';
+
+    const testimonialAuthoringRole = new Role(this, 'TestimonialAuthoringFunctionRole', {
       assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
     });
 
-    const testimonialModerationFunction = new NodejsFunction(
+    const testimonialAuthoringFunction = new NodejsFunction(
       this,
-      'TestimonialModerationFunction',
+      'TestimonialAuthoringFunction',
       {
-        entry: `${moduleDir}../../services/api/src/testimonial-moderation-handler.ts`,
+        entry: `${moduleDir}../../services/api/src/testimonial-authoring-handler.ts`,
         handler: 'handler',
         runtime: Runtime.NODEJS_22_X,
         architecture: Architecture.ARM_64,
         memorySize: 128,
         timeout: Duration.seconds(5),
-        role: testimonialModerationRole,
+        role: testimonialAuthoringRole,
         environment: {
           TESTIMONIAL_TABLE_NAME: this.table.tableName,
           AUDIT_TABLE_NAME: this.table.tableName,
@@ -627,61 +622,48 @@ export class DataStack extends Stack {
         },
         logGroup: createLogGroup(
           this,
-          'TestimonialModerationFunctionLogGroup',
-          testimonialModerationLogGroupName,
-          testimonialModerationRole,
+          'TestimonialAuthoringFunctionLogGroup',
+          testimonialAuthoringLogGroupName,
+          testimonialAuthoringRole,
         ),
       },
     );
 
-    grantFlagReads(this, testimonialModerationRole);
+    grantFlagReads(this, testimonialAuthoringRole);
 
-    this.table.grantReadData(testimonialModerationRole);
-    testimonialModerationRole.addToPrincipalPolicy(
+    this.table.grantReadData(testimonialAuthoringRole);
+    // Precise write actions only — same reasoning ContentAuthoringWrite
+    // documents above: DynamoTestimonialStore's real writes go through
+    // TransactWriteCommand (needs both), never table.grantWriteData()'s
+    // broader DeleteItem-including grant. A withdrawal is a status write,
+    // not a delete, so nothing here needs DeleteItem.
+    testimonialAuthoringRole.addToPrincipalPolicy(
       new PolicyStatement({
-        sid: 'TestimonialModerationWrite',
+        sid: 'TestimonialAuthoringWrite',
         effect: Effect.ALLOW,
-        actions: ['dynamodb:PutItem'],
+        actions: ['dynamodb:PutItem', 'dynamodb:TransactWriteItems'],
         resources: [this.table.tableArn],
       }),
     );
-    attachDestructiveActionGuardrail(testimonialModerationRole, {
+    attachDestructiveActionGuardrail(testimonialAuthoringRole, {
       buckets: [],
       tables: [this.table],
     });
-    attachAuditPartitionReadGuardrail(testimonialModerationRole, this.table);
+    attachAuditPartitionReadGuardrail(testimonialAuthoringRole, this.table);
 
-    // TASK 2.5.4: `GET /testimonials` is genuinely public (PUBLIC_ROUTE —
-    // published-only, unconditionally) — the real Lambda authorizer denies
-    // outright on a missing bearer token, so it cannot also gate a route
-    // an anonymous visitor must reach. The moderation queue moved to its
-    // own path, `GET /testimonials/pending`, which takes no override and
-    // so falls to `defaultAuthorizer` (the real one), same as publish/reject
-    // below. See testimonial-moderation.ts's own header.
-    const testimonialModerationIntegration = new HttpLambdaIntegration(
-      'TestimonialModerationIntegration',
-      testimonialModerationFunction,
+    // No `authorizer:` override — `defaultAuthorizer` (the real Lambda
+    // authorizer) applies, and `authz-matrix.ts`'s `Testimonial (own)` row
+    // does the rest: its only non-empty column is `Patient (own)`, so every
+    // clinician, the principal included, is refused by the matrix rather
+    // than by a branch in the handler.
+    const testimonialAuthoringIntegration = new HttpLambdaIntegration(
+      'TestimonialAuthoringIntegration',
+      testimonialAuthoringFunction,
     );
     httpApi.addRoutes({
-      path: '/testimonials',
-      methods: [HttpMethod.GET],
-      authorizer: PUBLIC_ROUTE,
-      integration: testimonialModerationIntegration,
-    });
-    httpApi.addRoutes({
-      path: '/testimonials/pending',
-      methods: [HttpMethod.GET],
-      integration: testimonialModerationIntegration,
-    });
-    httpApi.addRoutes({
-      path: '/testimonials/{id}/publish',
-      methods: [HttpMethod.POST],
-      integration: testimonialModerationIntegration,
-    });
-    httpApi.addRoutes({
-      path: '/testimonials/{id}/reject',
-      methods: [HttpMethod.POST],
-      integration: testimonialModerationIntegration,
+      path: '/testimonials/mine',
+      methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE],
+      integration: testimonialAuthoringIntegration,
     });
 
     // TASK 1.5.1: workshops — same table, one more entity. Public read

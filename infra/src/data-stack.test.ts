@@ -147,18 +147,21 @@ describe('DataStack — ContentHttpApi CORS (TASK 2.5.3 fix)', () => {
   // it matches the methods this API's routes actually use, so a route
   // added with a method nobody added here fails this test rather than
   // failing silently in a browser.
-  it('allows exactly the methods this API routes — GET, POST and PATCH', () => {
+  // 2026-09-02 adds PUT and DELETE for `/testimonials/mine` — a patient's
+  // single testimonial, written with PUT because there is only ever one,
+  // and withdrawn with DELETE.
+  it('allows exactly the methods this API routes', () => {
     const template = synth();
     template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
       CorsConfiguration: {
-        AllowMethods: ['GET', 'POST', 'PATCH'],
+        AllowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
       },
     });
   });
 
   it('routes no HTTP method the CORS preflight does not allow', () => {
     const template = synth();
-    const allowed = new Set(['GET', 'POST', 'PATCH']);
+    const allowed = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
     const routed = Object.values(template.findResources('AWS::ApiGatewayV2::Route'))
       .map((route) => String((route.Properties as { RouteKey: string }).RouteKey))
       // The signalling WebSocket API's routes are in this same template
@@ -484,8 +487,13 @@ describe('DataStack — feature-flag reads', () => {
   const FLAG_READING_FUNCTIONS = [
     'content-read-handler',
     'content-authoring-handler',
-    'testimonial-submission-handler',
-    'testimonial-moderation-handler',
+    // 2026-09-02: one testimonial function reads a flag, not two.
+    // `testimonial-submission-handler` (the anonymous public form) is
+    // deleted outright; `testimonial-moderation-handler` became
+    // `testimonial-read-handler`, which is *not* in this list — the public
+    // read takes no flag, and now that the moderation routes it shared a
+    // function with are gone, it has none to read.
+    'testimonial-authoring-handler',
     'workshop-read-handler',
     'workshop-authoring-handler',
     'stripe-checkout-handler',
@@ -869,8 +877,13 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         // `GET /content` keeps its published-only boundary intact.
         'GET /content/authored',
         'GET /patients/me/notifications',
-        'GET /testimonials/pending',
+        // 2026-09-02: a patient's own testimonial, on a singleton path.
+        // `GET /testimonials/pending` and the publish/reject pair are gone
+        // — the owner: *"there is no concept of review a testimonial."*
+        'GET /testimonials/mine',
         'GET /workshops/authored',
+        'DELETE /testimonials/mine',
+        'PUT /testimonials/mine',
         'PATCH /clinicians/me',
         'PATCH /content/{id}',
         'PATCH /patients/{id}',
@@ -902,8 +915,6 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         'POST /patients/{id}/restore',
         'POST /patients/{id}/suspend',
         'POST /patients/me/notifications/{notificationId}/read',
-        'POST /testimonials/{id}/publish',
-        'POST /testimonials/{id}/reject',
         'POST /workshops',
         'POST /workshops/{id}/cancel',
         'POST /workshops/{id}/publish',

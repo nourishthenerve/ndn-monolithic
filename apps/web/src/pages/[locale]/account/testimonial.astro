@@ -1,0 +1,87 @@
+---
+// 2026-09-02: a patient's own testimonial. The owner: *"for patients, when
+// logged in, should have option to upload maximum one testimonial with
+// option to update it. otherwise, submit a testimonial shouldn't be
+// available for public and all kinds of clinicians."*
+//
+// `allowRoles={['patient']}` is the mirror image of every other page in
+// this directory, which are clinician-only. It is not the boundary — the
+// matrix's `Testimonial (own)` row refuses every clinician at the API —
+// but it means a clinician is never offered a form the server would then
+// refuse, which is the same discipline the authoring page follows for
+// non-principals.
+//
+// Statically generated and **empty**, same as every sibling. Deliberately
+// absent from routes.ts.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { TestimonialPanel } from '../../../account/TestimonialPanel.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('accountTestimonial.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('accountTestimonial.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    allowRoles={['patient']}
+  >
+    <Fragment slot="signedOut">
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signInPatient', undefined, locale)} pool="patient" />
+      </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('accountTestimonial.forbidden', undefined, locale)}</p>
+    </Fragment>
+    <TestimonialPanel
+      client:only="react"
+      locale={locale}
+      strings={{
+        heading: t('accountTestimonial.panelHeading', undefined, locale),
+        intro: t('accountTestimonial.intro', undefined, locale),
+        loading: t('accountTestimonial.loading', undefined, locale),
+        forbidden: t('accountTestimonial.forbidden', undefined, locale),
+        error: t('accountTestimonial.error', undefined, locale),
+        quoteLabel: t('testimonials.form.quoteLabel', undefined, locale),
+        displayLabel: t('testimonials.form.attributionDisplayLabel', undefined, locale),
+        displayFull: t('testimonials.form.attributionDisplay.full', undefined, locale),
+        displayFirstNameOnly: t(
+          'testimonials.form.attributionDisplay.firstNameOnly',
+          undefined,
+          locale,
+        ),
+        displayAnonymous: t('testimonials.form.attributionDisplay.anonymous', undefined, locale),
+        nameLabel: t('testimonials.form.attributionNameLabel', undefined, locale),
+        nameRequired: t('accountTestimonial.nameRequired', undefined, locale),
+        consentNotice: t('accountTestimonial.consentNotice', undefined, locale),
+        publishButton: t('accountTestimonial.publish', undefined, locale),
+        updateButton: t('accountTestimonial.update', undefined, locale),
+        saving: t('accountTestimonial.saving', undefined, locale),
+        savedMessage: t('accountTestimonial.saved', undefined, locale),
+        withdrawButton: t('accountTestimonial.withdraw', undefined, locale),
+        withdrawnMessage: t('accountTestimonial.withdrawn', undefined, locale),
+        withdrawnNotice: t('accountTestimonial.withdrawnNotice', undefined, locale),
+        saveFailed: t('accountTestimonial.saveFailed', undefined, locale),
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>

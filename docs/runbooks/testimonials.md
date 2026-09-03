@@ -33,3 +33,46 @@ None beyond what TASK 1.4.1 (Turnstile secret + widget) already required — reu
 ## Cost
 
 £0.00 net-new, per TASK 1.4.2's own line — same table as content, two more Lambdas + a handful of API Gateway routes against infrastructure TASK 1.3.1 already provisioned.
+
+---
+
+## Amendment, 2026-09-02 — patient-authored, published on write, no review
+
+> *"the testimonial page by default should be read only with all published testimonials by various patients. for patients, when logged in, should have option to upload maximum one testimonial with option to update it. otherwise, submit a testimonial shouldn't be available for public and all kinds of clinicians. Also, there is no concept of review a testimonial — it should go live as soon as patient submits it from his account."*
+
+**Everything above about submission and moderation is superseded.** The author is now a signed-in patient, and three pieces of machinery went away with the stranger they existed to guard against.
+
+### What was deleted
+
+| Deleted | Why it existed | Why it does not now |
+| --- | --- | --- |
+| `testimonial-submission.ts` + handler | anonymous public form | the author has an account |
+| Turnstile on this path | proving a human | the authorizer already did |
+| `rate-limiter.ts` on this path | flooding | one record per patient — flooding is not a shape the data can take |
+| `GET /testimonials/pending` | the moderation queue | there is no review |
+| `POST /testimonials/{id}/publish` · `/reject` | approving a stranger's words | published on write |
+| `testimonials.submission.enabled` · `testimonials.moderationQueue.enabled` | two halves of one feature | one flag: `testimonials.enabled` |
+| the form on `/[locale]/testimonials/` | public submission | the page is read-only |
+
+### What replaced it
+
+- **`authz-matrix.ts`'s `Testimonial (own)` row** — `C R U D` in `Patient (own)`, and **`—` in every other column, the principal's included.** This is the one row where "the principal can do anything" (the 2026-08-31 amendment) is answered *no*. A testimonial is a patient's own words about their care; a practice that can write, edit or approve them is not collecting testimonials.
+- **`testimonial-authoring.ts`** — `GET|PUT|DELETE /testimonials/mine`. A singleton path with no id in it, which is the cardinality rule expressed in the URL rather than checked in code.
+- **`testimonialIdForPatient()`** — the record id is `sha256(patientId)`. **This is where "maximum one" actually lives:** a second submission addresses the record the first one made, so there is no code path that creates a patient's second testimonial. Hashed because the id lands in a `TESTIMONIAL#<id>` partition key that appears in logs and metrics.
+- **`testimonial-read.ts`** — what remains of `testimonial-moderation.ts`: the one route that was always public.
+
+### The public read now projects
+
+`GET /testimonials` used to return `Testimonial` rows whole — on a public, unauthenticated URL. That published `consent.submitterContactHash`, the status, both timestamps and the record id, none of which was ever rendered. Once ids are derived from patient ids, that last one matters.
+
+`toPublicTestimonial()` builds the response by naming what goes in rather than deleting what should not, so a field added to `Testimonial` later is private by default. It also rebuilds `attribution` field by field: an anonymous attribution that still carried a name would otherwise publish it.
+
+### Legacy rows
+
+Anonymous `pending_review` and `rejected` testimonials from the old form still exist. Nothing publishes them — the routes that could are gone — and `findPublished` excludes them, which `testimonial-repository.test.ts` asserts by name. They are stranded rather than deleted (00-conventions.md), and that is the safe direction: they were never approved, and they carry no author who could stand behind them.
+
+**If any pending row should go live, say so** — it is a one-off write, not a feature to rebuild.
+
+### Withdrawal, which was not asked for
+
+`DELETE /testimonials/mine` transitions to `withdrawn` and keeps the text. It is a judgement call, recorded here as one: the request covers writing and updating, not removing. But publication rests on the author's consent, and consent that cannot be withdrawn is not consent — shipping "update only" would leave a patient's public words irrevocable. `'withdraw'` is its own `Action` and its own audit action rather than an `update`, because editing your words is authorship and retracting them is consent.

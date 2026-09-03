@@ -95,8 +95,15 @@ export const LOG_INGESTION_ALARM_THRESHOLD_BYTES = 350_000_000;
 export const MONITORED_LOG_GROUP_NAMES = [
   '/ndn/health-function',
   '/ndn/smoke-test-function',
-  '/ndn/testimonial-submission-function',
-  '/ndn/testimonial-moderation-function',
+  // 2026-09-02: `testimonial-read-function` is the public read the old
+  // `testimonial-moderation-function` performed alongside its (now
+  // deleted) queue, so it inherits that slot — same traffic, same reason.
+  // `testimonial-submission-function` is gone outright, and its slot goes
+  // to `testimonial-authoring-function`: fewer requests than the form it
+  // replaces, but it is the one testimonial path that writes, and a write
+  // path running away is what this alarm is for.
+  '/ndn/testimonial-read-function',
+  '/ndn/testimonial-authoring-function',
   '/ndn/workshop-checkout-function',
   '/ndn/stripe-webhook-function',
   // Gate G1 §4: the two public GET endpoints were missing from this list

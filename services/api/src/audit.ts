@@ -77,6 +77,14 @@ export const AUDIT_ACTIONS = [
   // A credential handout is exactly the kind of act a reviewer most needs
   // this log to be able to answer "who, and when" about.
   'reset-password',
+  // 2026-09-02: a patient retracting their own published testimonial.
+  // Under its own name rather than folded into 'update' for the same
+  // reason 'reject' and 'unpublish' have theirs: the fact worth keeping is
+  // that something stopped being public, and which act made it so. It is
+  // also the one action in this list a *patient* performs on their own
+  // record, so a reviewer reading a day's rows can see consent being
+  // withdrawn rather than inferring it from a status field.
+  'withdraw',
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
