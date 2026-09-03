@@ -116,8 +116,9 @@ import { contentApiUrl, signallingWebSocketUrl } from '../site-config.js';
 
 import type { CallConnectionState, CallLifecycleState } from './call-state-machine.js';
 import { createCallStateMachine } from './call-state-machine.js';
+import { countdownUnits } from './countdown-units.js';
 import { DeviceCheck, type DeviceCheckStrings } from './DeviceCheck.js';
-import { joinWindowOpensAt, minutesUntilJoinWindowOpens, parseScheduledAt } from './join-window.js';
+import { countdownUntil, formatCountdown, parseScheduledAt } from './join-window.js';
 import { JoinCallButton, type JoinCallButtonStrings } from './JoinCallButton.js';
 import type { JoinDenialReason, RelayMessage, SignallingConnection } from './webrtc-signalling-client.js';
 import { connectSignalling } from './webrtc-signalling-client.js';
@@ -296,9 +297,17 @@ export function VideoCall({
   // malformed appointment id, which is not this component's own decision
   // to police (the join attempt itself will be refused server-side).
   const scheduledAt = session ? parseScheduledAt(session.appointmentId) : undefined;
-  const minutesRemaining = scheduledAt
-    ? minutesUntilJoinWindowOpens(joinWindowOpensAt(scheduledAt), now)
-    : undefined;
+  // 2026-09-03: counts down to the appointment's own start, not to a
+  // window opening ten minutes before it — see `join-window.ts`.
+  //
+  // Only the *before* half is computed here. Whether a slot has expired
+  // needs `durationMinutes`, which the appointment id
+  // (`<patientId>#<scheduledAt>`) does not carry, and this page is reached
+  // by URL with nothing else. The panels that link here do know it and
+  // stop offering the link; anyone who arrives at a finished call by URL
+  // is refused server-side with `too-late`, which this component already
+  // renders.
+  const countdown = scheduledAt ? countdownUntil(scheduledAt, now) : undefined;
 
   // The actual join sequence — gated on a resolved session, a device
   // state `DeviceCheck` has handed off, and now (TASK 4.5.1) the caller
@@ -542,10 +551,10 @@ export function VideoCall({
       </p>
     );
   }
-  if (minutesRemaining !== undefined) {
+  if (countdown !== undefined) {
     return (
       <p role="status" aria-live="polite">
-        {t('videoCall.tooEarly', { minutes: minutesRemaining }, locale)}
+        {t('videoCall.tooEarly', { countdown: formatCountdown(countdown, countdownUnits(locale)) }, locale)}
       </p>
     );
   }

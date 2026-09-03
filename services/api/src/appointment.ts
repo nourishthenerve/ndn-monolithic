@@ -12,14 +12,15 @@
 // cancel-the-old, `POST` a new one, so the append-only property every
 // entity in this table keeps holds here without a special case.
 //
-// A real finding, matching the identical mistake `assessment.ts`'s own
-// header names for its write row: `authz-matrix.ts`'s `Appointments` row
-// grants the `Principal` column bare `R`, not `C R U` — only the assigned
-// sub-clinician schedules an appointment, the same "whoever is actually
-// delivering care authors it" design assessment forms already established.
-// The `if (!patient) return 404` branch below is unreachable by
-// construction for the same reason assessment.ts's own is, and for the
-// same reason: kept as defence in depth, not removed.
+// **Superseded 2026-09-03.** This header used to state that
+// `authz-matrix.ts`'s `Appointments` row grants the `Principal` column
+// bare `R`, so "only the assigned sub-clinician schedules an appointment".
+// That was true when it was written and stopped being true on 2026-08-31,
+// when the principal became a practising clinician with `C R U J` — and
+// the `clinicianId` line below still assumed it, attaching every
+// principal-booked appointment to the principal instead of to the
+// clinician treating the patient. See that line's own note. The
+// `if (!patient) return 404` branch remains defence in depth.
 //
 // `GET /clinicians/me/calendar` resolves "me" the same "self-assigned
 // resource" trick `patient.ts`'s own `GET /caseload/mine` uses:
@@ -400,10 +401,34 @@ export function createAppointmentHandler(
 
     const input: AppointmentInput = {
       patientId,
-      // The caller's own id — only the assigned sub-clinician ever
-      // reaches this line, so the appointment is always scheduled as
-      // themselves, never a clinician id the request body could name.
-      clinicianId: principal.clinicianId as string,
+      // **The patient's assigned clinician, not whoever booked it**
+      // (2026-09-03). The owner: *"when I as a principal clinician approve
+      // a booking … I see a join the call button. But the clinician who
+      // has been assigned this patient doesnt see any join the call
+      // button."*
+      //
+      // This line used to read `principal.clinicianId`, on a comment
+      // asserting that "only the assigned sub-clinician ever reaches this
+      // line". That stopped being true when the matrix gave the principal
+      // `C R U J` on `Appointments` (the 2026-08-31 amendment: the
+      // principal is a practising clinician, not an overseer), and nothing
+      // here noticed.
+      //
+      // The consequence was not a permission error — it was worse, because
+      // it looked like it worked. `clinicianId` is what `gsi1pk` keys the
+      // clinician calendar on *and* what `ws-join.ts` checks `join-call`
+      // against, so a principal-booked appointment attached itself to the
+      // principal: it appeared on their calendar with a join link, and was
+      // invisible and unjoinable to the clinician who was actually going
+      // to treat the patient.
+      //
+      // An appointment is the patient's session with their treating
+      // clinician. Who typed it in is administrative and is recorded in
+      // the audit log, which is where that fact belongs. The fallback is
+      // the booker, for the one case the assignment cannot answer: a
+      // patient with no clinician yet, which only the principal can book
+      // for at all.
+      clinicianId: patient.assigned_clinician_id ?? (principal.clinicianId as string),
       scheduledAt: parsed.data.scheduledAt,
       durationMinutes: parsed.data.durationMinutes,
     };

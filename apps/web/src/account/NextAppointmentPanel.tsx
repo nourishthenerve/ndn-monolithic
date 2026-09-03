@@ -12,13 +12,16 @@
 // private-field filtering `private-field-boundary.md` warns against
 // (`Appointment` carries no `private{}` field at all, today or planned).
 import type { Locale } from '@ndn/i18n';
-import { Heading, Link } from '@ndn/ui';
+import { Heading } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
+
+import { JoinCallCell } from './JoinCallCell.js';
+import { useNow } from './useNow.js';
 
 export interface AppointmentEntry {
   readonly scheduledAt: string;
@@ -97,11 +100,10 @@ export function findNext(
   );
 }
 
-/** `call.astro`'s own composite id (`ws-join.ts`'s `parseAppointmentId`) — encoded once here, decoded automatically by `URLSearchParams` on the read side (`account-a11y.setup.ts`/`a11y-authenticated.test.ts` already build the same shape the same way). */
-export function callHref(locale: Locale, appointment: AppointmentEntry): string {
-  const appointmentId = `${appointment.patientId}#${appointment.scheduledAt}`;
-  return `/${locale}/account/call?appointmentId=${encodeURIComponent(appointmentId)}`;
-}
+// `callHref` moved to `JoinCallCell.tsx` (2026-09-03), which is now the
+// only thing that builds this link — re-exported so existing importers and
+// tests keep working against one implementation rather than two.
+export { callHref } from './JoinCallCell.js';
 
 export function NextAppointmentPanel({
   strings,
@@ -111,6 +113,9 @@ export function NextAppointmentPanel({
   now = systemNow,
 }: NextAppointmentPanelProps): ReactNode {
   const [state, setState] = useState<ViewState>({ status: 'loading' });
+  // Ticks; `now` itself does not. See `useNow.ts` for why that distinction
+  // is the whole point.
+  const currentTime = useNow(now);
 
   const load = useCallback(async () => {
     setState({ status: 'loading' });
@@ -164,7 +169,18 @@ export function NextAppointmentPanel({
           {new Date(state.next.scheduledAt).toLocaleString()} — {strings.durationLabel}{' '}
           {state.next.durationMinutes}
           {' — '}
-          <Link href={callHref(locale, state.next)}>{strings.joinCallLabel}</Link>
+          {/* 2026-09-03: the link only exists while the slot does. Before
+              it, a countdown; after it, "expired". The three states are
+              the same three `ws-join.ts` enforces, so what a patient can
+              press and what the server will accept agree — a link that is
+              refused on arrival is worse than no link, because the patient
+              has already believed in it. */}
+          <JoinCallCell
+            appointment={state.next}
+            locale={locale}
+            now={currentTime}
+            joinCallLabel={strings.joinCallLabel}
+          />
         </p>
       ) : (
         <p>{strings.emptyLabel}</p>

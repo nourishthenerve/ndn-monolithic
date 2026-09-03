@@ -91,3 +91,40 @@ Once both parties have joined the same appointment's call (two separate `wscat` 
 ## Cost
 
 $0.01/month at M6, $0.02/month at M12 — `03-cost-model.md`'s API Gateway WebSocket line, live-priced at Gate G3 (2026-08-26) ahead of TASK 4.1.1 and unchanged by it: $1.00/million messages + $0.25/million connection-minutes, `eu-west-2` standard rate, no free tier assumed. TASK 4.2.1 adds £0.00 net-new — Lambda logic and audit writes inside the same DynamoDB line, no new resource beyond one CloudWatch alarm reserved in TASK 4.4.2's own budget. TASK 4.2.2 adds £0.00 net-new too — the relay's own messages are already inside 4.1.1's own modelled message count (~30 signalling messages per call), and its two new IAM statements carry no cost of their own.
+
+## Amendment, 2026-09-03 — the join window is the appointment, and appointments belong to the treating clinician
+
+> *"when I as a principal clinician approve a booking for an appointment for a patient in pathients account I see a join the call button. But the clinician who has been assigned this patient doesnt see any join the call button. Also, keep this join the call button active from the start of the appointment to the whole duration upto which this appointment has been booked - before this appointment time show to the patient that the appointment is yet to start in x days, y hours and z minutes and after the appointment slot time say "expired"."*
+
+Two independent defects, reported together.
+
+### 1. An appointment belonged to whoever booked it
+
+`appointment.ts` set `clinicianId` to the caller's own id, on a comment asserting that "only the assigned sub-clinician ever reaches this line". True when written; false from 2026-08-31, when the matrix gave the principal `C R U J` on `Appointments`.
+
+`clinicianId` is not bookkeeping. It is what `gsi1pk` keys the clinician calendar on, **and** what `ws-join.ts` checks `join-call` against. So a principal-booked appointment attached itself to the principal: on their calendar, joinable by them, and invisible and unjoinable to the clinician actually treating the patient.
+
+It now takes the patient's `assigned_clinician_id`, falling back to the booker only when the patient has no clinician yet — a case only the principal can book for at all. Who typed it in is recorded in the audit log, which is where that belongs.
+
+**Existing appointments are not migrated.** Any already booked by the principal for another clinician's patient still carry the principal's id and will stay on the wrong calendar. There are few enough that fixing them is a one-off write rather than a migration; say so if you want it done.
+
+### 2. The window ignored the booked duration
+
+| | Was | Now |
+| --- | --- | --- |
+| Opens | `scheduledAt − 10 min` | `scheduledAt` |
+| Closes | `scheduledAt + 30 min` | `scheduledAt + durationMinutes` |
+
+A 15-minute check-in and a 90-minute assessment got the identical 40 minutes — one joinable long after it ended, the other locked out halfway through.
+
+`JOIN_WINDOW_OPENS_BEFORE_MINUTES` and `JOIN_WINDOW_CLOSES_AFTER_MINUTES` are gone, replaced by `joinWindowClosesAt(scheduledAt, durationMinutes)`. The end is **exclusive**: `scheduledAt + durationMinutes` is past the appointment, not the last moment of it, and the UI says "expired" at the same instant from `joinPhase`'s matching `>=`.
+
+The 10-minute early grace is deliberately dropped, because the instruction is explicit about where the window starts. Reinstating it is one subtraction in `ws-join.ts` and the matching one in `apps/web/src/account/join-window.ts`.
+
+### The three phases, in one component
+
+`JoinCallCell.tsx` renders a countdown, a live link, or "expired" — and is used by **both** the patient's `NextAppointmentPanel` and the clinician's `ClinicianCalendar`. Both sides of a call face the same window and must not be able to disagree about it; and a link that looks live and is refused on arrival is worse than no link, because by then the person has already believed in it.
+
+The phases are the three `ws-join.ts` enforces, so what a person can press and what the server will accept agree by construction rather than by two sets of constants being kept in step.
+
+`useNow.ts` is what makes a countdown tick. **Its shape is load-bearing:** these components take a `now: () => Date` prop, and an inline `() => new Date()` default in a `useCallback` dependency array is what caused an unbounded fetch loop (and a crashed vitest worker) on 2026-09-01. The function stays stable; only a piece of state ticks, and that state is a dependency of nothing that fetches.

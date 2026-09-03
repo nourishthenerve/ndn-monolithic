@@ -214,7 +214,7 @@ async function build(overrides: { flagEnabled?: boolean } = {}) {
     flags,
     clock,
   });
-  return { handler, patients, appointments, notificationStore };
+  return { handler, patients, appointments, patientStore, notificationStore };
 }
 
 async function invoke(
@@ -899,6 +899,110 @@ describe('the approval step — POST …/approve and …/decline', () => {
       (JSON.parse(response.body) as { item: { appointment_status: string } }).item
         .appointment_status,
     ).toBe('pending-approval');
+  });
+});
+
+// 2026-09-03: who an appointment belongs to.
+//
+// The owner: *"when I as a principal clinician approve a booking for an
+// appointment for a patient in pathients account I see a join the call
+// button. But the clinician who has been assigned this patient doesnt see
+// any join the call button."*
+//
+// `clinicianId` is not bookkeeping — `gsi1pk` keys the clinician calendar
+// on it, and `ws-join.ts` checks `join-call` against it. Setting it to
+// whoever booked meant a principal-booked appointment appeared on the
+// principal's calendar, joinable by them, and was invisible and
+// unjoinable to the clinician actually treating the patient.
+describe('an appointment belongs to the patient’s clinician, not to whoever booked it', () => {
+  const APPT_AT = '2026-09-01T10:00:00.000Z';
+
+  it('attaches a principal’s booking to the assigned sub-clinician', async () => {
+    const { handler, appointments } = await build();
+
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+
+    const created = await appointments.get('pat-1', APPT_AT);
+    expect(created?.clinicianId).toBe('cli-1');
+  });
+
+  it('puts it on the assigned clinician’s calendar, and not the principal’s', async () => {
+    const { handler } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+
+    const range = { from: '2026-08-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z' };
+    const mine = await invoke(
+      handler,
+      fakeEvent({ routeKey: CALENDAR_ROUTE, queryStringParameters: range }),
+    );
+    const principals = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: range,
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+
+    expect((JSON.parse(mine.body) as { items: unknown[] }).items).toHaveLength(1);
+    expect((JSON.parse(principals.body) as { items: unknown[] }).items).toEqual([]);
+  });
+
+  it('still attaches a sub-clinician’s own booking to themselves', async () => {
+    const { handler, appointments } = await build();
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+      }),
+    );
+
+    expect((await appointments.get('pat-1', APPT_AT))?.clinicianId).toBe('cli-1');
+  });
+
+  it('falls back to the booker when the patient has no clinician yet', async () => {
+    // Only the principal can book for an unassigned patient at all, and an
+    // appointment has to belong to somebody — better the person who made
+    // it than nobody.
+    const { handler, appointments, patientStore } = await build();
+    const patient = await patientStore.get('pat-1');
+    if (patient) {
+      // `assigned_clinician_id` is optional on `Patient`, so clearing it
+      // is an assignment rather than a deletion — no cast, no discarded
+      // binding, and `?? principal.clinicianId` reads `undefined` exactly
+      // as it would read an absent key.
+      await patientStore.put('pat-1', { ...patient, assigned_clinician_id: undefined });
+    }
+
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: APPT_AT, durationMinutes: 30 },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+
+    expect((await appointments.get('pat-1', APPT_AT))?.clinicianId).toBe('principal-sub');
   });
 });
 
