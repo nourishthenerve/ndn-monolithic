@@ -10,8 +10,6 @@ import { InMemoryFlagSource, CachedFlagReader } from './flags.js';
 import { unprojected } from './projection.js';
 import {
   createJoinMessageHandler,
-  JOIN_WINDOW_CLOSES_AFTER_MINUTES,
-  JOIN_WINDOW_OPENS_BEFORE_MINUTES,
   type JoinAppointmentReader,
   type JoinCallRecorder,
   type JoinMessageDeps,
@@ -74,6 +72,8 @@ function build(options: {
   directoryEntry?: { recordId: string; accountStatus: 'approved' | 'active' | 'suspended' } | null;
   now?: string;
   flagsEnabled?: boolean;
+  /** 2026-09-03: the join window is the booked slot, so its length is now a thing a test varies. */
+  durationMinutes?: number;
 } = {}) {
   const audit = new InMemoryAuditLog();
   const connections = new RecordingConnections();
@@ -82,7 +82,14 @@ function build(options: {
       ? undefined
       : (options.directoryEntry ?? { recordId: 'pat-1', accountStatus: 'approved' }),
   );
-  const appointments = new InMemoryAppointmentReader(options.appointments ?? [appointment()]);
+  const appointments = new InMemoryAppointmentReader(
+    options.appointments ??
+      [
+        options.durationMinutes === undefined
+          ? appointment()
+          : appointment({ durationMinutes: options.durationMinutes }),
+      ],
+  );
   const flags =
     options.flagsEnabled === false ? { isEnabled: async () => false } : enabledFlags();
 
@@ -273,46 +280,74 @@ describe('appointment state — checked only once authorisation has passed', () 
     expect(result).toEqual({ type: 'join-denied', reason: 'not-confirmed' });
   });
 
-  it(`${JOIN_WINDOW_OPENS_BEFORE_MINUTES + 1} minutes early is too-early`, async () => {
-    const early = new Date(
-      new Date(SCHEDULED_AT).getTime() - (JOIN_WINDOW_OPENS_BEFORE_MINUTES + 1) * 60_000,
-    ).toISOString();
-    const { join } = build({ now: early });
-    const result = await join({
+  // 2026-09-03: the window is the booked slot — `[scheduledAt,
+  // scheduledAt + durationMinutes)`. The fixture appointment is 30
+  // minutes, so these bounds are 10:00 and 10:30.
+  //
+  // The owner: *"keep this join the call button active from the start of
+  // the appointment to the whole duration upto which this appointment has
+  // been booked."* Previously a fixed ±window that ignored duration
+  // entirely, so a 15-minute check-in stayed joinable for 30 minutes after
+  // it ended and a 90-minute assessment shut both parties out halfway.
+  async function joinAt(now: string) {
+    const { join } = build({ now });
+    return join({
       connectionId: 'conn-1',
       connection: PATIENT_CONNECTION,
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'join-denied', reason: 'too-early' });
+  }
+
+  it('a minute before the start is too-early — there is no early grace any more', async () => {
+    expect(await joinAt('2026-09-01T09:59:00.000Z')).toEqual({
+      type: 'join-denied',
+      reason: 'too-early',
+    });
   });
 
-  it(`${JOIN_WINDOW_CLOSES_AFTER_MINUTES + 1} minutes late is too-late`, async () => {
-    const late = new Date(
-      new Date(SCHEDULED_AT).getTime() + (JOIN_WINDOW_CLOSES_AFTER_MINUTES + 1) * 60_000,
-    ).toISOString();
-    const { join } = build({ now: late });
-    const result = await join({
-      connectionId: 'conn-1',
-      connection: PATIENT_CONNECTION,
-      appointmentId: APPOINTMENT_ID,
-      origin: ORIGIN,
-    });
-    expect(result).toEqual({ type: 'join-denied', reason: 'too-late' });
+  it('exactly at the start, the join succeeds', async () => {
+    expect(await joinAt(SCHEDULED_AT)).toEqual({ type: 'joined' });
   });
 
-  it('exactly at the window edges, the join succeeds — the bounds are inclusive', async () => {
-    const opensAt = new Date(
-      new Date(SCHEDULED_AT).getTime() - JOIN_WINDOW_OPENS_BEFORE_MINUTES * 60_000,
-    ).toISOString();
-    const { join } = build({ now: opensAt });
-    const result = await join({
-      connectionId: 'conn-1',
-      connection: PATIENT_CONNECTION,
-      appointmentId: APPOINTMENT_ID,
-      origin: ORIGIN,
+  it('midway through the booked slot, the join succeeds', async () => {
+    expect(await joinAt('2026-09-01T10:20:00.000Z')).toEqual({ type: 'joined' });
+  });
+
+  it('the last millisecond of the slot still joins', async () => {
+    expect(await joinAt('2026-09-01T10:29:59.999Z')).toEqual({ type: 'joined' });
+  });
+
+  it('the instant the slot ends is too-late', async () => {
+    // The end is exclusive: `scheduledAt + durationMinutes` is past the
+    // appointment, not the last moment of it. The UI says "expired" at the
+    // same instant, from `joinPhase`'s matching `>=`.
+    expect(await joinAt('2026-09-01T10:30:00.000Z')).toEqual({
+      type: 'join-denied',
+      reason: 'too-late',
     });
-    expect(result).toEqual({ type: 'joined' });
+  });
+
+  it('is too-late well after the slot, where the old fixed window still allowed a join', async () => {
+    // 45 minutes past the start was inside the old 30-minute grace and is
+    // outside a 30-minute appointment only because the window now ends
+    // when the appointment does. This is the case the change exists for.
+    expect(await joinAt('2026-09-01T10:45:00.000Z')).toEqual({
+      type: 'join-denied',
+      reason: 'too-late',
+    });
+  });
+
+  it('a longer appointment stays joinable longer', async () => {
+    const { join } = build({ now: '2026-09-01T11:15:00.000Z', durationMinutes: 90 });
+    expect(
+      await join({
+        connectionId: 'conn-1',
+        connection: PATIENT_CONNECTION,
+        appointmentId: APPOINTMENT_ID,
+        origin: ORIGIN,
+      }),
+    ).toEqual({ type: 'joined' });
   });
 });
 

@@ -21,15 +21,30 @@ import type { TokenPool } from './jwt-verify.js';
 import type { Unprojected } from './projection.js';
 
 /**
- * Opens this many minutes before `scheduledAt` — late enough that a caller
- * cannot reuse a link days early, early enough that a caller who arrives
- * promptly for a call is never refused. Named here rather than left as a
- * magic number (the task's own instruction) — `docs/runbooks/video-signalling.md`
- * states the same two figures.
+ * **2026-09-03: the window is the appointment.** The owner: *"keep this
+ * join the call button active from the start of the appointment to the
+ * whole duration upto which this appointment has been booked."*
+ *
+ * It used to be a fixed ±window around `scheduledAt` — open 10 minutes
+ * early, close 30 minutes after the start — which ignored
+ * `durationMinutes` entirely. A 15-minute check-in and a 90-minute
+ * assessment got the identical 40 minutes, so one was joinable long after
+ * it ended and the other was shut out halfway through.
+ *
+ * Now the window is exactly `[scheduledAt, scheduledAt + durationMinutes)`:
+ * the booked slot, and nothing else. That is the same span the UI
+ * counts down to and the same span it calls expired afterwards, so the
+ * button a caller can see and the request the server will accept agree by
+ * construction rather than by two constants being kept in step.
+ *
+ * Note this drops the 10-minute early grace deliberately, because the
+ * instruction is explicit about where the window starts. Reinstating it is
+ * one subtraction here and the same one in
+ * `apps/web/src/account/appointment-window.ts`.
  */
-export const JOIN_WINDOW_OPENS_BEFORE_MINUTES = 10;
-/** Closes this many minutes after `scheduledAt` — sized so a late-running clinician can still join, short enough that a stale link cannot be reused days later. */
-export const JOIN_WINDOW_CLOSES_AFTER_MINUTES = 30;
+export function joinWindowClosesAt(scheduledAt: string, durationMinutes: number): number {
+  return new Date(scheduledAt).getTime() + durationMinutes * 60_000;
+}
 
 const CALL_AUTHZ_FLAG: FlagName = 'video.callAuthz.enabled';
 
@@ -147,13 +162,14 @@ function parseAppointmentId(
   };
 }
 
-function windowMiss(scheduledAt: string, now: Date): 'too-early' | 'too-late' | undefined {
-  const scheduledMs = new Date(scheduledAt).getTime();
-  const opensAtMs = scheduledMs - JOIN_WINDOW_OPENS_BEFORE_MINUTES * 60_000;
-  const closesAtMs = scheduledMs + JOIN_WINDOW_CLOSES_AFTER_MINUTES * 60_000;
+function windowMiss(
+  scheduledAt: string,
+  durationMinutes: number,
+  now: Date,
+): 'too-early' | 'too-late' | undefined {
   const nowMs = now.getTime();
-  if (nowMs < opensAtMs) return 'too-early';
-  if (nowMs > closesAtMs) return 'too-late';
+  if (nowMs < new Date(scheduledAt).getTime()) return 'too-early';
+  if (nowMs >= joinWindowClosesAt(scheduledAt, durationMinutes)) return 'too-late';
   return undefined;
 }
 
@@ -236,7 +252,7 @@ export function createJoinMessageHandler(
       return deny('cancelled');
     }
 
-    const miss = windowMiss(appointment.scheduledAt, now);
+    const miss = windowMiss(appointment.scheduledAt, appointment.durationMinutes, now);
     if (miss) {
       return deny(miss);
     }

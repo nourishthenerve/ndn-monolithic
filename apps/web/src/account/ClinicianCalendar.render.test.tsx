@@ -51,6 +51,14 @@ function clientAs(viewerRole: string | undefined) {
 
 const client = clientAs('principal-clinician');
 
+/**
+ * Inside the fixture appointment's own slot (`2026-09-01T10:00Z`, 30
+ * minutes). Since 2026-09-03 the join link exists only while the slot
+ * does, so a test that wants to see one has to say when it is looking —
+ * the real clock would show "Expired" and go on doing so forever.
+ */
+const duringTheSlot = () => new Date('2026-09-01T10:05:00.000Z');
+
 function entry(overrides: Partial<CalendarEntry> = {}): CalendarEntry {
   return {
     patientId: 'pat-1',
@@ -93,6 +101,7 @@ describe('which controls a row gets', () => {
         strings={STRINGS}
         locale="en"
         client={client}
+        now={duringTheSlot}
         fetchCalendar={() => ok([entry()])}
       />,
     );
@@ -191,6 +200,9 @@ describe('deciding', () => {
         strings={STRINGS}
         locale="en"
         client={client}
+        // The second row is the confirmed one this test reads back, so the
+        // clock sits inside *its* slot.
+        now={() => new Date('2026-09-02T10:05:00.000Z')}
         decideAppointment={() => Promise.resolve({ ok: false, status } as Response)}
         fetchCalendar={() =>
           ok([

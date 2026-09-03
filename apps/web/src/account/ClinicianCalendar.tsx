@@ -30,13 +30,15 @@
 // sub-clinician's `approve` with a 403, and the message that comes back
 // says so. Offering nothing at all would be the more confusing screen.
 import type { Locale } from '@ndn/i18n';
-import { Link } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
+
+import { JoinCallCell } from './JoinCallCell.js';
+import { useNow } from './useNow.js';
 
 export interface CalendarEntry {
   readonly patientId: string;
@@ -115,11 +117,11 @@ export function calendarWindow(now: Date): { readonly from: string; readonly to:
   return { from: now.toISOString(), to: to.toISOString() };
 }
 
-/** `call.astro`'s own composite id (`ws-join.ts`'s `parseAppointmentId`) — same construction as `NextAppointmentPanel.tsx`'s own `callHref`, not re-exported from there since the two components share no other dependency. */
-export function callHref(locale: Locale, entry: CalendarEntry): string {
-  const appointmentId = `${entry.patientId}#${entry.scheduledAt}`;
-  return `/${locale}/account/call?appointmentId=${encodeURIComponent(appointmentId)}`;
-}
+// `callHref` moved to `JoinCallCell.tsx` (2026-09-03) — the two
+// components now share that dependency, which is what the note here used
+// to say they did not. Re-exported so importers keep resolving against
+// one implementation rather than two.
+export { callHref } from './JoinCallCell.js';
 
 /**
  * The appointment's own id in a path is its `scheduledAt` — the `{apptId}`
@@ -163,6 +165,9 @@ export function ClinicianCalendar({
   decideAppointment = defaultDecideAppointment,
 }: ClinicianCalendarProps): ReactNode {
   const [state, setState] = useState<ViewState>({ status: 'loading' });
+  // Ticks on its own; `now` (the function) stays stable so this can never
+  // become a dependency of the fetch. See `useNow.ts`.
+  const currentTime = useNow(now);
   /** Keyed by the row's own composite id, so one row's outcome never speaks for another's. */
   const [deciding, setDeciding] = useState<Record<string, 'busy' | 'failed'>>({});
   /**
@@ -311,7 +316,16 @@ export function ClinicianCalendar({
                   </>
                 ) : item.appointment_status === 'scheduled' ? (
                   <>
-                    <Link href={callHref(locale, item)}>{strings.joinCallLabel}</Link>{' '}
+                    {/* 2026-09-03: the same three phases the patient's
+                        panel shows, from one component — both sides of a
+                        call face the same window and must not be able to
+                        disagree about it. */}
+                    <JoinCallCell
+                      appointment={item}
+                      locale={locale}
+                      now={currentTime}
+                      joinCallLabel={strings.joinCallLabel}
+                    />{' '}
                     {/* Attendance, on the same row. Offered for every
                         confirmed appointment rather than only past ones:
                         a clinician marking a session the moment it ends is
