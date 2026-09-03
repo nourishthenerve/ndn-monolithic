@@ -985,12 +985,11 @@ describe('an appointment belongs to the patient’s clinician, not to whoever bo
     const { handler, appointments, patientStore } = await build();
     const patient = await patientStore.get('pat-1');
     if (patient) {
-      // Written back without the field, rather than destructured around
-      // it — an unused binding is exactly what the omit trick leaves
-      // behind, and it is a lint error for good reason.
-      const unassigned: Record<string, unknown> = { ...patient };
-      delete unassigned.assigned_clinician_id;
-      await patientStore.put('pat-1', unassigned as typeof patient);
+      // `assigned_clinician_id` is optional on `Patient`, so clearing it
+      // is an assignment rather than a deletion — no cast, no discarded
+      // binding, and `?? principal.clinicianId` reads `undefined` exactly
+      // as it would read an absent key.
+      await patientStore.put('pat-1', { ...patient, assigned_clinician_id: undefined });
     }
 
     await invoke(
