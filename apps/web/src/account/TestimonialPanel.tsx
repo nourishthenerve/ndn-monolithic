@@ -32,7 +32,7 @@ export interface TestimonialRecord {
   readonly status: string;
 }
 
-type ViewState = 'loading' | 'ready' | 'forbidden' | 'error';
+type ViewState = 'loading' | 'ready' | 'forbidden' | 'unavailable' | 'error';
 type SaveState = 'idle' | 'saving' | 'saved' | 'withdrawn' | 'invalid' | 'failed';
 
 export interface TestimonialPanelStrings {
@@ -40,6 +40,16 @@ export interface TestimonialPanelStrings {
   readonly intro: string;
   readonly loading: string;
   readonly forbidden: string;
+  /**
+   * 2026-09-03: distinct from `error`, because a 404 here is not a failure
+   * — it is `testimonials.enabled` being off, which the flag reader
+   * answers by failing closed. Found the hard way: the flag had never been
+   * created under its new name after the 2026-09-02 rename, and every
+   * patient saw "your testimonial could not be loaded. Please try again."
+   * — advice that was wrong (retrying could not help) about a cause it did
+   * not name.
+   */
+  readonly unavailable: string;
   readonly error: string;
   readonly quoteLabel: string;
   readonly displayLabel: string;
@@ -113,6 +123,12 @@ export function TestimonialPanel({
       // and this is what it says.
       if (response.status === 401 || response.status === 403) {
         setState('forbidden');
+        return;
+      }
+      // 404 is the flag being off, not a fault — see `unavailable` above.
+      // Every route in this API answers a disabled feature that way.
+      if (response.status === 404) {
+        setState('unavailable');
         return;
       }
       if (!response.ok) {
@@ -215,6 +231,11 @@ export function TestimonialPanel({
   }
   if (state === 'forbidden') {
     return <p role="alert">{strings.forbidden}</p>;
+  }
+  if (state === 'unavailable') {
+    // `role="status"`, not `alert`: nothing has gone wrong, the feature is
+    // simply not switched on.
+    return <p role="status">{strings.unavailable}</p>;
   }
   if (state === 'error') {
     return <p role="alert">{strings.error}</p>;

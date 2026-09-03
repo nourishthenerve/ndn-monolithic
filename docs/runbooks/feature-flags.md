@@ -100,3 +100,41 @@ Nine functions hold the grant: contact-form and media-upload (`NdnWebStack`); co
 ### Cost
 
 £0.00. SSM Standard parameters and Standard-throughput `GetParameter` are free. At a 30-second TTL, a warm container makes at most 2 calls/minute per flag it reads, and the Lambdas are near-idle.
+
+## Renaming a flag (2026-09-03)
+
+**A renamed flag ships off, silently, and nothing in CI can tell you.**
+
+`FlagName` is a TypeScript union, so a *typo* is a compile error — that is what the union is for, and it works. What it cannot see is the gap between the union and SSM: rename a flag in code and the new name simply does not exist as a parameter, `SsmFlagSource` fails closed by design, and every route behind it answers `404` in production while every test passes.
+
+That happened with `testimonials.enabled` on 2026-09-02. The rename replaced `testimonials.submission.enabled` and `testimonials.moderationQueue.enabled` — both of which were `true` — with a name nothing had ever created. The feature shipped, deployed cleanly, and was off. The first anyone knew was a patient being told *"your testimonial could not be loaded. Please try again."*
+
+So, renaming a flag is a **two-place change**, and the second place is not in the repository:
+
+1. Change the name in `services/api/src/flags.ts` and its readers.
+2. **Create the parameter**, before or with the deploy:
+
+   ```bash
+   aws --profile ndn-prod --region eu-west-2 ssm put-parameter \
+     --name /ndn/flags/<new-name> \
+     --type String --value true \
+     --description "<what it gates, and what it replaced>"
+   ```
+
+3. Remove the old parameters once nothing reads them, so the next person cannot flip a switch wired to nothing:
+
+   ```bash
+   aws --profile ndn-prod --region eu-west-2 ssm delete-parameter \
+     --name /ndn/flags/<old-name>
+   ```
+
+The IAM grant is over the whole `/ndn/flags/` prefix, so a new parameter needs **no redeploy** — the reader picks it up within `FLAG_CACHE_TTL_MS` (30 seconds) of the next request.
+
+To see what is actually set, rather than what the code believes:
+
+```bash
+aws --profile ndn-prod --region eu-west-2 ssm get-parameters-by-path \
+  --path /ndn/flags --recursive --query "Parameters[].[Name,Value]" --output text | sort
+```
+
+Worth knowing when reading that output: the default AWS profile on the owner's machine is account `803129122420`, which hosts unrelated infrastructure. **`--profile ndn-prod` is not optional** — without it these commands are pointed at the wrong account entirely.
