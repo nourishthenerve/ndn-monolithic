@@ -106,8 +106,23 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // TASK 5.5.3 step 1: any clinician's own upcoming appointments, and the
   // first real inbound link to call.astro from a page other than itself.
   { segment: 'calendar', ownerRole: 'clinician' },
+  // 2026-09-04: the patient's own half of that page — the same list, the
+  // same join link, read from `/patients/me/appointments`. A separate
+  // route rather than a role branch inside `calendar` above; see the
+  // page's own header.
+  { segment: 'appointments', ownerRole: 'patient' },
   // TASK 3.5.2: the patient's own assigned-content list.
   { segment: 'content', ownerRole: 'patient' },
+  // 2026-09-02: the patient's own testimonial — `authz-matrix.ts`'s
+  // `Testimonial (own)` row, the one authoring surface in this app that is
+  // a patient's and nobody else's.
+  //
+  // **Missing since the page shipped, found 2026-09-04** by this file's own
+  // new on-disk cross-check, and it had been silently absent from the
+  // live-session a11y and keyboard sweeps for two days — precisely the
+  // failure this registry's header describes and precisely why a
+  // hand-maintained list needed a test.
+  { segment: 'testimonial', ownerRole: 'patient' },
   // TASK 3.6.2: both parties read and compose on the same page.
   { segment: 'messages', ownerRole: 'either' },
   // TASK 4.3.1/4.5.1: both parties join the same call from the same page.

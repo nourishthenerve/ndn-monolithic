@@ -1,0 +1,89 @@
+---
+// 2026-09-04: the patient's own calendar — the owner's *"for principal
+// clinician and normal clinician there is My Calendar button. Make similar
+// My Calender button for patient where he can see upcoming appointments
+// and easily join from there."*
+//
+// The clinician half of this has existed since TASK 5.5.3
+// (`calendar.astro`); the patient had no list at all. `NextAppointmentPanel`
+// on `/account/patient` shows exactly one appointment, below the profile
+// form, so a patient with several booked could see one of them and had no
+// way to learn about the rest.
+//
+// **A page of its own, not a role branch inside `calendar.astro`.** The two
+// read different endpoints (`/clinicians/me/calendar` against
+// `/patients/me/appointments`) and carry different controls, and
+// `PatientRecordPanel.tsx`'s own header already states this codebase's
+// position on the alternative: "a screen whose content silently differs by
+// role is a screen nobody can reason about". The URL says `appointments`
+// because that is what it lists and what the API calls them; the heading
+// and the dashboard link both read "My calendar", which is the words the
+// owner asked for and the same ones a clinician sees.
+//
+// Statically generated and **empty**, the same discipline every other
+// authenticated account page in this codebase states — what makes this
+// page private is not server rendering but that its content is not in the
+// HTML at all. Registered in `account-routes.ts` (`ownerRole: 'patient'`)
+// so the live-session a11y/keyboard sweep reaches it, and deliberately
+// absent from `routes.ts`, which is scanned unauthenticated.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { PatientAppointments } from '../../../account/PatientAppointments.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('patientCalendar.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('patientCalendar.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    allowRoles={['patient']}
+  >
+    <Fragment slot="signedOut">
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signInPatient', undefined, locale)} pool="patient" />
+      </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('patientCalendar.forbidden', undefined, locale)}</p>
+    </Fragment>
+    <PatientAppointments
+      client:only="react"
+      locale={locale}
+      strings={{
+        heading: t('patientCalendar.listHeading', undefined, locale),
+        loadingLabel: t('patientCalendar.loading', undefined, locale),
+        forbiddenLabel: t('patientCalendar.forbidden', undefined, locale),
+        errorLabel: t('patientCalendar.error', undefined, locale),
+        emptyLabel: t('patientCalendar.empty', undefined, locale),
+        /* The clinician calendar's own column and link labels, reused
+           rather than restated: both pages list the same appointments, and
+           two spellings of "Date and time" would be two things to keep in
+           step for no gain. */
+        dateColumnLabel: t('calendar.dateColumn', undefined, locale),
+        durationColumnLabel: t('calendar.durationColumn', undefined, locale),
+        joinCallLabel: t('calendar.joinCall', undefined, locale),
+        caption: t('patientCalendar.listHeading', undefined, locale),
+      }}
+    />
+    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
+  </RequireAuth>
+</BaseLayout>
