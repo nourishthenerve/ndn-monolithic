@@ -30,7 +30,7 @@ import { Heading } from '@ndn/ui';
 
 import { ClinicianCalendar } from '../../../account/ClinicianCalendar.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -77,6 +77,5 @@ const heading = t('calendar.heading', undefined, locale);
         caption: heading,
       }}
     />
-    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

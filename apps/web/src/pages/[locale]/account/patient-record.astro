@@ -26,7 +26,7 @@ import { AppointmentBooking } from '../../../account/AppointmentBooking.js';
 import { AssessmentForm } from '../../../account/AssessmentForm.js';
 import { PatientRecordPanel } from '../../../account/PatientRecordPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -159,6 +159,5 @@ const heading = t('patientRecord.heading', undefined, locale);
         versionLabel: t('assessment.version', undefined, locale),
       }}
     />
-    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

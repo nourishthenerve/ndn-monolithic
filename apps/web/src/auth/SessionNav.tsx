@@ -37,6 +37,26 @@
 // browser that cannot run them cannot use the account area whether or not
 // it can reach the sign-in link. The link would be an entrance to a room
 // that is not there.
+//
+// ## 2026-09-04: this is now the *only* sign-out control on the site
+//
+// The owner: *"there are sign out button almost on all page. remove them.
+// just keep it at top right for both patients and clinicians/principal."*
+//
+// Every account page rendered its own `<SignOutButton>` at the bottom —
+// thirteen of them, each a copy of the same line, because every page in
+// the account shell was built from the one before it and TASK 2.2.4's
+// original page had nowhere else to put one. Once the site nav learned
+// about sessions (above), that stopped being the only place it could live
+// and started being twelve extra places to keep in step: two controls for
+// one action, one of them below the fold on a long form, and a second
+// tab stop on every page for a screen-reader user to pass on the way out.
+//
+// It lives here, in the header, where a signed-in person already looks for
+// it and where it is the same control on every page — patient, clinician
+// and principal alike, since this island reads only "is there a session"
+// and never a role. `account-sign-out.test.ts` keeps the account pages
+// from quietly growing their own again.
 import { Link } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';

@@ -44,7 +44,7 @@ import { ClinicalRecordTimeline } from '../../../account/ClinicalRecordTimeline.
 import { NextAppointmentPanel } from '../../../account/NextAppointmentPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -166,6 +166,5 @@ const heading = t('patientProfile.heading', undefined, locale);
         versionLabel: t('assessment.version', undefined, locale),
       }}
     />
-    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>
