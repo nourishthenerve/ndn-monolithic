@@ -87,6 +87,16 @@ const heading = t('account.heading', undefined, locale);
               {t('account.yourDetailsLink', undefined, locale)}
             </Link>
           </li>
+          {/* 2026-09-04: the patient's own "My calendar", alongside the
+              clinicians' — *"Make similar My Calender button for patient
+              where he can see upcoming appointments and easily join from
+              there."* Their only view of an appointment before this was
+              the single "next" one, below the profile form. */}
+          <li>
+            <Link href={`/${locale}/account/appointments`}>
+              {t('patientCalendar.heading', undefined, locale)}
+            </Link>
+          </li>
         </ul>
       </nav>
     </RequireAuth>
