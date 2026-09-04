@@ -215,3 +215,41 @@ The regression is invisible on a partition that happens to be clean, so verify i
 1. Join, leave, and reload on both sides a few times, then join again from both. The call must connect on that attempt, not only the first.
 2. Join as one party, wait more than a minute, then join as the other. The first party must move from "waiting for the other participant" to connected when the second arrives — the old 30-second fuse is gone.
 3. Both sides show the other person full-frame with their own camera inset at the bottom right.
+
+## Amendment, 2026-09-04 (evening) — the self-view was black, and two features
+
+> *"i'm not seeing my own video in the smaller box. Also, add one more feature that if the video call length is 30 mins the call should be dropped automatically. Also, start the video call by default with audio only and have a separate button to turn the video on."*
+
+The screenshot showed the fix from earlier that day working — the other person full-frame — with the inset box solid black.
+
+### Attaching a stream needs two things, and a ref tells you about one
+
+The local preview attached in an effect keyed on `[deviceStream]`. That is set the moment `DeviceCheck` hands the stream over — **while the render is still showing the Join button**. No `<video>` was mounted yet, so `localVideoRef.current` was `null`, the effect did nothing, and it never ran again. The element mounted a moment later with no `srcObject` and stayed that way for the whole call.
+
+The morning's remote-stream fix moved that stream into state but kept the same shape for the element, so the local half still had the flaw the remote half had just been cured of. Both video elements are now held in state via a callback ref, which makes the element's arrival an ordinary dependency: the effect runs when *either* half becomes available, in whichever order they do. `setState` is a stable identity, so React calls it once on mount and once with `null` on unmount — never the per-render detach/reattach an inline callback ref causes.
+
+### Audio only, with a camera button
+
+The call starts with the video track `enabled = false` and a toggle turns it on. A disabled track transmits black frames, so the other party sees no image, which is what "audio only" has to mean on the wire.
+
+Implemented on the track rather than by withholding it from the peer connection: the sender stays in place, so switching on transmits immediately with no renegotiation, no second offer/answer round trip, and no second `getUserMedia` — which would also break `DeviceCheck.tsx`'s standing position as the only place in this codebase that requests camera permission.
+
+**The honest limit:** the camera device stays held for the call, so its indicator light stays on while nothing is being shown. Releasing it properly means stopping the track and re-acquiring one on toggle — a `getUserMedia` call from `VideoCall.tsx` and a real change to that boundary, worth doing deliberately rather than as a side effect of this request.
+
+The self-view says "Your camera is off" over the inset box while it is. A deliberate camera-off and a preview that failed to attach must not look the same — the owner has now reported the second one as a bug, and it looked exactly like the first.
+
+### The 30-minute limit
+
+`MAX_CALL_MINUTES = 30`, measured from the moment this side joins rather than from when the peer connects: a call that never connects must still stop holding a camera and a socket open, and "when did the call start" is a question the person on it would answer by when they pressed the button.
+
+Its own effect, keyed on `joinRequested` alone — deliberately separate from the join sequence, which tears down and rebuilds on a retry. A limit that restarted whenever the peer connection was rebuilt would not be a limit.
+
+Ending goes through exactly the state "Leave call" sets, so the teardown, the `leave` sent to the other party and the released camera are the one path that already worked. The ended message says the time ran out rather than the generic "The call has ended", because on a call nobody ended that reads as a failure, and the difference decides whether the person tries again.
+
+**This is a client-side limit and is honest about being one.** The boundary on a call's *span* stays server-side where it already is — `ws-join.ts` refuses a join outside the booked slot, so nobody starts one at will. What this adds is that a call under way ends by itself rather than running until somebody closes a tab. Both parties run their own timer and each receives the other's `leave`, so the two sides end together whichever fires first.
+
+### `VideoCall.tsx` has a render test now
+
+`video-calls.md` records why it never did: importing it pulls its whole `RTCPeerConnection`-touching body into the repo's 80% coverage gate. That reasoning held while nothing here was reported broken. It stopped holding after two reports in one day, the second of which was a **render-ordering** bug no amount of testing the pure helpers could have caught.
+
+`VideoCall.render.test.tsx` drives a fake socket and peer connection by hand — nothing opens or negotiates on its own, so each test states how far the call got before asserting. It covers the self-view attachment, the camera toggle, the 30-minute limit, and the signalling sequence itself: who offers, who answers, the `ready` handshake, the duplicate-answer guard, `join-denied`, `peer-unavailable`, and the `leave` in both directions. Branch coverage went **up** (81.25%) despite the file's 150 branches joining the count.

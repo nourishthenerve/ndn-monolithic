@@ -107,7 +107,7 @@
 // `t()` itself, at render time, rather than only ever receiving an
 // already-resolved string as a prop.
 import { defaultLocale, t, type Locale } from '@ndn/i18n';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
@@ -137,6 +137,25 @@ const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 // reached inside.
 const PEER_RETRY_INTERVAL_MS = 2000;
 const PEER_RETRY_ATTEMPTS = 15;
+
+/**
+ * 2026-09-04, the owner: *"if the video call length is 30 mins the call
+ * should be dropped automatically."*
+ *
+ * Measured from the moment this side joins, not from the moment the peer
+ * connects: a call that never connects at all must still stop holding a
+ * camera and a socket open, and "when did the call start" is a question
+ * the person on it would answer by when they pressed the button.
+ *
+ * **This is a client-side limit and is honest about being one.** The real
+ * boundary on a call's *span* stays server-side, where it already is:
+ * `ws-join.ts` refuses a join outside the booked slot, so nobody can start
+ * one at will. What this adds is that a call already under way ends by
+ * itself rather than running until somebody closes a tab. Both parties run
+ * their own timer and each also receives the other's `leave`, so the two
+ * sides end together whichever fires first.
+ */
+export const MAX_CALL_MINUTES = 30;
 
 type CallRole = 'patient' | 'clinician';
 
@@ -236,6 +255,49 @@ const REMOTE_PLACEHOLDER_STYLE: CSSProperties = {
   padding: '1rem',
 };
 
+/**
+ * 2026-09-04: what sits in the self-view while the camera is off.
+ *
+ * The inset box is `background: #000` and a camera that is off paints
+ * nothing into it, so without this the caller sees a black rectangle —
+ * which is exactly the thing the owner reported as a bug when the cause
+ * was a stream that had failed to attach. A deliberate "camera off" and a
+ * broken preview must not look the same.
+ *
+ * Geometry copied from `LOCAL_VIDEO_STYLE` rather than shared, because the
+ * two differ in the properties that matter (`objectFit` and the mirror
+ * belong to a video; centring text does not) and a shared base spread into
+ * both read worse than the duplication.
+ */
+const LOCAL_PLACEHOLDER_STYLE: CSSProperties = {
+  position: 'absolute',
+  right: '1rem',
+  bottom: '1rem',
+  width: '28%',
+  maxWidth: '12rem',
+  minWidth: '6rem',
+  aspectRatio: '16 / 9',
+  margin: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  textAlign: 'center',
+  fontSize: '0.8125rem',
+  padding: '0.25rem',
+  color: '#fff',
+  background: '#000',
+  borderRadius: '0.375rem',
+  border: '2px solid rgba(255, 255, 255, 0.85)',
+  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.45)',
+};
+
+const CALL_CONTROLS_STYLE: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '0.5rem',
+  marginBlockStart: '0.75rem',
+};
+
 type Stage =
   | { readonly kind: 'checking' }
   | { readonly kind: 'forbidden' }
@@ -275,6 +337,12 @@ export interface VideoCallStrings {
   readonly deviceCheck: DeviceCheckStrings;
   readonly joinCall: JoinCallButtonStrings;
   readonly leaveLabel: string;
+  /** 2026-09-04: the camera toggle's two labels, and what the self-view says while the camera is off. */
+  readonly turnCameraOnLabel: string;
+  readonly turnCameraOffLabel: string;
+  readonly cameraOffLabel: string;
+  /** Shown in place of the ordinary "call has ended" when the 30-minute limit is what ended it. */
+  readonly timeLimitReachedLabel: string;
 }
 
 export interface VideoCallProps {
@@ -307,6 +375,30 @@ export function VideoCall({
   const [joinRequested, setJoinRequested] = useState(false);
   const [now, setNow] = useState(() => new Date());
   /**
+   * 2026-09-04, the owner: *"start the video call by default with audio
+   * only and have a separate button to turn the video on."* So this starts
+   * `false`, and the button below is the only thing that turns it true.
+   *
+   * Implemented as `track.enabled`, not by withholding the track from the
+   * peer connection. The sender stays in place, so switching the camera on
+   * mid-call transmits immediately — no renegotiation, no second
+   * offer/answer round trip, and no second permission prompt (which would
+   * also break `DeviceCheck.tsx`'s stated position as the only place in
+   * this codebase that calls `getUserMedia`). A disabled track transmits
+   * black frames, so the other party sees no image of this person, which
+   * is what "audio only" has to mean on the wire.
+   *
+   * The honest limit of that choice: the camera device stays held for the
+   * call, so its indicator light stays on even while nothing is being
+   * shown. Releasing it properly would mean stopping the track and
+   * re-acquiring one on toggle, which is a `getUserMedia` call from this
+   * component and a real change to that boundary — worth doing on purpose,
+   * not as a side effect of this request.
+   */
+  const [cameraOn, setCameraOn] = useState(false);
+  /** Distinguishes "the 30 minutes were up" from every other way a call ends, so the message can say which. */
+  const [endedByTimeLimit, setEndedByTimeLimit] = useState(false);
+  /**
    * **2026-09-04: the remote stream is state, not a ref assignment.**
    *
    * `ontrack` used to write straight into `remoteVideoRef.current`, which
@@ -323,8 +415,28 @@ export function VideoCall({
    * DOM knows.
    */
   const [remoteStream, setRemoteStream] = useState<MediaStream | undefined>();
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  /**
+   * **2026-09-04: the video elements are state, not refs, and that is the
+   * fix for a self-view that was simply black.**
+   *
+   * Attaching a stream needs two things to have happened — the stream to
+   * exist, and the element to be mounted — and a `useRef` tells an effect
+   * about only the first. The local preview's effect ran on
+   * `[deviceStream]`, which is set the moment `DeviceCheck` hands over…
+   * while the render is still showing `JoinCallButton`. No `<video>` had
+   * been mounted yet, so `localVideoRef.current` was `null`, the effect
+   * did nothing, and it never ran again — the element mounted a moment
+   * later with no `srcObject` and stayed that way for the whole call.
+   *
+   * A callback ref that stores the node in state makes the element's
+   * arrival an ordinary dependency, so the effect below runs when *either*
+   * half becomes available, in whichever order they do. `setState` is a
+   * stable identity, so React calls it exactly once on mount and once with
+   * `null` on unmount — never the per-render detach/reattach an inline
+   * callback ref would cause.
+   */
+  const [localVideoEl, setLocalVideoEl] = useState<HTMLVideoElement | null>(null);
+  const [remoteVideoEl, setRemoteVideoEl] = useState<HTMLVideoElement | null>(null);
 
   // Whether this page has enough to even attempt a call — a real
   // appointment id, a real session — resolved independently of, and
@@ -350,29 +462,77 @@ export function VideoCall({
     };
   }, [client, getAppointmentId]);
 
-  useEffect(() => {
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = deviceStream ?? null;
-    }
-  }, [deviceStream]);
-
-  // The remote half of the same attachment, re-running whenever either the
-  // stream or the element changes — which is the whole point of holding
-  // the stream in state. `play()` is called explicitly and its rejection
-  // swallowed: `autoPlay` alone can be refused by a browser's autoplay
-  // policy for a stream that carries audio, and a refused promise must not
+  // Both halves of the attachment now depend on the element as well as the
+  // stream, so whichever arrives second is what runs them. `play()` is
+  // called explicitly and its rejection swallowed: `autoPlay` alone can be
+  // refused by a browser's autoplay policy, and a refused promise must not
   // become an unhandled rejection over a video that is, at worst, waiting
   // for a click.
   useEffect(() => {
-    const element = remoteVideoRef.current;
-    if (!element) {
+    if (!localVideoEl) {
       return;
     }
-    element.srcObject = remoteStream ?? null;
-    if (remoteStream) {
-      void element.play().catch(() => {});
+    localVideoEl.srcObject = deviceStream ?? null;
+    if (deviceStream) {
+      void localVideoEl.play().catch(() => {});
     }
-  }, [remoteStream]);
+  }, [localVideoEl, deviceStream]);
+
+  useEffect(() => {
+    if (!remoteVideoEl) {
+      return;
+    }
+    remoteVideoEl.srcObject = remoteStream ?? null;
+    if (remoteStream) {
+      void remoteVideoEl.play().catch(() => {});
+    }
+  }, [remoteVideoEl, remoteStream]);
+
+  // 2026-09-04: the camera switch itself. Applied to the stream rather
+  // than tracked separately, and re-applied whenever the stream changes,
+  // so a device swap in `DeviceCheck` cannot land a live camera on a call
+  // the caller had set to audio only.
+  useEffect(() => {
+    if (!deviceStream) {
+      return;
+    }
+    for (const track of deviceStream.getVideoTracks()) {
+      track.enabled = cameraOn;
+    }
+  }, [deviceStream, cameraOn]);
+
+  /**
+   * 2026-09-04: the 30-minute limit — *"if the video call length is 30
+   * mins the call should be dropped automatically."*
+   *
+   * Its own effect, deliberately separate from the join sequence below.
+   * That one tears down and rebuilds on a retry, and a limit that restarted
+   * every time the peer connection was rebuilt would not be a limit at all.
+   * This one is keyed on `joinRequested` alone, so it starts once when the
+   * caller joins and survives everything that happens after.
+   *
+   * Ending it goes through exactly the state "Leave call" sets, so the
+   * teardown, the `leave` sent to the other party and the released camera
+   * are the one path that already worked rather than a second one written
+   * to do the same thing.
+   */
+  useEffect(() => {
+    if (!joinRequested) {
+      return;
+    }
+    const timer = setTimeout(
+      () => {
+        setEndedByTimeLimit(true);
+        setStage({ kind: 'ended' });
+        setRemoteStream(undefined);
+        setJoinRequested(false);
+      },
+      MAX_CALL_MINUTES * 60_000,
+    );
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [joinRequested]);
 
   // Ticks the too-early countdown. Coarse (15s) on purpose: the displayed
   // text only ever changes once a minute, and this is a live region a
@@ -743,7 +903,12 @@ export function VideoCall({
   if (stage.kind === 'ended') {
     return (
       <p role="status" aria-live="polite">
-        {strings.disconnectedLabel}
+        {/* 2026-09-04: a call that stopped because its 30 minutes were up
+            says so. "The call has ended" alone, on a call nobody ended,
+            reads as a failure — and the difference between "we ran out of
+            time" and "something broke" is the whole of what the person
+            needs to know before deciding whether to try again. */}
+        {endedByTimeLimit ? strings.timeLimitReachedLabel : strings.disconnectedLabel}
       </p>
     );
   }
@@ -791,7 +956,7 @@ export function VideoCall({
           phone as well as a consulting-room monitor. */}
       <div style={CALL_STAGE_STYLE}>
         <video
-          ref={remoteVideoRef}
+          ref={setRemoteVideoEl}
           aria-label={strings.remoteVideoLabel}
           autoPlay
           playsInline
@@ -806,30 +971,50 @@ export function VideoCall({
             un-mirrored preview of yourself reads as wrong to almost
             everyone, because it is not what a mirror does. The remote
             video is never mirrored — that one is another person, and
-            flipping them would reverse any text they hold up. */}
+            flipping them would reverse any text they hold up.
+
+            Kept mounted while the camera is off rather than swapped out,
+            so the element — and the stream attached to it — survives the
+            toggle and switching back on is instant. The placeholder sits
+            over it. */}
         <video
-          ref={localVideoRef}
+          ref={setLocalVideoEl}
           aria-label={strings.localVideoLabel}
           autoPlay
           playsInline
           muted
           style={LOCAL_VIDEO_STYLE}
         />
+        {/* 2026-09-04: a call starts with the camera off, so the self-view
+            starts black — and the owner has already reported one black
+            self-view as a bug, when the cause was a stream that never
+            attached. A deliberate "camera off" must not look like that. */}
+        {!cameraOn && <p style={LOCAL_PLACEHOLDER_STYLE}>{strings.cameraOffLabel}</p>}
       </div>
-      <button
-        type="button"
-        onClick={() => {
-          // TASK 4.5.1 step 3: a real button, not only a tab close — the
-          // effect's own cleanup (this is the exact dependency change
-          // that triggers it) is what actually sends `leave` and tears
-          // down the peer connection and signalling socket.
-          setStage({ kind: 'ended' });
-          setRemoteStream(undefined);
-          setJoinRequested(false);
-        }}
-      >
-        {strings.leaveLabel}
-      </button>
+      <div style={CALL_CONTROLS_STYLE}>
+        {/* 2026-09-04: *"start the video call by default with audio only
+            and have a separate button to turn the video on."* `aria-pressed`
+            rather than two unrelated buttons: this is one control with a
+            state, and a screen reader should say which state it is in
+            rather than leaving that to be inferred from the label. */}
+        <button type="button" aria-pressed={cameraOn} onClick={() => setCameraOn((on) => !on)}>
+          {cameraOn ? strings.turnCameraOffLabel : strings.turnCameraOnLabel}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            // TASK 4.5.1 step 3: a real button, not only a tab close — the
+            // effect's own cleanup (this is the exact dependency change
+            // that triggers it) is what actually sends `leave` and tears
+            // down the peer connection and signalling socket.
+            setStage({ kind: 'ended' });
+            setRemoteStream(undefined);
+            setJoinRequested(false);
+          }}
+        >
+          {strings.leaveLabel}
+        </button>
+      </div>
     </section>
   );
 }
