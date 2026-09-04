@@ -39,7 +39,7 @@ import { Heading, Link } from '@ndn/ui';
 
 import { PatientNotifications } from '../../../account/PatientNotifications.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -217,6 +217,5 @@ const heading = t('account.heading', undefined, locale);
         </ul>
       </nav>
     </RequireAuth>
-    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

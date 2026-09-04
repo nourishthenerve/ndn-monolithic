@@ -20,7 +20,7 @@ import { Heading } from '@ndn/ui';
 
 import { MessageThread } from '../../../account/MessageThread.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -62,6 +62,5 @@ const heading = t('messageThread.heading', undefined, locale);
         rateLimitedLabel: t('messageThread.rateLimited', undefined, locale),
       }}
     />
-    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

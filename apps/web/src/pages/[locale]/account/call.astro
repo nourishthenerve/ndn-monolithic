@@ -43,7 +43,7 @@ import { Heading } from '@ndn/ui';
 
 import { VideoCall } from '../../../account/VideoCall.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -109,6 +109,5 @@ const heading = t('videoCall.heading', undefined, locale);
         leaveLabel: t('videoCall.leave', undefined, locale),
       }}
     />
-    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

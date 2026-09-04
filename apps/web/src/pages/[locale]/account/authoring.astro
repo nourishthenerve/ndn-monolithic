@@ -17,7 +17,7 @@ import { Heading } from '@ndn/ui';
 import { AuthoredContentList } from '../../../account/AuthoredContentList.js';
 import { AuthoringPanel } from '../../../account/AuthoringPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -135,6 +135,5 @@ const heading = t('authoring.heading', undefined, locale);
         viewLabel: t('authoredList.view', undefined, locale),
       }}
     />
-    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>

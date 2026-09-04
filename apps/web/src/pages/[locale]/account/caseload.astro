@@ -19,7 +19,7 @@ import { Heading } from '@ndn/ui';
 
 import { CaseloadView } from '../../../account/CaseloadView.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
-import { SignInLink, SignOutButton } from '../../../auth/SignInPanel.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { siteName } from '../../../site-config.js';
 
@@ -90,6 +90,5 @@ const heading = t('caseload.heading', undefined, locale);
         appointmentsColumnLabel: t('caseload.appointmentsColumn', undefined, locale),
       }}
     />
-    <SignOutButton client:only="react" label={t('account.signOut', undefined, locale)} />
   </RequireAuth>
 </BaseLayout>
