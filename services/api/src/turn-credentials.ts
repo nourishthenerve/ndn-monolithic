@@ -88,6 +88,8 @@ export interface TurnCallParticipant {
   readonly principalId: string;
   readonly ttl: number;
   readonly turnActive?: boolean;
+  /** 2026-09-04: set on a row whose connection is known to be gone — see `connection-repository.ts`. Absent on a live row. */
+  readonly leftAt?: string;
 }
 
 export interface TurnCallParticipantsReader {
@@ -201,7 +203,15 @@ export function createTurnCredentialsHandler(
 
     const participants = await deps.connections.findCallParticipants(rawAppointmentId);
     const nowSeconds = Math.floor(clock.now().getTime() / 1000);
-    const live = participants.filter((participant) => participant.ttl > nowSeconds);
+    // 2026-09-04: `leftAt` joins the `ttl` check, and it matters most for
+    // the cap below rather than for the caller's own row. A retired row
+    // that had once been issued a credential kept counting as an active
+    // relay for the rest of its twelve-hour `ttl`, so one earlier attempt
+    // at this appointment could refuse TURN to the other party for the
+    // rest of the day — a call left to fail on a network that needed it.
+    const live = participants.filter(
+      (participant) => participant.leftAt === undefined && participant.ttl > nowSeconds,
+    );
     const mine = live.find((participant) => participant.principalId === principal.subjectId);
     if (!mine) {
       return respond(403, { error: 'FORBIDDEN', reason: 'not-joined' });

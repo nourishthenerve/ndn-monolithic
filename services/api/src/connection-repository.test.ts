@@ -156,10 +156,19 @@ describe('findById', () => {
 });
 
 describe('recordCallJoin (TASK 4.2.1)', () => {
-  it('writes one row at CALL#<appointmentId> / CONN#<connectionId>', async () => {
+  const APPOINTMENT_ID = 'pat-1#2026-09-01T10:00:00.000Z';
+
+  /** No prior rows in the partition — the plain first-join case. */
+  function noExistingParticipants() {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
     ddbMock.on(PutCommand).resolves({});
+    ddbMock.on(UpdateCommand).resolves({});
+  }
+
+  it('writes one row at CALL#<appointmentId> / CONN#<connectionId>', async () => {
+    noExistingParticipants();
     await repository().recordCallJoin({
-      appointmentId: 'pat-1#2026-09-01T10:00:00.000Z',
+      appointmentId: APPOINTMENT_ID,
       connectionId: 'conn-1',
       principalId: 'sub-1',
       role: 'patient',
@@ -180,9 +189,9 @@ describe('recordCallJoin (TASK 4.2.1)', () => {
   });
 
   it('carries the ttl handed in, never recomputing its own', async () => {
-    ddbMock.on(PutCommand).resolves({});
+    noExistingParticipants();
     await repository().recordCallJoin({
-      appointmentId: 'pat-1#2026-09-01T10:00:00.000Z',
+      appointmentId: APPOINTMENT_ID,
       connectionId: 'conn-1',
       principalId: 'sub-1',
       role: 'sub-clinician',
@@ -193,17 +202,141 @@ describe('recordCallJoin (TASK 4.2.1)', () => {
     expect(item.ttl).toBe(42);
   });
 
-  it('is one PutItem, never a TransactWriteItems', async () => {
-    ddbMock.on(PutCommand).resolves({});
+  it('writes exactly one row, never a TransactWriteItems', async () => {
+    noExistingParticipants();
     await repository().recordCallJoin({
-      appointmentId: 'pat-1#2026-09-01T10:00:00.000Z',
+      appointmentId: APPOINTMENT_ID,
       connectionId: 'conn-1',
       principalId: 'sub-1',
       role: 'patient',
       ttl: 1,
     });
 
-    expect(ddbMock.calls()).toHaveLength(1);
+    expect(ddbMock.commandCalls(PutCommand)).toHaveLength(1);
+    // 2026-09-04: the Query that reads the partition this join is about to
+    // supersede itself in. One extra read, no extra write.
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1);
+    expect(ddbMock.commandCalls(UpdateCommand)).toHaveLength(0);
+  });
+
+  // 2026-09-04. **The bug this method now exists to prevent.** The sort key
+  // is the connectionId, so every join — every reload, every earlier
+  // attempt at the same appointment — left another permanent row here, and
+  // `ws-relay.ts` picked "the other party" with a `find` over the pile.
+  // Both people ended up talking to a dead socket and seeing only their own
+  // camera. See the method's own note.
+  describe('retiring this principal’s superseded rows', () => {
+    function existing(items: readonly Record<string, unknown>[]) {
+      ddbMock.on(QueryCommand).resolves({ Items: [...items] });
+      ddbMock.on(PutCommand).resolves({});
+      ddbMock.on(UpdateCommand).resolves({});
+    }
+
+    const rejoin = () =>
+      repository().recordCallJoin({
+        appointmentId: APPOINTMENT_ID,
+        connectionId: 'conn-new',
+        principalId: 'sub-1',
+        role: 'patient',
+        ttl: 100,
+      });
+
+    it('marks the same principal’s earlier connection as left', async () => {
+      existing([{ connectionId: 'conn-old', principalId: 'sub-1', role: 'patient', ttl: 100 }]);
+      await rejoin();
+
+      expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+        TableName: TABLE_NAME,
+        Key: { pk: `CALL#${APPOINTMENT_ID}`, sk: 'CONN#conn-old' },
+        UpdateExpression: 'SET leftAt = :now',
+        ExpressionAttributeValues: { ':now': NOW.toISOString() },
+      });
+    });
+
+    it('retires every one of them, not only the first', async () => {
+      existing([
+        { connectionId: 'conn-a', principalId: 'sub-1', role: 'patient', ttl: 100 },
+        { connectionId: 'conn-b', principalId: 'sub-1', role: 'patient', ttl: 100 },
+      ]);
+      await rejoin();
+      expect(ddbMock.commandCalls(UpdateCommand)).toHaveLength(2);
+    });
+
+    it('leaves the other party’s row alone — theirs is not this join’s business', async () => {
+      existing([{ connectionId: 'conn-them', principalId: 'cli-1', role: 'sub-clinician', ttl: 100 }]);
+      await rejoin();
+      expect(ddbMock.commandCalls(UpdateCommand)).toHaveLength(0);
+    });
+
+    it('never retires the row it has just written', async () => {
+      existing([{ connectionId: 'conn-new', principalId: 'sub-1', role: 'patient', ttl: 100 }]);
+      await rejoin();
+      expect(ddbMock.commandCalls(UpdateCommand)).toHaveLength(0);
+    });
+
+    it('does not re-mark a row already retired', async () => {
+      existing([
+        {
+          connectionId: 'conn-old',
+          principalId: 'sub-1',
+          role: 'patient',
+          ttl: 100,
+          leftAt: '2026-08-26T11:00:00.000Z',
+        },
+      ]);
+      await rejoin();
+      expect(ddbMock.commandCalls(UpdateCommand)).toHaveLength(0);
+    });
+
+    it('writes the new row before retiring anything — a failure must never leave this join with no row', async () => {
+      existing([{ connectionId: 'conn-old', principalId: 'sub-1', role: 'patient', ttl: 100 }]);
+      await rejoin();
+
+      const order = ddbMock.calls().map((call) => call.args[0].constructor.name);
+      expect(order.indexOf('PutCommand')).toBeGreaterThan(-1);
+      expect(order.indexOf('PutCommand')).toBeLessThan(order.indexOf('UpdateCommand'));
+    });
+
+    it('never issues a DeleteItem — a superseded row is marked, not removed', async () => {
+      existing([{ connectionId: 'conn-old', principalId: 'sub-1', role: 'patient', ttl: 100 }]);
+      await rejoin();
+      expect(
+        ddbMock.calls().filter((call) => call.args[0].constructor.name === 'DeleteCommand'),
+      ).toHaveLength(0);
+    });
+  });
+});
+
+describe('markCallParticipantLeft (2026-09-04)', () => {
+  const APPOINTMENT_ID = 'pat-1#2026-09-01T10:00:00.000Z';
+
+  it('stamps leftAt on that participant’s own CALL# row', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+    await repository().markCallParticipantLeft(APPOINTMENT_ID, 'conn-1');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      TableName: TABLE_NAME,
+      // The `CALL#` row, **not** `CONN#<id>/PROFILE` — confusing the two is
+      // precisely what made the relay keep choosing a dead connection:
+      // `markDisconnected` was updating the other row entirely.
+      Key: { pk: `CALL#${APPOINTMENT_ID}`, sk: 'CONN#conn-1' },
+      ConditionExpression: 'attribute_exists(pk)',
+      UpdateExpression: 'SET leftAt = :now',
+    });
+  });
+
+  it('is a no-op, not a thrown error, when the row is already gone', async () => {
+    ddbMock.on(UpdateCommand).rejects(
+      Object.assign(new Error('nope'), { name: 'ConditionalCheckFailedException' }),
+    );
+    await expect(
+      repository().markCallParticipantLeft(APPOINTMENT_ID, 'conn-1'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('propagates any other DynamoDB failure', async () => {
+    ddbMock.on(UpdateCommand).rejects(new Error('boom'));
+    await expect(repository().markCallParticipantLeft(APPOINTMENT_ID, 'conn-1')).rejects.toThrow();
   });
 });
 

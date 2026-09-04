@@ -19,8 +19,10 @@ const JoinMessageSchema = z.object({
   appointmentId: z.string().min(1),
 });
 
+// 2026-09-04: `'ready'` added — one party announcing they are on the call
+// so the offerer knows to offer. See `ws-relay.ts`'s own note.
 const RelayMessageSchema = z.object({
-  type: z.enum(['offer', 'answer', 'ice-candidate', 'leave']),
+  type: z.enum(['offer', 'answer', 'ice-candidate', 'leave', 'ready']),
   appointmentId: z.string().min(1),
   payload: z.unknown(),
 });

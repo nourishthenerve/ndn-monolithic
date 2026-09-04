@@ -19,10 +19,16 @@ export type JoinDenialReason =
   | 'not-your-appointment'
   | 'not-available';
 
-export type RelayMessageType = 'offer' | 'answer' | 'ice-candidate' | 'leave';
+/**
+ * 2026-09-04: `'ready'` joins the four — this browser's half of the type
+ * `services/api/src/ws-relay.ts` now relays. It carries no payload: it is
+ * one party saying "I am on this call, offer to me", which is how the
+ * offerer learns about a peer who joined after it did.
+ */
+export type RelayMessageType = 'offer' | 'answer' | 'ice-candidate' | 'leave' | 'ready';
 
 const relayMessageSchema = z.object({
-  type: z.enum(['offer', 'answer', 'ice-candidate', 'leave']),
+  type: z.enum(['offer', 'answer', 'ice-candidate', 'leave', 'ready']),
   appointmentId: z.string().min(1),
   payload: z.unknown(),
 });

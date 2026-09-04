@@ -108,7 +108,7 @@
 // already-resolved string as a prop.
 import { defaultLocale, t, type Locale } from '@ndn/i18n';
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
@@ -180,6 +180,62 @@ async function fetchTurnIceServer(accessToken: string, appointmentId: string): P
   }
 }
 
+/**
+ * 2026-09-04: the call's own layout, hoisted to module scope so the style
+ * objects have one identity for the lifetime of the module rather than a
+ * fresh one per render — the same reason `systemNow` is hoisted in the
+ * panels that link here, applied to a cheaper problem.
+ *
+ * `16 / 9` on the container, not on either video: the frame must not
+ * resize when a stream arrives or drops, or the page reflows under the
+ * caller mid-call.
+ */
+const CALL_STAGE_STYLE: CSSProperties = {
+  position: 'relative',
+  width: '100%',
+  maxWidth: '60rem',
+  aspectRatio: '16 / 9',
+  background: '#000',
+  borderRadius: '0.5rem',
+  overflow: 'hidden',
+};
+
+/** `cover`, so a portrait phone camera fills the frame instead of letterboxing into a black margin. */
+const REMOTE_VIDEO_STYLE: CSSProperties = {
+  width: '100%',
+  height: '100%',
+  objectFit: 'cover',
+  display: 'block',
+};
+
+const LOCAL_VIDEO_STYLE: CSSProperties = {
+  position: 'absolute',
+  right: '1rem',
+  bottom: '1rem',
+  width: '28%',
+  maxWidth: '12rem',
+  minWidth: '6rem',
+  aspectRatio: '16 / 9',
+  objectFit: 'cover',
+  borderRadius: '0.375rem',
+  border: '2px solid rgba(255, 255, 255, 0.85)',
+  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.45)',
+  background: '#000',
+  transform: 'scaleX(-1)',
+};
+
+const REMOTE_PLACEHOLDER_STYLE: CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  margin: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: '#fff',
+  textAlign: 'center',
+  padding: '1rem',
+};
+
 type Stage =
   | { readonly kind: 'checking' }
   | { readonly kind: 'forbidden' }
@@ -250,6 +306,23 @@ export function VideoCall({
   // the way it is already gated on `deviceStream`.
   const [joinRequested, setJoinRequested] = useState(false);
   const [now, setNow] = useState(() => new Date());
+  /**
+   * **2026-09-04: the remote stream is state, not a ref assignment.**
+   *
+   * `ontrack` used to write straight into `remoteVideoRef.current`, which
+   * is a one-shot with no second chance: if that ref was null at the
+   * instant the track arrived — the element not yet committed, or briefly
+   * unmounted by a stage change — the stream was dropped and nothing ever
+   * re-attached it. The caller then sat looking at their own camera with
+   * no way back, which is exactly the symptom reported.
+   *
+   * Held here, the stream survives any number of re-renders and is
+   * attached by an effect, the same shape `deviceStream` has always used
+   * for the local preview. It also makes "has the other party's video
+   * arrived" a fact the render can read, rather than something only the
+   * DOM knows.
+   */
+  const [remoteStream, setRemoteStream] = useState<MediaStream | undefined>();
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -282,6 +355,24 @@ export function VideoCall({
       localVideoRef.current.srcObject = deviceStream ?? null;
     }
   }, [deviceStream]);
+
+  // The remote half of the same attachment, re-running whenever either the
+  // stream or the element changes — which is the whole point of holding
+  // the stream in state. `play()` is called explicitly and its rejection
+  // swallowed: `autoPlay` alone can be refused by a browser's autoplay
+  // policy for a stream that carries audio, and a refused promise must not
+  // become an unhandled rejection over a video that is, at worst, waiting
+  // for a click.
+  useEffect(() => {
+    const element = remoteVideoRef.current;
+    if (!element) {
+      return;
+    }
+    element.srcObject = remoteStream ?? null;
+    if (remoteStream) {
+      void element.play().catch(() => {});
+    }
+  }, [remoteStream]);
 
   // Ticks the too-early countdown. Coarse (15s) on purpose: the displayed
   // text only ever changes once a minute, and this is a live region a
@@ -369,7 +460,17 @@ export function VideoCall({
       const queued = pendingCandidates;
       pendingCandidates = [];
       for (const candidate of queued) {
-        await pc?.addIceCandidate(candidate);
+        // 2026-09-04: a rejected candidate is not a failed call. ICE
+        // gathers many candidates and some are legitimately unusable by
+        // the peer; letting one throw out of here reached the `catch`
+        // below and put the whole call on the error screen over a single
+        // discarded network path.
+        try {
+          await pc?.addIceCandidate(candidate);
+        } catch {
+          // Nothing to do and nothing to say: the remaining candidates,
+          // and any still arriving, are what this connection will use.
+        }
       }
     };
 
@@ -387,7 +488,29 @@ export function VideoCall({
         // `call-failed` — this is expected, not a failure, and the two
         // must never be indistinguishable to the caller.
         setStageIfLive({ kind: 'ended' });
+        setRemoteStream(undefined);
         setJoinRequested(false);
+        return;
+      }
+      // 2026-09-04. The other party has joined and is waiting to be
+      // offered to. Only the offerer acts on it; for the answerer it is
+      // information about someone who is already going to offer.
+      //
+      // **This is what makes the handshake deterministic rather than
+      // racy.** Whoever joins second announces themselves, so the offerer
+      // learns of them immediately instead of discovering them by chance
+      // inside a bounded retry loop that gave up after 30 seconds — a
+      // short fuse for two people clicking a button in their own time,
+      // and unrecoverable once it blew.
+      if (message.type === 'ready') {
+        // Anything from the peer proves they are here, so the blind
+        // re-offer loop has nothing left to discover. Left armed, its next
+        // firing sends a *second* offer, which is how duplicate answers
+        // were produced — see the `answer` branch below.
+        clearTimeout(retryTimer);
+        if (role === 'patient' && pc) {
+          void sendOffer();
+        }
         return;
       }
       if (!pc) return;
@@ -400,6 +523,20 @@ export function VideoCall({
           await pc.setLocalDescription(answer);
           connection?.send({ type: 'answer', appointmentId: message.appointmentId, payload: answer });
         } else if (message.type === 'answer') {
+          clearTimeout(retryTimer);
+          // **2026-09-04: only when one is actually outstanding.**
+          //
+          // Two offers could be in flight at once — the one sent on
+          // joining and one from the retry timer, or from a `ready` —
+          // which the other side dutifully answers twice.
+          // `setRemoteDescription(answer)` on a connection already back in
+          // `stable` throws `InvalidStateError`, which landed in the
+          // `catch` below and replaced a working call with the error
+          // screen. The second answer is redundant by definition: it
+          // describes the same peer that the first one already connected.
+          if (pc.signalingState !== 'have-local-offer') {
+            return;
+          }
           await pc.setRemoteDescription(message.payload as RTCSessionDescriptionInit);
           remoteDescriptionSet = true;
           await flushPendingCandidates();
@@ -418,8 +555,19 @@ export function VideoCall({
         created.addTrack(track, stream);
       }
       created.ontrack = (event) => {
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = event.streams[0] ?? null;
+        if (!live) return;
+        // Both the audio and the video track arrive as separate `ontrack`
+        // events carrying the *same* stream, so this is idempotent by
+        // nature. `event.streams[0]` is what `addTrack(track, stream)` on
+        // the other side put there; a track with no stream at all is not a
+        // shape this codebase ever sends, and is ignored rather than
+        // clearing a stream that is already playing.
+        // Named `remote` rather than destructured into `stream`, which is
+        // this effect's own local camera grant — one letter of shadowing
+        // between "me" and "them" is not worth the risk.
+        const [remote] = event.streams;
+        if (remote) {
+          setRemoteStream(remote);
         }
       };
       created.onicecandidate = (event) => {
@@ -448,7 +596,16 @@ export function VideoCall({
         remoteDescriptionSet = false;
         pendingCandidates = [];
         usingTurn = Boolean(turnIceServer);
+        // The old peer connection's tracks die with it, so the stream held
+        // in state is now a frozen last frame. Cleared, so the caller sees
+        // the honest "reconnecting" state rather than a still image of the
+        // other person that looks like a live call.
+        setRemoteStream(undefined);
         pc = buildPeerConnection(turnIceServer);
+        // The answerer cannot re-offer, so it says it is ready again and
+        // the offerer does. Without this a retry rebuilt one side's peer
+        // connection and then waited on an offer nobody was going to send.
+        connection?.send({ type: 'ready', appointmentId, payload: {} });
         if (role === 'patient') {
           void sendOffer();
         }
@@ -479,28 +636,46 @@ export function VideoCall({
           onJoined: () => {
             pc = buildPeerConnection();
             setStageIfLive({ kind: 'call', lifecycle: { kind: 'connecting' } });
+            // 2026-09-04: announce first, offer second, and both sides do
+            // the first one. Between them these cover the two orderings
+            // completely: join second and your `ready` reaches a peer who
+            // is already there; join first and their `ready` reaches you.
+            // Neither side has to guess or poll.
+            connection?.send({ type: 'ready', appointmentId, payload: {} });
             if (role === 'patient') {
               void sendOffer();
             }
           },
           onJoinDenied: (reason) => setStageIfLive({ kind: 'join-denied', reason }),
           onPeerUnavailable: () => {
-            // Only the offerer's own message ever bounces this way — the
-            // answerer sends nothing until it has received an offer.
+            // 2026-09-04: **both sides reach this now**, because both send
+            // `ready` on joining. It used to be the offerer's alone, and
+            // the answerer's `return` here meant a clinician who arrived
+            // first sat on "Connecting…" with nothing to explain it. They
+            // are waiting for a peer, and the screen should say so.
+            setStageIfLive({ kind: 'waiting-for-peer' });
+            // Only the offerer has anything to retry — the answerer has
+            // nothing to send until an offer arrives, and its `ready` has
+            // already been delivered or will be re-sent by the other
+            // party's own arrival. The retry is now a safety net under the
+            // `ready` handshake rather than the sole mechanism, so
+            // exhausting it is no longer the ordinary way two people meet.
             if (role !== 'patient') return;
             if (retriesLeft <= 0) {
               setStageIfLive({ kind: 'call', lifecycle: { kind: 'call-failed' } });
               return;
             }
             retriesLeft -= 1;
-            setStageIfLive({ kind: 'waiting-for-peer' });
             retryTimer = setTimeout(() => void sendOffer(), PEER_RETRY_INTERVAL_MS);
           },
           onRelayMessage: (message) => void handleRelayMessage(message),
           // The signalling socket closing is not an ICE failure — see
           // this file's own header for why it gets its own stage rather
           // than a `call-state-machine.ts` transition.
-          onClose: () => setStageIfLive({ kind: 'ended' }),
+          onClose: () => {
+            setStageIfLive({ kind: 'ended' });
+            if (live) setRemoteStream(undefined);
+          },
         },
       });
     }
@@ -601,8 +776,46 @@ export function VideoCall({
       <p id="video-call-status-heading" role="status" aria-live="polite">
         {statusLabel}
       </p>
-      <video ref={localVideoRef} aria-label={strings.localVideoLabel} autoPlay playsInline muted />
-      <video ref={remoteVideoRef} aria-label={strings.remoteVideoLabel} autoPlay playsInline />
+      {/* 2026-09-04: the layout the owner asked for — *"so that we see
+          each other's videos (along with ours in a small box in bottom
+          right)"*. Before this the two `<video>` elements carried no
+          styling at all and stacked as inline boxes at their intrinsic
+          size, which is not a video call, it is two thumbnails.
+
+          The stage owns the aspect ratio so the frame does not resize as
+          streams come and go, and the self-view is positioned inside it
+          rather than after it. Inline styles rather than a stylesheet:
+          `apps/web` ships no CSS pipeline for islands, and the CSP already
+          allows `style-src 'unsafe-inline'` (`infra/src/web-stack.ts`).
+          Everything is relative units or percentages, so it holds up on a
+          phone as well as a consulting-room monitor. */}
+      <div style={CALL_STAGE_STYLE}>
+        <video
+          ref={remoteVideoRef}
+          aria-label={strings.remoteVideoLabel}
+          autoPlay
+          playsInline
+          style={REMOTE_VIDEO_STYLE}
+        />
+        {/* Until the other party's video arrives there is nothing to show
+            but black, which is indistinguishable from a broken call. The
+            status line above already says what is happening; this repeats
+            it inside the frame, where the caller is looking. */}
+        {!remoteStream && <p style={REMOTE_PLACEHOLDER_STYLE}>{statusLabel}</p>}
+        {/* Mirrored, the way every video call mirrors a self-view: an
+            un-mirrored preview of yourself reads as wrong to almost
+            everyone, because it is not what a mirror does. The remote
+            video is never mirrored — that one is another person, and
+            flipping them would reverse any text they hold up. */}
+        <video
+          ref={localVideoRef}
+          aria-label={strings.localVideoLabel}
+          autoPlay
+          playsInline
+          muted
+          style={LOCAL_VIDEO_STYLE}
+        />
+      </div>
       <button
         type="button"
         onClick={() => {
@@ -611,6 +824,7 @@ export function VideoCall({
           // that triggers it) is what actually sends `leave` and tears
           // down the peer connection and signalling socket.
           setStage({ kind: 'ended' });
+          setRemoteStream(undefined);
           setJoinRequested(false);
         }}
       >

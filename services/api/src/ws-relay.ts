@@ -21,11 +21,50 @@
 // second enforcement mechanism. Computed here (SDK-free arithmetic) so
 // `ws-relay-handler.ts` only ever does the one AWS-specific thing this
 // file can't: emit the CloudWatch metric.
-export type RelayMessageType = 'offer' | 'answer' | 'ice-candidate' | 'leave';
+// 2026-09-04: `'ready'` joins the four. It carries no payload and needs no
+// peer connection — it is one party telling the other "I am on this call
+// now, offer to me". Without it, the offerer's only way to discover a peer
+// who joined *after* them was to keep re-offering into a bounded retry
+// loop and give up 30 seconds later, which is a short fuse for two humans
+// clicking a button. See `VideoCall.tsx`.
+export type RelayMessageType = 'offer' | 'answer' | 'ice-candidate' | 'leave' | 'ready';
 
-/** What `connection-repository.ts`'s `findCallParticipants` returns — the `CALL#<appointmentId>` partition's own rows, at most two. */
+/** What `connection-repository.ts`'s `findCallParticipants` returns — the `CALL#<appointmentId>` partition's own rows. */
 export interface RelayCallParticipant {
   readonly connectionId: string;
+  /**
+   * 2026-09-04: set on a row whose connection is known to be gone — see
+   * `connection-repository.ts`'s own note for the bug that made this
+   * necessary. A row carrying it is never a forwarding target and never
+   * counts as the sender.
+   */
+  readonly leftAt?: string;
+  /**
+   * Epoch seconds, the same `ttl` the connection row carries. Checked here
+   * as well as by DynamoDB because TTL deletion is best-effort — AWS
+   * documents up to 48 hours of lag — and a row that has outlived its
+   * connection must not be picked in the meantime.
+   */
+  readonly ttl?: number;
+}
+
+/**
+ * The rows still worth talking to. **Filtering here rather than in the
+ * repository is deliberate**: `findCallParticipants`'s own contract is that
+ * it reads and decides nothing, and "who is live" is a decision — one that
+ * belongs in this file with the rest of them, where it can be tested
+ * without a DynamoDB double.
+ */
+export function liveParticipants(
+  participants: readonly RelayCallParticipant[],
+  now: Date,
+): readonly RelayCallParticipant[] {
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  return participants.filter(
+    (participant) =>
+      participant.leftAt === undefined &&
+      (participant.ttl === undefined || participant.ttl > nowSeconds),
+  );
 }
 
 export interface CallParticipantLookup {
@@ -53,6 +92,8 @@ export type RelayDecision =
 
 export interface RelayMessageDeps {
   readonly connections: CallParticipantLookup;
+  /** 2026-09-04: for the `ttl` half of `liveParticipants`. Optional so existing callers keep working; defaults to the real clock. */
+  readonly clock?: { now(): Date };
 }
 
 // Cloudflare's own real per-call usage figure is not visible from inside
@@ -78,8 +119,16 @@ function estimatedTurnRelayGbFor(type: RelayMessageType, payload: unknown): numb
 export function createRelayMessageHandler(
   deps: RelayMessageDeps,
 ): (input: RelayMessageInput) => Promise<RelayDecision> {
+  const clock = deps.clock ?? { now: () => new Date() };
   return async (input) => {
-    const participants = await deps.connections.findCallParticipants(input.appointmentId);
+    const stored = await deps.connections.findCallParticipants(input.appointmentId);
+    // 2026-09-04: the dead rows come out here, before anything is chosen.
+    // Previously `find` ran over every row this partition had ever held,
+    // so "the other party" was the first non-sender row in sort-key order
+    // — an arbitrary dead connection from an earlier attempt at the same
+    // appointment. See `connection-repository.ts`'s `recordCallJoin`.
+    const participants = liveParticipants(stored, clock.now());
+
     const sender = participants.find((p) => p.connectionId === input.senderConnectionId);
     if (!sender) {
       return { kind: 'not-authorised' };
