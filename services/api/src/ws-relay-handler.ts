@@ -134,9 +134,27 @@ export async function handleRelayMessage(event: RelayRequestEvent, message: Rela
     );
   } catch (error) {
     if ((error as { name?: string }).name === 'GoneException') {
-      // A stale connectionId whose row `ttl` has not yet expired — the
-      // identical soft-mark $disconnect itself makes, never a delete.
+      // A stale connectionId whose row `ttl` has not yet expired.
+      //
+      // **2026-09-04: this now retires the `CALL#` row too, and that is a
+      // bug fix, not tidying.** `markDisconnected` updates
+      // `CONN#<id>/PROFILE` — a *different row* from the
+      // `CALL#<appointmentId>/CONN#<id>` one the relay selects from — so
+      // before this line the dead participant stayed a candidate and the
+      // very next message chose it again, and the one after that, for the
+      // twelve hours until its `ttl` swept it. The call could never
+      // recover on its own.
       await connections.markDisconnected(decision.targetConnectionId);
+      await connections.markCallParticipantLeft(
+        message.appointmentId,
+        decision.targetConnectionId,
+      );
+      // And the sender is told, rather than left waiting on a message that
+      // silently went nowhere: `peer-unavailable` is the one signal
+      // `VideoCall.tsx` already knows how to act on, and the retry it
+      // starts will now re-resolve against a partition this call has just
+      // corrected.
+      await postToConnection(management, connectionId, { type: 'peer-unavailable' });
       logIdentifiersOnly({
         type: message.type,
         appointmentId: message.appointmentId,

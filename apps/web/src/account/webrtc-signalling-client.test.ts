@@ -23,6 +23,18 @@ describe('parseIncomingMessage', () => {
     expect(parseIncomingMessage(envelope)).toEqual(envelope);
   });
 
+  // 2026-09-04: the announcement that lets the offerer learn about a peer
+  // who joined after it did, instead of discovering them by chance inside a
+  // retry loop that gave up after 30 seconds. It must survive the parse on
+  // both sides of the relay or the handshake silently never happens.
+  it.each([['ready'], ['answer'], ['ice-candidate'], ['leave']])(
+    'accepts a %s envelope',
+    (type) => {
+      const envelope = { type, appointmentId: 'pat-1#2026-09-01T10:00:00.000Z', payload: {} };
+      expect(parseIncomingMessage(envelope)).toEqual(envelope);
+    },
+  );
+
   it('rejects a join-denied message with an unrecognised reason', () => {
     expect(parseIncomingMessage({ type: 'join-denied', reason: 'because' })).toBeUndefined();
   });

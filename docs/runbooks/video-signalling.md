@@ -157,3 +157,61 @@ The clinician's case is worth its own sentence, because it is not a comparison b
 They were the same instants. Every screen formatted with `new Date(iso).toLocaleString()` and no locale argument, which uses **the reader's browser locale, not the site's** — so the same appointment read `9/3/2026, 9:25:00 PM` on the patient's machine and `03/09/2026, 21:25:00` on the clinician's. `9/3` and `03/09` disagree about whether that is September or March, and nothing on either screen said which reading applied.
 
 `formatDateTime(value, locale)` (`packages/i18n/src/datetime.ts`) is now the only date renderer in the app, used by `NextAppointmentPanel`, `ClinicianCalendar`, `PatientRecordPanel` and `PatientNotifications`. The site's locale decides; the month is spelled so no ordering convention can flip it; the zone is named, because a patient and a clinician in different timezones is the ordinary case for a video appointment. Each still reads the time in their own zone — the label is what stops that looking like a disagreement.
+
+## Amendment, 2026-09-04 — both parties joined, and each saw only themselves
+
+> *"When it's the time both the patient as well as assigned clinician sees a join call button. However, when we click we only see our own video."*
+
+The join was authorised, the sockets were open, and the signalling messages were being relayed — to a connection that had been dead for hours.
+
+### The `CALL#` partition never forgot anyone
+
+`recordCallJoin` writes `CALL#<appointmentId>` / `CONN#<connectionId>`. **The sort key is the connectionId**, which is new on every WebSocket connection — so every join wrote another row: every page reload, every retry, every earlier attempt at the same appointment, each alive for the twelve hours its `ttl` carries.
+
+Nothing ever retired one. Both `$disconnect` and the relay's own `GoneException` path call `markDisconnected`, which updates `CONN#<id>/PROFILE` — **a different row**. The `CALL#` row it was meant to invalidate sat there untouched, still a candidate.
+
+`ws-relay.ts` then chose the other party like this:
+
+```js
+const other = participants.find((p) => p.connectionId !== input.senderConnectionId);
+```
+
+`find` over every row the partition had ever held returns the first in sort-key order: an arbitrary dead connection from an earlier session. Every offer, answer and ICE candidate went to a socket nobody was listening on, so neither side ever received the other's tracks and both sat looking at their own camera. And because the dead row was never retired, the next message chose it again — the call could not recover on its own, and neither could the next one.
+
+Four changes, and the first is the one that makes it deterministic rather than merely likelier to work:
+
+- **`recordCallJoin` retires this principal's own earlier rows in the same call.** One principal, one live row. Both parties open a fresh connection per call, so once the second has joined the partition holds exactly the two of them. The new row is written *before* the old ones are retired, so a failure can never leave a joiner with no row at all.
+- **`liveParticipants` (`ws-relay.ts`) filters before anything is chosen** — no `leftAt`, and `ttl` still ahead. The `ttl` half is not redundant with DynamoDB's own sweep: TTL deletion is best-effort and AWS documents up to 48 hours of lag.
+- **A `GoneException` now retires the `CALL#` row too**, and answers the sender `peer-unavailable` instead of swallowing the failure. This is what makes an already-poisoned partition self-heal: the first message to a dead peer removes it and tells the sender to retry.
+- **`turn-credentials.ts` honours `leftAt`.** Its relay cap counted the other party's `turnActive` rows without checking whether they were live, so one earlier attempt that had used TURN could refuse TURN to the other party for the rest of that row's twelve hours — failing exactly the calls that need it most.
+
+### Two people clicking a button had 30 seconds to find each other
+
+The offerer discovered its peer only by re-offering into `peer-unavailable` on a 2-second timer, 15 times, then declaring `call-failed`. Whoever clicked first started that clock, and it was unrecoverable once it blew.
+
+`'ready'` is a new relayed message type — no payload, no peer connection, just "I am on this call, offer to me". Both sides send it on joining, which covers both orderings without either having to guess: join second and your `ready` reaches someone already there; join first and theirs reaches you. The retry loop stays as a safety net rather than the mechanism, and `peer-unavailable` now puts *both* sides into "waiting for the other participant" — a clinician who arrived first used to sit on "Connecting…" with nothing to explain it.
+
+### Two ways a working call could still be thrown away
+
+- **A duplicate answer killed it.** Two offers could be in flight at once (the one sent on joining plus one from the retry timer), and the other side answers both. `setRemoteDescription(answer)` on a connection already back in `stable` throws `InvalidStateError`, which reached the catch-all and replaced a connected call with the error screen. An answer is now applied only while an offer is actually outstanding (`signalingState === 'have-local-offer'`), and anything from the peer clears the retry timer.
+- **One rejected ICE candidate killed it.** `addIceCandidate` rejections propagated to the same catch-all. ICE gathers many candidates and some are legitimately unusable; one discarded network path is not a failed call.
+
+### The remote stream had one chance to attach
+
+`ontrack` wrote straight into `remoteVideoRef.current`. If that ref was null at the instant the track arrived, the stream was dropped with nothing to re-attach it. It is now held in React state and attached by an effect — the same shape the local preview has always used — and `play()` is called explicitly, because `autoPlay` alone can be refused for a stream carrying audio.
+
+### The layout
+
+> *"Fix it so that we see each other's videos (along with ours in a small box in bottom right)."*
+
+The two `<video>` elements carried no styling at all and stacked as inline boxes at their intrinsic size. The call now renders as a 16:9 stage holding the remote video, with the self-view inset at the bottom right, mirrored the way every video call mirrors a self-view (the remote never is — flipping another person reverses any text they hold up). The stage owns the aspect ratio so the frame does not resize as streams come and go, and a placeholder carries the status line inside the frame while the other party's video is still absent, where black alone is indistinguishable from a broken call.
+
+Inline styles, not a stylesheet: `apps/web` ships no CSS pipeline for islands, and the CSP already allows `style-src 'unsafe-inline'`.
+
+### Verifying it
+
+The regression is invisible on a partition that happens to be clean, so verify it on an appointment that has **already been joined at least once before** — that is the state every real call reaches by its second attempt:
+
+1. Join, leave, and reload on both sides a few times, then join again from both. The call must connect on that attempt, not only the first.
+2. Join as one party, wait more than a minute, then join as the other. The first party must move from "waiting for the other participant" to connected when the second arrives — the old 30-second fuse is gone.
+3. Both sides show the other person full-frame with their own camera inset at the bottom right.
