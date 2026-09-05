@@ -41,7 +41,7 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
-import { VideoCall } from '../../../account/VideoCall.js';
+import { CallScreen } from '../../../account/CallScreen.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
@@ -71,7 +71,7 @@ const heading = t('videoCall.heading', undefined, locale);
         <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
       </p>
     </Fragment>
-    <VideoCall
+    <CallScreen
       client:only="react"
       locale={locale}
       strings={{
@@ -112,6 +112,28 @@ const heading = t('videoCall.heading', undefined, locale);
         cameraOffLabel: t('videoCall.cameraOff', undefined, locale),
         remoteCameraOffLabel: t('videoCall.remoteCameraOff', undefined, locale),
         timeLimitReachedLabel: t('videoCall.timeLimitReached', undefined, locale),
+      }}
+      assessmentStrings={{
+        heading: t('assessment.heading', undefined, locale),
+        loadingLabel: t('assessment.loading', undefined, locale),
+        forbiddenLabel: t('assessment.forbidden', undefined, locale),
+        notFoundLabel: t('assessment.notFound', undefined, locale),
+        errorLabel: t('assessment.error', undefined, locale),
+        missingIdLabel: t('assessment.missingId', undefined, locale),
+        saveLabel: t('assessment.save', undefined, locale),
+        savingLabel: t('assessment.saving', undefined, locale),
+        savedLabel: t('assessment.saved', undefined, locale),
+        conflictLabel: t('assessment.conflict', undefined, locale),
+        saveForbiddenLabel: t('assessment.saveForbidden', undefined, locale),
+        readOnlyLabel: t('assessment.readOnly', undefined, locale),
+        attachmentsHeading: t('assessment.attachmentsHeading', undefined, locale),
+        attachmentsEmpty: t('assessment.attachmentsEmpty', undefined, locale),
+        addFileLabel: t('assessment.addFile', undefined, locale),
+        uploadingLabel: t('assessment.uploading', undefined, locale),
+        uploadFailedLabel: t('assessment.uploadFailed', undefined, locale),
+        downloadLabel: t('assessment.download', undefined, locale),
+        noNextAppointmentLabel: t('assessment.noNextAppointment', undefined, locale),
+        versionLabel: t('assessment.version', undefined, locale),
       }}
     />
   </RequireAuth>

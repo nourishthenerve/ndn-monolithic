@@ -98,6 +98,26 @@ export function parseScheduledAt(appointmentId: string): Date | undefined {
   return Number.isNaN(scheduledAt.getTime()) ? undefined : scheduledAt;
 }
 
+/**
+ * The other half of the same id — `<patientId>#<scheduledAt>`.
+ *
+ * 2026-09-05: the call page is reached with nothing but that id on the
+ * query string, and the clinician's half of the call now needs to know
+ * *whose* assessment to put beside the video. It has been in the id all
+ * along; nothing had asked for it before.
+ *
+ * `undefined` for anything that does not split into two non-empty parts —
+ * the same deny-by-default reading `parseScheduledAt` and `ws-join.ts`'s
+ * own `parseAppointmentId` give a malformed id.
+ */
+export function parsePatientId(appointmentId: string): string | undefined {
+  const separator = appointmentId.indexOf('#');
+  if (separator <= 0 || separator === appointmentId.length - 1) {
+    return undefined;
+  }
+  return appointmentId.slice(0, separator);
+}
+
 export interface Countdown {
   readonly days: number;
   readonly hours: number;

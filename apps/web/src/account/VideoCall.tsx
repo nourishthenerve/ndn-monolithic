@@ -157,7 +157,13 @@ const PEER_RETRY_ATTEMPTS = 15;
  */
 export const MAX_CALL_MINUTES = 30;
 
-type CallRole = 'patient' | 'clinician';
+/**
+ * Which end of the call this browser is. Exported since 2026-09-05: the
+ * clinician's screen puts the patient's assessment beside the video and
+ * the patient's does not, so the layout above this component has to know
+ * the same answer it does — and this is the only place that resolves it.
+ */
+export type CallRole = 'patient' | 'clinician';
 
 function toCallConnectionState(state: RTCPeerConnectionState): CallConnectionState {
   if (state === 'connected') return 'connected';
@@ -214,10 +220,18 @@ const CALL_STAGE_STYLE: CSSProperties = {
   width: '100%',
   maxWidth: '60rem',
   aspectRatio: '16 / 9',
+  // 2026-09-05: with `aspect-ratio` set, a max height makes the browser
+  // shrink the *width* to keep the shape — which is what stops a
+  // full-width stage on a wide monitor from being taller than the screen
+  // and pushing the controls below the fold.
+  maxHeight: 'calc(100vh - 14rem)',
   background: '#000',
   borderRadius: '0.5rem',
   overflow: 'hidden',
 };
+
+/** The same stage, given the whole of whatever contains it. See `fillWidth`. */
+const CALL_STAGE_FILL_STYLE: CSSProperties = { ...CALL_STAGE_STYLE, maxWidth: 'none' };
 
 /** `cover`, so a portrait phone camera fills the frame instead of letterboxing into a black margin. */
 const REMOTE_VIDEO_STYLE: CSSProperties = {
@@ -352,6 +366,19 @@ export interface VideoCallProps {
   readonly client?: SessionClient;
   /** TASK 4.5.1's own join-button state machine is this callback's first real reader. */
   readonly onLifecycleChange?: (state: CallLifecycleState) => void;
+  /**
+   * 2026-09-05: fires once, when the join sequence has worked out which end
+   * of the call this is. Also the honest signal that a call is *under way*
+   * — it cannot fire before `JoinCallButton` has been pressed, because
+   * nothing resolves a role until then.
+   */
+  readonly onRoleResolved?: (role: CallRole) => void;
+  /**
+   * Widens the call stage past its own comfortable maximum. The clinician's
+   * layout gives it a column rather than the page, so the column's width is
+   * already the constraint and a second one inside it only wastes space.
+   */
+  readonly fillWidth?: boolean;
   /** Injectable for tests; defaults to `window.location.search`. */
   readonly getAppointmentId?: () => string | undefined;
   /** For the live too-early countdown's own `t()` call — every other string here is resolved once, at page-render time, by the caller. Defaults to `defaultLocale`. */
@@ -364,6 +391,8 @@ export function VideoCall({
   strings,
   client = defaultClient,
   onLifecycleChange,
+  onRoleResolved,
+  fillWidth = false,
   getAppointmentId = defaultGetAppointmentId,
   locale = defaultLocale,
 }: VideoCallProps): ReactNode {
@@ -934,6 +963,7 @@ export function VideoCall({
       }
       if (!live) return;
       role = resolvedRole;
+      onRoleResolved?.(resolvedRole);
 
       connection = connectSignalling({
         url: signallingWebSocketUrl,
@@ -1037,7 +1067,7 @@ export function VideoCall({
       // itself already keeps for the stream it never hands off.
       stream.getTracks().forEach((track) => track.stop());
     };
-  }, [session, deviceStream, joinRequested, onLifecycleChange]);
+  }, [session, deviceStream, joinRequested, onLifecycleChange, onRoleResolved]);
 
   if (stage.kind === 'forbidden') {
     return <p role="alert">{strings.forbiddenLabel}</p>;
@@ -1120,7 +1150,7 @@ export function VideoCall({
           allows `style-src 'unsafe-inline'` (`infra/src/web-stack.ts`).
           Everything is relative units or percentages, so it holds up on a
           phone as well as a consulting-room monitor. */}
-      <div style={CALL_STAGE_STYLE}>
+      <div style={fillWidth ? CALL_STAGE_FILL_STYLE : CALL_STAGE_STYLE}>
         <video
           ref={setRemoteVideoEl}
           aria-label={strings.remoteVideoLabel}
