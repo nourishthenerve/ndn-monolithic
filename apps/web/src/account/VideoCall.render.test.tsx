@@ -1073,3 +1073,56 @@ describe('the other participant’s camera', () => {
     expect(screen.getAllByText(STRINGS.connectingLabel)).toHaveLength(2);
   });
 });
+
+// 2026-09-05: a call must not be able to vanish into "Connecting…".
+//
+// `run()` is fire-and-forget, so anything thrown while it sets a call up
+// had no handler, changed no state, and left the stage on `checking` —
+// which renders as "Connecting…" for ever, with the local camera working
+// and nothing to say what went wrong. Reported that way twice.
+describe('a join sequence that fails says so', () => {
+  it('does not let a layout callback stand between the role and the socket', async () => {
+    const onRoleResolved = vi.fn(() => {
+      throw new Error('the layout blew up');
+    });
+    render(
+      <VideoCall
+        strings={STRINGS}
+        client={client}
+        getAppointmentId={getAppointmentId}
+        locale="en"
+        onRoleResolved={onRoleResolved}
+      />,
+    );
+    await joinTheCall();
+
+    // The socket exists despite the callback throwing: it is opened before
+    // anyone else is told the call has started.
+    await waitFor(() => {
+      expect(FakeWebSocket.last).toBeDefined();
+    });
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    expect(socket.sentOf('join')).toHaveLength(1);
+    expect(onRoleResolved).toHaveBeenCalled();
+  });
+
+  it('reports an error rather than sitting on "Connecting…" when the socket cannot be made', async () => {
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        static readonly OPEN = 1;
+        constructor() {
+          throw new Error('no socket for you');
+        }
+      },
+    );
+    renderCall();
+    await joinTheCall();
+
+    // Silence here is what made this class of failure unreportable.
+    expect(await screen.findByText(STRINGS.errorLabel)).toBeDefined();
+  });
+});

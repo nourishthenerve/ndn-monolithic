@@ -963,7 +963,6 @@ export function VideoCall({
       }
       if (!live) return;
       role = resolvedRole;
-      onRoleResolved?.(resolvedRole);
 
       connection = connectSignalling({
         url: signallingWebSocketUrl,
@@ -1034,9 +1033,33 @@ export function VideoCall({
           },
         },
       });
+
+      // **2026-09-05: told *after* the socket exists, never before.**
+      //
+      // This used to sit between resolving the role and calling
+      // `connectSignalling`, where it is a caller's callback standing in the
+      // middle of the one sequence that starts a call. `run()` is
+      // fire-and-forget, so anything thrown in there — by this callback or
+      // by whatever it re-renders — took the socket with it and left the
+      // stage on `checking`, which reads as a permanent "Connecting…" with
+      // no clue as to why. The layout it drives has no business being able
+      // to do that, and now it cannot: the call is already under way by the
+      // time anyone else is told about it, and a throw here is caught.
+      try {
+        onRoleResolved?.(resolvedRole);
+      } catch {
+        // A layout that cannot render is not a reason to drop a call.
+      }
     }
 
-    void run();
+    // `run()` is fire-and-forget by design — nothing awaits a call being
+    // set up. That makes an unexpected throw inside it invisible: no
+    // rejection handler, no state change, and a screen that says
+    // "Connecting…" until somebody gives up. Every such failure now lands
+    // on the error state, which at least says something happened.
+    void run().catch(() => {
+      setStageIfLive({ kind: 'error' });
+    });
 
     return () => {
       live = false;
