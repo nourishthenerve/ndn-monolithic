@@ -108,3 +108,29 @@ Gate G4 §7 named the same construction-time-only accessibility posture every ac
 ## Cost
 
 £0.00 net-new for TASK 4.3.1/4.3.3 — Cloudflare's STUN service is free and unlimited, and the ICE-failure retry rebuilds a peer connection with no new AWS resource. TASK 4.4.1 is also £0.00 net-new in normal operation: within Cloudflare's re-verified 1,000 GB/month TURN free tier (`03-cost-model.md`, ≈85 GB modelled worst case), and every WebSocket/HTTP call either task makes is already inside TASK 4.1.1's own modelled message count or a single low-volume Lambda invocation per retry. TASK 4.4.2 adds ~£0.10/month — one more CloudWatch alarm inside D-18's own ~8-alarm budget (the 6th), plus one `PutMetricData` call per call that used TURN, both negligible at this account's traffic. TASK 4.5.1 is £0.00 net-new — a countdown, a button, and one more relayed message type, no new AWS resource of any kind.
+
+## Amendment, 2026-09-05 — the clinician's call screen carries the assessment
+
+> *"when both patients and clinician connects I want patient's full assessment form and details to be shown to the clinician so that he can edit the details as they discuss over the call. For patient make video box cover the entire window but for clinician keep video box to the left and assessment form to the right."*
+
+`apps/web/src/account/CallScreen.tsx` is new and is now what `call.astro` renders. It owns the one thing that differs between the two people on a call: the clinician gets the patient's assessment beside the video, the patient gets the video and nothing else.
+
+**Why a component and not two branches in the page.** `call.astro` is statically generated and knows nothing at runtime — least of all which end of the call is loading it. That is resolved inside `VideoCall` (by asking whether `GET /clinicians/me/calendar` answers), and two sibling Astro islands cannot share the answer. So the layout has to live in the island that can hear it: `VideoCall` gained `onRoleResolved`, and `CallScreen` listens.
+
+**Whose assessment.** The patient id has been in `?appointmentId=` all along — `<patientId>#<scheduledAt>` — and nothing had asked for that half before. `parsePatientId` (`join-window.ts`) is the counterpart to `parseScheduledAt`, with the same deny-by-default reading of a malformed id.
+
+**No new access surface.** The clinician sees the sections `GET /patients/{id}/assessments/{id}` chooses to send them and saves the ones the server accepts. `assessment.ts` and the `can()` matrix are untouched; this adds a *place* to edit from, not a permission. The patient's own side never mounts the form at all — their assessment carries a clinician-only half (`projection.ts`), and while the server is what withholds it, a screen that offers to show it is the wrong screen.
+
+### Two decisions worth stating
+
+**The form is mounted for the life of the page, not while `connected`.** The literal reading of "when both connect" would mount it on the connected state and unmount it on every reconnect, taking any half-typed note with it. A blip in someone's wifi must not throw away what a clinician was writing about them. It appears when the call starts and stays — including after the call ends, so notes taken during the conversation can be finished after it.
+
+**The wrapper element is not optional.** Returning the call bare before the role resolved and wrapped in a grid after it changed the element at that position from `VideoCall` to `div`, and React reconciles that by *unmounting the subtree*: the entire call was torn down and restarted from the device check the instant the role came back — a second camera prompt, a second socket, and a dropped call. The structure is now identical in both cases, and only the sibling and the layout change. Three tests hold it there: one socket, no return to the device check, and one `getUserMedia`.
+
+### Sizing
+
+The call stage gained `maxHeight: calc(100vh - 14rem)`. With `aspect-ratio` set, a max height makes the browser shrink the *width* to keep the shape, which is what stops a full-width video on a wide monitor from being taller than the screen and pushing the controls below the fold. `fillWidth` drops the stage's own `60rem` maximum for callers that impose their own — the clinician's column is already the constraint. The assessment column scrolls inside itself (`calc(100vh - 10rem)`), so a clinician reading to the bottom of a long form never loses sight of the person they are talking to.
+
+### A loose end found on the way
+
+`AssessmentForm`'s `strings.heading` is declared on its interface and read by nothing — every caller passes it and no version of the component has ever rendered it. Left alone here rather than removed as a drive-by, but worth knowing before anyone tries to anchor a test on it, as this one first did.

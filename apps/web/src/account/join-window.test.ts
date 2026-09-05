@@ -14,6 +14,7 @@ import {
   isLiveOrUpcoming,
   joinPhase,
   joinWindowClosesAt,
+  parsePatientId,
   parseScheduledAt,
 } from './join-window.js';
 
@@ -47,6 +48,27 @@ describe('parseScheduledAt', () => {
       expect(parseScheduledAt(id)).toBeUndefined();
     },
   );
+});
+
+// 2026-09-05: the half of the composite id nothing had needed until the
+// clinician's call screen had to know whose assessment to show.
+describe('parsePatientId', () => {
+  it('reads the patientId half of a composite appointment id', () => {
+    expect(parsePatientId('pat-1#2026-09-10T14:00:00.000Z')).toBe('pat-1');
+  });
+
+  it('splits on the first separator only — the timestamp is not its business', () => {
+    expect(parsePatientId('pat-1#2026-09-10T14:00:00.000Z#extra')).toBe('pat-1');
+  });
+
+  it.each(['', 'no-separator', '#2026-09-10T14:00:00.000Z', 'pat-1#'])('refuses %s', (id) => {
+    expect(parsePatientId(id)).toBeUndefined();
+  });
+
+  it('agrees with parseScheduledAt about where the id divides', () => {
+    const id = 'pat-1#2026-09-10T14:00:00.000Z';
+    expect(`${parsePatientId(id)}#${parseScheduledAt(id)?.toISOString()}`).toBe(id);
+  });
 });
 
 describe('joinWindowClosesAt', () => {
