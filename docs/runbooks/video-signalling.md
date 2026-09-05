@@ -253,3 +253,44 @@ Ending goes through exactly the state "Leave call" sets, so the teardown, the `l
 `video-calls.md` records why it never did: importing it pulls its whole `RTCPeerConnection`-touching body into the repo's 80% coverage gate. That reasoning held while nothing here was reported broken. It stopped holding after two reports in one day, the second of which was a **render-ordering** bug no amount of testing the pure helpers could have caught.
 
 `VideoCall.render.test.tsx` drives a fake socket and peer connection by hand — nothing opens or negotiates on its own, so each test states how far the call got before asserting. It covers the self-view attachment, the camera toggle, the 30-minute limit, and the signalling sequence itself: who offers, who answers, the `ready` handshake, the duplicate-answer guard, `join-denied`, `peer-unavailable`, and the `leave` in both directions. Branch coverage went **up** (81.25%) despite the file's 150 branches joining the count.
+
+## Amendment, 2026-09-05 — the offer storm
+
+> *"now I see myself in the smaller box but dont see the other persons video. before that was working."*
+
+The self-view fix worked. The screenshot showed the other half stuck: **"Connecting…"**, the in-frame placeholder still up — so no remote track had arrived and the peer connection had never reached `connected`. Three defects, in a chain, all introduced by the two previous fixes.
+
+### 1. Retry timers doubled every two seconds
+
+`retryTimer = setTimeout(…)` re-armed without cancelling what was already pending. Harmless while exactly one message could bounce — but `ready` (2026-09-04) meant a caller waiting alone now got **two** `peer-unavailable` replies per round, one for the `ready` and one for the offer. Each armed a timer; only the last handle was kept. Each fired timer sent an offer, which bounced, which armed more. `clearTimeout(retryTimer)` could only ever cancel one of them.
+
+`armRetry()`/`cancelRetry()` are now the only way a retry is scheduled, and `armRetry` cancels first.
+
+### 2. Nothing stopped several offers being in flight at once
+
+Every one of those timers called `sendOffer()` with no guard, so several offers went out together and came back several answers. `offerInFlight` allows one at a time, with an explicit `force` for the two cases where a fresh offer is genuinely warranted — the peer has just announced itself, or this side has rebuilt its peer connection — because the outstanding offer was addressed to a peer or a connection that no longer exists.
+
+### 3. Dropping an answer stranded the ICE candidates — this is what killed the call
+
+The duplicate-answer guard skipped on `signalingState !== 'have-local-offer'` and returned **without setting `remoteDescriptionSet`**. Nothing flushes `pendingCandidates` but a successful `setRemoteDescription`, so every candidate the peer sent queued and was never applied. With no remote candidates there is nothing for ICE to pair: the connection never completes, no track ever arrives, and the call sits on "Connecting…" behind a black frame until somebody gives up.
+
+The two cases no longer share an exit. A browser refuses an answer in the wrong state, so forcing it through is not available — the fix is to get back in step:
+
+- **already answered** → genuinely redundant, skip;
+- **nothing negotiated and no offer outstanding** → the two sides are out of step, so send a fresh offer, which is also what unsticks the queued candidates.
+
+A failed negotiation step no longer drops the call onto the error screen either. It was reaching a catch-all that replaced a recoverable SDP race with "Something went wrong"; real terminal failure is the connection state machine's to report.
+
+### 4. And waiting for someone is not a failure
+
+Found while tracing the fix rather than reported. Two bounces per round also burned the 15-retry budget in about fourteen seconds, and the patient was then told **"This call could not connect"** — while their clinician simply had not arrived yet. Nothing had failed: the socket was open and the join accepted.
+
+The budget now counts offers actually re-sent, not bounces received (~30 seconds again), and running out of nudges leaves the honest "waiting for the other participant" up instead of declaring failure. Discovery no longer depends on it: the other party's `ready` reaches this side the moment they join. A call nobody ever joins is ended by the 30-minute limit.
+
+### The black frame that is not a bug
+
+A call now starts audio-only on both sides, so the ordinary state of a freshly connected call is two people looking at a black rectangle — the app working exactly as asked, and indistinguishable from the fault reported twice. The frame now says **"The other participant's camera is off."**, read from the remote track's own `muted` flag and kept current from its `mute`/`unmute` events. Not inferred from anything we send: it is a fact about them, and their track is the only honest source for it.
+
+### Coverage
+
+`VideoCall.render.test.tsx` grew to 48 tests. The ones that pin this amendment: one retry armed however many messages bounce; retries that do not multiply over successive rounds; the loop stopping the moment the peer speaks; an unapplicable answer restarting negotiation rather than dying silently; queued candidates flushed once a remote description lands; a genuine duplicate still ignored; a failed negotiation step not ending the call; waiting indefinitely without a failure message; and the remote camera notice appearing, clearing and returning.

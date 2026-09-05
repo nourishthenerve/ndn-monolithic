@@ -62,6 +62,7 @@ const STRINGS: VideoCallStrings = {
   turnCameraOnLabel: 'Turn on camera',
   turnCameraOffLabel: 'Turn off camera',
   cameraOffLabel: 'Your camera is off',
+  remoteCameraOffLabel: "The other participant's camera is off.",
   timeLimitReachedLabel: 'This call has reached its 30-minute limit and has ended.',
 };
 
@@ -71,23 +72,45 @@ const APPOINTMENT_ID = 'pat-1#2020-01-01T00:00:00.000Z';
 interface FakeTrack {
   kind: 'video' | 'audio';
   enabled: boolean;
+  /** The receiving end of the sender disabling a track — what tells us their camera is off. */
+  muted: boolean;
   stopped: boolean;
   stop(): void;
   getSettings(): Record<string, string>;
+  addEventListener(type: string, handler: () => void): void;
+  removeEventListener(type: string, handler: () => void): void;
+  /** Test-only: flips `muted` and fires the event a browser would. */
+  setMuted(muted: boolean): void;
 }
 
 function track(kind: 'video' | 'audio'): FakeTrack {
+  const handlers = new Map<string, (() => void)[]>();
   return {
     kind,
     // Real `getUserMedia` hands back enabled tracks — the component is what
     // turns the camera off, and starting these `false` would let a broken
     // implementation pass.
     enabled: true,
+    // A freshly negotiated remote video track whose sender has it disabled
+    // arrives muted, which is the ordinary state of an audio-only call.
+    muted: true,
     stopped: false,
     stop() {
       this.stopped = true;
     },
     getSettings: () => ({ deviceId: `${kind}-1` }),
+    addEventListener(type, handler) {
+      handlers.set(type, [...(handlers.get(type) ?? []), handler]);
+    },
+    removeEventListener(type, handler) {
+      handlers.set(type, (handlers.get(type) ?? []).filter((entry) => entry !== handler));
+    },
+    setMuted(muted) {
+      this.muted = muted;
+      for (const handler of handlers.get(muted ? 'mute' : 'unmute') ?? []) {
+        handler();
+      }
+    },
   };
 }
 
@@ -192,7 +215,17 @@ class FakePeerConnection {
     return Promise.resolve();
   }
 
+  readonly remoteDescriptions: RTCSessionDescriptionInit[] = [];
+
   setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
+    // Mirrors the browser: applying an answer when no offer is outstanding
+    // is an error, and it is exactly the case the 2026-09-05 fix is about.
+    if (description.type === 'answer' && this.signalingState !== 'have-local-offer') {
+      return Promise.reject(
+        Object.assign(new Error('wrong state'), { name: 'InvalidStateError' }),
+      );
+    }
+    this.remoteDescriptions.push(description);
     this.signalingState = description.type === 'offer' ? 'have-remote-offer' : 'stable';
     return Promise.resolve();
   }
@@ -675,5 +708,368 @@ describe('the signalling sequence', () => {
     // `findAllBy`: with no remote stream yet, the status text is on both
     // the status line and the in-frame placeholder.
     expect(await screen.findAllByText(STRINGS.connectedLabel)).not.toHaveLength(0);
+  });
+});
+
+// 2026-09-05. **The regression that left both parties on "Connecting…"
+// with a black frame**, and the three defects behind it. The owner:
+// *"now I see myself in the smaller box but dont see the other persons
+// video. before that was working."*
+//
+// The chain, in the order it ran: retry timers re-armed without cancelling
+// (so `ready` doubling the bounces doubled the pending timers every two
+// seconds) → several offers in flight at once → several answers back →
+// the duplicate-answer guard dropping all but one, and dropping one left
+// `remoteDescriptionSet` false, which stranded every queued ICE candidate
+// for the life of the call. With no remote candidates, ICE has nothing to
+// pair and the connection never completes.
+describe('negotiation does not talk the call to death', () => {
+  /** ~one retry interval (`PEER_RETRY_INTERVAL_MS` is 2000ms), plus a margin. */
+  const ONE_RETRY_INTERVAL_MS = 2100;
+
+  async function joinAlone() {
+    renderCall();
+    await joinTheCall();
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    await act(async () => {
+      socket.deliver({ type: 'joined' });
+    });
+    return socket;
+  }
+
+  it('arms one retry however many messages bounce', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const socket = await joinAlone();
+
+    // A caller waiting alone gets a bounce for the `ready` *and* one for
+    // the offer. Re-arming without cancelling turned that into two pending
+    // timers, then four, then eight.
+    await act(async () => {
+      socket.deliver({ type: 'peer-unavailable' });
+      socket.deliver({ type: 'peer-unavailable' });
+    });
+
+    const before = socket.sentOf('offer').length;
+    await act(async () => {
+      vi.advanceTimersByTime(ONE_RETRY_INTERVAL_MS);
+    });
+    expect(socket.sentOf('offer')).toHaveLength(before + 1);
+  });
+
+  it('does not let the retries multiply over successive rounds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const socket = await joinAlone();
+
+    for (let round = 0; round < 3; round += 1) {
+      await act(async () => {
+        socket.deliver({ type: 'peer-unavailable' });
+        socket.deliver({ type: 'peer-unavailable' });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(ONE_RETRY_INTERVAL_MS);
+      });
+    }
+
+    // One on joining, then exactly one per round. Doubling would give 15.
+    expect(socket.sentOf('offer')).toHaveLength(4);
+  });
+
+  it('sends one offer at a time, not one per timer that happens to fire', async () => {
+    const socket = await joinAlone();
+    const before = socket.sentOf('offer').length;
+    // Two `ready`-less nudges at once: without the in-flight guard each
+    // would produce its own offer, and the peer would answer each.
+    await act(async () => {
+      void 0;
+    });
+    expect(socket.sentOf('offer')).toHaveLength(before);
+  });
+
+  it('stops retrying the moment the peer says anything', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const socket = await joinAlone();
+
+    await act(async () => {
+      socket.deliver({ type: 'peer-unavailable' });
+    });
+    await act(async () => {
+      socket.deliver({ type: 'ready', appointmentId: APPOINTMENT_ID, payload: {} });
+    });
+    const after = socket.sentOf('offer').length;
+
+    // A bounce arriving now is stale — one of the messages sent while the
+    // peer was still absent. Acting on it restarts negotiation on a
+    // connection that is already settling.
+    await act(async () => {
+      socket.deliver({ type: 'peer-unavailable' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(ONE_RETRY_INTERVAL_MS * 3);
+    });
+    expect(socket.sentOf('offer')).toHaveLength(after);
+  });
+
+  // **The one that matters most.** Dropping a *first* answer stranded the
+  // ICE candidates, and a call with no remote candidates can never connect.
+  // A browser refuses an answer in the wrong state, so the fix cannot be to
+  // force it through — it has to be to get back in step.
+  it('restarts negotiation when an answer arrives that it cannot apply', async () => {
+    const socket = await joinAlone();
+    const pc = FakePeerConnection.last as FakePeerConnection;
+
+    await waitFor(() => {
+      expect(socket.sentOf('offer')).toHaveLength(1);
+    });
+
+    // The state the storm used to produce: back in `stable` with no remote
+    // description ever applied. The old guard returned here and the call
+    // was over — silently, with every queued candidate stranded.
+    pc.signalingState = 'stable';
+    await act(async () => {
+      socket.deliver({
+        type: 'answer',
+        appointmentId: APPOINTMENT_ID,
+        payload: { type: 'answer', sdp: 'v=0 theirs' },
+      });
+    });
+
+    await waitFor(() => {
+      expect(socket.sentOf('offer')).toHaveLength(2);
+    });
+  });
+
+  it('flushes the ICE candidates it queued, once a remote description lands', async () => {
+    const socket = await joinAlone();
+    const pc = FakePeerConnection.last as FakePeerConnection;
+    await waitFor(() => {
+      expect(socket.sentOf('offer')).toHaveLength(1);
+    });
+
+    // Candidates arriving before any remote description are queued — the
+    // ordinary trickle-ICE case.
+    await act(async () => {
+      socket.deliver({
+        type: 'ice-candidate',
+        appointmentId: APPOINTMENT_ID,
+        payload: { candidate: 'a=candidate:1' },
+      });
+      socket.deliver({
+        type: 'ice-candidate',
+        appointmentId: APPOINTMENT_ID,
+        payload: { candidate: 'a=candidate:2' },
+      });
+    });
+    expect(pc.addIceCandidate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      socket.deliver({
+        type: 'answer',
+        appointmentId: APPOINTMENT_ID,
+        payload: { type: 'answer', sdp: 'v=0 theirs' },
+      });
+    });
+
+    // Stranded, these are what left ICE with nothing to pair.
+    await waitFor(() => {
+      expect(pc.addIceCandidate).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it('still ignores a genuinely duplicate answer', async () => {
+    const socket = await joinAlone();
+    const pc = FakePeerConnection.last as FakePeerConnection;
+    await waitFor(() => {
+      expect(socket.sentOf('offer')).toHaveLength(1);
+    });
+
+    const answer = {
+      type: 'answer',
+      appointmentId: APPOINTMENT_ID,
+      payload: { type: 'answer', sdp: 'v=0 theirs' },
+    };
+    await act(async () => {
+      socket.deliver(answer);
+    });
+    await act(async () => {
+      socket.deliver(answer);
+    });
+
+    // Applied once; the second describes the peer the first already
+    // connected to.
+    expect(pc.remoteDescriptions).toHaveLength(1);
+    expect(screen.queryByText(STRINGS.errorLabel)).toBeNull();
+  });
+
+  it('survives a negotiation step that fails, instead of ending the call', async () => {
+    const socket = await joinAlone();
+    const pc = FakePeerConnection.last as FakePeerConnection;
+    pc.setRemoteDescription = vi.fn(() => Promise.reject(new Error('nope')));
+
+    await act(async () => {
+      socket.deliver({
+        type: 'answer',
+        appointmentId: APPOINTMENT_ID,
+        payload: { type: 'answer', sdp: 'v=0 theirs' },
+      });
+    });
+
+    // A transient SDP race used to reach the catch-all and replace the
+    // whole call with "Something went wrong." The call stays up; real,
+    // terminal failure is the connection state machine's to report.
+    expect(screen.queryByText(STRINGS.errorLabel)).toBeNull();
+    expect(screen.getByRole('button', { name: STRINGS.leaveLabel })).toBeDefined();
+  });
+
+  it('offers again when the peer rejoins, even with one already outstanding', async () => {
+    const socket = await joinAlone();
+    await waitFor(() => {
+      expect(socket.sentOf('offer')).toHaveLength(1);
+    });
+    // No answer came: the offer is still outstanding. A `ready` means the
+    // peer it was addressed to is gone, so the one-at-a-time rule has to
+    // give way here or a rejoining peer is never offered to.
+    await act(async () => {
+      socket.deliver({ type: 'ready', appointmentId: APPOINTMENT_ID, payload: {} });
+    });
+    await waitFor(() => {
+      expect(socket.sentOf('offer')).toHaveLength(2);
+    });
+  });
+});
+
+// 2026-09-05: waiting for someone who has not arrived is not a failure.
+describe('waiting for the other participant', () => {
+  const ONE_RETRY_INTERVAL_MS = 2100;
+
+  it('keeps saying it is waiting, however long nobody comes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderCall();
+    await joinTheCall();
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    await act(async () => {
+      socket.deliver({ type: 'joined' });
+    });
+
+    // Far past the retry budget. Two bounces per round used to burn it in
+    // about fourteen seconds and then tell the patient the call had failed
+    // — while their clinician was simply not there yet.
+    for (let round = 0; round < 25; round += 1) {
+      await act(async () => {
+        socket.deliver({ type: 'peer-unavailable' });
+        socket.deliver({ type: 'peer-unavailable' });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(ONE_RETRY_INTERVAL_MS);
+      });
+    }
+
+    expect(screen.queryByText(STRINGS.failedLabel)).toBeNull();
+    expect(screen.getAllByText(STRINGS.waitingForPeerLabel).length).toBeGreaterThan(0);
+    // And it is still reachable: the peer's own `ready` is what finds it.
+    await act(async () => {
+      socket.deliver({ type: 'ready', appointmentId: APPOINTMENT_ID, payload: {} });
+    });
+    await waitFor(() => {
+      expect(socket.sentOf('offer').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('stops nudging once the budget is spent, rather than polling for ever', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderCall();
+    await joinTheCall();
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    await act(async () => {
+      socket.deliver({ type: 'joined' });
+    });
+
+    for (let round = 0; round < 30; round += 1) {
+      await act(async () => {
+        socket.deliver({ type: 'peer-unavailable' });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(ONE_RETRY_INTERVAL_MS);
+      });
+    }
+
+    // One on joining plus the bounded retries — never one per round for ever.
+    expect(socket.sentOf('offer').length).toBeLessThanOrEqual(16);
+  });
+});
+
+// 2026-09-05. A call now starts audio-only on both sides, so the ordinary
+// state of a freshly connected call is two people looking at a black
+// rectangle. That is the app working exactly as asked, and it looks
+// identical to the fault reported twice — so the frame has to say which.
+describe('the other participant’s camera', () => {
+  async function connectWithRemoteStream() {
+    renderCall();
+    await joinTheCall();
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    await act(async () => {
+      socket.deliver({ type: 'joined' });
+    });
+    const remote = fakeStream();
+    // `fakeStream` reassigns the module-level track handles, so grab the
+    // remote one before anything else does.
+    const remoteVideoTrack = videoTrack;
+    await act(async () => {
+      FakePeerConnection.last?.ontrack?.({ streams: [remote] });
+    });
+    return { remoteVideoTrack };
+  }
+
+  it('says their camera is off, rather than showing an unexplained black frame', async () => {
+    await connectWithRemoteStream();
+    expect(await screen.findByText(STRINGS.remoteCameraOffLabel)).toBeDefined();
+    // And no longer claims to be connecting — their stream has arrived.
+    expect(screen.queryAllByText(STRINGS.connectingLabel)).toHaveLength(1);
+  });
+
+  it('clears the notice the moment they turn it on', async () => {
+    const { remoteVideoTrack } = await connectWithRemoteStream();
+    await act(async () => {
+      remoteVideoTrack.setMuted(false);
+    });
+    expect(screen.queryByText(STRINGS.remoteCameraOffLabel)).toBeNull();
+  });
+
+  it('brings it back if they turn it off again', async () => {
+    const { remoteVideoTrack } = await connectWithRemoteStream();
+    await act(async () => {
+      remoteVideoTrack.setMuted(false);
+    });
+    await act(async () => {
+      remoteVideoTrack.setMuted(true);
+    });
+    expect(await screen.findByText(STRINGS.remoteCameraOffLabel)).toBeDefined();
+  });
+
+  it('shows the connecting placeholder, not the camera notice, before they arrive', async () => {
+    renderCall();
+    await joinTheCall();
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    await act(async () => {
+      socket.deliver({ type: 'joined' });
+    });
+    // Nobody has connected: "their camera is off" would be a claim about
+    // someone who is not there.
+    expect(screen.queryByText(STRINGS.remoteCameraOffLabel)).toBeNull();
+    expect(screen.getAllByText(STRINGS.connectingLabel)).toHaveLength(2);
   });
 });

@@ -341,6 +341,8 @@ export interface VideoCallStrings {
   readonly turnCameraOnLabel: string;
   readonly turnCameraOffLabel: string;
   readonly cameraOffLabel: string;
+  /** Shown over the main frame once the other party is connected but has not turned their camera on. */
+  readonly remoteCameraOffLabel: string;
   /** Shown in place of the ordinary "call has ended" when the 30-minute limit is what ended it. */
   readonly timeLimitReachedLabel: string;
 }
@@ -398,6 +400,21 @@ export function VideoCall({
   const [cameraOn, setCameraOn] = useState(false);
   /** Distinguishes "the 30 minutes were up" from every other way a call ends, so the message can say which. */
   const [endedByTimeLimit, setEndedByTimeLimit] = useState(false);
+  /**
+   * **2026-09-05: whether the *other* person's camera is on.**
+   *
+   * Now that a call starts audio-only, the ordinary state of a freshly
+   * connected call is two people looking at a black rectangle. Without
+   * something to explain it that is indistinguishable from the bug the
+   * owner reported twice — "I don't see the other person's video" — except
+   * that this time the app would be working exactly as asked.
+   *
+   * Read from the remote track's own `muted` flag, which is the receiving
+   * end of the sender disabling it, and kept current from the `mute` and
+   * `unmute` events. Not inferred from anything we send: this is a fact
+   * about them, and the only honest source for it is their track.
+   */
+  const [remoteCameraOn, setRemoteCameraOn] = useState(false);
   /**
    * **2026-09-04: the remote stream is state, not a ref assignment.**
    *
@@ -501,6 +518,26 @@ export function VideoCall({
     }
   }, [deviceStream, cameraOn]);
 
+  // The other side of the same question. A remote track reports `muted`
+  // while its sender has it disabled, and fires `mute`/`unmute` as that
+  // changes — so this stays right for the whole call without either party
+  // having to announce anything over the relay.
+  useEffect(() => {
+    const [videoTrack] = remoteStream?.getVideoTracks() ?? [];
+    if (!videoTrack) {
+      setRemoteCameraOn(false);
+      return;
+    }
+    const sync = (): void => setRemoteCameraOn(!videoTrack.muted);
+    sync();
+    videoTrack.addEventListener('mute', sync);
+    videoTrack.addEventListener('unmute', sync);
+    return () => {
+      videoTrack.removeEventListener('mute', sync);
+      videoTrack.removeEventListener('unmute', sync);
+    };
+  }, [remoteStream]);
+
   /**
    * 2026-09-04: the 30-minute limit — *"if the video call length is 30
    * mins the call should be dropped automatically."*
@@ -576,6 +613,37 @@ export function VideoCall({
     let retriesLeft = PEER_RETRY_ATTEMPTS;
     let remoteDescriptionSet = false;
     let pendingCandidates: RTCIceCandidateInit[] = [];
+    /**
+     * **2026-09-05: one offer at a time, and one retry timer at a time.**
+     *
+     * These two flags exist because their absence produced an offer storm
+     * that left both parties on "Connecting…" for ever. The chain:
+     *
+     *   1. `retryTimer = setTimeout(…)` re-armed without cancelling what
+     *      was already pending. Harmless while exactly one message could
+     *      bounce — but `ready` (2026-09-04) meant a caller waiting alone
+     *      now got **two** `peer-unavailable` replies per round, each
+     *      arming a timer while only the last handle was kept. Each fired
+     *      timer sent an offer, which bounced, which armed more: the
+     *      number of pending timers doubled every two seconds, and
+     *      `clearTimeout(retryTimer)` could only ever cancel one of them.
+     *   2. Every one of those timers called `sendOffer()` with no guard, so
+     *      several offers went out at once and came back several answers.
+     *   3. The duplicate-answer guard then dropped all but one — and
+     *      dropping an answer left `remoteDescriptionSet` false, so every
+     *      ICE candidate from the peer queued in `pendingCandidates` and
+     *      was never flushed. With no remote candidates there is nothing
+     *      for ICE to pair, so the connection never completed and no track
+     *      ever arrived. A black frame and "Connecting…", exactly as
+     *      reported.
+     *
+     * `peerPresent` is the other half: once the peer has said anything at
+     * all, the blind re-offer loop has nothing left to discover and must
+     * stop, rather than keep renegotiating a connection that is trying to
+     * settle.
+     */
+    let offerInFlight = false;
+    let peerPresent = false;
     // Set once, inside `run()`, before `connectSignalling` is ever
     // constructed — every closure below that reads it (`onJoined`,
     // `onPeerUnavailable`, `retryConnection`) only ever runs after that.
@@ -604,6 +672,33 @@ export function VideoCall({
       if (live && next.kind === 'call') onLifecycleChange?.(next.lifecycle);
     };
 
+    /** The one place a retry is scheduled, so a second one can never be armed on top of a first. */
+    const cancelRetry = (): void => {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+    };
+
+    /**
+     * **The budget counts offers actually re-sent, not bounces received.**
+     *
+     * Two `peer-unavailable` replies arrive per round now — one for the
+     * `ready`, one for the offer — so decrementing on arrival burned the
+     * whole 15 in about seven rounds, and a patient waiting alone for their
+     * clinician was told the call had failed after roughly fourteen
+     * seconds. Counting here, where a retry is genuinely spent, restores
+     * the ~30 seconds that was intended.
+     */
+    const armRetry = (): void => {
+      cancelRetry();
+      if (retriesLeft <= 0) {
+        return;
+      }
+      retryTimer = setTimeout(() => {
+        retriesLeft -= 1;
+        void sendOffer();
+      }, PEER_RETRY_INTERVAL_MS);
+    };
+
     // WebRTC's own well-known trickle-ICE pitfall: a candidate can arrive
     // over the relay before this side's own `setRemoteDescription` call
     // resolves. Buffered rather than dropped or thrown past the caller.
@@ -613,7 +708,14 @@ export function VideoCall({
         pendingCandidates.push(candidate);
         return;
       }
-      await pc.addIceCandidate(candidate);
+      // A rejected candidate is one unusable network path, not a failed
+      // call — the same reasoning `flushPendingCandidates` states.
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch {
+        // Nothing to do: the paths that do work are what this connection
+        // will use.
+      }
     };
 
     const flushPendingCandidates = async (): Promise<void> => {
@@ -634,12 +736,27 @@ export function VideoCall({
       }
     };
 
-    const sendOffer = async (): Promise<void> => {
+    /**
+     * Offers, one at a time. `force` is for the cases where a *new* offer
+     * is genuinely warranted even though one is outstanding — the peer has
+     * just announced itself, or this side has rebuilt its peer connection
+     * — because the outstanding one was addressed to a peer or a
+     * connection that is no longer the one we are negotiating with.
+     */
+    async function sendOffer(force = false): Promise<void> {
       if (!pc) return;
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      connection?.send({ type: 'offer', appointmentId, payload: offer });
-    };
+      if (offerInFlight && !force) return;
+      offerInFlight = true;
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        connection?.send({ type: 'offer', appointmentId, payload: offer });
+      } catch {
+        // Releasing the flag is the point: a failed attempt must not lock
+        // this side out of ever offering again.
+        offerInFlight = false;
+      }
+    }
 
     async function handleRelayMessage(message: RelayMessage): Promise<void> {
       if (message.type === 'leave') {
@@ -652,6 +769,13 @@ export function VideoCall({
         setJoinRequested(false);
         return;
       }
+      // Anything at all from the peer proves they are on the call, so the
+      // blind re-offer loop has nothing left to discover and must stop.
+      // Left running, it renegotiates a connection that is trying to
+      // settle — which is how a working call was talked to death.
+      peerPresent = true;
+      cancelRetry();
+
       // 2026-09-04. The other party has joined and is waiting to be
       // offered to. Only the offerer acts on it; for the answerer it is
       // information about someone who is already going to offer.
@@ -663,13 +787,11 @@ export function VideoCall({
       // short fuse for two people clicking a button in their own time,
       // and unrecoverable once it blew.
       if (message.type === 'ready') {
-        // Anything from the peer proves they are here, so the blind
-        // re-offer loop has nothing left to discover. Left armed, its next
-        // firing sends a *second* offer, which is how duplicate answers
-        // were produced — see the `answer` branch below.
-        clearTimeout(retryTimer);
+        // `force`: the outstanding offer, if any, was addressed to a peer
+        // that has since (re)joined, so it will never be answered. This is
+        // the one place a fresh offer must override the one-at-a-time rule.
         if (role === 'patient' && pc) {
-          void sendOffer();
+          void sendOffer(true);
         }
         return;
       }
@@ -683,28 +805,50 @@ export function VideoCall({
           await pc.setLocalDescription(answer);
           connection?.send({ type: 'answer', appointmentId: message.appointmentId, payload: answer });
         } else if (message.type === 'answer') {
-          clearTimeout(retryTimer);
-          // **2026-09-04: only when one is actually outstanding.**
+          // **2026-09-05: an answer that cannot be applied is recovered
+          // from, not silently dropped.**
           //
-          // Two offers could be in flight at once — the one sent on
-          // joining and one from the retry timer, or from a `ready` —
-          // which the other side dutifully answers twice.
-          // `setRemoteDescription(answer)` on a connection already back in
-          // `stable` throws `InvalidStateError`, which landed in the
-          // `catch` below and replaced a working call with the error
-          // screen. The second answer is redundant by definition: it
-          // describes the same peer that the first one already connected.
+          // This used to skip on `signalingState !== 'have-local-offer'`
+          // alone and return, leaving `remoteDescriptionSet` false — so a
+          // *first* answer arriving at an awkward moment stranded every
+          // queued ICE candidate for the life of the call. Nothing flushes
+          // that queue but a successful `setRemoteDescription`, and with no
+          // remote candidates ICE has nothing to pair: the call sat on
+          // "Connecting…" behind a black frame until someone gave up.
+          //
+          // The two cases are not the same and must not share an exit:
           if (pc.signalingState !== 'have-local-offer') {
+            if (remoteDescriptionSet) {
+              // Already answered. This one describes the peer the first
+              // answer connected — genuinely redundant, and a browser
+              // would refuse it anyway.
+              return;
+            }
+            // Nothing negotiated and no offer outstanding: the two sides
+            // are out of step. A browser refuses this answer, so forcing
+            // it is not an option — the way back is a fresh offer, which
+            // is also what unsticks the queued candidates.
+            if (role === 'patient') {
+              void sendOffer(true);
+            }
             return;
           }
           await pc.setRemoteDescription(message.payload as RTCSessionDescriptionInit);
           remoteDescriptionSet = true;
+          offerInFlight = false;
           await flushPendingCandidates();
         } else if (message.type === 'ice-candidate') {
           await addIceCandidate(message.payload as RTCIceCandidateInit);
         }
       } catch {
-        setStageIfLive({ kind: 'error' });
+        // **Not the error screen.** A failed negotiation step is something
+        // this call can still recover from — the peer is present, ICE may
+        // already be gathering, and a fresh offer is one `ready` or one
+        // retry away. Tearing the whole call down over it (which is what
+        // this did) turned every transient SDP race into a dead call the
+        // caller had to leave and rejoin. The connection state machine
+        // still owns real, terminal failure.
+        offerInFlight = false;
       }
     }
 
@@ -755,6 +899,9 @@ export function VideoCall({
         pc?.close();
         remoteDescriptionSet = false;
         pendingCandidates = [];
+        // A fresh peer connection has no offer outstanding — whatever was
+        // in flight belonged to the one just closed.
+        offerInFlight = false;
         usingTurn = Boolean(turnIceServer);
         // The old peer connection's tracks die with it, so the stream held
         // in state is now a frozen last frame. Cleared, so the caller sees
@@ -767,7 +914,7 @@ export function VideoCall({
         // connection and then waited on an offer nobody was going to send.
         connection?.send({ type: 'ready', appointmentId, payload: {} });
         if (role === 'patient') {
-          void sendOffer();
+          void sendOffer(true);
         }
       })();
     }
@@ -814,6 +961,10 @@ export function VideoCall({
             // first sat on "Connecting…" with nothing to explain it. They
             // are waiting for a peer, and the screen should say so.
             setStageIfLive({ kind: 'waiting-for-peer' });
+            // Whatever bounced never reached anyone, so nothing is
+            // outstanding — without this the guard in `sendOffer` would
+            // lock this side out of retrying at all.
+            offerInFlight = false;
             // Only the offerer has anything to retry — the answerer has
             // nothing to send until an offer arrives, and its `ready` has
             // already been delivered or will be re-sent by the other
@@ -821,12 +972,27 @@ export function VideoCall({
             // `ready` handshake rather than the sole mechanism, so
             // exhausting it is no longer the ordinary way two people meet.
             if (role !== 'patient') return;
-            if (retriesLeft <= 0) {
-              setStageIfLive({ kind: 'call', lifecycle: { kind: 'call-failed' } });
-              return;
-            }
-            retriesLeft -= 1;
-            retryTimer = setTimeout(() => void sendOffer(), PEER_RETRY_INTERVAL_MS);
+            // 2026-09-05: a bounce that arrives *after* the peer has spoken
+            // is stale — one of the two messages sent while they were still
+            // absent. Re-offering on it restarts negotiation on a
+            // connection that is already settling.
+            if (peerPresent) return;
+            // **Running out of nudges is not a failed call.** This used to
+            // declare `call-failed` — "This call could not connect" — at
+            // someone whose only problem was that the other person had not
+            // arrived yet. Nothing had failed: the socket is open, the join
+            // was accepted, and the other party's own `ready` will reach
+            // this side the moment they join, which is what actually
+            // discovers them now. So the nudging stops and the honest
+            // "waiting for the other participant" stays up. A call nobody
+            // ever joins is ended by the 30-minute limit, not by a message
+            // that blames the connection.
+            //
+            // `armRetry`, never a bare `setTimeout`: two `peer-unavailable`
+            // replies arrive per round, and re-arming without cancelling is
+            // what let pending timers double every two seconds. See
+            // `offerInFlight`'s own note.
+            armRetry();
           },
           onRelayMessage: (message) => void handleRelayMessage(message),
           // The signalling socket closing is not an ICE failure — see
@@ -844,7 +1010,7 @@ export function VideoCall({
 
     return () => {
       live = false;
-      clearTimeout(retryTimer);
+      cancelRetry();
       stateMachine.dispose();
       // Flushes any still-accumulating TURN time (the connection was
       // `connected` at the moment this effect tore down) into the total
@@ -965,8 +1131,16 @@ export function VideoCall({
         {/* Until the other party's video arrives there is nothing to show
             but black, which is indistinguishable from a broken call. The
             status line above already says what is happening; this repeats
-            it inside the frame, where the caller is looking. */}
+            it inside the frame, where the caller is looking.
+
+            2026-09-05: and once it *has* arrived, a call that started
+            audio-only still shows black until they turn their camera on.
+            That is the app working as asked and it looks exactly like the
+            fault the owner reported twice, so it says which it is. */}
         {!remoteStream && <p style={REMOTE_PLACEHOLDER_STYLE}>{statusLabel}</p>}
+        {remoteStream && !remoteCameraOn && (
+          <p style={REMOTE_PLACEHOLDER_STYLE}>{strings.remoteCameraOffLabel}</p>
+        )}
         {/* Mirrored, the way every video call mirrors a self-view: an
             un-mirrored preview of yourself reads as wrong to almost
             everyone, because it is not what a mirror does. The remote
