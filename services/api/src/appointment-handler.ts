@@ -6,11 +6,13 @@
 
 import { AppointmentRepository } from './appointment-repository.js';
 import { createAppointmentHandler } from './appointment.js';
+import { ClinicianRepository } from './clinician-repository.js';
 import { systemClock } from './clock.js';
 import { DynamoAuditLog } from './dynamo-audit-log.js';
 import {
   createPatientProfileStore,
   DynamoAppointmentStore,
+  DynamoClinicianStore,
   DynamoPatientNotificationStore,
 } from './dynamo-store.js';
 import { PatientNotificationRepository } from './patient-notification-repository.js';
@@ -44,9 +46,22 @@ const notifications = new PatientNotificationRepository(
   systemClock,
 );
 
+// 2026-09-06: display names for the two people an appointment is about,
+// joined onto the two read routes. Read-only here — the role's own
+// `ReadClinicianAccounts` statement grants `GetItem` on `CLI#*` and nothing
+// more — so the `AuditWriter` it takes never records anything from this
+// function. Constructed exactly as `caseload-handler.ts` builds its own, and
+// reading the same `CLINICIAN_TABLE_NAME` that stack now sets here too.
+const clinicians = new ClinicianRepository(
+  new DynamoClinicianStore({ tableName: process.env.CLINICIAN_TABLE_NAME ?? '' }),
+  audit,
+  systemClock,
+);
+
 export const handler = createAppointmentHandler({
   patients,
   appointments,
+  clinicians,
   notifications,
   flags,
 });

@@ -91,6 +91,19 @@ export interface CalendarAppointment {
   readonly scheduledAt: string;
   readonly durationMinutes: number;
   readonly appointment_status: string;
+  /**
+   * 2026-09-06: who the appointment is *with*, joined onto the row by the
+   * API (`services/api/src/appointment.ts`) rather than stored on it.
+   *
+   * Both are optional, and their absence is meaningful rather than a
+   * loading state: the server omits a name it will not disclose to this
+   * caller (the patient name is gated on the `Patient profile` row, not on
+   * the `Appointments` read that returned the row) and omits one that is
+   * genuinely not recorded. Either way there is nothing to show, so the
+   * line is dropped instead of rendering a label with a blank after it.
+   */
+  readonly patientName?: string;
+  readonly clinicianName?: string;
 }
 
 export type CalendarSource = 'patient' | 'clinician';
@@ -175,6 +188,9 @@ export interface AppointmentCalendarStrings {
   readonly durationLabel: string;
   readonly minutesSuffix: string;
   readonly statusLabel: string;
+  /** 2026-09-06: *"it should also show the name of the patient and the name of the clinician."* */
+  readonly patientLabel: string;
+  readonly clinicianLabel: string;
   readonly joinCallLabel: string;
   /**
    * 2026-09-06: the four decisions that used to live on `account/calendar`,
@@ -715,7 +731,23 @@ export function AppointmentCalendar({
                         {formatDateTime(entry.scheduledAt, locale)}
                       </time>
                     </p>
+                    {/* Who, before how long and what state — an appointment
+                        is with a person, and that is the first thing a
+                        clinician scanning a day wants off it. Each name is
+                        rendered only when the API sent one; see
+                        `CalendarAppointment` on why an absent name is a real
+                        answer and not a gap to fill with a placeholder. */}
                     <p className="ndn-cal-meta">
+                      {entry.patientName && (
+                        <span>
+                          {strings.patientLabel} {entry.patientName}
+                        </span>
+                      )}
+                      {entry.clinicianName && (
+                        <span>
+                          {strings.clinicianLabel} {entry.clinicianName}
+                        </span>
+                      )}
                       <span>
                         {strings.durationLabel} {entry.durationMinutes} {strings.minutesSuffix}
                       </span>

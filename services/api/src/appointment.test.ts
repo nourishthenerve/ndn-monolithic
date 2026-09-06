@@ -1,11 +1,12 @@
 import type { Appointment, Patient, PatientNotification } from '@ndn/shared-types';
 import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { AppointmentStore, AppointmentTransition } from './appointment-repository.js';
 import { AppointmentRepository } from './appointment-repository.js';
 import { createAppointmentHandler } from './appointment.js';
 import { actorContext, InMemoryAuditLog } from './audit.js';
+import { ClinicianRepository, InMemoryClinicianStore } from './clinician-repository.js';
 import type { Clock } from './clock.js';
 import { AppError } from './errors.js';
 import { CachedFlagReader, FLAG_CACHE_TTL_MS, InMemoryFlagSource } from './flags.js';
@@ -207,14 +208,30 @@ async function build(overrides: { flagEnabled?: boolean } = {}) {
     newId: () => `n${(notificationSeq += 1)}`,
   });
 
+  // 2026-09-06: the directory the two read routes join display names from.
+  // `cli-1` is the clinician `pat-1` is assigned to above, so a calendar row
+  // for that pair resolves both names and the negative cases (an unassigned
+  // clinician, a caller who may not read the profile) stay expressible.
+  const clinicians = new ClinicianRepository(
+    new InMemoryClinicianStore(),
+    new InMemoryAuditLog(),
+    clock,
+  );
+  await clinicians.create(
+    'cli-1',
+    { displayName: 'A Clinician', role: 'sub' },
+    OWNER_ACTOR,
+  );
+
   const handler = createAppointmentHandler({
     patients,
     appointments,
+    clinicians,
     notifications,
     flags,
     clock,
   });
-  return { handler, patients, appointments, patientStore, notificationStore };
+  return { handler, patients, appointments, clinicians, patientStore, notificationStore };
 }
 
 async function invoke(
@@ -621,6 +638,131 @@ describe('GET /clinicians/me/calendar', () => {
       }),
     );
     expect(response.statusCode).toBe(404);
+  });
+});
+
+// 2026-09-06: *"on calender when we click an appointment it should also show
+// the name of the patient and the name of the clinician."* The row stores two
+// ids and no names, so both routes join them on the way out.
+describe('the two names an appointment is about', () => {
+  async function seedOne(handler: ReturnType<typeof createAppointmentHandler>, at: string) {
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: at, durationMinutes: 30 },
+      }),
+    );
+  }
+
+  type NamedItem = {
+    readonly patientId: string;
+    readonly clinicianId: string;
+    readonly patientName?: string;
+    readonly clinicianName?: string;
+  };
+
+  const itemsOf = (body: string): NamedItem[] => (JSON.parse(body) as { items: NamedItem[] }).items;
+
+  it('carries both names on the clinician calendar', async () => {
+    const { handler } = await build();
+    await seedOne(handler, '2026-09-01T10:00:00.000Z');
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' },
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(itemsOf(response.body)[0]).toMatchObject({
+      patientName: 'A Patient',
+      clinicianName: 'A Clinician',
+    });
+  });
+
+  it('carries both names on the patient\'s own list', async () => {
+    const { handler } = await build();
+    await seedOne(handler, '2026-09-01T10:00:00.000Z');
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: PATIENT_LIST_ROUTE,
+        pathParameters: { id: 'me' },
+        principal: OWNING_PATIENT_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    // The patient's own name is theirs to see by definition; the clinician's
+    // is the half of this request that actually tells them something.
+    expect(itemsOf(response.body)[0]).toMatchObject({
+      patientName: 'A Patient',
+      clinicianName: 'A Clinician',
+    });
+  });
+
+  it('omits a name it cannot resolve rather than falling back to the id', async () => {
+    // `caseload-repository.ts` does fall back to the id for its own table
+    // column. This must not: a raw Cognito `sub` rendered where a person's
+    // name belongs is worse than no line at all, and the client drops the
+    // line entirely when the field is absent.
+    const { handler, clinicians } = await build();
+    vi.spyOn(clinicians, 'findById').mockResolvedValue(undefined);
+    await seedOne(handler, '2026-09-01T10:00:00.000Z');
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' },
+      }),
+    );
+    const item = itemsOf(response.body)[0];
+    // Absent, not blank and not the id — the key never reaches the wire, so
+    // the client can distinguish "no name" from "a name that is empty".
+    expect(item && 'clinicianName' in item).toBe(false);
+    // The row itself is unaffected — a missing name is cosmetic, never a
+    // reason to drop an appointment the caller is entitled to.
+    expect(item?.clinicianId).toBe('cli-1');
+  });
+
+  it('survives a directory read that throws, rather than 500ing the calendar', async () => {
+    const { handler, clinicians } = await build();
+    vi.spyOn(clinicians, 'findById').mockRejectedValue(new Error('directory down'));
+    await seedOne(handler, '2026-09-01T10:00:00.000Z');
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' },
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(itemsOf(response.body)[0]?.clinicianName).toBeUndefined();
+  });
+
+  it('reads each distinct id once, however many rows name it', async () => {
+    // The guarantee that keeps this from being two extra DynamoDB reads per
+    // appointment: a fortnight of one clinician's calendar is one clinician
+    // and a handful of patients, so the per-request cache is what makes the
+    // join affordable at all. Caching the *promise* is what makes it hold
+    // for the concurrent lookups inside one `Promise.all`.
+    const { handler, clinicians } = await build();
+    const findById = vi.spyOn(clinicians, 'findById');
+    await seedOne(handler, '2026-09-01T10:00:00.000Z');
+    await seedOne(handler, '2026-09-01T12:00:00.000Z');
+    await seedOne(handler, '2026-09-01T14:00:00.000Z');
+    findById.mockClear();
+
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' },
+      }),
+    );
+    expect(itemsOf(response.body)).toHaveLength(3);
+    expect(findById).toHaveBeenCalledTimes(1);
   });
 });
 

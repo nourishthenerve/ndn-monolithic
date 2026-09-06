@@ -70,6 +70,8 @@ const STRINGS = {
   durationLabel: 'Duration:',
   minutesSuffix: 'minutes',
   statusLabel: 'Status:',
+  patientLabel: 'Patient:',
+  clinicianLabel: 'Clinician:',
   joinCallLabel: 'Join call',
   approveLabel: 'Approve',
   declineLabel: 'Decline',
@@ -265,6 +267,57 @@ describe('a patient', () => {
   it('says so for a month with nothing in it', async () => {
     renderPatient(vi.fn().mockResolvedValue(jsonResponse([])));
     expect(await screen.findByText('No appointments in this period.')).toBeDefined();
+  });
+});
+
+// 2026-09-06: *"on calender when we click an appointment it should also show
+// the name of the patient and the name of the clinician."* The API joins them
+// onto the row; this is the half that renders them.
+describe('the names on a day panel', () => {
+  function renderWith(entry: CalendarAppointment) {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('patient')}
+        fetchPatientAppointments={vi.fn().mockResolvedValue(jsonResponse([entry]))}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+  }
+
+  it('shows both names when the API sent them', async () => {
+    renderWith({
+      ...appointment(local(2026, 8, 15, 9, 0)),
+      patientName: 'Ada Lovelace',
+      clinicianName: 'Dr Grace Hopper',
+    });
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(screen.getByText(/Ada Lovelace/)).toBeDefined();
+    expect(screen.getByText(/Dr Grace Hopper/)).toBeDefined();
+  });
+
+  it('drops the line entirely when a name is absent, rather than labelling a blank', async () => {
+    // The server omits a name it will not disclose *and* one that is not
+    // recorded, so the absent case is ordinary rather than exceptional — a
+    // "Patient:" with nothing after it would read as data loss.
+    renderWith(appointment(local(2026, 8, 15, 9, 0)));
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(screen.queryByText(/Patient:/)).toBeNull();
+    expect(screen.queryByText(/Clinician:/)).toBeNull();
+    // The rest of the row is untouched — a missing name costs only its line.
+    expect(screen.getByText(/Duration:/)).toBeDefined();
+  });
+
+  it('shows the clinician alone when only that name resolved', async () => {
+    renderWith({
+      ...appointment(local(2026, 8, 15, 9, 0)),
+      clinicianName: 'Dr Grace Hopper',
+    });
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(screen.getByText(/Dr Grace Hopper/)).toBeDefined();
+    expect(screen.queryByText(/Patient:/)).toBeNull();
   });
 });
 

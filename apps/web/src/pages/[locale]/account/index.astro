@@ -140,6 +140,8 @@ const PANEL_HEADING_LEVEL = 3;
           durationLabel: t('accountCalendar.duration', undefined, locale),
           minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
           statusLabel: t('accountCalendar.status', undefined, locale),
+          patientLabel: t('accountCalendar.patient', undefined, locale),
+          clinicianLabel: t('accountCalendar.clinician', undefined, locale),
           joinCallLabel: t('calendar.joinCall', undefined, locale),
           // The four decisions inherited from the deleted `account/calendar`
           // page, reusing its own catalogue entries rather than new copy.
@@ -162,6 +164,86 @@ const PANEL_HEADING_LEVEL = 3;
           },
         }}
       />
+    </RequireAuth>
+
+    {/* ## 1a. Patient dashboard — the caseload table itself, not a link to it.
+        *"there is still a button to be clicked for patient dashboard for
+        clinicians account. rather keep that table that otherwise opens when
+        we click that button on the landing dashboard itself."*
+
+        `account/caseload` is deleted; the table it existed to mount is here.
+        The four roles are that page's own `allowRoles` — the table renders
+        different columns for a visitor (name, address, appointment count)
+        than for a clinician, which `CaseloadView` decides from the resolved
+        role rather than from anything passed here.
+
+        The one thing that had to move with it is `patient-record`'s "back to
+        dashboard" link, which pointed at the deleted page and now points
+        here — where the table it means actually is.
+
+        **2026-09-06: directly beneath the calendar, not at the foot of the
+        page.** The owner: *"for clinician and principal clinician on logged
+        in landing dashboard immediately after calender have patient
+        dashboard. atm, it's at the bottom."* It had been sitting below the
+        staff Account section — a password form standing between a clinician
+        and their own caseload, which is the thing they actually signed in
+        to work from. The two sections a clinician sees are now ordered by
+        how often they are wanted rather than by the order they were built.
+
+        It sits *between* the numbered patient sections and does not disturb
+        them: everything from "## 2" down is gated to `patient`, and this is
+        gated to the four staff roles, so no session ever renders both. */}
+    <RequireAuth
+      client:only="react"
+      allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk', 'visitor']}
+    >
+      <section aria-labelledby="caseload-heading">
+        <Heading level={2} id="caseload-heading">
+          {t('account.dashboardLink', undefined, locale)}
+        </Heading>
+        <CaseloadView
+          client:only="react"
+          recordHrefBase={`/${locale}/account/patient-record`}
+          strings={{
+            loadingLabel: t('caseload.loading', undefined, locale),
+            forbiddenLabel: t('caseload.forbidden', undefined, locale),
+            errorLabel: t('caseload.error', undefined, locale),
+            emptyLabel: t('caseload.empty', undefined, locale),
+            patientColumnLabel: t('caseload.patientColumn', undefined, locale),
+            statusColumnLabel: t('caseload.statusColumn', undefined, locale),
+            clinicianColumnLabel: t('caseload.clinicianColumn', undefined, locale),
+            assignColumnLabel: t('caseload.assignColumn', undefined, locale),
+            nextPageLabel: t('caseload.nextPage', undefined, locale),
+            previousPageLabel: t('caseload.previousPage', undefined, locale),
+            // Not the page heading repeated — a caption's job is to say what
+            // the table contains, and the owner's own reason for wanting this
+            // table is the sentence it now carries.
+            caption: t('caseload.tableCaption', undefined, locale),
+            pagerLabel: t('caseload.pagerLabel', undefined, locale),
+            totalPatientsLabel: t('caseload.totalPatients', undefined, locale),
+            activePatientsLabel: t('caseload.activePatients', undefined, locale),
+            statusPendingLabel: t('caseload.statusPending', undefined, locale),
+            statusApprovedLabel: t('caseload.statusApproved', undefined, locale),
+            statusDeclinedLabel: t('caseload.statusDeclined', undefined, locale),
+            statusSuspendedLabel: t('caseload.statusSuspended', undefined, locale),
+            unassignedLabel: t('caseload.unassigned', undefined, locale),
+            chooseClinicianLabel: t('caseload.chooseClinician', undefined, locale),
+            assignButton: t('caseload.assignButton', undefined, locale),
+            reassignButton: t('caseload.reassignButton', undefined, locale),
+            working: t('caseload.working', undefined, locale),
+            assignError: t('caseload.assignError', undefined, locale),
+            noCliniciansLabel: t('caseload.noClinicians', undefined, locale),
+            openRecordLabel: t('caseload.openRecord', undefined, locale),
+            removeColumnLabel: t('caseload.removeColumn', undefined, locale),
+            suspendButton: t('caseload.suspendButton', undefined, locale),
+            restoreButton: t('caseload.restoreButton', undefined, locale),
+            suspendConfirm: t('caseload.suspendConfirm', undefined, locale),
+            statusError: t('caseload.statusError', undefined, locale),
+            addressColumnLabel: t('caseload.addressColumn', undefined, locale),
+            appointmentsColumnLabel: t('caseload.appointmentsColumn', undefined, locale),
+          }}
+        />
+      </section>
     </RequireAuth>
 
     {/* ## 2. Personal details — `account/patient`'s content, less three
@@ -362,72 +444,6 @@ const PANEL_HEADING_LEVEL = 3;
             ),
             policyViolationError: t('changePassword.policyViolationError', undefined, locale),
             error: t('changePassword.error', undefined, locale),
-          }}
-        />
-      </section>
-    </RequireAuth>
-    {/* ## Patient dashboard — the caseload table itself, not a link to it.
-        *"there is still a button to be clicked for patient dashboard for
-        clinicians account. rather keep that table that otherwise opens when
-        we click that button on the landing dashboard itself."*
-
-        `account/caseload` is deleted with this change; the table it existed
-        to mount is here. The four roles are that page's own `allowRoles` —
-        the table renders different columns for a visitor (name, address,
-        appointment count) than for a clinician, which `CaseloadView` decides
-        from the resolved role rather than from anything passed here.
-
-        The one thing that had to move with it is `patient-record`'s "back to
-        dashboard" link, which pointed at the deleted page and now points
-        here — where the table it means actually is. */}
-    <RequireAuth
-      client:only="react"
-      allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk', 'visitor']}
-    >
-      <section aria-labelledby="caseload-heading">
-        <Heading level={2} id="caseload-heading">
-          {t('account.dashboardLink', undefined, locale)}
-        </Heading>
-        <CaseloadView
-          client:only="react"
-          recordHrefBase={`/${locale}/account/patient-record`}
-          strings={{
-            loadingLabel: t('caseload.loading', undefined, locale),
-            forbiddenLabel: t('caseload.forbidden', undefined, locale),
-            errorLabel: t('caseload.error', undefined, locale),
-            emptyLabel: t('caseload.empty', undefined, locale),
-            patientColumnLabel: t('caseload.patientColumn', undefined, locale),
-            statusColumnLabel: t('caseload.statusColumn', undefined, locale),
-            clinicianColumnLabel: t('caseload.clinicianColumn', undefined, locale),
-            assignColumnLabel: t('caseload.assignColumn', undefined, locale),
-            nextPageLabel: t('caseload.nextPage', undefined, locale),
-            previousPageLabel: t('caseload.previousPage', undefined, locale),
-            // Not the page heading repeated — a caption's job is to say what
-            // the table contains, and the owner's own reason for wanting this
-            // table is the sentence it now carries.
-            caption: t('caseload.tableCaption', undefined, locale),
-            pagerLabel: t('caseload.pagerLabel', undefined, locale),
-            totalPatientsLabel: t('caseload.totalPatients', undefined, locale),
-            activePatientsLabel: t('caseload.activePatients', undefined, locale),
-            statusPendingLabel: t('caseload.statusPending', undefined, locale),
-            statusApprovedLabel: t('caseload.statusApproved', undefined, locale),
-            statusDeclinedLabel: t('caseload.statusDeclined', undefined, locale),
-            statusSuspendedLabel: t('caseload.statusSuspended', undefined, locale),
-            unassignedLabel: t('caseload.unassigned', undefined, locale),
-            chooseClinicianLabel: t('caseload.chooseClinician', undefined, locale),
-            assignButton: t('caseload.assignButton', undefined, locale),
-            reassignButton: t('caseload.reassignButton', undefined, locale),
-            working: t('caseload.working', undefined, locale),
-            assignError: t('caseload.assignError', undefined, locale),
-            noCliniciansLabel: t('caseload.noClinicians', undefined, locale),
-            openRecordLabel: t('caseload.openRecord', undefined, locale),
-            removeColumnLabel: t('caseload.removeColumn', undefined, locale),
-            suspendButton: t('caseload.suspendButton', undefined, locale),
-            restoreButton: t('caseload.restoreButton', undefined, locale),
-            suspendConfirm: t('caseload.suspendConfirm', undefined, locale),
-            statusError: t('caseload.statusError', undefined, locale),
-            addressColumnLabel: t('caseload.addressColumn', undefined, locale),
-            appointmentsColumnLabel: t('caseload.appointmentsColumn', undefined, locale),
           }}
         />
       </section>
