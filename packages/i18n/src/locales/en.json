@@ -128,6 +128,8 @@
   "account.callback.failed": "That sign-in link could not be completed. Please try again.",
   "caseload.heading": "Patient dashboard",
   "caseload.description": "Every patient in the system, active first, with the clinician each is assigned to.",
+  "caseload.tableCaption": "Every patient, with the clinician they are assigned to",
+  "caseload.pagerLabel": "Patient list pages",
   "caseload.loading": "Loading the patient dashboard…",
   "caseload.forbidden": "You do not have access to this page.",
   "caseload.error": "Something went wrong loading the dashboard. Please try again.",

@@ -113,6 +113,16 @@ export interface CaseloadViewStrings {
   readonly nextPageLabel: string;
   readonly previousPageLabel: string;
   readonly caption: string;
+  /**
+   * 2026-09-06: the pagination nav's own accessible name.
+   *
+   * It used to reuse `caption`, which was the page heading repeated — fine
+   * while the caption was two words, wrong once the caption became a
+   * sentence describing the table. A nav named "Every patient, with the
+   * clinician they are assigned to" tells a screen-reader user nothing about
+   * what the two buttons in it do.
+   */
+  readonly pagerLabel: string;
   readonly totalPatientsLabel: string;
   readonly activePatientsLabel: string;
   readonly statusPendingLabel: string;
@@ -484,20 +494,25 @@ export function CaseloadView({
 
   if (state.page.items.length === 0 && cursorStack.length === 1) {
     return (
-      <>
+      <div className="ndn-caseload">
         {counts && <PatientCounts counts={counts} strings={strings} />}
         <p>{strings.emptyLabel}</p>
-      </>
+      </div>
     );
   }
 
   return (
-    <>
+    <div className="ndn-caseload">
       {counts && <PatientCounts counts={counts} strings={strings} />}
       {assignFailed && <p role="alert">{strings.assignError}</p>}
       {statusFailed && <p role="alert">{strings.statusError}</p>}
-      <table>
-        <caption>{strings.caption}</caption>
+      {/* A caseload row carries a name, a status, a clinician, a picker and
+          two buttons. That does not fit a phone at any font size worth
+          reading, so the table scrolls inside its own container rather than
+          forcing the whole page sideways. */}
+      <div className="ndn-caseload-scroll">
+      <table className="ndn-caseload-table">
+        <caption className="ndn-caseload-caption">{strings.caption}</caption>
         <thead>
           <tr>
             <th scope="col">{strings.patientColumnLabel}</th>
@@ -530,7 +545,10 @@ export function CaseloadView({
                   {isVisitor ? (
                     item.fullName
                   ) : (
-                    <a href={`${recordHrefBase}?id=${encodeURIComponent(item.patientId)}`}>
+                    <a
+                      className="ndn-caseload-name"
+                      href={`${recordHrefBase}?id=${encodeURIComponent(item.patientId)}`}
+                    >
                       {item.fullName || strings.openRecordLabel}
                     </a>
                   )}
@@ -542,8 +560,20 @@ export function CaseloadView({
                   </>
                 ) : (
                   <>
-                    <td>{statusLabel(item.accountStatus)}</td>
-                    <td>{item.assignedClinicianName ?? strings.unassignedLabel}</td>
+                    <td>
+                      <span className={`ndn-caseload-status ndn-caseload-status--${item.accountStatus}`}>
+                        {statusLabel(item.accountStatus)}
+                      </span>
+                    </td>
+                    {/* "Which patients are assigned to which clinician" is
+                        what this view is read for, so an unassigned row says
+                        so in its own right rather than leaving a blank that
+                        reads as missing data. */}
+                    <td>
+                      {item.assignedClinicianName ?? (
+                        <span className="ndn-caseload-unassigned">{strings.unassignedLabel}</span>
+                      )}
+                    </td>
                   </>
                 )}
                 {canAssign && (
@@ -558,6 +588,7 @@ export function CaseloadView({
                           accessible name, patient included, for anyone
                           navigating by form control alone. */}
                       <select
+                        className="ndn-caseload-select"
                         id={selectId}
                         aria-label={`${strings.chooseClinicianLabel} — ${item.fullName}`}
                         disabled={isBusy}
@@ -578,6 +609,7 @@ export function CaseloadView({
                       </select>{' '}
                       <button
                         type="button"
+                        className="ndn-caseload-button"
                         aria-label={`${item.assignedClinicianId ? strings.reassignButton : strings.assignButton} — ${item.fullName}`}
                         disabled={isBusy || !choices[item.patientId]}
                         onClick={() => void handleAssign(item)}
@@ -596,6 +628,7 @@ export function CaseloadView({
                 <td>
                   <button
                     type="button"
+                    className="ndn-caseload-button"
                     aria-label={`${item.accountStatus === 'suspended' ? strings.restoreButton : strings.suspendButton} — ${item.fullName}`}
                     disabled={isBusy}
                     onClick={() =>
@@ -615,19 +648,26 @@ export function CaseloadView({
           })}
         </tbody>
       </table>
-      <nav aria-label={strings.caption}>
-        <button type="button" onClick={goPrevious} disabled={cursorStack.length <= 1}>
+      </div>
+      <nav className="ndn-caseload-pager" aria-label={strings.pagerLabel}>
+        <button
+          type="button"
+          className="ndn-caseload-button"
+          onClick={goPrevious}
+          disabled={cursorStack.length <= 1}
+        >
           {strings.previousPageLabel}
         </button>
         <button
           type="button"
+          className="ndn-caseload-button"
           onClick={() => state.page.nextCursor && goNext(state.page.nextCursor)}
           disabled={!state.page.nextCursor}
         >
           {strings.nextPageLabel}
         </button>
       </nav>
-    </>
+    </div>
   );
 }
 
@@ -639,8 +679,13 @@ function PatientCounts({
   readonly counts: CaseloadCounts;
   readonly strings: CaseloadViewStrings;
 }): ReactNode {
+  // Kept as a bare dt/dd sequence with no wrapper elements — CSS grid pairs
+  // them into columns instead. `<div>` inside a `<dl>` is valid HTML5, but
+  // this page is only ever axe-scanned by the authenticated nightly run
+  // against production, and a rule disagreeing about it is not something to
+  // discover there.
   return (
-    <dl>
+    <dl className="ndn-caseload-counts">
       <dt>{strings.totalPatientsLabel}</dt>
       <dd>{counts.total}</dd>
       <dt>{strings.activePatientsLabel}</dt>

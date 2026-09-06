@@ -17,6 +17,7 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
+import { caseloadStylesCss } from '../../../account/caseload-styles.js';
 import { CaseloadView } from '../../../account/CaseloadView.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
@@ -66,7 +67,11 @@ const heading = t('caseload.heading', undefined, locale);
         assignColumnLabel: t('caseload.assignColumn', undefined, locale),
         nextPageLabel: t('caseload.nextPage', undefined, locale),
         previousPageLabel: t('caseload.previousPage', undefined, locale),
-        caption: heading,
+        // Not the page heading repeated — a caption's job is to say what
+        // the table contains, and the owner's own reason for wanting this
+        // table is the sentence it now carries.
+        caption: t('caseload.tableCaption', undefined, locale),
+        pagerLabel: t('caseload.pagerLabel', undefined, locale),
         totalPatientsLabel: t('caseload.totalPatients', undefined, locale),
         activePatientsLabel: t('caseload.activePatients', undefined, locale),
         statusPendingLabel: t('caseload.statusPending', undefined, locale),
@@ -92,3 +97,9 @@ const heading = t('caseload.heading', undefined, locale);
     />
   </RequireAuth>
 </BaseLayout>
+
+{/* One `set:html` block for the caseload table's styles — an island cannot
+    ship its own inline `<style>` and rely on it surviving this site's CSP,
+    and the string lives in its own module so it is not also bundled into the
+    client JavaScript. See `account/caseload-styles.ts`. */}
+<style set:html={caseloadStylesCss} />

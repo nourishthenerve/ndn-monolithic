@@ -16,12 +16,15 @@
 // `displayName` is a field on the `CLI#` record and a patient has none —
 // their equivalent is `/account/patient`, which edits the fields a
 // patient actually has.
+import { Heading } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
+
+import type { PanelHeadingLevel } from './heading-level.js';
 
 type PanelState = 'loading' | 'ready' | 'saving' | 'saved' | 'forbidden' | 'error';
 
@@ -39,6 +42,8 @@ export interface OwnDetailsPanelStrings {
 
 export interface OwnDetailsPanelProps {
   readonly strings: OwnDetailsPanelStrings;
+  /** 2026-09-06: the level this panel's own heading renders at — 2 on its own page, 3 inside a dashboard section. See `heading-level.ts`. */
+  readonly headingLevel?: PanelHeadingLevel;
   readonly client?: SessionClient;
   /** Injectable for tests; defaults to a real same-origin-authorised fetch against `contentApiUrl`. */
   readonly fetchOwnDetails?: (accessToken: string) => Promise<Response>;
@@ -63,6 +68,7 @@ function defaultSaveOwnDetails(accessToken: string, displayName: string): Promis
 
 export function OwnDetailsPanel({
   strings,
+  headingLevel = 2,
   client = defaultClient,
   fetchOwnDetails = defaultFetchOwnDetails,
   saveOwnDetails = defaultSaveOwnDetails,
@@ -134,7 +140,7 @@ export function OwnDetailsPanel({
   if (state === 'loading') {
     return (
       <section>
-        <h2>{strings.heading}</h2>
+        <Heading level={headingLevel}>{strings.heading}</Heading>
         <p role="status" aria-live="polite">
           {strings.loading}
         </p>
@@ -144,7 +150,7 @@ export function OwnDetailsPanel({
   if (state === 'forbidden') {
     return (
       <section>
-        <h2>{strings.heading}</h2>
+        <Heading level={headingLevel}>{strings.heading}</Heading>
         <p role="alert">{strings.forbidden}</p>
       </section>
     );
@@ -154,7 +160,7 @@ export function OwnDetailsPanel({
 
   return (
     <section>
-      <h2>{strings.heading}</h2>
+      <Heading level={headingLevel}>{strings.heading}</Heading>
       <p>{strings.intro}</p>
       <form onSubmit={(event) => void handleSubmit(event)}>
         <p>
