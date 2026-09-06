@@ -54,6 +54,19 @@ const PRINCIPAL_CONTEXT = {
   clinicianId: 'principal-sub',
 };
 
+/**
+ * 2026-09-06. A helpdesk *is* a `CLI#` row and so carries a `clinicianId` —
+ * `cli-hd`, which no patient is ever assigned to. That is the whole reason
+ * the calendar route expands "me" to the practice for this role: their own
+ * id can only ever answer with nothing.
+ */
+const HELPDESK_CONTEXT = {
+  subjectId: 'cli-hd',
+  role: 'helpdesk',
+  accountStatus: 'active',
+  clinicianId: 'cli-hd',
+};
+
 /** In-memory `AppointmentStore` — this file exercises `appointment.ts`'s own routing/authz logic; the real Query/BETWEEN shape is `dynamo-store.test.ts`'s job. */
 class InMemoryAppointmentStore implements AppointmentStore {
   private readonly items: Appointment[] = [];
@@ -220,6 +233,15 @@ async function build(overrides: { flagEnabled?: boolean } = {}) {
   await clinicians.create(
     'cli-1',
     { displayName: 'A Clinician', role: 'sub' },
+    OWNER_ACTOR,
+  );
+  // In the directory but never in the fan-out: a helpdesk row owns no
+  // appointment, so querying GSI1 for it could only ever return nothing.
+  // `the practice's calendar` below asserts it is skipped rather than merely
+  // returning empty.
+  await clinicians.create(
+    'cli-hd',
+    { displayName: 'A Helpdesk', role: 'helpdesk' },
     OWNER_ACTOR,
   );
 
@@ -638,6 +660,72 @@ describe('GET /clinicians/me/calendar', () => {
       }),
     );
     expect(response.statusCode).toBe(404);
+  });
+});
+
+// 2026-09-06: *"for help desk I want to show on the landing dashboard both
+// ready only calender and patient dashboard — the two stuff the principal
+// clinician is seeing but in read only mode."*
+describe('a helpdesk reads the practice\'s calendar, not their own empty one', () => {
+  async function seedForCli1(handler: ReturnType<typeof createAppointmentHandler>) {
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
+      }),
+    );
+  }
+
+  const RANGE = { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' };
+
+  it('returns another clinician\'s appointment — the row their own id could never find', async () => {
+    const { handler } = await build();
+    await seedForCli1(handler);
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: RANGE,
+        principal: HELPDESK_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as { items: { clinicianId: string }[] };
+    expect(body.items).toHaveLength(1);
+    // `cli-1`, not `cli-hd` — the whole point of the expansion.
+    expect(body.items[0]?.clinicianId).toBe('cli-1');
+  });
+
+  it('queries only the treating clinicians, never the helpdesk row beside them', async () => {
+    const { handler, appointments } = await build();
+    await seedForCli1(handler);
+    const listFor = vi.spyOn(appointments, 'listForClinicianCalendar');
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: RANGE,
+        principal: HELPDESK_CONTEXT,
+      }),
+    );
+    expect(listFor.mock.calls.map((call) => call[0])).toEqual(['cli-1']);
+  });
+
+  it('leaves a sub-clinician\'s own calendar exactly as it was', async () => {
+    // The regression guard on this change's central claim: the expansion is
+    // derived from the caller's role and is not a `clinicianId` anyone can
+    // supply, so every other role's answer is byte-for-byte unchanged.
+    const { handler, appointments } = await build();
+    await seedForCli1(handler);
+    const listFor = vi.spyOn(appointments, 'listForClinicianCalendar');
+    await invoke(
+      handler,
+      fakeEvent({ routeKey: CALENDAR_ROUTE, queryStringParameters: RANGE }),
+    );
+    expect(listFor.mock.calls.map((call) => call[0])).toEqual(['cli-1']);
+    expect(listFor).toHaveBeenCalledTimes(1);
   });
 });
 

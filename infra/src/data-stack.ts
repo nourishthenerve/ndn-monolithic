@@ -1762,12 +1762,26 @@ export class DataStack extends Stack {
         resources: [`${this.table.tableArn}/index/${GSI1_INDEX_NAME}`],
       }),
     );
+    // 2026-09-06: the clinician *directory* read behind a helpdesk's
+    // practice-wide calendar (`ClinicianRepository.list()` — one GSI2 `Query`
+    // on `CLINICIAN_INDEX#all`, then the `GetItem` per clinician the
+    // statement below already covers). `Query` alone and never `Scan`, the
+    // same line every other index grant in this stack holds.
+    appointmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'QueryClinicianDirectoryIndex',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [`${this.table.tableArn}/index/${GSI2_INDEX_NAME}`],
+      }),
+    );
     // 2026-09-06: the clinician-name lookup the two read routes now do
-    // (`ClinicianRepository.findById`, cached per request). Read-only and
-    // `CLI#*`-scoped — the identical statement `CaseloadFunction` already
-    // carries for the identical call, and deliberately a separate statement
-    // from the `PAT#*` one above rather than a widening of it: this function
-    // writes patient rows and must never be able to write a clinician's.
+    // (`ClinicianRepository.findById`, cached per request), and the directory
+    // fan-out's own per-clinician read. Read-only and `CLI#*`-scoped — the
+    // identical statement `CaseloadFunction` already carries for the
+    // identical call, and deliberately a separate statement from the `PAT#*`
+    // one above rather than a widening of it: this function writes patient
+    // rows and must never be able to write a clinician's.
     appointmentRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'ReadClinicianAccounts',
