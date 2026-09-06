@@ -44,6 +44,7 @@ import { Card, Heading, Link } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { takeAtMost } from '../list-limit.js';
 import { blogContentType, contentApiUrl } from '../site-config.js';
 
 export interface LiveBlogPost {
@@ -64,6 +65,25 @@ export interface LiveBlogListProps {
   /** The build-time list, rendered into the HTML and used as the seed. */
   readonly initialPosts: readonly LiveBlogPost[];
   readonly fetchPosts?: () => Promise<readonly LiveBlogPost[] | undefined>;
+  /**
+   * 2026-09-06: how many to show, for the homepage's "latest three" strip.
+   * Unset — the `/blog` listing — shows everything, so that page is
+   * unchanged by this prop existing.
+   *
+   * Applied **after** the reconciliation below, never to the seed: trimming
+   * the seed first would mean a post published since the last deploy could
+   * only ever appear by pushing the strip to four, and the whole point of
+   * this island is that the fetched list replaces the built one.
+   */
+  readonly limit?: number;
+  /**
+   * Level for each post's own title. Defaults to 2, the listing page's
+   * shape (`<h1>` page title, `<h2>` per post). The homepage passes 3,
+   * because there each post sits under a `<h2>` section heading and an
+   * `<h2>` there would make posts siblings of the section rather than its
+   * contents.
+   */
+  readonly headingLevel?: 2 | 3 | 4 | 5 | 6;
 }
 
 /**
@@ -125,6 +145,8 @@ export function LiveBlogList({
   locale,
   initialPosts,
   fetchPosts = defaultFetchPosts,
+  limit,
+  headingLevel = 2,
 }: LiveBlogListProps): ReactNode {
   const [posts, setPosts] = useState<readonly LiveBlogPost[]>(initialPosts);
   const prerendered = prerenderedIds(initialPosts);
@@ -141,7 +163,7 @@ export function LiveBlogList({
     };
   }, [fetchPosts]);
 
-  const entries = postsForLocale(posts, locale);
+  const entries = takeAtMost(postsForLocale(posts, locale), limit);
 
   if (entries.length === 0) {
     return <p>{strings.empty}</p>;
@@ -151,7 +173,7 @@ export function LiveBlogList({
     <>
       {entries.map(({ post, title, excerpt }) => (
         <Card key={post.id}>
-          <Heading level={2}>{title}</Heading>
+          <Heading level={headingLevel}>{title}</Heading>
           <p>{excerpt}</p>
           <Link href={hrefFor(locale, post.id, prerendered)}>{strings.readMore}</Link>
         </Card>

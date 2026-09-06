@@ -5,6 +5,11 @@
 // the test has to be about what is rendered, not about what an API
 // returns. The owner, signed in as the principal clinician, clicked
 // "Patient sign in" in the nav and landed on a test patient's details.
+//
+// 2026-09-06: the header now offers one sign-in control rather than two —
+// see this component's own header. What the suite asserts is unchanged in
+// substance: a signed-in visitor is offered no way to become someone else,
+// and a resolving one is offered nothing at all.
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,8 +19,7 @@ import type { SessionNavStrings } from './SessionNav.js';
 afterEach(cleanup);
 
 const STRINGS: SessionNavStrings = {
-  patientSignIn: 'Patient sign in',
-  clinicianSignIn: 'Clinician sign in',
+  signIn: 'Sign in',
   account: 'Your account',
   signOut: 'Sign out',
 };
@@ -30,11 +34,10 @@ function clientResolving(state: unknown, delayForever = false) {
 describe('signed in', () => {
   const signedIn = clientResolving({ status: 'signed-in', session: {} });
 
-  it('offers neither sign-in link — the bug this exists to stop', async () => {
+  it('offers no sign-in link at all — the bug this exists to stop', async () => {
     render(<SessionNav strings={STRINGS} accountHref="/en/account" client={signedIn} />);
     await screen.findByRole('button', { name: 'Sign out' });
-    expect(screen.queryByText('Patient sign in')).toBeNull();
-    expect(screen.queryByText('Clinician sign in')).toBeNull();
+    expect(screen.queryByText('Sign in')).toBeNull();
   });
 
   it('offers sign out and a way to the account instead', async () => {
@@ -49,18 +52,26 @@ describe('signed in', () => {
 describe('signed out', () => {
   const signedOut = clientResolving({ status: 'signed-out' });
 
-  it('offers both pools, pointed at their own sign-in routes', async () => {
+  it('offers exactly one sign-in link, pointed at the patient pool', async () => {
     render(<SessionNav strings={STRINGS} accountHref="/en/account" client={signedOut} />);
-    const patient = await screen.findByRole('link', { name: 'Patient sign in' });
-    expect(patient.getAttribute('href')).toBe('/auth/signin');
+    const links = await screen.findAllByRole('link');
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(['/auth/signin']);
+  });
+
+  it('does not offer the clinician pool here — that link lives in the footer', async () => {
+    render(<SessionNav strings={STRINGS} accountHref="/en/account" client={signedOut} />);
+    await screen.findByRole('link', { name: 'Sign in' });
+    // Two Cognito pools mean two hosted login pages (ADR-0004), and the
+    // owner asked for one control up here. `StaffSignInLink` carries the
+    // other, so a staff member is not locked out.
     expect(
-      screen.getByRole('link', { name: 'Clinician sign in' }).getAttribute('href'),
-    ).toBe('/auth/signin?pool=clinician');
+      screen.queryByRole('link', { name: /clinician/i }),
+    ).toBeNull();
   });
 
   it('offers no sign-out button', async () => {
     render(<SessionNav strings={STRINGS} accountHref="/en/account" client={signedOut} />);
-    await screen.findByRole('link', { name: 'Patient sign in' });
+    await screen.findByRole('link', { name: 'Sign in' });
     expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
   });
 });
@@ -90,7 +101,7 @@ describe('when the session cannot be resolved', () => {
     render(<SessionNav strings={STRINGS} accountHref="/en/account" client={failing} />);
     // Offering sign-in to someone already signed in is recoverable;
     // hiding sign-out from someone who needs it is not.
-    expect(await screen.findByRole('link', { name: 'Patient sign in' })).toBeDefined();
+    expect(await screen.findByRole('link', { name: 'Sign in' })).toBeDefined();
   });
 });
 

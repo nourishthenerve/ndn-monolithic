@@ -17,6 +17,7 @@ import { Card, Heading, Link } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { takeAtMost } from '../list-limit.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
 export interface LiveWorkshop {
@@ -40,6 +41,10 @@ export interface LiveWorkshopListProps {
   readonly locale: string;
   readonly initialWorkshops: readonly LiveWorkshop[];
   readonly fetchWorkshops?: () => Promise<readonly LiveWorkshop[] | undefined>;
+  /** 2026-09-06: the homepage's "next three" strip. See `LiveBlogList`'s own `limit` for why this is applied after the reconciliation, not to the seed. */
+  readonly limit?: number;
+  /** Level for each workshop's title — 3 on the homepage, where a `<h2>` section heading already sits above them. See `LiveBlogList`. */
+  readonly headingLevel?: 2 | 3 | 4 | 5 | 6;
 }
 
 /**
@@ -100,6 +105,8 @@ export function LiveWorkshopList({
   locale,
   initialWorkshops,
   fetchWorkshops = defaultFetchWorkshops,
+  limit,
+  headingLevel = 2,
 }: LiveWorkshopListProps): ReactNode {
   const [workshops, setWorkshops] = useState<readonly LiveWorkshop[]>(initialWorkshops);
   const prerendered = prerenderedIds(initialWorkshops);
@@ -116,7 +123,7 @@ export function LiveWorkshopList({
     };
   }, [fetchWorkshops]);
 
-  const entries = workshopsForLocale(workshops, locale);
+  const entries = takeAtMost(workshopsForLocale(workshops, locale), limit);
 
   if (entries.length === 0) {
     return <p>{strings.empty}</p>;
@@ -137,7 +144,7 @@ export function LiveWorkshopList({
               loading="lazy"
             />
           )}
-          <Heading level={2}>{title}</Heading>
+          <Heading level={headingLevel}>{title}</Heading>
           <p>{description}</p>
           <Link href={hrefFor(locale, workshop.id, prerendered)}>{strings.viewDetails}</Link>
         </Card>

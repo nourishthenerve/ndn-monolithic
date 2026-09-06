@@ -1,36 +1,436 @@
 ---
-// TASK 1.1.2 hand-authored this page's own <html>/<head>/skip-link
-// boilerplate before BaseLayout existed; TASK 1.2.1 introduces
-// BaseLayout, and every page (including this one) now renders through it.
+// 2026-09-06: the public site is now **this page**. The owner: *"in webapp I
+// want to do major design changes. i want single paged website here. it will
+// have about section, services, recent three blogs, recent three workshops,
+// and top three testimonials."*
+//
+// What was here before was a stub — a heading, one sentence, and a contact
+// form whose backend had already been deleted (D-32) — while About and
+// Services each held one paragraph on a route of their own. Those two pages
+// are gone; their copy lives in the sections below, at `#about` and
+// `#services`.
+//
+// ## The three content strips are the listing pages' own islands
+//
+// `LiveBlogList`, `LiveWorkshopList` and `LiveTestimonialList` are reused
+// exactly as `/blog`, `/workshops` and `/testimonials` use them — seeded
+// server-side from a build-time fetch, reconciled client-side so something
+// published since the last deploy still appears. The only difference is a
+// `limit` of three and a heading level of 3 (see each prop's own comment).
+// Nothing here re-fetches or re-formats content on its own; a second way to
+// render a blog post is exactly the drift that would make the homepage and
+// the archive disagree.
+//
+// ## "Older blogs and workshops" links are same-origin
+//
+// The owner named `https://nourishthenerve.com/en/blog` and `.../en/workshops`.
+// Those are *this site's* pages — `site-config.ts`'s `siteUrl` is that apex —
+// so they are written as `/{locale}/blog` and `/{locale}/workshops`. An
+// absolute apex URL would jump a visitor from `next.`, from staging, or from
+// an ephemeral PR environment straight into production.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Button, Card, Heading, Input, Link as UiLink, VisuallyHidden } from '@ndn/ui';
+import { Card, Heading, Link, VisuallyHidden } from '@ndn/ui';
 
+import { fetchPublishedBlogPosts } from '../../blog/content-client.js';
+import { LiveBlogList } from '../../blog/LiveBlogList.js';
+import { services } from '../../config/services.js';
 import BaseLayout from '../../layouts/BaseLayout.astro';
-import { siteName } from '../../site-config.js';
+import {
+  siteName,
+  whatsappBusinessNumber,
+  whatsappChatUrl,
+} from '../../site-config.js';
+import { LiveTestimonialList } from '../../testimonials/LiveTestimonialList.js';
+import { fetchPublishedTestimonials } from '../../testimonials/testimonial-client.js';
+import { LiveWorkshopList } from '../../workshops/LiveWorkshopList.js';
+import { fetchPublishedWorkshops } from '../../workshops/workshop-client.js';
 
-export function getStaticPaths() {
-  return supportedLocales.map((locale) => ({ params: { locale } }));
+/** How many of each the landing page shows before handing off to the archive. */
+const HOME_LIST_LIMIT = 3;
+
+export async function getStaticPaths() {
+  // Three independent build-time fetches, in parallel. None of the three
+  // clients throws — each returns an empty list when the content API is
+  // unreachable (the ephemeral PR environment has no NdnDataStack at all),
+  // so a build never depends on content existing.
+  const [posts, workshops, testimonials] = await Promise.all([
+    fetchPublishedBlogPosts(),
+    fetchPublishedWorkshops(),
+    fetchPublishedTestimonials(),
+  ]);
+  return supportedLocales.map((locale) => ({
+    params: { locale },
+    props: { posts, workshops, testimonials },
+  }));
 }
 
 const { locale } = Astro.params as { locale: Locale };
+const { posts, workshops, testimonials } = Astro.props as {
+  posts: Awaited<ReturnType<typeof fetchPublishedBlogPosts>>;
+  workshops: Awaited<ReturnType<typeof fetchPublishedWorkshops>>;
+  testimonials: Awaited<ReturnType<typeof fetchPublishedTestimonials>>;
+};
+
+// A post or workshop not yet translated into this locale doesn't appear —
+// the same filter `/blog` and `/workshops` apply to their own seeds. Moot
+// while `supportedLocales` is `['en']`, correct once it isn't.
+const postsForLocale = posts.filter((post) => post.translations[locale] !== undefined);
+const workshopsForLocale = workshops.filter(
+  (workshop) => workshop.details[locale] !== undefined,
+);
+
+// `set:html`, not a literal `<style>...</style>` block — the convention
+// Nav.astro and Footer.astro already document.
+//
+// Two things here are load-bearing rather than decorative:
+//
+//   * `.ndn-home-grid > astro-island { display: contents }`. Astro wraps a
+//     `client:*` island in an `<astro-island>` element, so the cards a list
+//     renders are that element's children, not the grid's — without this the
+//     whole strip collapses into one grid cell. Astro does emit the same
+//     declaration itself, but only as an **inline** `<style>` inside the
+//     island, and this repo's CSP is the reason `csp-inline-scripts.test.ts`
+//     exists: inline content here lives or dies by an allow-list. Restating
+//     it in the page's own stylesheet means the layout does not depend on
+//     that. Scoped to this grid rather than set on `astro-island` globally,
+//     which would also change how the site nav's own island lays out.
+//   * The call-to-action selectors are `.ndn-home a.ndn-home-cta`, not
+//     `.ndn-home-cta`. `packages/ui`'s `.ndn-link` (underlined, brand
+//     coloured) has the same specificity as a bare class would, and which of
+//     the two wins would then depend on stylesheet order.
+const homeStylesCss = `
+.ndn-home {
+  --ndn-home-measure: 68rem;
+}
+
+.ndn-home-inner {
+  max-width: var(--ndn-home-measure);
+  margin-inline: auto;
+}
+
+.ndn-home-hero {
+  padding-block: clamp(3.5rem, 10vw, 6rem);
+  padding-inline: 1.25rem;
+  background-image: linear-gradient(160deg, #eef5f3 0%, #ffffff 72%);
+  border-block-end: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.ndn-home-hero h1 {
+  font-size: clamp(2rem, 5.5vw, 3.25rem);
+  max-width: 22ch;
+  margin-block: 0 1rem;
+}
+
+.ndn-home-lede {
+  font-size: clamp(1.0625rem, 2vw, 1.25rem);
+  line-height: 1.6;
+  color: var(--ndn-color-text-muted);
+  max-width: 62ch;
+  margin-block: 0 2rem;
+}
+
+.ndn-home-section {
+  padding-block: clamp(3rem, 7vw, 4.5rem);
+  padding-inline: 1.25rem;
+}
+
+.ndn-home-section--tinted {
+  background-color: #f6f8f8;
+}
+
+.ndn-home-section h2 {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  margin-block: 0 0.75rem;
+}
+
+.ndn-home-section h3 {
+  font-size: 1.125rem;
+  margin-block: 0 0.25rem;
+}
+
+.ndn-home-intro,
+.ndn-home-prose p {
+  color: var(--ndn-color-text-muted);
+  line-height: 1.7;
+  max-width: 62ch;
+  margin-block: 0 1rem;
+}
+
+/* auto-fill, not auto-fit: with one published workshop, auto-fit collapses
+   the empty tracks and stretches that single card across the whole row,
+   which reads as a banner rather than as one of three. auto-fill keeps the
+   tracks, so a strip of one, two or three cards is the same card width. */
+.ndn-home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 1.25rem;
+  margin-block: 2rem 1.5rem;
+}
+
+.ndn-home-grid > astro-island {
+  display: contents;
+}
+
+.ndn-home-grid .ndn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: border-color var(--ndn-motion-duration-fast) ease;
+}
+
+.ndn-home-grid .ndn-card:hover {
+  border-color: var(--ndn-color-brand);
+}
+
+.ndn-home-grid .ndn-card p {
+  color: var(--ndn-color-text-muted);
+  line-height: 1.6;
+  margin-block: 0;
+}
+
+.ndn-home-grid .ndn-card img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.375rem;
+}
+
+.ndn-home-grid .ndn-card blockquote {
+  margin: 0;
+  border-inline-start: 3px solid var(--ndn-color-brand);
+  padding-inline-start: 1rem;
+}
+
+.ndn-home-grid .ndn-card blockquote p {
+  color: var(--ndn-color-text);
+}
+
+.ndn-home-grid .ndn-card blockquote footer {
+  margin-block-start: 0.75rem;
+  font-weight: 500;
+  color: var(--ndn-color-text-muted);
+}
+
+/* Pushes a card's own link to the bottom edge so a row of cards with
+   different amounts of text still lines its links up. align-self keeps the
+   anchor's hit area to its text rather than the full card width, which a
+   column flex container would otherwise stretch it to. (No backticks in
+   this block: it is a JS template literal.) */
+.ndn-home-grid .ndn-card > .ndn-link:last-child {
+  margin-block-start: auto;
+  align-self: flex-start;
+  padding-block-start: 0.5rem;
+}
+
+.ndn-home-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.ndn-home a.ndn-home-cta {
+  text-decoration: none;
+  border-radius: 0.5rem;
+  border: 1px solid var(--ndn-color-brand);
+  color: var(--ndn-color-brand);
+  padding-block: 0.75rem;
+  padding-inline: 1.5rem;
+  font-weight: 500;
+  transition: background-color var(--ndn-motion-duration-fast) ease;
+}
+
+.ndn-home a.ndn-home-cta:hover {
+  background-color: rgba(10, 110, 90, 0.08);
+}
+
+.ndn-home a.ndn-home-cta--primary {
+  background-color: var(--ndn-color-brand);
+  color: #ffffff;
+}
+
+.ndn-home a.ndn-home-cta--primary:hover {
+  background-color: #085647;
+}
+
+.ndn-home-contact-number {
+  font-size: 1.25rem;
+  font-weight: 500;
+  margin-block: 0 1.5rem;
+}
+`;
 ---
 
-<BaseLayout locale={locale} title={siteName} description={t('site.description', undefined, locale)}>
-  <Heading level={1}>{siteName}</Heading>
-  <p>{t('site.description', undefined, locale)}</p>
+{/* `wide`: this page's hero and alternating tinted bands are full-bleed and
+    carry their own 68rem inner measure, so it opts out of the centred
+    content column BaseLayout gives every other page. */}
+<BaseLayout
+  locale={locale}
+  title={siteName}
+  description={t('site.description', undefined, locale)}
+  wide
+>
+  <div class="ndn-home">
+    <section class="ndn-home-hero">
+      <div class="ndn-home-inner">
+        <Heading level={1}>{t('home.hero.title', undefined, locale)}</Heading>
+        <p class="ndn-home-lede">{t('home.hero.body', undefined, locale)}</p>
+        <div class="ndn-home-cta-row">
+          <Link
+            href={whatsappChatUrl(whatsappBusinessNumber)}
+            external
+            className="ndn-home-cta ndn-home-cta--primary"
+          >
+            {t('home.hero.primaryCta', undefined, locale)}
+          </Link>
+          <Link href="#services" className="ndn-home-cta">
+            {t('home.hero.secondaryCta', undefined, locale)}
+          </Link>
+        </div>
+      </div>
+    </section>
 
-  <Card>
-    <Heading level={2}>{t('common.getInTouch', undefined, locale)}</Heading>
-    <Input
-      label={t('home.emailLabel', undefined, locale)}
-      type="email"
-      name="email"
-      autocomplete="email"
-    />
-    <Button type="submit">{t('common.send', undefined, locale)}</Button>
-    <p><UiLink href={`/${locale}/about`}>{t('common.learnMoreAboutUs', undefined, locale)}</UiLink></p>
-  </Card>
+    <section id="about" class="ndn-home-section" aria-labelledby="about-heading">
+      <div class="ndn-home-inner ndn-home-prose">
+        <Heading level={2} id="about-heading">{t('about.heading', undefined, locale)}</Heading>
+        <p>{t('about.intro', undefined, locale)}</p>
+        <p>{t('home.about.body', undefined, locale)}</p>
+      </div>
+    </section>
 
-  <VisuallyHidden>{t('common.endOfPage', undefined, locale)}</VisuallyHidden>
+    <section
+      id="services"
+      class="ndn-home-section ndn-home-section--tinted"
+      aria-labelledby="services-heading"
+    >
+      <div class="ndn-home-inner">
+        <Heading level={2} id="services-heading">
+          {t('home.services.heading', undefined, locale)}
+        </Heading>
+        <p class="ndn-home-intro">{t('services.intro', undefined, locale)}</p>
+        <div class="ndn-home-grid">
+          {
+            services.map((service) => (
+              <Card>
+                <Heading level={3}>{t(service.titleKey, undefined, locale)}</Heading>
+                <p>{t(service.bodyKey, undefined, locale)}</p>
+              </Card>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <section id="blog" class="ndn-home-section" aria-labelledby="blog-heading">
+      <div class="ndn-home-inner">
+        <Heading level={2} id="blog-heading">{t('home.blog.heading', undefined, locale)}</Heading>
+        <p class="ndn-home-intro">{t('home.blog.intro', undefined, locale)}</p>
+        <div class="ndn-home-grid">
+          {/* `client:load`, not `client:only` — the seed must be in the HTML
+              for a crawler and for a reader with no JavaScript. Same
+              reasoning, and the same directive, as the `/blog` listing. */}
+          <LiveBlogList
+            client:load
+            locale={locale}
+            initialPosts={postsForLocale}
+            limit={HOME_LIST_LIMIT}
+            headingLevel={3}
+            strings={{
+              empty: t('blog.index.empty', undefined, locale),
+              readMore: t('blog.index.readMore', undefined, locale),
+            }}
+          />
+        </div>
+        <div class="ndn-home-cta-row">
+          <Link href={`/${locale}/blog`} className="ndn-home-cta">
+            {t('home.blog.viewAll', undefined, locale)}
+          </Link>
+        </div>
+      </div>
+    </section>
+
+    <section
+      id="workshops"
+      class="ndn-home-section ndn-home-section--tinted"
+      aria-labelledby="workshops-heading"
+    >
+      <div class="ndn-home-inner">
+        <Heading level={2} id="workshops-heading">
+          {t('home.workshops.heading', undefined, locale)}
+        </Heading>
+        <p class="ndn-home-intro">{t('home.workshops.intro', undefined, locale)}</p>
+        <div class="ndn-home-grid">
+          <LiveWorkshopList
+            client:load
+            locale={locale}
+            initialWorkshops={workshopsForLocale}
+            limit={HOME_LIST_LIMIT}
+            headingLevel={3}
+            strings={{
+              empty: t('workshops.index.empty', undefined, locale),
+              viewDetails: t('workshops.index.viewDetails', undefined, locale),
+              posterAltTemplate: t('workshops.index.posterAlt', { title: '{title}' }, locale),
+            }}
+          />
+        </div>
+        <div class="ndn-home-cta-row">
+          <Link href={`/${locale}/workshops`} className="ndn-home-cta">
+            {t('home.workshops.viewAll', undefined, locale)}
+          </Link>
+        </div>
+      </div>
+    </section>
+
+    <section id="testimonials" class="ndn-home-section" aria-labelledby="testimonials-heading">
+      <div class="ndn-home-inner">
+        <Heading level={2} id="testimonials-heading">
+          {t('home.testimonials.heading', undefined, locale)}
+        </Heading>
+        <div class="ndn-home-grid">
+          <LiveTestimonialList
+            client:load
+            locale={locale}
+            initialTestimonials={testimonials}
+            limit={HOME_LIST_LIMIT}
+            strings={{
+              empty: t('testimonials.index.empty', undefined, locale),
+              anonymous: t('testimonials.form.attributionDisplay.anonymous', undefined, locale),
+            }}
+          />
+        </div>
+        <div class="ndn-home-cta-row">
+          <Link href={`/${locale}/testimonials`} className="ndn-home-cta">
+            {t('home.testimonials.viewAll', undefined, locale)}
+          </Link>
+        </div>
+      </div>
+    </section>
+
+    <section
+      id="contact"
+      class="ndn-home-section ndn-home-section--tinted"
+      aria-labelledby="contact-heading"
+    >
+      <div class="ndn-home-inner">
+        <Heading level={2} id="contact-heading">
+          {t('common.getInTouch', undefined, locale)}
+        </Heading>
+        <p class="ndn-home-intro">{t('home.contact.body', undefined, locale)}</p>
+        <p class="ndn-home-contact-number">{whatsappBusinessNumber}</p>
+        <div class="ndn-home-cta-row">
+          <Link
+            href={whatsappChatUrl(whatsappBusinessNumber)}
+            external
+            className="ndn-home-cta ndn-home-cta--primary"
+          >
+            {t('home.hero.primaryCta', undefined, locale)}
+          </Link>
+        </div>
+      </div>
+    </section>
+
+    <VisuallyHidden>{t('common.endOfPage', undefined, locale)}</VisuallyHidden>
+  </div>
 </BaseLayout>
+
+<style set:html={homeStylesCss} />

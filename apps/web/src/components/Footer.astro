@@ -6,6 +6,7 @@ import { t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link, visuallyHiddenClassName } from '@ndn/ui';
 
+import { StaffSignInLink } from '../auth/StaffSignInLink.js';
 import { legalPages } from '../config/legal-pages.js';
 import { socialLinks } from '../config/social-links.js';
 import { siteName } from '../site-config.js';
@@ -20,10 +21,26 @@ const year = new Date().getFullYear();
 // TASK 1.2.1: see Nav.astro's comment on why this is `set:html`, not a
 // literal `<style>...</style>` block.
 const footerStylesCss = `
-footer {
+/* body > footer, not a bare footer selector. This block is global — Astro's
+   scoped styles only reach markup written in this file, and Nav/Footer are
+   separate components — so a bare selector styled *every* <footer> on the
+   page. That is not hypothetical: a testimonial's attribution line is a
+   <footer> inside its <blockquote>, and it was picking up this landmark's
+   top border and page padding. Found 2026-09-06 on the redesigned landing
+   page, where three quotes sit in cards; it was equally wrong on
+   /testimonials, just less visible. BaseLayout.astro's own page-shell CSS
+   already restricts itself to body > selectors for exactly this reason. */
+body > footer {
   border-block-start: 1px solid rgba(0, 0, 0, 0.08);
   padding-block: 1.5rem;
-  padding-inline: 1rem;
+  /* Full-bleed rule, centred contents — the same 68rem measure the header
+     and the landing page's sections use, without needing a wrapper element
+     inside the landmark. */
+  padding-inline: max(1.25rem, calc((100% - 68rem) / 2));
+}
+
+.ndn-footer-staff {
+  margin-block: 0 1rem;
 }
 
 .ndn-footer-social-list,
@@ -73,6 +90,18 @@ footer {
       ))
     }
   </ul>
+
+  {/* 2026-09-06: the clinician pool's own sign-in, moved out of the header
+      when that was reduced to a single patient control. It has to live
+      somewhere — two Cognito pools mean two hosted login pages, and staff
+      can only reach theirs through `?pool=clinician`. See
+      `auth/StaffSignInLink.tsx` for why it is an island and not an `<a>`. */}
+  <Heading level={2} className={visuallyHiddenClassName}>
+    {t('footer.staffHeading', undefined, locale)}
+  </Heading>
+  <p class="ndn-footer-staff">
+    <StaffSignInLink client:only="react" label={t('footer.clinicianSignIn', undefined, locale)} />
+  </p>
 
   <p class="ndn-footer-copyright">{t('footer.copyright', { year, siteName }, locale)}</p>
 </footer>

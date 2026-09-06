@@ -342,7 +342,7 @@ describe('WebStack — CloudFront distribution', () => {
     expect(rewrite('/')).toBe('/index.html');
     expect(rewrite('/en')).toBe('/en/index.html');
     expect(rewrite('/en/')).toBe('/en/index.html');
-    expect(rewrite('/en/about')).toBe('/en/about/index.html');
+    expect(rewrite('/en/blog')).toBe('/en/blog/index.html');
     expect(rewrite('/assets/site.css')).toBe('/assets/site.css');
     expect(rewrite('/favicon.ico')).toBe('/favicon.ico');
   });

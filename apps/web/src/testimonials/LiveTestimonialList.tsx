@@ -37,6 +37,7 @@ import { Card } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { takeAtMost } from '../list-limit.js';
 import { contentApiUrl } from '../site-config.js';
 
 export interface LiveTestimonial {
@@ -59,6 +60,18 @@ export interface LiveTestimonialListProps {
   /** The build-time list, rendered into the HTML and used as the seed. */
   readonly initialTestimonials: readonly LiveTestimonial[];
   readonly fetchTestimonials?: () => Promise<readonly LiveTestimonial[] | undefined>;
+  /**
+   * 2026-09-06: the homepage's three quotes. Applied after the
+   * reconciliation, for the reason `LiveBlogList`'s own `limit` sets out.
+   *
+   * Worth naming what this is *not*: the owner asked for the "top three"
+   * testimonials, and nothing on a testimonial ranks it — there is no
+   * rating, score or ordering field on the record (`testimonial-repository.ts`).
+   * So this takes the first three the API returns, which is the most recent
+   * three. Choosing them by hand would need a `featured` flag on the record
+   * itself, not a prop here.
+   */
+  readonly limit?: number;
 }
 
 /**
@@ -102,6 +115,7 @@ export function LiveTestimonialList({
   locale,
   initialTestimonials,
   fetchTestimonials = defaultFetchTestimonials,
+  limit,
 }: LiveTestimonialListProps): ReactNode {
   const [testimonials, setTestimonials] =
     useState<readonly LiveTestimonial[]>(initialTestimonials);
@@ -121,10 +135,13 @@ export function LiveTestimonialList({
     };
   }, [fetchTestimonials]);
 
-  const withText = testimonials.flatMap((testimonial) => {
-    const quote = quoteFor(testimonial, locale);
-    return quote ? [{ testimonial, quote }] : [];
-  });
+  const withText = takeAtMost(
+    testimonials.flatMap((testimonial) => {
+      const quote = quoteFor(testimonial, locale);
+      return quote ? [{ testimonial, quote }] : [];
+    }),
+    limit,
+  );
 
   if (withText.length === 0) {
     return <p>{strings.empty}</p>;
