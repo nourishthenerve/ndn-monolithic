@@ -9,7 +9,15 @@
 // not the author's while proving nothing extra.
 import { describe, expect, it } from 'vitest';
 
-import { formatDateTime } from './datetime.js';
+import {
+  formatDate,
+  formatDateTime,
+  formatDayOfMonth,
+  formatMonthYear,
+  formatTimeOfDay,
+  formatWeekdayLong,
+  formatWeekdayShort,
+} from './datetime.js';
 
 const INSTANT = '2026-09-03T20:25:00.000Z';
 
@@ -58,5 +66,52 @@ describe('formatDateTime', () => {
     // can trace to the row that holds it. "Invalid Date" is neither.
     expect(formatDateTime('not-a-date', 'en')).toBe('not-a-date');
     expect(formatDateTime(new Date(Number.NaN), 'en')).toBe('');
+  });
+});
+
+// 2026-09-06: the four smaller renderings the dashboard's month calendar
+// needs. What is worth asserting is not the exact English wording — that is
+// `Intl`'s to decide and varies by ICU version — but the three properties
+// this module exists to guarantee: the site's locale decides, the month is
+// never a bare number, and an unparseable value survives visibly.
+describe('the calendar formatters', () => {
+  const AT = new Date(2026, 8, 15, 14, 30);
+
+  it('spell the month rather than numbering it, in the month heading and the full date', () => {
+    expect(formatMonthYear(AT, 'en')).toContain('September');
+    expect(formatMonthYear(AT, 'en')).toContain('2026');
+    expect(formatDate(AT, 'en')).toContain('September');
+    // No ordering convention can make a spelled month mean a different one —
+    // the whole point of rule 2 in this module's header.
+    expect(formatMonthYear(AT, 'en')).not.toMatch(/\b9\b/);
+  });
+
+  it('name the weekday both short and long, so an abbreviation always has a full form behind it', () => {
+    expect(formatWeekdayLong(AT, 'en')).toBe('Tuesday');
+    expect(formatWeekdayShort(AT, 'en')).toBe('Tue');
+  });
+
+  it('render a bare day number and a bare time, since the cell around them carries the rest', () => {
+    expect(formatDayOfMonth(AT, 'en')).toBe('15');
+    // No timezone suffix here: forty-two of them on one grid is noise, and
+    // `formatDateTime` still names the zone wherever a single appointment is
+    // shown in full. See this module's own note on rule 3.
+    expect(formatTimeOfDay(AT, 'en')).not.toMatch(/GMT|UTC/);
+    expect(formatTimeOfDay(AT, 'en')).toContain('30');
+  });
+
+  it('track the requested locale rather than the machine default', () => {
+    expect(formatMonthYear(AT, 'en')).toBe(
+      new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(AT),
+    );
+  });
+
+  it('hand back an unparseable value unchanged, exactly as formatDateTime does', () => {
+    expect(formatMonthYear('not-a-date', 'en')).toBe('not-a-date');
+    expect(formatDate('not-a-date', 'en')).toBe('not-a-date');
+    expect(formatDayOfMonth(new Date(Number.NaN), 'en')).toBe('');
+    expect(formatTimeOfDay('nope', 'en')).toBe('nope');
+    expect(formatWeekdayShort('nope', 'en')).toBe('nope');
+    expect(formatWeekdayLong('nope', 'en')).toBe('nope');
   });
 });

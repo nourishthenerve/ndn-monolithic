@@ -1,0 +1,372 @@
+// @vitest-environment jsdom
+//
+// 2026-09-06: the dashboard's month calendar.
+//
+// The behaviours worth pinning are the ones a screenshot cannot show: which
+// endpoint each role is sent to, that a patient's month change costs no
+// second request while a clinician's must, that a patient never sees an
+// unapproved slot, and that scrolling back a month actually reaches the past
+// — which is the whole point of the view.
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  AppointmentCalendar,
+  calendarSourcesFor,
+  visibleForPatient,
+} from './AppointmentCalendar.js';
+import type { CalendarAppointment } from './AppointmentCalendar.js';
+
+afterEach(cleanup);
+
+// Local construction throughout, so the suite passes in any timezone — see
+// `calendar-grid.test.ts` for the same discipline and why it matters here.
+function local(year: number, month: number, day: number, hour = 0, minute = 0): Date {
+  return new Date(year, month, day, hour, minute);
+}
+
+/** 15 September 2026, midday. Stable identity — `useNow` requires it. */
+const NOW = local(2026, 8, 15, 12, 0);
+const now = (): Date => NOW;
+
+function appointment(
+  date: Date,
+  status: CalendarAppointment['appointment_status'] = 'scheduled',
+): CalendarAppointment {
+  return {
+    patientId: 'patient-1',
+    scheduledAt: date.toISOString(),
+    durationMinutes: 45,
+    appointment_status: status,
+  };
+}
+
+const STRINGS = {
+  heading: 'My calendar',
+  loadingLabel: 'Loading your calendar…',
+  forbiddenLabel: 'No calendar for you.',
+  errorLabel: 'Calendar failed.',
+  previousMonthLabel: 'Previous month',
+  nextMonthLabel: 'Next month',
+  todayLabel: 'Today',
+  gridCaption: 'Appointments by day.',
+  todayMarker: 'Today',
+  noAppointmentsOnDay: 'No appointments on this day.',
+  emptyMonth: 'No appointments this month.',
+  durationLabel: 'Duration:',
+  minutesSuffix: 'minutes',
+  statusLabel: 'Status:',
+  joinCallLabel: 'Join call',
+  statusLabels: {
+    scheduled: 'Confirmed',
+    'pending-approval': 'Waiting for approval',
+    completed: 'Attended',
+    cancelled: 'Cancelled',
+    'no-show': 'Did not attend',
+  },
+};
+
+// `null`, not `undefined`, for "no access token": a default parameter is
+// applied when the argument *is* `undefined`, so `sessionFor('patient',
+// undefined)` would have handed back the default token and quietly tested
+// something else entirely.
+function sessionFor(role: string | undefined, accessToken: string | null = 'token') {
+  return {
+    resolve: () => Promise.resolve({ status: 'signed-in', session: { viewerRole: role } }),
+    authorization: () => Promise.resolve(accessToken ?? undefined),
+    complete: () => Promise.resolve({ status: 'signed-out' }),
+    signOut: () => Promise.resolve(undefined),
+  } as never;
+}
+
+function jsonResponse(items: readonly CalendarAppointment[], status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve({ items }),
+  } as unknown as Response;
+}
+
+describe('calendarSourcesFor', () => {
+  it('sends a patient to their own history and a clinician to the ranged calendar', () => {
+    expect(calendarSourcesFor('patient')).toEqual(['patient']);
+    expect(calendarSourcesFor('principal-clinician')).toEqual(['clinician']);
+    expect(calendarSourcesFor('sub-clinician')).toEqual(['clinician']);
+  });
+
+  it('gives helpdesk and visitor no calendar at all — the owner\'s own exclusion', () => {
+    expect(calendarSourcesFor('helpdesk')).toEqual([]);
+    expect(calendarSourcesFor('visitor')).toEqual([]);
+  });
+
+  it('tries both when the token cannot be read, rather than hiding on a shrug', () => {
+    expect(calendarSourcesFor(undefined)).toEqual(['patient', 'clinician']);
+  });
+});
+
+describe('visibleForPatient', () => {
+  const all = [
+    appointment(local(2026, 8, 1), 'scheduled'),
+    appointment(local(2026, 8, 2), 'pending-approval'),
+    appointment(local(2026, 8, 3), 'cancelled'),
+    appointment(local(2026, 8, 4), 'completed'),
+    appointment(local(2026, 8, 5), 'no-show'),
+  ];
+
+  it('hides what was never confirmed and what never happened', () => {
+    const statuses = visibleForPatient(all).map((item) => item.appointment_status);
+    expect(statuses).not.toContain('pending-approval');
+    expect(statuses).not.toContain('cancelled');
+  });
+
+  it('keeps attendance history, which is what a past month is for', () => {
+    const statuses = visibleForPatient(all).map((item) => item.appointment_status);
+    expect(statuses).toEqual(['scheduled', 'completed', 'no-show']);
+  });
+});
+
+describe('who gets a calendar', () => {
+  it('renders nothing at all for helpdesk', async () => {
+    const fetchPatient = vi.fn();
+    const { container } = render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('helpdesk')}
+        fetchPatientAppointments={fetchPatient}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(container.textContent).toBe('');
+    });
+    expect(fetchPatient).not.toHaveBeenCalled();
+  });
+
+  it('renders nothing for a visitor', async () => {
+    const { container } = render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('visitor')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(container.textContent).toBe('');
+    });
+  });
+});
+
+describe('a patient', () => {
+  const items = [
+    appointment(local(2026, 8, 15, 9, 0)),
+    appointment(local(2026, 8, 15, 14, 30)),
+    appointment(local(2026, 7, 20, 10, 0), 'completed'),
+    appointment(local(2026, 8, 22, 10, 0), 'pending-approval'),
+  ];
+
+  function renderPatient(fetchPatient = vi.fn().mockResolvedValue(jsonResponse(items))) {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('patient')}
+        fetchPatientAppointments={fetchPatient}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+    return fetchPatient;
+  }
+
+  it('opens on the current month with today selected', async () => {
+    renderPatient();
+    expect(await screen.findByText('September 2026')).toBeDefined();
+    // Today has two appointments, so the panel below the grid lists them.
+    expect(await screen.findByRole('heading', { name: /September 15, 2026/ })).toBeDefined();
+  });
+
+  it('shows a confirmed appointment with its duration, status and join control', async () => {
+    renderPatient();
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(screen.getAllByText(/45 minutes/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Confirmed/).length).toBeGreaterThan(0);
+  });
+
+  it('never shows an unapproved slot, whatever the API returns', async () => {
+    renderPatient();
+    await screen.findByText('September 2026');
+    expect(screen.queryByText('Waiting for approval')).toBeNull();
+    // 22 September is `pending-approval`, so its square must not be a
+    // pressable day at all.
+    expect(screen.queryByRole('button', { name: /September 22, 2026/ })).toBeNull();
+  });
+
+  it('scrolls back to a past month and finds what happened there', async () => {
+    renderPatient();
+    await screen.findByText('September 2026');
+
+    (await screen.findByRole('button', { name: 'Previous month' })).click();
+
+    expect(await screen.findByText('August 2026')).toBeDefined();
+    const august20 = await screen.findByRole('button', { name: /August 20, 2026/ });
+    august20.click();
+    expect(await screen.findByRole('heading', { name: /August 20, 2026/ })).toBeDefined();
+    expect(screen.getAllByText(/Attended/).length).toBeGreaterThan(0);
+  });
+
+  it('costs no second request to change month — the whole history arrived at once', async () => {
+    const fetchPatient = renderPatient();
+    await screen.findByText('September 2026');
+    expect(fetchPatient).toHaveBeenCalledTimes(1);
+
+    (await screen.findByRole('button', { name: 'Previous month' })).click();
+    await screen.findByText('August 2026');
+    (await screen.findByRole('button', { name: 'Next month' })).click();
+    await screen.findByText('September 2026');
+
+    expect(fetchPatient).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns to the current month from the Today control', async () => {
+    renderPatient();
+    await screen.findByText('September 2026');
+    (await screen.findByRole('button', { name: 'Previous month' })).click();
+    await screen.findByText('August 2026');
+
+    (await screen.findByRole('button', { name: 'Today' })).click();
+    expect(await screen.findByText('September 2026')).toBeDefined();
+  });
+
+  it('says so for a month with nothing in it', async () => {
+    renderPatient(vi.fn().mockResolvedValue(jsonResponse([])));
+    expect(await screen.findByText('No appointments this month.')).toBeDefined();
+  });
+});
+
+describe('a clinician', () => {
+  it('fetches a range covering the whole visible grid, and a new one per month', async () => {
+    const fetchClinician = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([appointment(local(2026, 8, 15, 9, 0))]));
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('sub-clinician')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={fetchClinician}
+      />,
+    );
+    await screen.findByText('September 2026');
+    expect(fetchClinician).toHaveBeenCalledTimes(1);
+
+    const [firstFrom] = fetchClinician.mock.calls[0] as [string, string, string];
+    // The grid's first square is in August — a range clipped to September
+    // would leave that row permanently empty.
+    expect(new Date(firstFrom).getTime()).toBeLessThan(local(2026, 8, 1).getTime());
+
+    (await screen.findByRole('button', { name: 'Previous month' })).click();
+    await screen.findByText('August 2026');
+
+    await waitFor(() => {
+      expect(fetchClinician).toHaveBeenCalledTimes(2);
+    });
+    const [secondFrom] = fetchClinician.mock.calls[1] as [string, string, string];
+    expect(new Date(secondFrom).getTime()).toBeLessThan(new Date(firstFrom).getTime());
+  });
+
+  it('shows an unapproved slot, which a patient is not shown', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('principal-clinician')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse([appointment(local(2026, 8, 15, 9, 0), 'pending-approval')]),
+          )}
+      />,
+    );
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(screen.getAllByText(/Waiting for approval/).length).toBeGreaterThan(0);
+    // Nothing to join until it is confirmed — `ws-join.ts` would refuse it.
+    expect(screen.queryByRole('link', { name: 'Join call' })).toBeNull();
+  });
+});
+
+describe('a token this bundle cannot read', () => {
+  it('falls back to the clinician endpoint when the patient one refuses', async () => {
+    const fetchPatient = vi.fn().mockResolvedValue(jsonResponse([], 403));
+    const fetchClinician = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([appointment(local(2026, 8, 15, 9, 0))]));
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor(undefined)}
+        fetchPatientAppointments={fetchPatient}
+        fetchClinicianCalendar={fetchClinician}
+      />,
+    );
+    // Hiding the calendar from someone entitled to it is the worse failure —
+    // so an unreadable claim costs a wasted request, not a blank dashboard.
+    expect(await screen.findByRole('heading', { name: /September 15, 2026/ })).toBeDefined();
+    expect(fetchPatient).toHaveBeenCalled();
+    expect(fetchClinician).toHaveBeenCalled();
+  });
+
+  it('reports a refusal when every source refuses', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor(undefined)}
+        fetchPatientAppointments={vi.fn().mockResolvedValue(jsonResponse([], 403))}
+        fetchClinicianCalendar={vi.fn().mockResolvedValue(jsonResponse([], 403))}
+      />,
+    );
+    expect(await screen.findByText('No calendar for you.')).toBeDefined();
+  });
+});
+
+describe('when the calendar cannot be loaded', () => {
+  it('reports an error rather than an empty month', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('patient')}
+        fetchPatientAppointments={vi.fn().mockRejectedValue(new Error('network'))}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText('Calendar failed.')).toBeDefined();
+  });
+
+  it('is forbidden, not broken, with no access token', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('patient', null)}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText('No calendar for you.')).toBeDefined();
+  });
+});

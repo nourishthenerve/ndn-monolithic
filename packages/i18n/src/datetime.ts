@@ -64,3 +64,81 @@ export function formatDateTime(value: string | Date, locale: Locale): string {
   }
   return new Intl.DateTimeFormat(locale, DATE_TIME_OPTIONS).format(instant);
 }
+
+// 2026-09-06: the account dashboard's month calendar needs four smaller
+// renderings of a date than the whole sentence above — a month heading, a
+// column of weekday abbreviations, a day number in each cell, and a start
+// time on each appointment chip.
+//
+// They live here, beside `formatDateTime`, for the reason this file exists
+// at all: the moment a screen reaches for `toLocaleDateString()` on its own,
+// it starts formatting in the *reader's browser locale* rather than the
+// site's, and two people looking at the same calendar stop seeing the same
+// month. Rule 1 above is not specific to a full timestamp.
+//
+// Rule 3 — "the zone is named" — deliberately does **not** carry over. These
+// four render *inside* a calendar whose own heading already establishes the
+// month, and a zone suffix on all forty-two day numbers would be noise;
+// `formatDateTime` remains the one that names it, and the calendar uses that
+// one wherever a single appointment is shown in full. Every one of these
+// still formats in the reader's own zone, which is what makes the grid agree
+// with the times printed on it.
+
+/** Deliberately not `Number.prototype.toString()`: a locale with its own digits should get them. */
+const DAY_OF_MONTH_OPTIONS: Intl.DateTimeFormatOptions = { day: 'numeric' };
+const MONTH_YEAR_OPTIONS: Intl.DateTimeFormatOptions = { month: 'long', year: 'numeric' };
+const WEEKDAY_SHORT_OPTIONS: Intl.DateTimeFormatOptions = { weekday: 'short' };
+const WEEKDAY_LONG_OPTIONS: Intl.DateTimeFormatOptions = { weekday: 'long' };
+/** No `timeZoneName`: see the note above on why rule 3 stops at this file's own boundary. */
+const TIME_OF_DAY_OPTIONS: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
+/** A day named in full, for the panel that lists one day's appointments. */
+const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+};
+
+function format(
+  value: string | Date,
+  locale: Locale,
+  options: Intl.DateTimeFormatOptions,
+): string {
+  const instant = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(instant.getTime())) {
+    // Same choice `formatDateTime` documents: the raw value is a fault
+    // someone can report, where "Invalid Date" is not.
+    return typeof value === 'string' ? value : '';
+  }
+  return new Intl.DateTimeFormat(locale, options).format(instant);
+}
+
+/** "September 2026" — a calendar's own heading. */
+export function formatMonthYear(value: string | Date, locale: Locale): string {
+  return format(value, locale, MONTH_YEAR_OPTIONS);
+}
+
+/** "Mon" — a calendar's column headers. */
+export function formatWeekdayShort(value: string | Date, locale: Locale): string {
+  return format(value, locale, WEEKDAY_SHORT_OPTIONS);
+}
+
+/** "Monday" — the accessible name behind an abbreviated column header. */
+export function formatWeekdayLong(value: string | Date, locale: Locale): string {
+  return format(value, locale, WEEKDAY_LONG_OPTIONS);
+}
+
+/** "3" — a day number in a calendar cell. */
+export function formatDayOfMonth(value: string | Date, locale: Locale): string {
+  return format(value, locale, DAY_OF_MONTH_OPTIONS);
+}
+
+/** "21:25" — an appointment chip, where the day is already established by the cell it sits in. */
+export function formatTimeOfDay(value: string | Date, locale: Locale): string {
+  return format(value, locale, TIME_OF_DAY_OPTIONS);
+}
+
+/** "Thursday, 3 September 2026" — the heading of a selected day's list. */
+export function formatDate(value: string | Date, locale: Locale): string {
+  return format(value, locale, DATE_OPTIONS);
+}

@@ -37,6 +37,8 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link } from '@ndn/ui';
 
+import { AppointmentCalendar } from '../../../account/AppointmentCalendar.js';
+import { appointmentCalendarStylesCss } from '../../../account/calendar-styles.js';
 import { PatientNotifications } from '../../../account/PatientNotifications.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
@@ -67,6 +69,56 @@ const heading = t('account.heading', undefined, locale);
         <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
       </p>
     </Fragment>
+    {/* 2026-09-06: *"At the very top I want to show calender … where the
+        patient/clinician/principal clinician can scroll left and right to
+        see all past and upcoming appointments. There is no concept of
+        calender for help desk and visitor."*
+
+        First thing under the heading, above the intro line and every link
+        list, because "the very top" is the request. The three roles named
+        are exactly this gate's `allowRoles`; the component refuses the other
+        two as well (`calendarSourcesFor`), so it is safe wherever it is
+        mounted — but the gate here means a helpdesk session never downloads
+        the island at all. No `forbidden` slot: a role with no calendar
+        should see no trace of one, not an explanation of its absence. */}
+    <RequireAuth
+      client:only="react"
+      allowRoles={['patient', 'principal-clinician', 'sub-clinician']}
+    >
+      <AppointmentCalendar
+        client:only="react"
+        locale={locale}
+        strings={{
+          heading: t('accountCalendar.heading', undefined, locale),
+          loadingLabel: t('accountCalendar.loading', undefined, locale),
+          forbiddenLabel: t('accountCalendar.forbidden', undefined, locale),
+          errorLabel: t('accountCalendar.error', undefined, locale),
+          previousMonthLabel: t('accountCalendar.previousMonth', undefined, locale),
+          nextMonthLabel: t('accountCalendar.nextMonth', undefined, locale),
+          todayLabel: t('accountCalendar.today', undefined, locale),
+          gridCaption: t('accountCalendar.gridCaption', undefined, locale),
+          todayMarker: t('accountCalendar.todayMarker', undefined, locale),
+          noAppointmentsOnDay: t('accountCalendar.noAppointmentsOnDay', undefined, locale),
+          emptyMonth: t('accountCalendar.emptyMonth', undefined, locale),
+          durationLabel: t('accountCalendar.duration', undefined, locale),
+          minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
+          statusLabel: t('accountCalendar.status', undefined, locale),
+          joinCallLabel: t('calendar.joinCall', undefined, locale),
+          statusLabels: {
+            // Keyed by the API's own `appointment_status` values
+            // (`packages/shared-types/src/appointment.ts`), so an
+            // unrecognised one falls through to the raw value rather than
+            // rendering blank.
+            scheduled: t('accountCalendar.status.scheduled', undefined, locale),
+            'pending-approval': t('accountCalendar.status.pendingApproval', undefined, locale),
+            completed: t('accountCalendar.status.completed', undefined, locale),
+            cancelled: t('accountCalendar.status.cancelled', undefined, locale),
+            'no-show': t('accountCalendar.status.noShow', undefined, locale),
+          },
+        }}
+      />
+    </RequireAuth>
+
     <p>{t('account.signedInIntro', undefined, locale)}</p>
     {/* 2026-09-02: the patient-only link moved out of the shared list and
         into its own gated block — the same shape every other role-gated
@@ -219,3 +271,9 @@ const heading = t('account.heading', undefined, locale);
     </RequireAuth>
   </RequireAuth>
 </BaseLayout>
+
+{/* One `set:html` block for the calendar island's styles. An island cannot
+    ship its own inline `<style>` and rely on it surviving this site's CSP,
+    and the string lives in its own module so it is not also bundled into the
+    client JavaScript — see `account/calendar-styles.ts`. */}
+<style set:html={appointmentCalendarStylesCss} />
