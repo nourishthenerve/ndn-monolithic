@@ -1,0 +1,149 @@
+---
+// 2026-09-06: writing a blog post. The owner: *"Split blog and workshops
+// button. Also, when I click them it should open a pretty rich formatable
+// kind of page to let the person create a nice blog post."*
+//
+// This and `account/workshops.astro` replace `account/authoring`, which held
+// both forms and both lists on one page behind one dashboard link. Two
+// things are being written here, they share no state, and putting them on one
+// page meant scrolling past a workshop form to reach the blog list.
+//
+// Principal-only, in the matrix (`Content item`, narrowed to `Principal`) and
+// here. Statically generated and **empty**, the same discipline every account
+// page states.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { AuthoredContentList } from '../../../account/AuthoredContentList.js';
+import { BlogComposer } from '../../../account/BlogComposer.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { proseStylesCss, richTextEditorStylesCss } from '../../../rich-text/styles.js';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('blogAuthoring.heading', undefined, locale);
+
+/** Both composers take the same editor vocabulary; the panel copy is the same question either way. */
+const editorStrings = {
+  label: t('richText.bodyLabel', undefined, locale),
+  hint: t('richText.editorHint', undefined, locale),
+  linkUrlLabel: t('richText.linkUrlLabel', undefined, locale),
+  linkApply: t('richText.linkApply', undefined, locale),
+  linkInvalid: t('richText.linkInvalid', undefined, locale),
+  imageChooseLabel: t('richText.imageChoose', undefined, locale),
+  imageAltLabel: t('richText.imageAlt', undefined, locale),
+  imageAltHint: t('richText.imageAltHint', undefined, locale),
+  imageCaptionLabel: t('richText.imageCaption', undefined, locale),
+  imageInsert: t('richText.imageInsert', undefined, locale),
+  imageUploading: t('richText.imageUploading', undefined, locale),
+  imageFailed: t('richText.imageFailed', undefined, locale),
+  imageTooLarge: t('authoring.mediaTooLarge', undefined, locale),
+  imageWrongType: t('authoring.mediaWrongType', undefined, locale),
+  cancel: t('richText.cancel', undefined, locale),
+  previewNotice: t('richText.previewNotice', undefined, locale),
+};
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('blogAuthoring.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    allowRoles={['principal-clinician']}
+  >
+    <Fragment slot="signedOut">
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
+      </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('authoring.forbidden', undefined, locale)}</p>
+    </Fragment>
+
+    <BlogComposer
+      client:only="react"
+      locale={locale}
+      strings={{
+        heading: t('authoring.blogHeading', undefined, locale),
+        intro: t('authoring.blogIntro', undefined, locale),
+        titleLabel: t('authoring.titleLabel', undefined, locale),
+        excerptLabel: t('authoring.excerptLabel', undefined, locale),
+        excerptHint: t('authoring.excerptHint', undefined, locale),
+        keywordsLabel: t('authoring.keywordsLabel', undefined, locale),
+        keywordsHint: t('authoring.keywordsHint', undefined, locale),
+        bodyRequired: t('authoring.bodyRequired', undefined, locale),
+        slugError: t('authoring.slugError', undefined, locale),
+        publishNowLabel: t('authoring.publishNowLabel', undefined, locale),
+        publishNowHint: t('authoring.publishNowHint', undefined, locale),
+        submitButton: t('authoring.submitButton', undefined, locale),
+        submitting: t('authoring.submitting', undefined, locale),
+        successMessage: t('authoring.successMessage', undefined, locale),
+        publishDelayNotice: t('authoring.publishDelay', undefined, locale),
+        conflictError: t('authoring.conflictError', undefined, locale),
+        invalidError: t('authoring.invalidError', undefined, locale),
+        forbidden: t('authoring.forbidden', undefined, locale),
+        error: t('authoring.error', undefined, locale),
+        media: {
+          label: t('authoring.mediaLabel', undefined, locale),
+          hint: t('authoring.mediaHint', undefined, locale),
+          uploading: t('authoring.mediaUploading', undefined, locale),
+          uploaded: t('authoring.mediaUploaded', undefined, locale),
+          remove: t('authoring.mediaRemove', undefined, locale),
+          tooLarge: t('authoring.mediaTooLarge', undefined, locale),
+          wrongType: t('authoring.mediaWrongType', undefined, locale),
+          failed: t('authoring.mediaFailed', undefined, locale),
+          previewAlt: t('authoring.mediaPreviewAlt', undefined, locale),
+        },
+        editor: editorStrings,
+      }}
+    />
+
+    {/* 2026-09-02: what has already been written, and its status. Added
+        because a draft was otherwise unreachable — the public read returns
+        published items only, and nothing here listed anything else, so a post
+        saved before the form began publishing by default was invisible with
+        no way to recover it. */}
+    <AuthoredContentList
+      client:only="react"
+      kind="blog"
+      locale={locale}
+      strings={{
+        heading: t('authoredList.blogHeading', undefined, locale),
+        loading: t('authoredList.loading', undefined, locale),
+        forbidden: t('authoredList.forbidden', undefined, locale),
+        error: t('authoredList.error', undefined, locale),
+        empty: t('authoredList.empty', undefined, locale),
+        titleColumn: t('authoredList.titleColumn', undefined, locale),
+        statusColumn: t('authoredList.statusColumn', undefined, locale),
+        actionColumn: t('authoredList.actionColumn', undefined, locale),
+        publish: t('authoredList.publish', undefined, locale),
+        unpublish: t('authoredList.unpublish', undefined, locale),
+        working: t('authoredList.working', undefined, locale),
+        actionFailed: t('authoredList.actionFailed', undefined, locale),
+        viewLabel: t('authoredList.view', undefined, locale),
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>
+
+{/* Two stylesheets, one island. `proseStylesCss` is the published look of an
+    article and is what makes the writing surface and the preview show the
+    real thing rather than an approximation of it;
+    `richTextEditorStylesCss` is the toolbar around them. Both go through
+    `set:html` because an island cannot ship its own inline style and rely on
+    it surviving this site's CSP — see `rich-text/styles.ts`. */}
+<style set:html={proseStylesCss} />
+<style set:html={richTextEditorStylesCss} />

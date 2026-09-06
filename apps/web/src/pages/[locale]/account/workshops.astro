@@ -1,0 +1,134 @@
+---
+// 2026-09-06: announcing a workshop. The other half of *"Split blog and
+// workshops button"* — see `account/blog.astro` for the reasoning the two
+// share, and `rich-text/policy.ts` for what the editor on both is allowed to
+// produce.
+//
+// Principal-only, in the matrix (`Workshop`, narrowed to `Principal`) and
+// here. Statically generated and **empty**, the same discipline every account
+// page states.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { AuthoredContentList } from '../../../account/AuthoredContentList.js';
+import { WorkshopComposer } from '../../../account/WorkshopComposer.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { proseStylesCss, richTextEditorStylesCss } from '../../../rich-text/styles.js';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('workshopAuthoring.heading', undefined, locale);
+
+const editorStrings = {
+  label: t('richText.descriptionLabel', undefined, locale),
+  hint: t('richText.editorHint', undefined, locale),
+  linkUrlLabel: t('richText.linkUrlLabel', undefined, locale),
+  linkApply: t('richText.linkApply', undefined, locale),
+  linkInvalid: t('richText.linkInvalid', undefined, locale),
+  imageChooseLabel: t('richText.imageChoose', undefined, locale),
+  imageAltLabel: t('richText.imageAlt', undefined, locale),
+  imageAltHint: t('richText.imageAltHint', undefined, locale),
+  imageCaptionLabel: t('richText.imageCaption', undefined, locale),
+  imageInsert: t('richText.imageInsert', undefined, locale),
+  imageUploading: t('richText.imageUploading', undefined, locale),
+  imageFailed: t('richText.imageFailed', undefined, locale),
+  imageTooLarge: t('authoring.mediaTooLarge', undefined, locale),
+  imageWrongType: t('authoring.mediaWrongType', undefined, locale),
+  cancel: t('richText.cancel', undefined, locale),
+  previewNotice: t('richText.previewNotice', undefined, locale),
+};
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('workshopAuthoring.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    allowRoles={['principal-clinician']}
+  >
+    <Fragment slot="signedOut">
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
+      </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('authoring.forbidden', undefined, locale)}</p>
+    </Fragment>
+
+    <WorkshopComposer
+      client:only="react"
+      locale={locale}
+      strings={{
+        heading: t('authoring.workshopHeading', undefined, locale),
+        intro: t('authoring.workshopIntro', undefined, locale),
+        titleLabel: t('authoring.titleLabel', undefined, locale),
+        dateTimeLabel: t('authoring.dateTimeLabel', undefined, locale),
+        capacityLabel: t('authoring.capacityLabel', undefined, locale),
+        capacityHint: t('authoring.capacityHint', undefined, locale),
+        descriptionRequired: t('authoring.descriptionRequired', undefined, locale),
+        slugError: t('authoring.slugError', undefined, locale),
+        dateTimeError: t('authoring.dateTimeError', undefined, locale),
+        publishNowLabel: t('authoring.publishNowLabel', undefined, locale),
+        publishNowHint: t('authoring.publishNowHint', undefined, locale),
+        submitButton: t('authoring.submitButton', undefined, locale),
+        submitting: t('authoring.submitting', undefined, locale),
+        successMessage: t('authoring.successMessage', undefined, locale),
+        publishDelayNotice: t('authoring.publishDelay', undefined, locale),
+        conflictError: t('authoring.conflictError', undefined, locale),
+        invalidError: t('authoring.invalidError', undefined, locale),
+        forbidden: t('authoring.forbidden', undefined, locale),
+        error: t('authoring.error', undefined, locale),
+        media: {
+          label: t('authoring.posterLabel', undefined, locale),
+          hint: t('authoring.mediaHint', undefined, locale),
+          uploading: t('authoring.mediaUploading', undefined, locale),
+          uploaded: t('authoring.mediaUploaded', undefined, locale),
+          remove: t('authoring.mediaRemove', undefined, locale),
+          tooLarge: t('authoring.mediaTooLarge', undefined, locale),
+          wrongType: t('authoring.mediaWrongType', undefined, locale),
+          failed: t('authoring.mediaFailed', undefined, locale),
+          previewAlt: t('authoring.mediaPreviewAlt', undefined, locale),
+        },
+        editor: editorStrings,
+      }}
+    />
+
+    <AuthoredContentList
+      client:only="react"
+      kind="workshop"
+      locale={locale}
+      strings={{
+        heading: t('authoredList.workshopHeading', undefined, locale),
+        loading: t('authoredList.loading', undefined, locale),
+        forbidden: t('authoredList.forbidden', undefined, locale),
+        error: t('authoredList.error', undefined, locale),
+        empty: t('authoredList.empty', undefined, locale),
+        titleColumn: t('authoredList.titleColumn', undefined, locale),
+        statusColumn: t('authoredList.statusColumn', undefined, locale),
+        actionColumn: t('authoredList.actionColumn', undefined, locale),
+        publish: t('authoredList.publish', undefined, locale),
+        unpublish: t('authoredList.unpublish', undefined, locale),
+        working: t('authoredList.working', undefined, locale),
+        actionFailed: t('authoredList.actionFailed', undefined, locale),
+        viewLabel: t('authoredList.view', undefined, locale),
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>
+
+{/* See `account/blog.astro` for why both stylesheets, and why `set:html`. */}
+<style set:html={proseStylesCss} />
+<style set:html={richTextEditorStylesCss} />

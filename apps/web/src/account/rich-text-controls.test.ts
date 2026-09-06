@@ -1,0 +1,103 @@
+// 2026-09-06: the toolbar as data, checked exhaustively.
+//
+// The component around it is a `contenteditable` island with no jsdom pattern
+// to drive end to end — which is exactly why the table is a separate module.
+// What can be proved here is the class of mistake a twenty-nine-entry list
+// invites: a duplicate id (two buttons sharing a roving-tabindex position), a
+// control with no label (an unnamed button on a toolbar of glyphs), or a
+// command whose output `rich-text/policy.ts` would then throw away.
+import { describe, expect, it } from 'vitest';
+
+import { ALLOWED_TAGS } from '../rich-text/policy.js';
+import { isSafeRichText } from '../rich-text/render.js';
+
+import { HIGHLIGHT_COLOR, RICH_TEXT_CONTROLS, RICH_TEXT_GROUPS, TABLE_HTML } from './rich-text-controls.js';
+
+describe('every control', () => {
+  it('has an id of its own', () => {
+    const ids = RICH_TEXT_CONTROLS.map((control) => control.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('has a catalogue key for its accessible name', () => {
+    // The visible mark is a glyph. Without this the button has no name at
+    // all — for a screen reader, and for anyone hovering to find out what it
+    // does.
+    for (const control of RICH_TEXT_CONTROLS) {
+      expect(control.labelKey, `${control.id} has no label`).toMatch(/^richText\./);
+    }
+  });
+
+  it('has something to draw, and only one of the two ways to draw it', () => {
+    for (const control of RICH_TEXT_CONTROLS) {
+      const hasGlyph = Boolean(control.glyph);
+      const hasIcon = Boolean(control.iconPath);
+      expect(hasGlyph || hasIcon, `${control.id} renders nothing`).toBe(true);
+      expect(hasGlyph && hasIcon, `${control.id} renders twice`).toBe(false);
+    }
+  });
+
+  it('either issues a command or names an action, never neither', () => {
+    // A control with neither is a button that does nothing when pressed.
+    for (const control of RICH_TEXT_CONTROLS) {
+      expect(
+        Boolean(control.command) || Boolean(control.action),
+        `${control.id} does nothing`,
+      ).toBe(true);
+    }
+  });
+
+  it('belongs to a group the toolbar renders', () => {
+    for (const control of RICH_TEXT_CONTROLS) {
+      expect(RICH_TEXT_GROUPS).toContain(control.group);
+    }
+  });
+});
+
+describe('the block controls', () => {
+  it('name a tag the policy actually keeps', () => {
+    // `formatBlock` into a tag the sanitiser then unwraps would be a button
+    // whose effect disappears the moment the author stops typing.
+    for (const control of RICH_TEXT_CONTROLS) {
+      if (control.blockTag) {
+        expect(ALLOWED_TAGS.has(control.blockTag), `${control.blockTag} is not allowed`).toBe(true);
+      }
+    }
+  });
+
+  it('pass the tag in angle brackets, which Firefox requires', () => {
+    // Without them `formatBlock` silently does nothing in Gecko.
+    for (const control of RICH_TEXT_CONTROLS) {
+      if (control.command === 'formatBlock') {
+        expect(control.value, `${control.id} would be a no-op in Firefox`).toMatch(/^<[a-z0-9]+>$/);
+      }
+    }
+  });
+
+  it('covers the three heading levels the stylesheet renders, and no more', () => {
+    const headings = RICH_TEXT_CONTROLS.filter((control) =>
+      control.blockTag?.startsWith('h'),
+    ).map((control) => control.blockTag);
+    expect(headings).toEqual(['h2', 'h3', 'h4']);
+  });
+});
+
+describe('what the insert controls produce', () => {
+  it('inserts a table the validator will accept', () => {
+    // Built by hand as a string, so nothing else checks it: a typo here would
+    // publish a table that `renderableRichText` then refuses, silently
+    // flattening the whole post to plain text.
+    expect(isSafeRichText(TABLE_HTML)).toBe(true);
+  });
+
+  it('uses a fixed highlight rather than a colour the author picks', () => {
+    // A free colour well is the one control on a toolbar like this that can
+    // produce a page failing the contrast gate the rest of the site is held
+    // to. See the `highlight` control's own note.
+    expect(HIGHLIGHT_COLOR).toMatch(/^#[0-9a-f]{6}$/);
+    const colourControls = RICH_TEXT_CONTROLS.filter((control) =>
+      ['foreColor', 'backColor'].includes(control.command ?? ''),
+    );
+    expect(colourControls).toEqual([]);
+  });
+});

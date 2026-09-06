@@ -99,7 +99,14 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // `can()` check), same reasoning as `patient-admin` above.
   { segment: 'clinician-admin', ownerRole: 'clinician' },
   // 2026-08-31: blog and workshop authoring, principal-only.
-  { segment: 'authoring', ownerRole: 'clinician' },
+  //
+  // **`authoring` is deleted, not merely unregistered (2026-09-06)**, at the
+  // owner's word: *"Split blog and workshops button."* It held both create
+  // forms and both published-item lists behind one dashboard link, so writing
+  // a post meant scrolling past a workshop form to reach the blog list. Two
+  // things, two pages, two links.
+  { segment: 'blog', ownerRole: 'clinician' },
+  { segment: 'workshops', ownerRole: 'clinician' },
   // `change-password` and `calendar` are **deleted, not merely unregistered**
   // (2026-09-06, the owner: *"remove those two pages entirely"*). Both were
   // pages whose whole content the dashboard had absorbed — the password form

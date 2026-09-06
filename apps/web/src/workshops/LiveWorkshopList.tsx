@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { takeAtMost } from '../list-limit.js';
+import { richTextToPlainText } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
 export interface LiveWorkshop {
@@ -81,8 +82,12 @@ export function workshopsForLocale(
 }[] {
   return workshops.flatMap((workshop) => {
     const detail = workshop.details[locale];
+    // 2026-09-06: a description is markup now, and a card is one line of
+    // summary text. Flattened rather than rendered: a card is not the place
+    // for a heading, a table or an image, and printing the tags as characters
+    // is the other thing that would have happened here.
     return detail
-      ? [{ workshop, title: detail.title, description: detail.description }]
+      ? [{ workshop, title: detail.title, description: richTextToPlainText(detail.description) }]
       : [];
   });
 }

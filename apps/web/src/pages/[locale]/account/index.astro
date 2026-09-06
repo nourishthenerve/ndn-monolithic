@@ -468,6 +468,15 @@ const PANEL_HEADING_LEVEL = 3;
         </ul>
       </nav>
     </RequireAuth>
+    {/* 2026-09-06: *"there are three buttons - patient accounts, clinician
+        accounts and blog and workshops. Split blog and workshops button."*
+
+        The third link pointed at `account/authoring`, one page carrying a
+        blog form, a workshop form and a published-item list for each. They
+        are two jobs done at different times — a post is written when there is
+        something to say, a workshop when one is scheduled — and the page that
+        held both made each of them longer. There are two links and two pages
+        now; the page itself is deleted rather than kept as a third way in. */}
     <RequireAuth client:only="react" allowRoles={['principal-clinician']}>
       <nav aria-label={t('account.principalToolsHeading', undefined, locale)}>
         <ul>
@@ -477,8 +486,13 @@ const PANEL_HEADING_LEVEL = 3;
             </Link>
           </li>
           <li>
-            <Link href={`/${locale}/account/authoring`}>
-              {t('account.authoringLink', undefined, locale)}
+            <Link href={`/${locale}/account/blog`}>
+              {t('account.blogLink', undefined, locale)}
+            </Link>
+          </li>
+          <li>
+            <Link href={`/${locale}/account/workshops`}>
+              {t('account.workshopsLink', undefined, locale)}
             </Link>
           </li>
         </ul>
