@@ -281,4 +281,44 @@ export const appointmentCalendarStylesCss = `
 .ndn-cal-day-list > li p:last-child {
   margin-block-end: 0;
 }
+
+/* The decisions a clinician can take on a slot, inherited from the deleted
+   account/calendar page. A row of small controls rather than the panel's
+   only action, so they wrap on a phone instead of stretching. (No backticks
+   in here: this block is a template literal.) */
+.ndn-cal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block: 0.75rem 0;
+}
+
+.ndn-cal-action {
+  min-height: 2.25rem;
+  padding-block: 0.375rem;
+  padding-inline: 0.75rem;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 0.375rem;
+  background-color: #ffffff;
+  color: var(--ndn-color-text);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color var(--ndn-motion-duration-fast) ease;
+}
+
+.ndn-cal-action:hover:not(:disabled) {
+  border-color: var(--ndn-color-brand);
+}
+
+.ndn-cal-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ndn-cal-action:focus-visible {
+  outline: 2px solid var(--ndn-color-focus-ring);
+  outline-offset: 2px;
+}
 `;

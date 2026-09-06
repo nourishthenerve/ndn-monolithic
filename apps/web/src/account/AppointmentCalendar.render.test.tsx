@@ -69,6 +69,12 @@ const STRINGS = {
   minutesSuffix: 'minutes',
   statusLabel: 'Status:',
   joinCallLabel: 'Join call',
+  approveLabel: 'Approve',
+  declineLabel: 'Decline',
+  completeLabel: 'Mark as attended',
+  noShowLabel: 'Mark as no-show',
+  decidingLabel: 'Saving…',
+  decideFailedLabel: 'That could not be saved.',
   statusLabels: {
     scheduled: 'Confirmed',
     'pending-approval': 'Waiting for approval',
@@ -443,5 +449,104 @@ describe('the loading contract the authenticated a11y gate depends on', () => {
     );
     // The setup's assumption is sound; it was this component that broke it.
     expect(await screen.findByRole('status')).toBeDefined();
+  });
+});
+
+// 2026-09-06: `account/calendar` was deleted at the owner's word ("remove
+// those two pages entirely"), and these four controls came here with it.
+//
+// Marking attendance had **no other home in the UI at all** —
+// `PatientRecordPanel` carries approve/decline, nothing carried
+// complete/no-show — and `appointment.ts` is explicit that without those
+// routes `appointment_status` never reaches `completed`, leaving every
+// "appointments so far" figure reading zero. Deleting the page without
+// moving this would have broken those counts silently, which is what these
+// tests exist to stop happening again.
+describe('the decisions inherited from the deleted calendar page', () => {
+  function renderClinician(
+    entry: CalendarAppointment,
+    decideAppointment = vi.fn().mockResolvedValue(jsonResponse([])),
+    role = 'principal-clinician',
+  ) {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor(role)}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={vi.fn().mockResolvedValue(jsonResponse([entry]))}
+        decideAppointment={decideAppointment}
+      />,
+    );
+    return decideAppointment;
+  }
+
+  it('offers attendance on a confirmed slot, which nothing else in the UI does', async () => {
+    renderClinician(appointment(local(2026, 8, 15, 9, 0)));
+    expect(await screen.findByRole('button', { name: 'Mark as attended' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Mark as no-show' })).toBeDefined();
+  });
+
+  it('posts the decision for the right appointment', async () => {
+    const entry = appointment(local(2026, 8, 15, 9, 0));
+    const decide = renderClinician(entry);
+    (await screen.findByRole('button', { name: 'Mark as attended' })).click();
+    await waitFor(() => {
+      expect(decide).toHaveBeenCalledWith('token', entry, 'complete');
+    });
+  });
+
+  it('offers approve and decline on a pending slot, to the principal', async () => {
+    renderClinician(appointment(local(2026, 8, 15, 9, 0), 'pending-approval'));
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Decline' })).toBeDefined();
+    // Nothing to join until it is confirmed — `ws-join.ts` would refuse it.
+    expect(screen.queryByRole('link', { name: 'Join call' })).toBeNull();
+  });
+
+  it('hides approve and decline from a sub-clinician rather than offering then refusing', async () => {
+    renderClinician(
+      appointment(local(2026, 8, 15, 9, 0), 'pending-approval'),
+      vi.fn(),
+      'sub-clinician',
+    );
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+
+  it('still offers attendance to a sub-clinician — that rides Appointments: update', async () => {
+    renderClinician(appointment(local(2026, 8, 15, 9, 0)), vi.fn(), 'sub-clinician');
+    expect(await screen.findByRole('button', { name: 'Mark as attended' })).toBeDefined();
+  });
+
+  it('offers a patient none of them, on their own calendar', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('patient')}
+        fetchPatientAppointments={vi
+          .fn()
+          .mockResolvedValue(jsonResponse([appointment(local(2026, 8, 15, 9, 0))]))}
+        fetchClinicianCalendar={vi.fn()}
+        decideAppointment={vi.fn()}
+      />,
+    );
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(screen.queryByRole('button', { name: 'Mark as attended' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+
+  it('reports a refusal on the row it belongs to rather than failing silently', async () => {
+    renderClinician(
+      appointment(local(2026, 8, 15, 9, 0)),
+      vi.fn().mockResolvedValue(jsonResponse([], 403)),
+    );
+    (await screen.findByRole('button', { name: 'Mark as attended' })).click();
+    // A 403 (not yours) and a 409 (already decided) land here together: both
+    // mean "this row is not yours to change now".
+    expect((await screen.findByRole('alert')).textContent).toContain('That could not be saved.');
   });
 });

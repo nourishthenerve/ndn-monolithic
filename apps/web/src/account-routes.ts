@@ -99,17 +99,19 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   { segment: 'clinician-admin', ownerRole: 'clinician' },
   // 2026-08-31: blog and workshop authoring, principal-only.
   { segment: 'authoring', ownerRole: 'clinician' },
-  // D-34: any signed-in clinician's own self-service password change —
-  // clinician-only, not principal-only (services/api/src/clinician-admin.ts's
-  // own role check, not the `can()` matrix — see that file's own header).
-  { segment: 'change-password', ownerRole: 'clinician' },
-  // TASK 5.5.3 step 1: any clinician's own upcoming appointments, and the
-  // first real inbound link to call.astro from a page other than itself.
-  { segment: 'calendar', ownerRole: 'clinician' },
-  // 2026-09-04: the patient's own half of that page — the same list, the
-  // same join link, read from `/patients/me/appointments`. A separate
-  // route rather than a role branch inside `calendar` above; see the
-  // page's own header.
+  // `change-password` and `calendar` are **deleted, not merely unregistered**
+  // (2026-09-06, the owner: *"remove those two pages entirely"*). Both were
+  // pages whose whole content the dashboard had absorbed — the password form
+  // and `OwnDetailsPanel` into its Account section, the clinician's
+  // appointment list into the calendar at its top. The four decisions the
+  // calendar page carried (approve, decline, mark attended, no-show) moved
+  // with it into `AppointmentCalendar`'s day panel; marking attendance had
+  // no other home in the UI at all, and losing it would have left
+  // `appointment_status` never reaching `completed`.
+  //
+  // 2026-09-04: the patient's own appointment list, read from
+  // `/patients/me/appointments`. Unlinked from the dashboard (the calendar
+  // shows the same slots) but still a real page.
   { segment: 'appointments', ownerRole: 'patient' },
   // TASK 3.5.2: the patient's own assigned-content list.
   { segment: 'content', ownerRole: 'patient' },

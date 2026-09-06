@@ -8,14 +8,17 @@
 //
 // ## What existed, and why it is not this
 //
-// Two list views already read the same data: `PatientAppointments` (the
-// patient's own, `/account/appointments`) and `ClinicianCalendar` (the
-// clinician's, `/account/calendar`). Both are tables of rows, both look
-// **forward only** — the patient's filters to `isLiveOrUpcoming`, the
-// clinician's to a fixed 30-day window — and neither can show last month.
-// That last point is the request: a calendar you can scroll backwards
-// through is a different thing from a list of what is next, and this is the
-// former. Neither existing page is replaced here; both keep their own job.
+// Two list views read the same data when this was written:
+// `PatientAppointments` (the patient's own, `/account/appointments`) and
+// `ClinicianCalendar` (the clinician's, `/account/calendar`). Both were
+// tables of rows, both looked **forward only** — the patient's filtered to
+// `isLiveOrUpcoming`, the clinician's to a fixed 30-day window — and neither
+// could show last month. That last point was the request: a calendar you can
+// scroll backwards through is a different thing from a list of what is next.
+//
+// **2026-09-06: `ClinicianCalendar` and its page are gone**, and this view
+// absorbed the four decisions they carried (approve, decline, mark attended,
+// no-show). `PatientAppointments` still exists on `/account/appointments`.
 //
 // ## One component, two endpoints, chosen by role
 //
@@ -138,6 +141,17 @@ export function visibleForPatient(
   return items.filter((item) => !PATIENT_HIDDEN_STATUSES.includes(item.appointment_status));
 }
 
+/**
+ * The four `POST` transitions this view can reach.
+ *
+ * `approve`/`decline` are the principal's alone (`authz-matrix.ts`'s
+ * `Appointment approval` row); `complete`/`no-show` ride
+ * `Appointments: update`, so the treating clinician holds them as well. The
+ * server decides which; this list only says what the UI knows how to ask
+ * for.
+ */
+export type AppointmentAction = 'approve' | 'decline' | 'complete' | 'no-show';
+
 type ViewState =
   | { readonly status: 'loading' }
   /** Helpdesk and visitor: not an error, not an empty calendar — no calendar. */
@@ -162,6 +176,18 @@ export interface AppointmentCalendarStrings {
   readonly minutesSuffix: string;
   readonly statusLabel: string;
   readonly joinCallLabel: string;
+  /**
+   * 2026-09-06: the four decisions that used to live on `account/calendar`,
+   * moved here when that page was deleted. Approve/decline are the
+   * principal's; complete/no-show ride `Appointments: update`, so the
+   * treating clinician has them too. A patient never sees any of them.
+   */
+  readonly approveLabel: string;
+  readonly declineLabel: string;
+  readonly completeLabel: string;
+  readonly noShowLabel: string;
+  readonly decidingLabel: string;
+  readonly decideFailedLabel: string;
   /** Keyed by `appointment_status`; an unknown value falls back to the raw one. */
   readonly statusLabels: Readonly<Record<string, string>>;
 }
@@ -177,6 +203,15 @@ export interface AppointmentCalendarProps {
     from: string,
     to: string,
     accessToken: string,
+  ) => Promise<Response>;
+  /**
+   * 2026-09-06: `POST …/appointments/{apptId}/{approve|decline|complete|no-show}`.
+   * Injectable for tests.
+   */
+  readonly decideAppointment?: (
+    accessToken: string,
+    entry: CalendarAppointment,
+    decision: AppointmentAction,
   ) => Promise<Response>;
   /**
    * Injectable for tests; defaults to the real current time. **A caller
@@ -217,6 +252,20 @@ function defaultFetchPatientAppointments(accessToken: string): Promise<Response>
   });
 }
 
+function defaultDecideAppointment(
+  accessToken: string,
+  entry: CalendarAppointment,
+  decision: AppointmentAction,
+): Promise<Response> {
+  // The appointment's own id in a path is its `scheduledAt` — the `{apptId}`
+  // segment the API reads, not the composite `<patientId>#<scheduledAt>` a
+  // *call* is identified by. The two look similar and are not the same.
+  return fetch(
+    `${contentApiUrl}/patients/${encodeURIComponent(entry.patientId)}/appointments/${encodeURIComponent(entry.scheduledAt)}/${decision}`,
+    { method: 'POST', headers: { authorization: `Bearer ${accessToken}` } },
+  );
+}
+
 function defaultFetchClinicianCalendar(
   from: string,
   to: string,
@@ -234,6 +283,7 @@ export function AppointmentCalendar({
   client = defaultClient,
   fetchPatientAppointments = defaultFetchPatientAppointments,
   fetchClinicianCalendar = defaultFetchClinicianCalendar,
+  decideAppointment = defaultDecideAppointment,
   now = systemNow,
 }: AppointmentCalendarProps): ReactNode {
   // Ticks on its own so a join countdown stays honest; `now` (the function)
@@ -247,6 +297,16 @@ export function AppointmentCalendar({
   const [sources, setSources] = useState<readonly CalendarSource[] | undefined>(undefined);
   /** `null` is "the reader has chosen nothing yet", so the default can still apply. */
   const [chosenDay, setChosenDay] = useState<string | null>(null);
+  /** Keyed by the row's own composite id, so one row's outcome never speaks for another's. */
+  const [deciding, setDeciding] = useState<Record<string, 'busy' | 'failed'>>({});
+  /**
+   * Approve/decline are the principal's alone, and are hidden rather than
+   * offered-then-refused. Starts `true` and narrows only on a *known*
+   * non-principal role, so an unreadable token still shows the controls and
+   * lets the server answer — `token-claims.ts`'s rule: hide on a positive
+   * answer, never on a shrug.
+   */
+  const [mayDecide, setMayDecide] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -261,7 +321,11 @@ export function AppointmentCalendar({
           setSources([]);
           return;
         }
-        setSources(calendarSourcesFor(resolved.session.viewerRole));
+        const role = resolved.session.viewerRole;
+        setSources(calendarSourcesFor(role));
+        if (role !== undefined) {
+          setMayDecide(role === 'principal-clinician');
+        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -352,6 +416,36 @@ export function AppointmentCalendar({
       ? chosenDay
       : fallbackDay;
 
+  const decide = async (entry: CalendarAppointment, decision: AppointmentAction) => {
+    const rowKey = `${entry.patientId}#${entry.scheduledAt}`;
+    setDeciding((current) => ({ ...current, [rowKey]: 'busy' }));
+    const accessToken = await client.authorization();
+    if (!accessToken) {
+      setDeciding((current) => ({ ...current, [rowKey]: 'failed' }));
+      return;
+    }
+    try {
+      const response = await decideAppointment(accessToken, entry, decision);
+      if (!response.ok) {
+        // A 403 (not the principal) and a 409 (already decided) land here
+        // together on purpose: both mean "this row is not yours to change
+        // now", and both are fixed by reloading and looking again.
+        setDeciding((current) => ({ ...current, [rowKey]: 'failed' }));
+        return;
+      }
+      setDeciding((current) => {
+        const next = { ...current };
+        delete next[rowKey];
+        return next;
+      });
+      // A decision changes the row's status, which changes what this panel
+      // and the grid above it should say — so re-read rather than patch.
+      await load();
+    } catch {
+      setDeciding((current) => ({ ...current, [rowKey]: 'failed' }));
+    }
+  };
+
   const goToWindow = (next: Date) => {
     setWindowStart(next);
     // A day chosen in the window being left must not survive into the next
@@ -381,6 +475,10 @@ export function AppointmentCalendar({
     .some((day) => (byDay.get(dayKey(day))?.length ?? 0) > 0);
   const selectedEntries = selectedDay ? (byDay.get(selectedDay) ?? []) : [];
   const selectedDate = weeks.flat().find((day) => dayKey(day) === selectedDay);
+  /** Whose calendar this is — a patient is offered none of the decisions below. */
+  const isClinician = sources?.includes('clinician') ?? false;
+  const decidingFor = (entry: CalendarAppointment): 'busy' | 'failed' | undefined =>
+    deciding[`${entry.patientId}#${entry.scheduledAt}`];
   const firstDayOnGrid = weeks[0]?.[0];
   const lastWeekOnGrid = weeks[weeks.length - 1];
   const lastDayOnGrid = lastWeekOnGrid?.[lastWeekOnGrid.length - 1];
@@ -631,6 +729,76 @@ export function AppointmentCalendar({
                           now={currentTime}
                           joinCallLabel={strings.joinCallLabel}
                         />
+                      </p>
+                    )}
+                    {/* 2026-09-06: the decisions, moved here from
+                        `account/calendar` when that page was deleted.
+
+                        `isClinician`, not a role check: a patient's calendar
+                        is built from their own history and none of these
+                        four routes would accept them. Marking attendance in
+                        particular had **no other home in the UI at all** —
+                        `PatientRecordPanel` carries approve/decline, nothing
+                        carried complete/no-show — and without it
+                        `appointment_status` never becomes `completed`, so
+                        every "appointments so far" figure reads zero
+                        forever. Deleting that page without moving this would
+                        have quietly broken those counts. */}
+                    {isClinician && (
+                      <p className="ndn-cal-actions">
+                        {entry.appointment_status === 'pending-approval' && mayDecide && (
+                          <>
+                            <button
+                              type="button"
+                              className="ndn-cal-action"
+                              disabled={decidingFor(entry) === 'busy'}
+                              onClick={() => void decide(entry, 'approve')}
+                            >
+                              {decidingFor(entry) === 'busy'
+                                ? strings.decidingLabel
+                                : strings.approveLabel}
+                            </button>
+                            <button
+                              type="button"
+                              className="ndn-cal-action"
+                              disabled={decidingFor(entry) === 'busy'}
+                              onClick={() => void decide(entry, 'decline')}
+                            >
+                              {strings.declineLabel}
+                            </button>
+                          </>
+                        )}
+                        {/* Offered for every confirmed appointment rather
+                            than only past ones: a clinician marking a session
+                            the moment it ends is the realistic flow, and
+                            "past" would need a clock this panel would then
+                            disagree with the server about. The server refuses
+                            anything that is not still `scheduled`. */}
+                        {entry.appointment_status === 'scheduled' && (
+                          <>
+                            <button
+                              type="button"
+                              className="ndn-cal-action"
+                              disabled={decidingFor(entry) === 'busy'}
+                              onClick={() => void decide(entry, 'complete')}
+                            >
+                              {decidingFor(entry) === 'busy'
+                                ? strings.decidingLabel
+                                : strings.completeLabel}
+                            </button>
+                            <button
+                              type="button"
+                              className="ndn-cal-action"
+                              disabled={decidingFor(entry) === 'busy'}
+                              onClick={() => void decide(entry, 'no-show')}
+                            >
+                              {strings.noShowLabel}
+                            </button>
+                          </>
+                        )}
+                        {decidingFor(entry) === 'failed' && (
+                          <span role="alert">{strings.decideFailedLabel}</span>
+                        )}
                       </p>
                     )}
                   </li>

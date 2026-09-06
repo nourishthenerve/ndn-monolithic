@@ -139,6 +139,14 @@ const PANEL_HEADING_LEVEL = 3;
           minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
           statusLabel: t('accountCalendar.status', undefined, locale),
           joinCallLabel: t('calendar.joinCall', undefined, locale),
+          // The four decisions inherited from the deleted `account/calendar`
+          // page, reusing its own catalogue entries rather than new copy.
+          approveLabel: t('clinicianCalendar.approve', undefined, locale),
+          declineLabel: t('clinicianCalendar.decline', undefined, locale),
+          completeLabel: t('clinicianCalendar.complete', undefined, locale),
+          noShowLabel: t('clinicianCalendar.noShow', undefined, locale),
+          decidingLabel: t('clinicianCalendar.deciding', undefined, locale),
+          decideFailedLabel: t('clinicianCalendar.decideFailed', undefined, locale),
           statusLabels: {
             // Keyed by the API's own `appointment_status` values
             // (`packages/shared-types/src/appointment.ts`), so an
