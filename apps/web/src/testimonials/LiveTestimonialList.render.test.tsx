@@ -136,3 +136,56 @@ describe('the default fetch', () => {
     expect(injected).toHaveBeenCalledTimes(1);
   });
 });
+
+// 2026-09-06: the homepage shows three quotes. The owner asked for the "top
+// three" — nothing on a testimonial ranks it (no rating, no ordering field),
+// so this is the first three the API returns, i.e. the most recent three.
+// Naming that here rather than letting the prop imply a ranking it has not
+// got.
+describe('the homepage strip', () => {
+  function quote(text: string): LiveTestimonial {
+    return { quote: { en: text }, attribution: { display: 'anonymous' } };
+  }
+
+  const built = [quote('one'), quote('two'), quote('three'), quote('four')];
+
+  it('shows only the first `limit` quotes', () => {
+    render(
+      <LiveTestimonialList
+        strings={STRINGS}
+        locale="en"
+        initialTestimonials={built}
+        limit={3}
+        fetchTestimonials={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getByText('three')).toBeDefined();
+    expect(screen.queryByText('four')).toBeNull();
+  });
+
+  it('trims after the reconciliation, so one published since the build can take a place', async () => {
+    render(
+      <LiveTestimonialList
+        strings={STRINGS}
+        locale="en"
+        initialTestimonials={built}
+        limit={3}
+        fetchTestimonials={() => Promise.resolve([PUBLISHED_SINCE, ...built])}
+      />,
+    );
+    expect(await screen.findByText('Published five minutes ago.')).toBeDefined();
+    expect(screen.queryByText('three')).toBeNull();
+  });
+
+  it('is unlimited when no limit is given — the /testimonials page is unchanged', () => {
+    render(
+      <LiveTestimonialList
+        strings={STRINGS}
+        locale="en"
+        initialTestimonials={built}
+        fetchTestimonials={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getByText('four')).toBeDefined();
+  });
+});

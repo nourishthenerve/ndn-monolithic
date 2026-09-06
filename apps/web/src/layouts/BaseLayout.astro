@@ -52,9 +52,21 @@ interface Props {
    * that should win.
    */
   readonly noIndex?: boolean;
+  /**
+   * 2026-09-06: opt out of the centred content column `<main>` otherwise
+   * gets, for a page that lays out its own full-bleed sections.
+   *
+   * Until now `<main>` had no padding or measure at all — `primitiveStylesCss`
+   * zeroes the body margin, so every page's text ran flush to the viewport
+   * edge and as wide as the window. That was survivable while the site was
+   * six short pages; it is not, next to a designed landing page. The default
+   * is therefore the column, and `index.astro` — whose hero and alternating
+   * tinted bands must reach the edges — is the one page that passes `wide`.
+   */
+  readonly wide?: boolean;
 }
 
-const { locale, title, description, canonicalHref, hreflangLinks, noIndex } = Astro.props;
+const { locale, title, description, canonicalHref, hreflangLinks, noIndex, wide } = Astro.props;
 const dir = localeDirection(locale);
 
 const rootVariables = { ...colorSchemeCssVariables('light'), ...typeTokenCssVariables() };
@@ -79,6 +91,16 @@ body {
 body > main {
   order: 2;
   flex: 1 0 auto;
+}
+/* The default reading column. max-width caps the stretched flex item and
+   the padding sits inside that box, so this needs no box-sizing reset and
+   cannot overflow the viewport. (No backticks in here: this block is a JS
+   template literal, and one would end it mid-stylesheet.) */
+body > main.ndn-main--contained {
+  max-width: 68rem;
+  margin-inline: auto;
+  padding-block: 2rem;
+  padding-inline: 1.25rem;
 }
 body > .ndn-nav-header {
   order: 1;
@@ -107,7 +129,7 @@ body > footer {
   </head>
   <body>
     <SkipLink>{t('common.skipToContent', undefined, locale)}</SkipLink>
-    <main id="main" tabindex="-1">
+    <main id="main" tabindex="-1" class={wide ? undefined : 'ndn-main--contained'}>
       <slot />
     </main>
     <Nav locale={locale} />

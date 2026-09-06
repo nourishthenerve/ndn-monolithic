@@ -64,9 +64,30 @@ import type { ReactNode } from 'react';
 import { createSessionClient, type SessionClient } from './session.js';
 import { SignInLink, SignOutButton } from './SignInPanel.js';
 
+// ## 2026-09-06: one sign-in control, not two
+//
+// The owner, redesigning the public site as a single page: *"at the top
+// there will be only patient sign in button… only one sign in button at the
+// top and based on who has entered his credential his particular account
+// will get opened."*
+//
+// The second half of that already works and always has: whichever pool a
+// visitor authenticates against, the callback lands them on
+// `/{locale}/account`, which builds itself from the token's own role
+// (`token-claims.ts`, and the `allowRoles` gates on that page). A patient
+// sees a patient's account; the principal sees the principal's. Nothing
+// about that needed changing.
+//
+// The first half is this: the header now offers **one** entry point, the
+// patient one, and the clinician link moves to the footer. It cannot simply
+// be deleted. ADR-0004's Gate-G1 amendment puts patients and clinicians in
+// two separate Cognito user pools — Cognito's MFA policy is pool-wide, and
+// clinicians must have TOTP while patients must not — so each pool has its
+// own hosted login page and there is no single form that accepts both kinds
+// of credential. A staff member who cannot reach `?pool=clinician` cannot
+// sign in at all.
 export interface SessionNavStrings {
-  readonly patientSignIn: string;
-  readonly clinicianSignIn: string;
+  readonly signIn: string;
   readonly account: string;
   readonly signOut: string;
 }
@@ -144,10 +165,7 @@ export function SessionNav({
   return (
     <ul className={listClassName}>
       <li>
-        <SignInLink label={strings.patientSignIn} pool="patient" />
-      </li>
-      <li>
-        <SignInLink label={strings.clinicianSignIn} pool="clinician" />
+        <SignInLink label={strings.signIn} pool="patient" />
       </li>
     </ul>
   );

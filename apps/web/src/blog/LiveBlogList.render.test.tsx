@@ -111,3 +111,66 @@ describe('link shapes', () => {
     expect(hrefs).toContain('/en/blog/post?slug=brand-new');
   });
 });
+
+// 2026-09-06: the homepage shows three posts and links out to the archive
+// for the rest. The subtle half is *when* the trim happens — after the
+// reconciliation, not to the seed — because a post published since the last
+// deploy has to be able to take one of the three places.
+describe('the homepage strip', () => {
+  const built = [post('a'), post('b'), post('c'), post('d')];
+
+  it('shows only the first `limit` posts', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={built}
+        limit={3}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getAllByRole('link', { name: 'Read more' })).toHaveLength(3);
+    expect(screen.queryByText('d title')).toBeNull();
+  });
+
+  it('still shows a post published since the build, rather than trimming the seed first', async () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={built}
+        limit={3}
+        fetchPosts={() => Promise.resolve([post('brand-new'), ...built])}
+      />,
+    );
+    // Trimming the seed to three before reconciling would have left the new
+    // post out of the strip entirely — or pushed it to four.
+    expect(await screen.findByText('brand-new title')).toBeDefined();
+    expect(screen.getAllByRole('link', { name: 'Read more' })).toHaveLength(3);
+  });
+
+  it('is unlimited when no limit is given — the /blog listing is unchanged', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={built}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getAllByRole('link', { name: 'Read more' })).toHaveLength(4);
+  });
+
+  it('renders post titles at the level the page asks for, so they sit under its section heading', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[post('a')]}
+        headingLevel={3}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'a title', level: 3 })).toBeDefined();
+  });
+});
