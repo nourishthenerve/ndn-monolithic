@@ -35,6 +35,8 @@ import { createSessionClient } from '../auth/session.js';
 import { viewerRoleFromAccessToken } from '../auth/token-claims.js';
 import { contentApiUrl } from '../site-config.js';
 
+import type { PanelHeadingLevel } from './heading-level.js';
+
 /** The form every patient's record is instantiated from. One template, one form per patient — `assessment-repository.ts`'s `DEFAULT_ASSESSMENT_ID`. */
 export const ASSESSMENT_ID = 'intake-v1';
 
@@ -133,6 +135,8 @@ export interface AssessmentFormStrings {
 
 export interface AssessmentFormProps {
   readonly strings: AssessmentFormStrings;
+  /** 2026-09-06: the level each form section's heading renders at — 2 on its own page, 3 inside a dashboard section. See `heading-level.ts`. */
+  readonly headingLevel?: PanelHeadingLevel;
   /** Injectable for tests. Defaults to `?id=` on the URL, or `me` when the viewer is a patient. */
   readonly patientId?: string;
   readonly client?: SessionClient;
@@ -326,6 +330,7 @@ export function responsesToSave(
 
 export function AssessmentForm({
   strings,
+  headingLevel = 2,
   patientId,
   client = defaultClient,
   fetchForm = defaultFetchForm,
@@ -713,7 +718,7 @@ export function AssessmentForm({
         const saveState = saveStates[section.fieldSet] ?? 'idle';
         return (
           <section key={section.fieldSet} aria-labelledby={`assessment-${section.fieldSet}-heading`}>
-            <Heading level={2} id={`assessment-${section.fieldSet}-heading`}>
+            <Heading level={headingLevel} id={`assessment-${section.fieldSet}-heading`}>
               {section.title}
             </Heading>
             {!writable && <p>{strings.readOnlyLabel}</p>}

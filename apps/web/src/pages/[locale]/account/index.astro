@@ -2,44 +2,59 @@
 // TASK 2.2.4: the first page behind a session. Statically generated and
 // **empty** — ADR-0017's static-output decision is intact, because what
 // makes this page private is not server rendering but that its content is
-// not in the HTML at all. The island below decides whether to build any,
-// and renders nothing until the session resolves.
+// not in the HTML at all. The islands below decide whether to build any,
+// and render nothing until the session resolves.
 //
-// D-34 (2026-08-31): a real, visible link to change-password.astro — this
-// page is the one every signed-in identity actually lands on, unlike
-// every other account page's own "URL-only reachability" (account-routes.ts).
-// Found live: nothing pointed at the feature once it shipped, so nobody
-// could find it. Shown to a signed-in patient too, same as every sibling
-// account link — the server-side role check (clinician-admin.ts) is the
-// real boundary, not this link's visibility.
+// ## 2026-09-06: for a patient, this page *is* the account
 //
-// Amendment, same day: the three staff tools get the same treatment, for
-// the same reason and on the same reasoning. The patient dashboard,
-// patient accounts and clinician accounts pages have each been reachable
-// by typed URL only since they shipped, which is why the owner's request
-// for "two options available" reads as though they do not exist — they
-// do, there was simply nothing linking to them.
+// The owner: *"the moment a patient signs in it lands to his dashboard.
+// This dashboard has 'My calender', 'Personal Details', 'Testimonial' and
+// 'Account' section. Inside 'My Calender' we already have a nice looking
+// calender. Inside 'Personal Details' keep all personal details option,
+// inside 'Testimonial' keep testimonial content and inside 'Account' have
+// option to change password."*
 //
-// Second amendment, same day: **shown to the principal clinician only.**
-// The first cut listed all three unconditionally, arguing that a link
-// which lies about what the server will allow beats a menu that quietly
-// disagrees with it. The owner, seeing it as a sub-clinician, disagreed —
-// *"for a non-principal clinician I dont even want create patient or
-// create clinician account to be visible"* — and they are right: the
-// menu is not the place to discover you were never allowed. The nested
-// `RequireAuth` below hides them on a *known* "not the principal" and
-// shows them whenever that cannot be determined, so the failure mode is
-// a link the API refuses (today's behaviour) rather than a principal
-// locked out of their own tools. See `auth/token-claims.ts` for why this
-// is presentation and not authorisation. Change-password stays outside
-// it: every signed-in identity, patient included, needs that one.
+// Until now this page was a **menu**: a list of links to `account/patient`,
+// `account/appointments`, `account/testimonial` and
+// `account/change-password`, plus a notifications feed. A patient signing in
+// landed on a page whose entire content was directions to four other pages.
+// Now the four pages' content is here, in four named sections, and the
+// pages themselves remain — reachable by URL, still registered in
+// `account-routes.ts` for the authenticated a11y gate, and still the place
+// a deep link lands. What is gone is the layer of links in between.
+//
+// Two things went with it, at the owner's word — *"remove Updates section
+// and My Calender button on dashboard as they are redundant"*:
+//
+//   * `PatientNotifications` ("Updates"). Its feed is appointment-approved
+//     / appointment-cancelled / calendar-updated notices — every one of them
+//     a statement about a slot the calendar directly above now shows.
+//   * The "My calendar" link, for the same reason twice over: it pointed at
+//     `account/appointments`, a forward-only list of the appointments the
+//     calendar already draws.
+//
+// `account.signedInIntro` went too — "your care plan and appointments will
+// appear here" was a promise printed directly above the thing it promised.
+//
+// ## The staff half is deliberately untouched
+//
+// Everything below the patient sections is the clinician/principal/helpdesk
+// shell exactly as it was, including its own change-password link: those
+// roles' pages carry `OwnDetailsPanel` alongside the password form, which
+// this page does not inline, and the owner's brief was about what a patient
+// lands on. The calendar is the one section the two halves share.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link } from '@ndn/ui';
 
 import { AppointmentCalendar } from '../../../account/AppointmentCalendar.js';
+import { AssessmentForm } from '../../../account/AssessmentForm.js';
 import { appointmentCalendarStylesCss } from '../../../account/calendar-styles.js';
-import { PatientNotifications } from '../../../account/PatientNotifications.js';
+import { ChangePasswordPanel } from '../../../account/ChangePasswordPanel.js';
+import { ClinicalRecordTimeline } from '../../../account/ClinicalRecordTimeline.js';
+import { NextAppointmentPanel } from '../../../account/NextAppointmentPanel.js';
+import { PatientProfile } from '../../../account/PatientProfile.js';
+import { TestimonialPanel } from '../../../account/TestimonialPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
@@ -51,6 +66,13 @@ export function getStaticPaths() {
 
 const { locale } = Astro.params as { locale: Locale };
 const heading = t('account.heading', undefined, locale);
+
+/**
+ * Every panel gathered into a named section renders its own heading one
+ * level down, so the outline reads "page > section > panel" rather than a
+ * flat run of `<h2>`s. See `account/heading-level.ts`.
+ */
+const PANEL_HEADING_LEVEL = 3;
 ---
 
 <BaseLayout
@@ -69,18 +91,19 @@ const heading = t('account.heading', undefined, locale);
         <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
       </p>
     </Fragment>
-    {/* 2026-09-06: *"At the very top I want to show calender … where the
+
+    {/* ## 1. My calendar
+        2026-09-06: *"At the very top I want to show calender … where the
         patient/clinician/principal clinician can scroll left and right to
         see all past and upcoming appointments. There is no concept of
         calender for help desk and visitor."*
 
-        First thing under the heading, above the intro line and every link
-        list, because "the very top" is the request. The three roles named
-        are exactly this gate's `allowRoles`; the component refuses the other
-        two as well (`calendarSourcesFor`), so it is safe wherever it is
-        mounted — but the gate here means a helpdesk session never downloads
-        the island at all. No `forbidden` slot: a role with no calendar
-        should see no trace of one, not an explanation of its absence. */}
+        The three roles named are exactly this gate's `allowRoles`; the
+        component refuses the other two as well (`calendarSourcesFor`), so it
+        is safe wherever it is mounted — but the gate here means a helpdesk
+        session never downloads the island at all. No `forbidden` slot: a
+        role with no calendar should see no trace of one, not an explanation
+        of its absence. The section heading is the component's own. */}
     <RequireAuth
       client:only="react"
       allowRoles={['patient', 'principal-clinician', 'sub-clinician']}
@@ -119,81 +142,196 @@ const heading = t('account.heading', undefined, locale);
       />
     </RequireAuth>
 
-    <p>{t('account.signedInIntro', undefined, locale)}</p>
-    {/* 2026-09-02: the patient-only link moved out of the shared list and
-        into its own gated block — the same shape every other role-gated
-        group on this page already uses.
+    {/* ## 2. Personal details — the whole of `account/patient` inlined.
+        *"just underneath this calender show the entire Your details
+        content."* Every panel that page renders, in that page's own order,
+        each one level down so they read as this section's contents.
 
-        It was a `RequireAuth` island nested directly inside the `<ul>`,
-        which Astro renders as an `<astro-island>` element: a direct child
-        of a list that is not a list item, which axe's `list` rule calls
-        serious (WCAG 1.3.1). Nothing caught it, because the only scan that
-        reaches this page is the authenticated nightly one. Found by the
-        static check `components/list-structure.test.ts` now performs over
-        `dist/`, written after the identical mistake in the site nav. */}
+        `NextAppointmentPanel` is kept because "the entire Your details
+        content" is what was asked for — but it is worth naming that it is
+        now the third view of the same appointments on one screen, after the
+        calendar's grid and its day panel. It is one line to remove if the
+        owner agrees. */}
     <RequireAuth client:only="react" allowRoles={['patient']}>
-      <nav aria-label={t('account.yourAccountHeading', undefined, locale)}>
+      <section aria-labelledby="personal-details-heading">
+        <Heading level={2} id="personal-details-heading">
+          {t('account.personalDetailsHeading', undefined, locale)}
+        </Heading>
+        <PatientProfile
+          client:only="react"
+          strings={{
+            loadingLabel: t('patientProfile.loading', undefined, locale),
+            forbiddenLabel: t('patientProfile.forbidden', undefined, locale),
+            errorLabel: t('patientProfile.error', undefined, locale),
+            savedLabel: t('patientProfile.saved', undefined, locale),
+            fullNameLabel: t('patientProfile.fullName', undefined, locale),
+            emailLabel: t('patientProfile.email', undefined, locale),
+            phoneLabel: t('patientProfile.phone', undefined, locale),
+            marketingOptInLabel: t('patientProfile.marketingOptIn', undefined, locale),
+            saveLabel: t('patientProfile.save', undefined, locale),
+            savingLabel: t('patientProfile.saving', undefined, locale),
+          }}
+        />
+        <NextAppointmentPanel
+          client:only="react"
+          locale={locale}
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={{
+            heading: t('nextAppointment.heading', undefined, locale),
+            loadingLabel: t('nextAppointment.loading', undefined, locale),
+            forbiddenLabel: t('nextAppointment.forbidden', undefined, locale),
+            errorLabel: t('nextAppointment.error', undefined, locale),
+            emptyLabel: t('nextAppointment.empty', undefined, locale),
+            durationLabel: t('nextAppointment.duration', undefined, locale),
+            joinCallLabel: t('nextAppointment.joinCall', undefined, locale),
+          }}
+        />
+        <ClinicalRecordTimeline
+          client:only="react"
+          kind="diagnosis"
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={{
+            heading: t('clinicalRecordTimeline.diagnosisHeading', undefined, locale),
+            loadingLabel: t('clinicalRecordTimeline.loading', undefined, locale),
+            forbiddenLabel: t('clinicalRecordTimeline.forbidden', undefined, locale),
+            errorLabel: t('clinicalRecordTimeline.error', undefined, locale),
+            emptyLabel: t('clinicalRecordTimeline.diagnosisEmpty', undefined, locale),
+            versionLabel: t('clinicalRecordTimeline.version', undefined, locale),
+          }}
+        />
+        <ClinicalRecordTimeline
+          client:only="react"
+          kind="care-plan"
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={{
+            heading: t('clinicalRecordTimeline.carePlanHeading', undefined, locale),
+            loadingLabel: t('clinicalRecordTimeline.loading', undefined, locale),
+            forbiddenLabel: t('clinicalRecordTimeline.forbidden', undefined, locale),
+            errorLabel: t('clinicalRecordTimeline.error', undefined, locale),
+            emptyLabel: t('clinicalRecordTimeline.carePlanEmpty', undefined, locale),
+            versionLabel: t('clinicalRecordTimeline.version', undefined, locale),
+          }}
+        />
+        {/* Resolves to the signed-in patient's own form (`me`), so no `?id=`
+            is involved — they see general info (theirs to edit), the patient
+            section and the calendar (both read-only), never the
+            clinician's. */}
+        <AssessmentForm
+          client:only="react"
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={{
+            heading: t('assessment.heading', undefined, locale),
+            loadingLabel: t('assessment.loading', undefined, locale),
+            forbiddenLabel: t('assessment.forbidden', undefined, locale),
+            notFoundLabel: t('assessment.notFound', undefined, locale),
+            errorLabel: t('assessment.error', undefined, locale),
+            missingIdLabel: t('assessment.missingId', undefined, locale),
+            saveLabel: t('assessment.save', undefined, locale),
+            savingLabel: t('assessment.saving', undefined, locale),
+            savedLabel: t('assessment.saved', undefined, locale),
+            conflictLabel: t('assessment.conflict', undefined, locale),
+            saveForbiddenLabel: t('assessment.saveForbidden', undefined, locale),
+            readOnlyLabel: t('assessment.readOnly', undefined, locale),
+            attachmentsHeading: t('assessment.attachmentsHeading', undefined, locale),
+            attachmentsEmpty: t('assessment.attachmentsEmpty', undefined, locale),
+            addFileLabel: t('assessment.addFile', undefined, locale),
+            uploadingLabel: t('assessment.uploading', undefined, locale),
+            uploadFailedLabel: t('assessment.uploadFailed', undefined, locale),
+            downloadLabel: t('assessment.download', undefined, locale),
+            noNextAppointmentLabel: t('assessment.noNextAppointment', undefined, locale),
+            versionLabel: t('assessment.version', undefined, locale),
+          }}
+        />
+      </section>
+
+      {/* ## 3. Testimonial — `account/testimonial` inlined. The panel
+          renders its own `<h2>` ("Your testimonial"), so it is already this
+          section's heading and needs no wrapper. */}
+      <TestimonialPanel
+        client:only="react"
+        locale={locale}
+        strings={{
+          heading: t('accountTestimonial.panelHeading', undefined, locale),
+          intro: t('accountTestimonial.intro', undefined, locale),
+          loading: t('accountTestimonial.loading', undefined, locale),
+          forbidden: t('accountTestimonial.forbidden', undefined, locale),
+          unavailable: t('accountTestimonial.unavailable', undefined, locale),
+          error: t('accountTestimonial.error', undefined, locale),
+          quoteLabel: t('testimonials.form.quoteLabel', undefined, locale),
+          displayLabel: t('testimonials.form.attributionDisplayLabel', undefined, locale),
+          displayFull: t('testimonials.form.attributionDisplay.full', undefined, locale),
+          displayFirstNameOnly: t(
+            'testimonials.form.attributionDisplay.firstNameOnly',
+            undefined,
+            locale,
+          ),
+          displayAnonymous: t('testimonials.form.attributionDisplay.anonymous', undefined, locale),
+          nameLabel: t('testimonials.form.attributionNameLabel', undefined, locale),
+          nameRequired: t('accountTestimonial.nameRequired', undefined, locale),
+          consentNotice: t('accountTestimonial.consentNotice', undefined, locale),
+          publishButton: t('accountTestimonial.publish', undefined, locale),
+          updateButton: t('accountTestimonial.update', undefined, locale),
+          saving: t('accountTestimonial.saving', undefined, locale),
+          savedMessage: t('accountTestimonial.saved', undefined, locale),
+          withdrawButton: t('accountTestimonial.withdraw', undefined, locale),
+          withdrawnMessage: t('accountTestimonial.withdrawn', undefined, locale),
+          withdrawnNotice: t('accountTestimonial.withdrawnNotice', undefined, locale),
+          saveFailed: t('accountTestimonial.saveFailed', undefined, locale),
+        }}
+      />
+
+      {/* ## 4. Account — the password form from `account/change-password`.
+          Only the password form: that page also carries `OwnDetailsPanel`,
+          which the API serves to *staff* (`GET /clinicians/me`) and refuses
+          a patient, so inlining it here would render a permanent
+          "you do not have access" panel on a patient's own dashboard. */}
+      <section aria-labelledby="account-section-heading">
+        <Heading level={2} id="account-section-heading">
+          {t('account.accountSectionHeading', undefined, locale)}
+        </Heading>
+        <ChangePasswordPanel
+          client:only="react"
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={{
+            heading: t('changePassword.heading', undefined, locale),
+            intro: t('changePassword.intro', undefined, locale),
+            currentPasswordLabel: t('changePassword.currentPasswordLabel', undefined, locale),
+            newPasswordLabel: t('changePassword.newPasswordLabel', undefined, locale),
+            confirmPasswordLabel: t('changePassword.confirmPasswordLabel', undefined, locale),
+            submitButton: t('changePassword.submitButton', undefined, locale),
+            submitting: t('changePassword.submitting', undefined, locale),
+            successMessage: t('changePassword.successMessage', undefined, locale),
+            mismatchError: t('changePassword.mismatchError', undefined, locale),
+            forbidden: t('changePassword.forbidden', undefined, locale),
+            incorrectCurrentPasswordError: t(
+              'changePassword.incorrectCurrentPasswordError',
+              undefined,
+              locale,
+            ),
+            policyViolationError: t('changePassword.policyViolationError', undefined, locale),
+            error: t('changePassword.error', undefined, locale),
+          }}
+        />
+      </section>
+    </RequireAuth>
+
+    {/* Everything below is the staff shell, unchanged. The change-password
+        link is now gated away from patients — they have the form itself
+        above — but stays for the roles whose own page carries
+        `OwnDetailsPanel` beside it. */}
+    <RequireAuth
+      client:only="react"
+      allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk', 'visitor']}
+    >
+      <nav aria-label={t('account.changePasswordLink', undefined, locale)}>
         <ul>
           <li>
-            <Link href={`/${locale}/account/patient`}>
-              {t('account.yourDetailsLink', undefined, locale)}
-            </Link>
-          </li>
-          {/* 2026-09-04: the patient's own "My calendar", alongside the
-              clinicians' — *"Make similar My Calender button for patient
-              where he can see upcoming appointments and easily join from
-              there."* Their only view of an appointment before this was
-              the single "next" one, below the profile form. */}
-          <li>
-            <Link href={`/${locale}/account/appointments`}>
-              {t('patientCalendar.heading', undefined, locale)}
+            <Link href={`/${locale}/account/change-password`}>
+              {t('account.changePasswordLink', undefined, locale)}
             </Link>
           </li>
         </ul>
       </nav>
-    </RequireAuth>
-    <nav aria-label={t('account.changePasswordLink', undefined, locale)}>
-      <ul>
-        <li>
-          <Link href={`/${locale}/account/change-password`}>
-            {t('account.changePasswordLink', undefined, locale)}
-          </Link>
-        </li>
-      </ul>
-    </nav>
-    {/* 2026-09-01: "it will appear as a notification on patients logged in
-        dashboard." This is the page every signed-in identity actually
-        lands on, which is what makes it the dashboard the owner means.
-        Gated to `patient` because the feed is the patient's own and the
-        API refuses everyone else — showing a clinician a permanent
-        "you do not have access to this" panel on their landing page would
-        be noise, not information. */}
-    <RequireAuth client:only="react" allowRoles={['patient']}>
-      <PatientNotifications
-        client:only="react"
-        locale={locale}
-        strings={{
-          heading: t('patientNotifications.heading', undefined, locale),
-          loadingLabel: t('patientNotifications.loading', undefined, locale),
-          forbiddenLabel: t('patientNotifications.forbidden', undefined, locale),
-          errorLabel: t('patientNotifications.error', undefined, locale),
-          emptyLabel: t('patientNotifications.empty', undefined, locale),
-          dismissLabel: t('patientNotifications.dismiss', undefined, locale),
-          forLabel: t('patientNotifications.for', undefined, locale),
-          genericLabel: t('patientNotifications.generic', undefined, locale),
-          kindLabels: {
-            // No `appointment-requested`. It is retired (2026-09-02): the
-            // API no longer writes one and filters out the rows that
-            // predate the change, so this label was unreachable. Removing
-            // it also fixes the failure direction — if that filter ever
-            // regressed, the feed falls back to the generic line rather
-            // than resurrecting the sentence the owner asked to be rid of.
-            'appointment-approved': t('patientNotifications.appointmentApproved', undefined, locale),
-            'appointment-cancelled': t('patientNotifications.appointmentCancelled', undefined, locale),
-            'calendar-updated': t('patientNotifications.calendarUpdated', undefined, locale),
-          },
-        }}
-      />
     </RequireAuth>
     <RequireAuth
       client:only="react"
@@ -223,20 +361,6 @@ const heading = t('account.heading', undefined, locale);
           <li>
             <Link href={`/${locale}/account/calendar`}>
               {t('calendar.heading', undefined, locale)}
-            </Link>
-          </li>
-        </ul>
-      </nav>
-    </RequireAuth>
-    {/* 2026-09-02: the patient's own testimonial. The one authoring
-        surface in this app that is a patient's and nobody else's — see
-        authz-matrix.ts's `Testimonial (own)` row. */}
-    <RequireAuth client:only="react" allowRoles={['patient']}>
-      <nav aria-label={t('account.testimonialLink', undefined, locale)}>
-        <ul>
-          <li>
-            <Link href={`/${locale}/account/testimonial`}>
-              {t('account.testimonialLink', undefined, locale)}
             </Link>
           </li>
         </ul>

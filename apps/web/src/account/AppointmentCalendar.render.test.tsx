@@ -370,3 +370,66 @@ describe('when the calendar cannot be loaded', () => {
     expect(await screen.findByText('No calendar for you.')).toBeDefined();
   });
 });
+
+// 2026-09-06, found on the production run rather than by any local suite:
+// `account-a11y.setup.ts` waits for `getByRole('status')` to reach zero
+// before capturing the signed-in storage state — its proxy for "the page has
+// finished loading". This component's day-announcement region is present for
+// the life of the page, so carrying `role="status"` pinned that count at 1
+// forever, the setup timed out, and all 28 authenticated axe scans were
+// skipped. `aria-live="polite"` announces identically without claiming the
+// role, and this holds it there.
+describe('the loading contract the authenticated a11y gate depends on', () => {
+  it('leaves no role="status" element behind once the calendar is ready', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('patient')}
+        fetchPatientAppointments={vi
+          .fn()
+          .mockResolvedValue(jsonResponse([appointment(local(2026, 8, 15, 9, 0))]))}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+    await screen.findByText('September 2026');
+    expect(screen.queryAllByRole('status')).toHaveLength(0);
+  });
+
+  it('still announces the selected day to assistive tech', async () => {
+    const { container } = render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('patient')}
+        fetchPatientAppointments={vi
+          .fn()
+          .mockResolvedValue(jsonResponse([appointment(local(2026, 8, 15, 9, 0))]))}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+    await screen.findByText('September 2026');
+    // The region is gone as a *role*, not as a live region — dropping the
+    // announcement would have been the wrong fix for the wrong problem.
+    const live = container.querySelectorAll('[aria-live="polite"]');
+    expect(live.length).toBeGreaterThan(0);
+    expect([...live].some((el) => el.textContent?.includes('September 15, 2026'))).toBe(true);
+  });
+
+  it('does use role="status" while it is genuinely still loading', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('patient')}
+        fetchPatientAppointments={() => new Promise(() => {})}
+        fetchClinicianCalendar={vi.fn()}
+      />,
+    );
+    // The setup's assumption is sound; it was this component that broke it.
+    expect(await screen.findByRole('status')).toBeDefined();
+  });
+});

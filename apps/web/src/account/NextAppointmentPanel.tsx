@@ -21,6 +21,7 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
+import type { PanelHeadingLevel } from './heading-level.js';
 import { isLiveOrUpcoming } from './join-window.js';
 import { JoinCallCell } from './JoinCallCell.js';
 import { useNow } from './useNow.js';
@@ -74,6 +75,8 @@ export interface NextAppointmentPanelProps {
   readonly fetchAppointments?: (accessToken: string) => Promise<Response>;
   /** Injectable for tests; defaults to the real current time. */
   readonly now?: () => Date;
+  /** 2026-09-06: the level this panel's own heading renders at — 2 on its own page, 3 inside a dashboard section. See `heading-level.ts`. */
+  readonly headingLevel?: PanelHeadingLevel;
 }
 
 const defaultClient = createSessionClient();
@@ -138,6 +141,7 @@ export function NextAppointmentPanel({
   client = defaultClient,
   fetchAppointments = defaultFetchAppointments,
   now = systemNow,
+  headingLevel = 2,
 }: NextAppointmentPanelProps): ReactNode {
   const [state, setState] = useState<ViewState>({ status: 'loading' });
   // Ticks; `now` itself does not. See `useNow.ts` for why that distinction
@@ -194,7 +198,7 @@ export function NextAppointmentPanel({
 
   return (
     <section aria-labelledby="next-appointment-heading">
-      <Heading level={2} id="next-appointment-heading">
+      <Heading level={headingLevel} id="next-appointment-heading">
         {strings.heading}
       </Heading>
       {next ? (

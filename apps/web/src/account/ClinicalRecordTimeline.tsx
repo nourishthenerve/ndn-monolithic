@@ -23,6 +23,9 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
+import { nestedHeadingLevel } from './heading-level.js';
+import type { PanelHeadingLevel } from './heading-level.js';
+
 export type ClinicalRecordKind = 'diagnosis' | 'care-plan';
 
 export interface ClinicalRecordEntry {
@@ -52,6 +55,8 @@ export interface ClinicalRecordTimelineProps {
   readonly client?: SessionClient;
   /** Injectable for tests; defaults to a real same-origin-authorised fetch against `contentApiUrl`. */
   readonly fetchHistory?: (kind: ClinicalRecordKind, accessToken: string) => Promise<Response>;
+  /** 2026-09-06: the level this panel's own heading renders at — 2 on its own page, 3 inside a dashboard section. See `heading-level.ts`. */
+  readonly headingLevel?: PanelHeadingLevel;
 }
 
 const defaultClient = createSessionClient();
@@ -71,6 +76,7 @@ export function ClinicalRecordTimeline({
   strings,
   client = defaultClient,
   fetchHistory = defaultFetchHistory,
+  headingLevel = 2,
 }: ClinicalRecordTimelineProps): ReactNode {
   const [state, setState] = useState<ViewState>({ status: 'loading' });
 
@@ -120,7 +126,7 @@ export function ClinicalRecordTimeline({
 
   return (
     <section aria-labelledby={headingId}>
-      <Heading level={2} id={headingId}>
+      <Heading level={headingLevel} id={headingId}>
         {strings.heading}
       </Heading>
       {state.items.length === 0 ? (
@@ -129,7 +135,7 @@ export function ClinicalRecordTimeline({
         <ol>
           {state.items.map((item) => (
             <li key={item.version}>
-              <Heading level={3}>
+              <Heading level={nestedHeadingLevel(headingLevel)}>
                 {strings.versionLabel} {item.version}
               </Heading>
               <p>{item.visible.summary}</p>
