@@ -545,7 +545,15 @@ export function AppointmentCalendar({
           that `aria-live` would read the entire day out on every arrow
           press. This says what changed, and the panel below it is there to
           be navigated to. */}
-      <p className={visuallyHiddenClassName} role="status" aria-live="polite">
+      {/* `aria-live` alone, **not** `role="status"`. Both announce the same
+          way, but `role=status` is also how `account-a11y.setup.ts` decides
+          the page has finished loading: it waits for
+          `getByRole('status')` to reach zero before capturing the signed-in
+          storage state. This region is present for the life of the page, so
+          carrying that role pinned the count at 1 forever — the setup timed
+          out and all 28 authenticated axe scans were skipped. Found on the
+          2026-09-06 production run, not by any local suite. */}
+      <p className={visuallyHiddenClassName} aria-live="polite">
         {selectedDate
           ? `${formatDate(selectedDate, locale)} ${dayAppointmentsLabel(selectedEntries.length, locale)}`
           : ''}

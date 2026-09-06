@@ -7,6 +7,7 @@
 // boundary, not this component. A patient who reaches this page sees the
 // identical form and an identical 403 on submit; nothing about D-29's
 // "no self-service for patients" is enforced client-side.
+import { Heading } from '@ndn/ui';
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -14,8 +15,10 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
+
 import { validateChangePasswordFields } from './change-password-request.js';
 import type { ChangePasswordFormFields, ChangePasswordRequestBody } from './change-password-request.js';
+import type { PanelHeadingLevel } from './heading-level.js';
 
 type Status =
   | 'idle'
@@ -57,6 +60,8 @@ export interface ChangePasswordPanelProps {
     accessToken: string,
     body: ChangePasswordRequestBody,
   ) => Promise<Response>;
+  /** 2026-09-06: the level this panel's own heading renders at — 2 on its own page, 3 inside a dashboard section. See `heading-level.ts`. */
+  readonly headingLevel?: PanelHeadingLevel;
 }
 
 const defaultClient = createSessionClient();
@@ -76,6 +81,7 @@ export function ChangePasswordPanel({
   strings,
   client = defaultClient,
   changePassword = defaultChangePassword,
+  headingLevel = 2,
 }: ChangePasswordPanelProps): ReactNode {
   const [fields, setFields] = useState<ChangePasswordFormFields>(EMPTY_FIELDS);
   const [status, setStatus] = useState<Status>('idle');
@@ -121,7 +127,7 @@ export function ChangePasswordPanel({
 
   return (
     <section>
-      <h2>{strings.heading}</h2>
+      <Heading level={headingLevel}>{strings.heading}</Heading>
       <p>{strings.intro}</p>
       <form onSubmit={(event) => void handleSubmit(event)}>
         <p>
