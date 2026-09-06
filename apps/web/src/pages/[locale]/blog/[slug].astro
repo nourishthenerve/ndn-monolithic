@@ -20,6 +20,8 @@ import type { BlogPost } from '../../../blog/content-client.js';
 import { fetchPublishedBlogPosts } from '../../../blog/content-client.js';
 import { buildHreflangLinks } from '../../../blog/seo.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { renderableRichText, toPlainParagraphs } from '../../../rich-text/render.js';
+import { proseStylesCss } from '../../../rich-text/styles.js';
 import { mediaUrl, siteName, siteUrl } from '../../../site-config.js';
 
 export async function getStaticPaths() {
@@ -47,7 +49,13 @@ if (!translation) {
 const urlForLocale = (l: string) => `${siteUrl}/${l}/blog/${slug}`;
 const canonicalHref = urlForLocale(locale);
 const hreflangLinks = buildHreflangLinks(populatedLocales, urlForLocale);
-const bodyParagraphs = translation.body.split(/\n{2,}/);
+// 2026-09-06: a post written in the rich-text editor is markup, and one
+// written before it existed is plain text. `renderableRichText` answers which
+// this is — and answers "plain text" for anything it cannot vouch for, so an
+// unexpected body degrades to the reading this page has always given it
+// rather than being injected on trust. See `rich-text/render.ts`.
+const bodyHtml = renderableRichText(translation.body);
+const bodyParagraphs = bodyHtml ? [] : toPlainParagraphs(translation.body);
 const leadImage = post.imageKey ? mediaUrl(post.imageKey) : undefined;
 ---
 
@@ -67,6 +75,17 @@ const leadImage = post.imageKey ? mediaUrl(post.imageKey) : undefined;
          it — the same refusal the live component makes. */
       leadImage && <img src={leadImage} alt={t('blog.post.imageAlt', undefined, locale)} />
     }
-    {bodyParagraphs.map((paragraph) => <p>{paragraph}</p>)}
+    {
+      bodyHtml ? (
+        <div class="ndn-prose" set:html={bodyHtml} />
+      ) : (
+        bodyParagraphs.map((paragraph) => <p>{paragraph}</p>)
+      )
+    }
   </article>
 </BaseLayout>
+
+{/* Only the published look, never the editor's — this page is read signed
+    out and has no toolbar on it. See `rich-text/styles.ts` for why the two
+    stylesheets are separate. */}
+<style set:html={proseStylesCss} />

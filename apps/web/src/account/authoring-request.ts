@@ -36,6 +36,45 @@ export interface WorkshopFormFields {
   readonly publishNow: boolean;
 }
 
+/**
+ * A blank blog form.
+ *
+ * **2026-09-02: defaults to publishing.** The owner, twice: *"I want them to
+ * go live immediately"*, then *"the blog post and workshop when being saved
+ * are not being published yet."*
+ *
+ * Both times the content had saved correctly — as a *draft*, because this box
+ * started unticked and the public read endpoint returns published items only
+ * (`content-repository.ts`). So "Save" did exactly what it said and nothing
+ * anyone wanted: the post existed, and no reader could ever reach it.
+ *
+ * Drafting is still one click away, which is the right way round for a clinic
+ * that publishes a handful of posts a year — the rare case asks for itself,
+ * rather than the common one being a trap.
+ *
+ * 2026-09-06: moved here from `AuthoringPanel.tsx` when that component was
+ * split in two. A form's blank state is data, and both halves of the split
+ * needed it.
+ */
+export const EMPTY_BLOG: BlogFormFields = {
+  id: '',
+  title: '',
+  excerpt: '',
+  body: '',
+  keywords: '',
+  publishNow: true,
+};
+
+/** Same default, same reason — see `EMPTY_BLOG`. */
+export const EMPTY_WORKSHOP: WorkshopFormFields = {
+  id: '',
+  title: '',
+  description: '',
+  dateTimeLocal: '',
+  capacity: '',
+  publishNow: true,
+};
+
 export interface CreateBlogRequestBody {
   readonly id: string;
   readonly contentType: 'blog';

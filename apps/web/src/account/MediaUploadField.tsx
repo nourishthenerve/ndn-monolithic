@@ -27,22 +27,22 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { mediaUrl } from '../site-config.js';
 
-/**
- * What the API's own `uploadBodySchema` accepts, and no more. Repeated
- * here rather than imported because `services/api` is not a dependency of
- * `apps/web` — but a mismatch is only ever a worse error message, since
- * the server rejects the same set with a 400 either way.
- */
-export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+// 2026-09-06: the upload flow itself moved to `media-upload.ts` when
+// `RichTextEditor` needed the same presign-then-PUT for images placed inside
+// a post's body. Everything the header above describes still holds; what left
+// is the mechanics, so there is one of them rather than two that look alike.
+import {
+  ACCEPTED_IMAGE_TYPES,
+  checkFile,
+  defaultPutFile,
+  defaultRequestUploadUrl,
+  MAX_IMAGE_BYTES,
+  uploadImage,
+} from './media-upload.js';
+import type { PutFile, RequestUploadUrl } from './media-upload.js';
 
-/**
- * 5 MB. Nothing on the server enforces this — a presigned `PutObject`
- * carries no size condition — so it is honestly a courtesy rather than a
- * limit: it turns "the upload silently took two minutes on clinic wifi"
- * into a sentence, at the moment of choosing, when picking a smaller file
- * is still easy.
- */
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/** Re-exported because this module is where both were first stated, and callers — and tests — already name them through it. */
+export { ACCEPTED_IMAGE_TYPES, MAX_IMAGE_BYTES };
 
 export type UploadState = 'idle' | 'uploading' | 'uploaded' | 'too-large' | 'wrong-type' | 'failed';
 
@@ -67,43 +67,11 @@ export interface MediaUploadFieldProps {
   readonly onUploaded: (key: string | undefined) => void;
   readonly disabled?: boolean;
   readonly client?: SessionClient;
-  readonly requestUploadUrl?: (
-    accessToken: string,
-    body: { fileName: string; contentType: string },
-  ) => Promise<Response>;
-  readonly putFile?: (uploadUrl: string, file: File) => Promise<Response>;
+  readonly requestUploadUrl?: RequestUploadUrl;
+  readonly putFile?: PutFile;
 }
 
 const defaultClient = createSessionClient();
-
-/**
- * Same-origin, like every other presign in this app: `/workshops/…` and
- * `/content/…` are CloudFront behaviours onto the web stack's own API
- * (web-stack.ts). Not `contentApiUrl` — these routes are not on that API,
- * which is precisely the mistake that made assessment uploads 404 for a
- * day (docs/runbooks/assessment-forms.md, 2026-09-02).
- */
-function defaultRequestUploadUrl(presignPath: string) {
-  return (accessToken: string, body: { fileName: string; contentType: string }): Promise<Response> =>
-    fetch(presignPath, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-}
-
-/**
- * No `authorization` header: the URL *is* the authorisation, and S3 rejects
- * a signed request that carries headers the signature did not cover.
- * `content-type` is sent because it was signed into the URL.
- */
-function defaultPutFile(uploadUrl: string, file: File): Promise<Response> {
-  return fetch(uploadUrl, {
-    method: 'PUT',
-    headers: { 'content-type': file.type },
-    body: file,
-  });
-}
 
 export function MediaUploadField({
   strings,
@@ -127,42 +95,35 @@ export function MediaUploadField({
     if (!file) {
       return;
     }
-    // Checked before anything is sent: both are answerable from the file
-    // itself, and a presigned URL minted for a file that will be refused
-    // is a capability issued for nothing.
-    if (!ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof ACCEPTED_IMAGE_TYPES)[number])) {
-      setState('wrong-type');
+    // Checked before anything is sent: both answers are in the file itself,
+    // and a presigned URL minted for a file that will be refused is a
+    // capability issued for nothing. `uploadImage` asks again — it has to,
+    // since the editor calls it directly — but asking here is what keeps a
+    // wrong file from ever reaching the token exchange.
+    const rejected = checkFile(file);
+    if (rejected) {
+      setState(rejected);
       return;
     }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setState('too-large');
-      return;
-    }
-
     setState('uploading');
     const accessToken = await client.authorization();
     if (!accessToken) {
       setState('failed');
       return;
     }
-    try {
-      const presign = await request(accessToken, { fileName: file.name, contentType: file.type });
-      if (!presign.ok) {
-        setState('failed');
-        return;
-      }
-      const { uploadUrl, key } = (await presign.json()) as { uploadUrl: string; key: string };
-      const put = await putFile(uploadUrl, file);
-      if (!put.ok) {
-        setState('failed');
-        return;
-      }
-      // Only now — the key is reported once the object it names exists.
-      onUploaded(key);
-      setState('uploaded');
-    } catch {
-      setState('failed');
+    const result = await uploadImage({
+      file,
+      accessToken,
+      requestUploadUrl: request,
+      putFile,
+    });
+    if (!result.ok) {
+      setState(result.reason);
+      return;
     }
+    // Only now — the key is reported once the object it names exists.
+    onUploaded(result.key);
+    setState('uploaded');
   };
 
   const handleRemove = () => {

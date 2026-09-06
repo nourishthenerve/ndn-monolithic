@@ -18,6 +18,7 @@ import { Heading } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { blogContentType, contentApiUrl, mediaUrl } from '../site-config.js';
 
 interface Translation {
@@ -56,10 +57,16 @@ export interface LiveBlogPostProps {
   readonly fetchPosts?: () => Promise<readonly LiveBlogPostRecord[] | undefined>;
 }
 
-/** Paragraphs are blank-line separated — the same split `[slug].astro` does at build time, so both renderings break identically. */
-export function toParagraphs(body: string): readonly string[] {
-  return body.split(/\n{2,}/);
-}
+/**
+ * Paragraphs are blank-line separated — the same split `[slug].astro` does at
+ * build time, so both renderings break identically.
+ *
+ * 2026-09-06: the split itself moved to `rich-text/render.ts`, which is now
+ * where *both* readings of a body live: this one for plain text, and
+ * `renderableRichText` for a post written in the editor. Re-exported under
+ * its old name because that is what this module's own tests already call it.
+ */
+export const toParagraphs = toPlainParagraphs;
 
 function slugFromLocation(): string {
   if (typeof window === 'undefined') {
@@ -148,14 +155,23 @@ export function LiveBlogPost({
   // a record naming something private renders no image rather than a link
   // to it. See its own note.
   const image = imageKey ? mediaUrl(imageKey) : undefined;
+  // The same question `[slug].astro` asks of the same field, from the same
+  // function, so this page and the prerendered one cannot render one post two
+  // ways. `undefined` means "not markup, or not markup we can vouch for" and
+  // takes the paragraph path this page has always used.
+  const bodyHtml = renderableRichText(translation.body);
 
   return (
     <article>
       <Heading level={1}>{translation.title}</Heading>
       {image && <img src={image} alt={strings.imageAlt} />}
-      {toParagraphs(translation.body).map((paragraph, index) => (
-        <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
-      ))}
+      {bodyHtml ? (
+        <div className="ndn-prose" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
+      ) : (
+        toParagraphs(translation.body).map((paragraph, index) => (
+          <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
+        ))
+      )}
     </article>
   );
 }

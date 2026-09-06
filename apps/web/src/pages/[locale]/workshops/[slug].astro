@@ -18,6 +18,12 @@ import { Heading } from '@ndn/ui';
 
 import { buildHreflangLinks } from '../../../blog/seo.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
+import {
+  renderableRichText,
+  richTextToPlainText,
+  toPlainParagraphs,
+} from '../../../rich-text/render.js';
+import { proseStylesCss } from '../../../rich-text/styles.js';
 import { siteName, siteUrl, workshopPosterUrl } from '../../../site-config.js';
 import type { Workshop } from '../../../workshops/workshop-client.js';
 import { fetchPublishedWorkshops } from '../../../workshops/workshop-client.js';
@@ -57,12 +63,20 @@ const formattedDate = new Intl.DateTimeFormat(locale, {
   timeStyle: 'short',
 }).format(new Date(workshop.dateTimeUtc));
 const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : undefined;
+// 2026-09-06: the description is written in the rich-text editor now — see
+// `blog/[slug].astro` for the same two-reading treatment of the same problem.
+const descriptionHtml = renderableRichText(detail.description);
+const descriptionParagraphs = descriptionHtml ? [] : toPlainParagraphs(detail.description);
+// `<meta name="description">` takes a string, not markup: a page whose own
+// description tag begins "<p>" ships those three characters to every search
+// result that quotes it.
+const metaDescription = richTextToPlainText(detail.description);
 ---
 
 <BaseLayout
   locale={locale}
   title={`${detail.title} — ${siteName}`}
-  description={detail.description}
+  description={metaDescription}
   canonicalHref={canonicalHref}
   hreflangLinks={hreflangLinks}
 >
@@ -78,10 +92,19 @@ const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : u
       )
     }
     <Heading level={1}>{detail.title}</Heading>
-    <p>{detail.description}</p>
+    {
+      descriptionHtml ? (
+        <div class="ndn-prose" set:html={descriptionHtml} />
+      ) : (
+        descriptionParagraphs.map((paragraph) => <p>{paragraph}</p>)
+      )
+    }
     <dl>
       <dt>{t('workshops.detail.dateLabel', undefined, locale)}</dt>
       <dd>{formattedDate}</dd>
     </dl>
   </article>
 </BaseLayout>
+
+{/* Only the published look — see `blog/[slug].astro`. */}
+<style set:html={proseStylesCss} />

@@ -25,6 +25,7 @@ import type { Locale } from '@ndn/i18n';
 
 import { LiveBlogPost } from '../../../blog/LiveBlogPost.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { proseStylesCss } from '../../../rich-text/styles.js';
 import { siteName } from '../../../site-config.js';
 
 export function getStaticPaths() {
@@ -52,3 +53,7 @@ const heading = t('blog.index.heading', undefined, locale);
     }}
   />
 </BaseLayout>
+
+{/* The island renders a formatted body, so this page needs the published
+    look as much as the prerendered one does. See `rich-text/styles.ts`. */}
+<style set:html={proseStylesCss} />

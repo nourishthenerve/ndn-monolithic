@@ -13,6 +13,7 @@ import { Heading } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
 export interface LiveWorkshopRecord {
@@ -134,6 +135,7 @@ export function LiveWorkshop({
   // public `media/` prefix, so a record naming something private renders
   // nothing instead of a link to it.
   const posterSrc = record.posterKey ? workshopPosterUrl(record.posterKey) : undefined;
+  const descriptionHtml = renderableRichText(detail.description);
 
   return (
     <article>
@@ -144,7 +146,15 @@ export function LiveWorkshop({
         />
       )}
       <Heading level={1}>{detail.title}</Heading>
-      <p>{detail.description}</p>
+      {/* The same reading `workshops/[slug].astro` gives the same field, from
+          the same function — see `rich-text/render.ts`. */}
+      {descriptionHtml ? (
+        <div className="ndn-prose" dangerouslySetInnerHTML={{ __html: descriptionHtml }} />
+      ) : (
+        toPlainParagraphs(detail.description).map((paragraph, index) => (
+          <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
+        ))
+      )}
       <dl>
         <dt>{strings.dateLabel}</dt>
         <dd>{formatWorkshopDate(record.dateTimeUtc, locale)}</dd>
