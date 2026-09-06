@@ -70,6 +70,59 @@ export const appointmentCalendarStylesCss = `
   outline-offset: 2px;
 }
 
+/* 2026-09-06: the banner that appears when a call is open — *"when the
+   appointment comes I want to have a 'join call' button on the calender that
+   both can click to join the call."*
+
+   .ndn-cal-live-region — the aria-live wrapper — deliberately has no rule of
+   its own. It is in the DOM for the life of the page and empty almost all of
+   it, so every bit of the spacing belongs to the banner that appears inside
+   it; a margin or a min-height on the wrapper would leave a gap above the
+   grid whenever no call is open. */
+.ndn-cal-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-block: 0.75rem 0;
+  padding-block: 0.75rem;
+  padding-inline: 1rem;
+  border: 1px solid var(--ndn-color-brand);
+  border-radius: 0.5rem;
+  /* Tinted rather than filled: the join control inside it is the thing that
+     should read as the strongest element on the calendar, and a solid brand
+     panel behind a solid brand button flattens both. */
+  background-color: rgba(10, 110, 90, 0.08);
+  font-weight: 500;
+}
+
+/* The one call-to-action on this view, so it is the one filled control —
+   every other button here is an outline. Sized past WCAG 2.2 SC 2.5.8's 24px
+   floor like the toolbar controls, because it is pressed in a hurry.
+
+   Selected through its parent, giving 0-2-0 against packages/ui's own
+   .ndn-link (0-1-0), which every Link carries and which sets the brand
+   colour and an underline. Specificity rather than source order: this
+   stylesheet and the primitive one are injected by different parts of the
+   layout, and a rule that only wins because of where it happens to land is
+   a rule that stops winning when something moves. */
+.ndn-cal-live .ndn-cal-live-join {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding-inline: 1.25rem;
+  border-radius: 0.5rem;
+  background-color: var(--ndn-color-brand);
+  color: #ffffff;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ndn-cal-live .ndn-cal-live-join:hover {
+  text-decoration: underline;
+}
+
 .ndn-cal-month {
   margin-block: 0.75rem 0.75rem;
   font-size: 1.125rem;
@@ -192,6 +245,18 @@ export const appointmentCalendarStylesCss = `
   text-decoration: line-through;
 }
 
+/* 2026-09-06: the appointment whose call is open right now. Last of the chip
+   rules on purpose — it is not a sixth status but a state a confirmed one
+   passes through, so it has to win over whichever status rule already
+   applied to the same chip. Filled rather than tinted, matching the banner's
+   own button, so the square and the call-to-action read as the same fact.
+   6.19:1 on white text, well past the 4.5:1 this size of text needs. */
+.ndn-cal-chip--live {
+  background-color: var(--ndn-color-brand);
+  color: #ffffff;
+  font-weight: 600;
+}
+
 /* The narrow-screen stand-in for the time chips — see the component. One dot
    per appointment, coloured by the same status palette, so a glance still
    tells you which days are busy and roughly with what. */
@@ -219,6 +284,16 @@ export const appointmentCalendarStylesCss = `
 
 .ndn-cal-dot--no-show {
   background-color: #b3261e;
+}
+
+/* The narrow-screen half of the live mark, and last for the same reason.
+   A halo as well as a fill: below 34rem the dot is 7px, colour alone is a
+   weak signal at that size, and the live one has to be findable in a row of
+   them at a glance. (No backticks in this block — it is a template
+   literal.) */
+.ndn-cal-dot--live {
+  background-color: var(--ndn-color-brand);
+  box-shadow: 0 0 0 2px rgba(10, 110, 90, 0.3);
 }
 
 /* A seventh of a phone is about 38px of usable cell, where "9:30 AM"

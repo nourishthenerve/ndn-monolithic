@@ -558,6 +558,7 @@
   "accountCalendar.duration": "Duration:",
   "accountCalendar.patient": "Patient:",
   "accountCalendar.clinician": "Clinician:",
+  "accountCalendar.liveNow": "Your appointment started at {time} and is under way now.",
   "accountCalendar.status": "Status:",
   "accountCalendar.status.scheduled": "Confirmed",
   "accountCalendar.status.pendingApproval": "Waiting for approval",
