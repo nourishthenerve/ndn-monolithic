@@ -30,15 +30,14 @@ function local(year: number, month: number, day: number, hour = 0, minute = 0): 
  * `Intl` here — a test that recomputes the string it is checking proves only
  * that the code agrees with itself.
  *
- * 15 September 2026 is a Tuesday, and the window is centred on the day
- * itself — 17 days either side — so it runs Saturday 29 August to Friday
- * 2 October. The columns therefore run Sat…Fri: that is the trade
- * `calendar-grid.ts` makes to put today in the middle square on every
- * weekday rather than only on a Thursday. One press back moves it two weeks,
- * which keeps those columns.
+ * 15 September 2026 is a Tuesday, so the default window — two whole weeks
+ * either side of its own week, Monday-first — runs Monday 31 August to
+ * Sunday 4 October, and one press up moves it two weeks earlier. The
+ * columns are Mon…Sun on every one of these, whichever weekday the window
+ * is centred on; that is what the third pass bought back.
  */
-const DEFAULT_WINDOW = 'August 29 – October 2, 2026';
-const EARLIER_WINDOW = 'August 15 – September 18, 2026';
+const DEFAULT_WINDOW = 'August 31 – October 4, 2026';
+const EARLIER_WINDOW = 'August 17 – September 20, 2026';
 
 /** 15 September 2026, midday. Stable identity — `useNow` requires it. */
 const NOW = local(2026, 8, 15, 12, 0);
