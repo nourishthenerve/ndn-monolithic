@@ -1722,6 +1722,10 @@ export class DataStack extends Stack {
       environment: {
         PRINCIPAL_TABLE_NAME: this.table.tableName,
         AUDIT_TABLE_NAME: this.table.tableName,
+        // 2026-09-06: the calendar's two read routes join a clinician's
+        // display name onto each appointment, through the same
+        // `ClinicianRepository` the caseload uses — which reads this name.
+        CLINICIAN_TABLE_NAME: this.table.tableName,
         ...FLAG_ENVIRONMENT,
       },
       logGroup: createLogGroup(this, 'AppointmentFunctionLogGroup', appointmentLogGroupName, appointmentRole),
@@ -1756,6 +1760,21 @@ export class DataStack extends Stack {
         effect: Effect.ALLOW,
         actions: ['dynamodb:Query'],
         resources: [`${this.table.tableArn}/index/${GSI1_INDEX_NAME}`],
+      }),
+    );
+    // 2026-09-06: the clinician-name lookup the two read routes now do
+    // (`ClinicianRepository.findById`, cached per request). Read-only and
+    // `CLI#*`-scoped — the identical statement `CaseloadFunction` already
+    // carries for the identical call, and deliberately a separate statement
+    // from the `PAT#*` one above rather than a widening of it: this function
+    // writes patient rows and must never be able to write a clinician's.
+    appointmentRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'ReadClinicianAccounts',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:GetItem'],
+        resources: [this.table.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CLI#*'] } },
       }),
     );
     // A separate statement, on `AUDIT#*` alone — every appointment

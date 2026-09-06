@@ -42,6 +42,7 @@ import type { AppointmentInput, AppointmentRepository } from './appointment-repo
 import { APPOINTMENT_ENTITY_TYPE } from './appointment-repository.js';
 import { actorFromPrincipal, requestOriginOf } from './audit.js';
 import { can } from './authz.js';
+import type { ClinicianRepository } from './clinician-repository.js';
 import { systemClock, type Clock } from './clock.js';
 import { AppError } from './errors.js';
 import type { FlagReader } from './flags.js';
@@ -70,6 +71,9 @@ const APPOINTMENTS_FLAG = 'appointments.enabled';
 /** The `Appointment approval` row — a different row from `Appointments`, and `Principal`-only. See docs/plan/04-data-model-rbac.md's own note on why approving is not a widening of booking. */
 const APPOINTMENT_APPROVAL_ENTITY_TYPE = 'appointment-approval';
 
+/** The `Patient profile` row, restated as `patient.ts` and `caseload-repository.ts` each restate it — what gates the patient *name* on a read below, which is a different question from what gates the appointment. */
+const PATIENT_PROFILE_ENTITY_TYPE = 'patient-profile';
+
 const scheduleBodySchema = z
   .object({
     scheduledAt: z.string().datetime(),
@@ -81,6 +85,12 @@ export interface AppointmentDeps {
   /** For the assignment-relationship lookup `can()` needs — never for an appointment read or write, which stays on `appointments` below. */
   readonly patients: PatientRepository;
   readonly appointments: AppointmentRepository;
+  /**
+   * 2026-09-06: display names for the two people an appointment is about.
+   * Read-only here, and only on the two list routes — this handler never
+   * creates or updates a clinician record.
+   */
+  readonly clinicians: ClinicianRepository;
   /**
    * 2026-09-01: the patient's in-app dashboard feed. Written as a side
    * effect of the four calendar actions below, never by a route of its
@@ -131,6 +141,121 @@ export function createAppointmentHandler(
       return respond(401, { error: 'UNAUTHORIZED' });
     }
 
+    // ## 2026-09-06: the two names an appointment is *about*
+    //
+    // The owner: *"on calender when we click an appointment it should also
+    // show the name of the patient and the name of the clinician."*
+    //
+    // An appointment stores `patientId` and `clinicianId` and no names at
+    // all — deliberately, and this file already says why on `approvedBy`:
+    // "An identifier, never a name." That decision is not being reversed;
+    // the names are *joined on the way out* of the two read routes and never
+    // written to the row, so the record stays the single-source id it was.
+    //
+    // **The promise is cached, not the name.** A clinician's fortnight is
+    // one clinician and a handful of patients repeated across it, and a
+    // patient's whole history is one patient and usually one clinician —
+    // so nearly every lookup is a repeat. Caching the settled value alone
+    // would still let the concurrent lookups inside one `Promise.all` each
+    // fire their own read for the same id before any of them resolved.
+    const patientNameCache = new Map<string, Promise<string | undefined>>();
+    const clinicianNameCache = new Map<string, Promise<string | undefined>>();
+
+    /**
+     * The patient's name — **only if this caller could read that patient's
+     * profile anyway.**
+     *
+     * Gated on the `Patient profile` row rather than inherited from the
+     * `Appointments` read that got us this far, because the two are not the
+     * same grant: `Appointments` hands `Visitor` and `Helpdesk` a plain `R`,
+     * and an appointment naming a patient the caller may not look up would
+     * disclose more than either row allows on its own. Where the two rows
+     * agree the name simply appears; where they disagree the field is
+     * **absent rather than blank**, so the client can tell "no name for you"
+     * from "this person has no name recorded".
+     */
+    const patientNameFor = (id: string): Promise<string | undefined> => {
+      const cached = patientNameCache.get(id);
+      if (cached) {
+        return cached;
+      }
+      const pending = (async () => {
+        const record = await deps.patients.findById(id);
+        if (!record) {
+          return undefined;
+        }
+        const profile = {
+          entityType: PATIENT_PROFILE_ENTITY_TYPE,
+          ownerPatientId: id,
+          assignedClinicianId: record.assigned_clinician_id,
+        } as const;
+        if (!can(principal, 'read', profile).allowed) {
+          return undefined;
+        }
+        // Projected before a field is read off it, the same way
+        // `caseload-repository.ts` reads this exact field — `fullName` is
+        // not itself private, but reading a record's field without going
+        // through the boundary is the habit this codebase does not keep.
+        return projectFor(principal, record, profile).personal?.fullName || undefined;
+      })();
+      patientNameCache.set(id, pending);
+      return pending;
+    };
+
+    /**
+     * The clinician's display name.
+     *
+     * **Not** gated on `Clinician accounts`: that row governs administering
+     * clinician records, and gating on it would hide a patient's own
+     * clinician's name from them — the half of this request that matters
+     * most. `caseload-repository.ts` already sets the precedent, returning
+     * `assignedClinicianName` to every role that may see the care
+     * relationship without consulting that row. A display name is the name
+     * of the person providing the care the caller is already looking at.
+     */
+    const clinicianNameFor = (id: string): Promise<string | undefined> => {
+      const cached = clinicianNameCache.get(id);
+      if (cached) {
+        return cached;
+      }
+      const pending = deps.clinicians
+        .findById(id)
+        .then((record) => record?.displayName || undefined)
+        // A name is decoration on a row that is already authorised and
+        // already useful. A directory read that fails must not turn a
+        // working calendar into a 500.
+        .catch(() => undefined);
+      clinicianNameCache.set(id, pending);
+      return pending;
+    };
+
+    /**
+     * Both names attached, ready for `projectAllFor`.
+     *
+     * Enriched **before** projection, not after: `projectFor` is what brands
+     * a value `Projected`, and building the enriched object first means the
+     * brand is earned rather than re-applied by a cast to something the
+     * boundary never saw. Generic over the record so this needs no
+     * `Appointment` import and cannot silently accept a row without the two
+     * ids it joins on.
+     */
+    const withNames = <T extends { readonly patientId: string; readonly clinicianId: string }>(
+      appointments: readonly T[],
+    ): Promise<(T & { patientName?: string; clinicianName?: string })[]> =>
+      Promise.all(
+        appointments.map(async (appointment) => {
+          const [patientName, clinicianName] = await Promise.all([
+            patientNameFor(appointment.patientId),
+            clinicianNameFor(appointment.clinicianId),
+          ]);
+          return {
+            ...appointment,
+            ...(patientName ? { patientName } : {}),
+            ...(clinicianName ? { clinicianName } : {}),
+          };
+        }),
+      );
+
     if (routeKey === 'GET /clinicians/me/calendar') {
       // A patient principal has no `clinicianId` at all — `resource`
       // below then names `assignedClinicianId: undefined`, which can
@@ -160,7 +285,7 @@ export function createAppointmentHandler(
         from,
         to,
       );
-      const items = projectAllFor(principal, appointments, resource);
+      const items = projectAllFor(principal, await withNames(appointments), resource);
       return respond(200, { items });
     }
 
@@ -332,7 +457,7 @@ export function createAppointmentHandler(
         return respond(404, { error: 'RECORD_NOT_FOUND' });
       }
       const appointments = await deps.appointments.listForPatient(patientId);
-      const items = projectAllFor(principal, appointments, resource);
+      const items = projectAllFor(principal, await withNames(appointments), resource);
       return respond(200, { items });
     }
 

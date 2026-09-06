@@ -556,6 +556,8 @@
   "accountCalendar.noAppointmentsOnDay": "No appointments on this day.",
   "accountCalendar.emptyWindow": "No appointments in this period.",
   "accountCalendar.duration": "Duration:",
+  "accountCalendar.patient": "Patient:",
+  "accountCalendar.clinician": "Clinician:",
   "accountCalendar.status": "Status:",
   "accountCalendar.status.scheduled": "Confirmed",
   "accountCalendar.status.pendingApproval": "Waiting for approval",
