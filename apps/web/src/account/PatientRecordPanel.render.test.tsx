@@ -119,7 +119,7 @@ function panel(
   return (
     <PatientRecordPanel
       strings={STRINGS}
-      dashboardHref="/en/account/caseload"
+      dashboardHref="/en/account"
       locale="en"
       patientId={PATIENT_ID}
       client={clientAs(viewerRole)}
@@ -206,7 +206,7 @@ function fullPanel(overrides: Record<string, unknown> = {}) {
   return (
     <PatientRecordPanel
       strings={STRINGS}
-      dashboardHref="/en/account/caseload"
+      dashboardHref="/en/account"
       locale="en"
       patientId={PATIENT_ID}
       client={clientAs('principal-clinician')}
