@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CENTER_COLUMN,
+  CENTER_OFFSET_DAYS,
+  CENTER_ROW,
   dayKey,
   defaultSelectedDay,
   gridRange,
@@ -9,9 +12,6 @@ import {
   isSameDay,
   shiftWindow,
   startOfDay,
-  startOfWeek,
-  WEEK_STARTS_ON,
-  WEEKS_BEFORE,
   windowGrid,
   windowStartFor,
   WINDOW_STEP_WEEKS,
@@ -34,59 +34,59 @@ function at(year: number, month: number, day: number, hour = 0, minute = 0): str
 /** 15 September 2026 is a Tuesday — a mid-week anchor, so off-by-one padding shows up. */
 const TODAY = local(2026, 8, 15);
 
-describe('startOfWeek', () => {
-  it('walks back to the configured first day of the week', () => {
-    // Tuesday 15 September 2026 -> Monday the 14th.
-    expect(dayKey(startOfWeek(TODAY))).toBe('2026-09-14');
-  });
-
-  it('is the identity on a day that already starts a week', () => {
-    const monday = local(2026, 8, 14);
-    expect(dayKey(startOfWeek(monday))).toBe('2026-09-14');
-  });
-
-  it('crosses a month boundary backwards when it has to', () => {
-    // Wednesday 1 July 2026 -> Monday 29 June.
-    expect(dayKey(startOfWeek(local(2026, 6, 1)))).toBe('2026-06-29');
-  });
-});
-
 describe('windowStartFor', () => {
-  it('puts the anchor day\'s week in the middle row', () => {
+  it('puts the anchor day in the middle square, not merely its week', () => {
+    // The regression this module was rewritten for: centring the *week* left
+    // today wherever its weekday happened to fall, which on a Sunday is the
+    // last column of the middle row.
     const weeks = windowGrid(windowStartFor(TODAY));
-    const middle = weeks[WEEKS_BEFORE];
-    expect(middle?.some((day) => isSameDay(day, TODAY))).toBe(true);
+    expect(isSameDay(weeks[CENTER_ROW]?.[CENTER_COLUMN] as Date, TODAY)).toBe(true);
   });
 
-  it('opens on exactly two weeks behind and two ahead', () => {
-    expect(WINDOW_WEEKS).toBe(5);
-    const weeks = windowGrid(windowStartFor(TODAY));
-    expect(weeks).toHaveLength(5);
-    // Monday 31 August through Sunday 4 October — the whole weeks either
-    // side of Tuesday the 15th's own week.
-    expect(dayKey(weeks[0]?.[0] as Date)).toBe('2026-08-31');
-    const lastWeek = weeks[weeks.length - 1] as readonly Date[];
-    expect(dayKey(lastWeek[lastWeek.length - 1] as Date)).toBe('2026-10-04');
+  it('centres on every weekday, not only the lucky one', () => {
+    for (let offset = 0; offset < 7; offset += 1) {
+      const anchor = local(2026, 8, 14 + offset);
+      const weeks = windowGrid(windowStartFor(anchor));
+      expect(isSameDay(weeks[CENTER_ROW]?.[CENTER_COLUMN] as Date, anchor)).toBe(true);
+    }
   });
 
-  it('reaches at least a fortnight in both directions, whichever weekday today is', () => {
-    const FORTNIGHT_MS = 14 * 24 * 60 * 60 * 1000;
+  it('opens on 17 days either side, symmetrically, whichever weekday today is', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
     for (let offset = 0; offset < 7; offset += 1) {
       const anchor = local(2026, 8, 14 + offset);
       const days = windowGrid(windowStartFor(anchor)).flat();
       const first = startOfDay(days[0] as Date).getTime();
       const last = startOfDay(days[days.length - 1] as Date).getTime();
       const anchorDay = startOfDay(anchor).getTime();
-      expect(anchorDay - first).toBeGreaterThanOrEqual(FORTNIGHT_MS);
-      expect(last - anchorDay).toBeGreaterThanOrEqual(FORTNIGHT_MS);
+      // The fortnight each way that was asked for, and the same amount each
+      // way — the lopsided 20-behind/14-ahead of the week-aligned version is
+      // exactly what this asserts is gone.
+      expect((anchorDay - first) / DAY_MS).toBe(CENTER_OFFSET_DAYS);
+      expect((last - anchorDay) / DAY_MS).toBe(CENTER_OFFSET_DAYS);
     }
+  });
+
+  it('spans five rows of seven around the anchor', () => {
+    expect(WINDOW_WEEKS).toBe(5);
+    const weeks = windowGrid(windowStartFor(TODAY));
+    expect(weeks).toHaveLength(5);
+    // Saturday 29 August through Friday 2 October — 17 days either side of
+    // Tuesday the 15th, so the columns run Sat…Fri rather than Mon…Sun.
+    expect(dayKey(weeks[0]?.[0] as Date)).toBe('2026-08-29');
+    const lastWeek = weeks[weeks.length - 1] as readonly Date[];
+    expect(dayKey(lastWeek[lastWeek.length - 1] as Date)).toBe('2026-10-02');
   });
 });
 
 describe('windowGrid', () => {
-  it('starts every row on the configured first day of the week', () => {
-    for (const week of windowGrid(windowStartFor(TODAY))) {
-      expect(week[0]?.getDay()).toBe(WEEK_STARTS_ON);
+  it('starts every row on the same weekday, so the columns line up', () => {
+    // Which weekday that is depends on the anchor — it is the anchor's own,
+    // shifted back by `CENTER_OFFSET_DAYS`. What matters for the grid is only
+    // that every row agrees, so a column means one weekday all the way down.
+    const start = windowStartFor(TODAY);
+    for (const week of windowGrid(start)) {
+      expect(week[0]?.getDay()).toBe(start.getDay());
       expect(week).toHaveLength(7);
     }
   });
@@ -112,11 +112,14 @@ describe('windowGrid', () => {
 });
 
 describe('shiftWindow', () => {
-  it('moves whole weeks, so every row still starts on the same weekday', () => {
+  it('moves whole weeks, so the columns keep their weekdays while paging', () => {
+    // This is what stops the headers dancing on every press of the arrows:
+    // only "Today" re-centres, and only re-centring can change which weekday
+    // heads column one.
     const start = windowStartFor(TODAY);
     const shifted = shiftWindow(start, -WINDOW_STEP_WEEKS);
-    expect(shifted.getDay()).toBe(WEEK_STARTS_ON);
-    expect(dayKey(shifted)).toBe('2026-08-17');
+    expect(shifted.getDay()).toBe(start.getDay());
+    expect(dayKey(shifted)).toBe('2026-08-15');
   });
 
   it('keeps three of the five rows on screen, so a run of appointments is followed not jumped', () => {

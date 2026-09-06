@@ -291,7 +291,12 @@ export function AppointmentCalendar({
   const currentTime = useNow(now);
   // The window's first day, not a month. Opens centred on today — the
   // owner's *"place todays date in the middle so that I see a 2 weeks
-  // backward and 2 weeks forward"*.
+  // backward and 2 weeks forward"*, and after a second pass that is now
+  // today itself in the middle *square* rather than today's week in the
+  // middle *row*. The two are not the same thing and looked nothing alike
+  // on a Sunday; `calendar-grid.ts`'s header has the whole finding, and the
+  // weekday headers below are rendered from row one precisely so they follow
+  // whatever weekday the centring lands on.
   const [windowStart, setWindowStart] = useState<Date>(() => windowStartFor(now()));
   const [state, setState] = useState<ViewState>({ status: 'loading' });
   const [sources, setSources] = useState<readonly CalendarSource[] | undefined>(undefined);
