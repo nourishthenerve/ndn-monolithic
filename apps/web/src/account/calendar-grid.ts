@@ -10,36 +10,45 @@
 // week in the middle row. So the unit this module works in is a window of
 // whole weeks, not a named month.
 //
-// ## 2026-09-06, second pass: the columns anchor on *today*, not on Monday
+// ## 2026-09-06, second pass, then third: what "the middle" actually means
 //
 // The owner, on seeing the first version: *"the calender I'm seeing still is
 // not aligned in the middle. I want current date to be in the middle so that
 // I see 2 weeks backward and 2 weeks forward."*
 //
-// The first version centred today's **week** and left the columns pinned to
-// Monday. That is not the same thing, and on most days it does not look like
-// it either: with fixed Mon…Sun columns, today's position in the grid is
-// decided entirely by today's weekday and cannot be moved. Sunday 6 September
-// 2026 — the day the complaint was made — put today in the *last* column of
-// the middle row, with 20 days of history behind it and only 14 ahead.
+// The second pass read that as *the middle square* and anchored the columns
+// on today's own weekday to get there. It worked, and it cost the thing that
+// makes a calendar legible: with the columns re-anchored daily, the weekday
+// headers rotated, so the grid stopped being a wall calendar and became a
+// rolling strip that happened to be labelled with weekdays.
 //
-// So the trade is forced, and worth naming rather than burying. A five-by-
-// seven grid has exactly one middle square, and a day can only sit in it if
-// the columns are allowed to start on that day's own weekday. Keeping Monday
-// in column one means giving up centring on six days out of seven; centring
-// means giving up a fixed Monday. The owner has now asked for centring twice,
-// so Monday is what gives.
+// The owner saw the real answer, and it is better than the trade the second
+// pass thought was forced: *"in order to keep columns constant and also
+// current date to be in the middle, can you keep this calender not left right
+// but top down aligned? this way the columns will remain the same and you can
+// also keep the current date in the middle row and everything works/looks
+// like a wall calender."*
 //
-// What that buys: today is always the middle square — `CENTER_ROW` /
-// `CENTER_COLUMN` — with **17 days either side, symmetrically**, which covers
-// the fortnight each way that was asked for and never leans one way. What it
-// costs: the weekday headers rotate as the days pass, so this reads as a
-// rolling window labelled with weekdays rather than as a wall calendar. Every
-// column still carries its own weekday name (`AppointmentCalendar` renders
-// the headers from row one), so nothing is ambiguous — only unfamiliar.
+// **The middle that matters is vertical.** On a wall calendar nobody expects
+// today to be horizontally centred — a day belongs in its weekday column, and
+// that is exactly what makes the column mean something. What you want centred
+// is *which week you are looking at*. Centre the row, not the cell, and the
+// dilemma the second pass ran into simply is not one: fixed Mon…Sun columns
+// and a centred today are both available at once, because they were never
+// competing for the same axis.
 //
-// `shiftWindow` still moves in whole weeks, which is what keeps the columns
-// stable while paging: the headers only change when "Today" re-centres.
+// So the window is week-aligned again (`startOfWeek`), today's week is
+// `CENTER_ROW`, and the columns are Monday-first for good. The navigation is
+// reoriented with it — the control moves the window **up and down** through
+// weeks rather than left and right, which is the direction time actually runs
+// in this layout.
+//
+// The one honest cost, unchanged from the first pass and now deliberately
+// accepted: because the rows are whole weeks, the window reaches a little
+// further one way than the other depending on today's weekday — on a Sunday,
+// 20 days back and 14 ahead. That is wall-calendar behaviour, it always shows
+// **at least** the fortnight each way that was asked for, and trying to
+// correct it is what produced the rotating headers.
 //
 // Every function here is pure and takes its own clock, so the grid, the
 // fetch range and the grouping can be tested without a DOM, a timer or a
@@ -58,6 +67,19 @@
 // read back with the local `getFullYear`/`getMonth`/`getDate` accessors, and
 // `gridRange` converts to UTC only at the boundary, where the API needs it.
 
+/**
+ * ISO-8601's own first day of the week, matching `Date.prototype.getDay`'s
+ * numbering. The clinic is UK-based and the site ships one locale (`en`);
+ * `Intl.Locale.prototype.getWeekInfo` would derive this properly but is
+ * still not in every browser this site supports, so it is a named constant
+ * — the single place to change when a locale that starts on Sunday ships.
+ *
+ * Restored on the third pass. The second pass made the week start float with
+ * today's weekday, which is what put rotating labels on the columns; a wall
+ * calendar's columns are fixed, and this is what fixes them.
+ */
+export const WEEK_STARTS_ON = 1;
+
 export const DAYS_IN_WEEK = 7;
 
 /** Weeks of history the default view opens on — the owner's "2 weeks backward". */
@@ -69,25 +91,17 @@ export const WEEKS_AFTER = 2;
 export const WINDOW_WEEKS = WEEKS_BEFORE + 1 + WEEKS_AFTER;
 
 /**
- * Where today sits in the grid — the middle square of `WINDOW_WEEKS` rows of
- * `DAYS_IN_WEEK`.
+ * The row today's week occupies — the middle one, with `WEEKS_BEFORE` above
+ * it and `WEEKS_AFTER` below.
  *
- * `CENTER_ROW` is `WEEKS_BEFORE` by construction (two rows above it, two
- * below). `CENTER_COLUMN` is the middle of an odd-width row, which is the
- * only reason the grid is seven wide rather than six or eight: an even width
- * has no middle column and could not centre anything.
+ * There is deliberately no `CENTER_COLUMN` to go with it. Today's column is
+ * its weekday and is not something this module chooses; that is the whole
+ * point of the third pass. Centring happens on one axis only.
  */
 export const CENTER_ROW = WEEKS_BEFORE;
-export const CENTER_COLUMN = (DAYS_IN_WEEK - 1) / 2;
 
 /**
- * How far back the window starts from the day it is centred on: 17 days, so
- * that day lands on `CENTER_ROW`/`CENTER_COLUMN` with the same 17 ahead.
- */
-export const CENTER_OFFSET_DAYS = CENTER_ROW * DAYS_IN_WEEK + CENTER_COLUMN;
-
-/**
- * How far one press of the back/forward control moves the window.
+ * How far one press of the up/down control moves the window.
  *
  * Two weeks, not five: the window is the unit the owner described, and
  * paging by its full width would swap the whole view for an unrelated one.
@@ -103,21 +117,28 @@ export function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
+/** The start of the local week `date` falls in, per `WEEK_STARTS_ON`. */
+export function startOfWeek(date: Date): Date {
+  const offset = (date.getDay() - WEEK_STARTS_ON + DAYS_IN_WEEK) % DAYS_IN_WEEK;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() - offset);
+}
+
 /**
- * Where the window starts when it is centred on `date` — `CENTER_OFFSET_DAYS`
- * before it, so `date` itself lands on the middle square.
+ * Where the window sits when it is centred on `date` — the start of the week
+ * `WEEKS_BEFORE` weeks before `date`'s own week.
  *
- * This is what "today in the middle" means concretely, and it is deliberately
- * *not* week-aligned: aligning to Monday is precisely what stopped the first
- * version from centring anything (see this module's header). The window's
- * first day is whatever weekday sits 17 days before `date`, and every row
- * starts on that weekday because `windowGrid` counts in sevens from it.
+ * This is what "today in the middle" means once the middle is understood as
+ * vertical: `date`'s week becomes `CENTER_ROW` of `WINDOW_WEEKS`, with two
+ * whole weeks of history above it and two ahead below. Where `date` sits
+ * *within* that row is its weekday's business, and fixing that is what makes
+ * the columns constant.
  */
 export function windowStartFor(date: Date): Date {
+  const week = startOfWeek(date);
   return new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate() - CENTER_OFFSET_DAYS,
+    week.getFullYear(),
+    week.getMonth(),
+    week.getDate() - WEEKS_BEFORE * DAYS_IN_WEEK,
   );
 }
 
@@ -160,10 +181,10 @@ export function isPastDay(day: Date, now: Date): boolean {
 /**
  * The window as rows of seven, starting at `windowStart`.
  *
- * Every row begins on the *same weekday* by construction — whichever weekday
- * `windowStart` is — because each row is seven days on from the last. That is
- * what keeps the columns lining up under their headers; which weekday heads
- * column one is `windowStartFor`'s business, not this function's.
+ * Every row begins on `WEEK_STARTS_ON` by construction, because
+ * `windowStart` is itself a week start and each row is seven days on from
+ * the last. That is what makes a column mean one weekday all the way down,
+ * which is most of what makes this read as a wall calendar.
  */
 export function windowGrid(windowStart: Date): readonly (readonly Date[])[] {
   return Array.from({ length: WINDOW_WEEKS }, (_unusedWeek, week) =>
