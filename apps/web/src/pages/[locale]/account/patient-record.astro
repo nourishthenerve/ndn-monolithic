@@ -59,10 +59,13 @@ const heading = t('patientRecord.heading', undefined, locale);
     <Fragment slot="forbidden">
       <p>{t('patientRecord.forbidden', undefined, locale)}</p>
     </Fragment>
+    {/* 2026-09-06: `dashboardHref` was `account/caseload`, which is deleted —
+        its table is a section of the dashboard now, so "back to dashboard"
+        points at the dashboard, where the table it means actually is. */}
     <PatientRecordPanel
       client:only="react"
       locale={locale}
-      dashboardHref={`/${locale}/account/caseload`}
+      dashboardHref={`/${locale}/account`}
       strings={{
         loadingLabel: t('patientRecord.loading', undefined, locale),
         forbiddenLabel: t('patientRecord.forbidden', undefined, locale),

@@ -33,12 +33,12 @@ import type { Locale } from '@ndn/i18n';
  * still gets a real axe scan of its own legible forbidden state.
  *
  * **Amendment, 2026-08-31 — and a coverage gap this makes worth naming.**
- * The three principal-only pages (`caseload`, `patient-admin`,
+ * The principal-only pages (`patient-admin`,
  * `clinician-admin`) now decide client-side whether to render their
  * content at all (`RequireAuth`'s `requirePrincipalClinician`), rather
  * than rendering a form and letting the submit be refused. The paragraph
  * above still holds — the scan gets a real axe pass over a legible
- * forbidden state — but the consequence is that those three pages' *real*
+ * forbidden state — but the consequence is that those two pages' *real*
  * content is no longer axe-scanned by anything, because the a11y suite's
  * clinician fixture is a sub-clinician.
  *
@@ -79,8 +79,9 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // TASK 3.1.1/3.2.1/3.2.2/3.3.1/3.3.2: the patient's own profile,
   // diagnosis, care plan and assessment timeline.
   { segment: 'patient', ownerRole: 'patient' },
-  // TASK 2.5.3: the principal clinician's cross-caseload view.
-  { segment: 'caseload', ownerRole: 'clinician' },
+  // `caseload` is **deleted, not merely unregistered** (2026-09-06): its
+  // cross-caseload table is a section of the dashboard now rather than a
+  // page a clinician has to click through to.
   // 2026-08-31: staff looking at one named patient (`?id=`) — and, since
   // 2026-09-01, where that patient's assessment form lives, for every
   // staff role that may reach one. Registered
@@ -91,7 +92,7 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // D-29: the principal clinician's patient-account creation/reset-password
   // form. Principal-only in practice (services/api/src/patient-admin.ts's
   // own `can()` check), the same "no finer role than 'clinician' in this
-  // enum" reasoning `caseload` above already accepts.
+  // enum" reasoning the rest of this list already accepts.
   { segment: 'patient-admin', ownerRole: 'clinician' },
   // D-30: the principal clinician's own colleague-account creation form.
   // Principal-only in practice (services/api/src/clinician-admin.ts's own
