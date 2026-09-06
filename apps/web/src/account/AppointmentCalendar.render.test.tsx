@@ -25,6 +25,18 @@ function local(year: number, month: number, day: number, hour = 0, minute = 0): 
   return new Date(year, month, day, hour, minute);
 }
 
+/**
+ * The window headings the grid shows, spelled out rather than rebuilt with
+ * `Intl` here — a test that recomputes the string it is checking proves only
+ * that the code agrees with itself.
+ *
+ * 15 September 2026 is a Tuesday, so the default window (two whole weeks
+ * either side of its own week) runs Monday 31 August to Sunday 4 October,
+ * and one press back moves it two weeks.
+ */
+const DEFAULT_WINDOW = 'August 31 – October 4, 2026';
+const EARLIER_WINDOW = 'August 17 – September 20, 2026';
+
 /** 15 September 2026, midday. Stable identity — `useNow` requires it. */
 const NOW = local(2026, 8, 15, 12, 0);
 const now = (): Date => NOW;
@@ -46,13 +58,13 @@ const STRINGS = {
   loadingLabel: 'Loading your calendar…',
   forbiddenLabel: 'No calendar for you.',
   errorLabel: 'Calendar failed.',
-  previousMonthLabel: 'Previous month',
-  nextMonthLabel: 'Next month',
+  previousWeeksLabel: 'Previous two weeks',
+  nextWeeksLabel: 'Next two weeks',
   todayLabel: 'Today',
   gridCaption: 'Appointments by day.',
   todayMarker: 'Today',
   noAppointmentsOnDay: 'No appointments on this day.',
-  emptyMonth: 'No appointments this month.',
+  emptyWindow: 'No appointments in this period.',
   durationLabel: 'Duration:',
   minutesSuffix: 'minutes',
   statusLabel: 'Status:',
@@ -183,9 +195,9 @@ describe('a patient', () => {
     return fetchPatient;
   }
 
-  it('opens on the current month with today selected', async () => {
+  it('opens on a window centred on today, with today selected', async () => {
     renderPatient();
-    expect(await screen.findByText('September 2026')).toBeDefined();
+    expect(await screen.findByText(DEFAULT_WINDOW)).toBeDefined();
     // Today has two appointments, so the panel below the grid lists them.
     expect(await screen.findByRole('heading', { name: /September 15, 2026/ })).toBeDefined();
   });
@@ -199,57 +211,57 @@ describe('a patient', () => {
 
   it('never shows an unapproved slot, whatever the API returns', async () => {
     renderPatient();
-    await screen.findByText('September 2026');
+    await screen.findByText(DEFAULT_WINDOW);
     expect(screen.queryByText('Waiting for approval')).toBeNull();
     // 22 September is `pending-approval`, so its square must not be a
     // pressable day at all.
     expect(screen.queryByRole('button', { name: /September 22, 2026/ })).toBeNull();
   });
 
-  it('scrolls back to a past month and finds what happened there', async () => {
+  it('scrolls back and finds what happened there', async () => {
     renderPatient();
-    await screen.findByText('September 2026');
+    await screen.findByText(DEFAULT_WINDOW);
 
-    (await screen.findByRole('button', { name: 'Previous month' })).click();
+    (await screen.findByRole('button', { name: 'Previous two weeks' })).click();
 
-    expect(await screen.findByText('August 2026')).toBeDefined();
+    expect(await screen.findByText(EARLIER_WINDOW)).toBeDefined();
     const august20 = await screen.findByRole('button', { name: /August 20, 2026/ });
     august20.click();
     expect(await screen.findByRole('heading', { name: /August 20, 2026/ })).toBeDefined();
     expect(screen.getAllByText(/Attended/).length).toBeGreaterThan(0);
   });
 
-  it('costs no second request to change month — the whole history arrived at once', async () => {
+  it('costs no second request to move the window — the whole history arrived at once', async () => {
     const fetchPatient = renderPatient();
-    await screen.findByText('September 2026');
+    await screen.findByText(DEFAULT_WINDOW);
     expect(fetchPatient).toHaveBeenCalledTimes(1);
 
-    (await screen.findByRole('button', { name: 'Previous month' })).click();
-    await screen.findByText('August 2026');
-    (await screen.findByRole('button', { name: 'Next month' })).click();
-    await screen.findByText('September 2026');
+    (await screen.findByRole('button', { name: 'Previous two weeks' })).click();
+    await screen.findByText(EARLIER_WINDOW);
+    (await screen.findByRole('button', { name: 'Next two weeks' })).click();
+    await screen.findByText(DEFAULT_WINDOW);
 
     expect(fetchPatient).toHaveBeenCalledTimes(1);
   });
 
-  it('returns to the current month from the Today control', async () => {
+  it('re-centres on today from the Today control', async () => {
     renderPatient();
-    await screen.findByText('September 2026');
-    (await screen.findByRole('button', { name: 'Previous month' })).click();
-    await screen.findByText('August 2026');
+    await screen.findByText(DEFAULT_WINDOW);
+    (await screen.findByRole('button', { name: 'Previous two weeks' })).click();
+    await screen.findByText(EARLIER_WINDOW);
 
     (await screen.findByRole('button', { name: 'Today' })).click();
-    expect(await screen.findByText('September 2026')).toBeDefined();
+    expect(await screen.findByText(DEFAULT_WINDOW)).toBeDefined();
   });
 
   it('says so for a month with nothing in it', async () => {
     renderPatient(vi.fn().mockResolvedValue(jsonResponse([])));
-    expect(await screen.findByText('No appointments this month.')).toBeDefined();
+    expect(await screen.findByText('No appointments in this period.')).toBeDefined();
   });
 });
 
 describe('a clinician', () => {
-  it('fetches a range covering the whole visible grid, and a new one per month', async () => {
+  it('fetches a range covering the whole visible grid, and a new one per move', async () => {
     const fetchClinician = vi
       .fn()
       .mockResolvedValue(jsonResponse([appointment(local(2026, 8, 15, 9, 0))]));
@@ -263,7 +275,7 @@ describe('a clinician', () => {
         fetchClinicianCalendar={fetchClinician}
       />,
     );
-    await screen.findByText('September 2026');
+    await screen.findByText(DEFAULT_WINDOW);
     expect(fetchClinician).toHaveBeenCalledTimes(1);
 
     const [firstFrom] = fetchClinician.mock.calls[0] as [string, string, string];
@@ -271,8 +283,8 @@ describe('a clinician', () => {
     // would leave that row permanently empty.
     expect(new Date(firstFrom).getTime()).toBeLessThan(local(2026, 8, 1).getTime());
 
-    (await screen.findByRole('button', { name: 'Previous month' })).click();
-    await screen.findByText('August 2026');
+    (await screen.findByRole('button', { name: 'Previous two weeks' })).click();
+    await screen.findByText(EARLIER_WINDOW);
 
     await waitFor(() => {
       expect(fetchClinician).toHaveBeenCalledTimes(2);
@@ -393,7 +405,7 @@ describe('the loading contract the authenticated a11y gate depends on', () => {
         fetchClinicianCalendar={vi.fn()}
       />,
     );
-    await screen.findByText('September 2026');
+    await screen.findByText(DEFAULT_WINDOW);
     expect(screen.queryAllByRole('status')).toHaveLength(0);
   });
 
@@ -410,7 +422,7 @@ describe('the loading contract the authenticated a11y gate depends on', () => {
         fetchClinicianCalendar={vi.fn()}
       />,
     );
-    await screen.findByText('September 2026');
+    await screen.findByText(DEFAULT_WINDOW);
     // The region is gone as a *role*, not as a live region — dropping the
     // announcement would have been the wrong fix for the wrong problem.
     const live = container.querySelectorAll('[aria-live="polite"]');

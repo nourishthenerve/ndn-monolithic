@@ -91,6 +91,12 @@ const WEEKDAY_SHORT_OPTIONS: Intl.DateTimeFormatOptions = { weekday: 'short' };
 const WEEKDAY_LONG_OPTIONS: Intl.DateTimeFormatOptions = { weekday: 'long' };
 /** No `timeZoneName`: see the note above on why rule 3 stops at this file's own boundary. */
 const TIME_OF_DAY_OPTIONS: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
+/** No weekday: a *range* names two ends, and two weekdays in one label is noise. */
+const MONTH_DAY_YEAR_OPTIONS: Intl.DateTimeFormatOptions = {
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+};
 /** A day named in full, for the panel that lists one day's appointments. */
 const DATE_OPTIONS: Intl.DateTimeFormatOptions = {
   weekday: 'long',
@@ -141,4 +147,40 @@ export function formatTimeOfDay(value: string | Date, locale: Locale): string {
 /** "Thursday, 3 September 2026" — the heading of a selected day's list. */
 export function formatDate(value: string | Date, locale: Locale): string {
   return format(value, locale, DATE_OPTIONS);
+}
+
+/** "1 Sep" — the marker the calendar puts on the first day of a month, where the grid spans two. */
+export function formatDayMonthShort(value: string | Date, locale: Locale): string {
+  return format(value, locale, { day: 'numeric', month: 'short' });
+}
+
+/**
+ * "17 August – 20 September 2026" — the span a rolling calendar window
+ * covers.
+ *
+ * `Intl.DateTimeFormat.prototype.formatRange` rather than two `formatDate`
+ * calls joined by a dash, because the correct rendering of a range is not
+ * concatenation: it collapses the parts the two ends share, and *which*
+ * parts those are is locale-specific ("17–20 September 2026" within one
+ * month, "August 17 – September 20, 2026" across two). Gluing two full dates
+ * together would produce a correct-but-clumsy string in English and a wrong
+ * one somewhere else.
+ *
+ * Falls back to the join when `formatRange` is unavailable — it is ES2021
+ * and present in every browser this site supports, but a formatter that
+ * throws on a range would take the whole calendar down with it, and a
+ * clumsier label is not worth that.
+ */
+export function formatDateRange(from: string | Date, to: string | Date, locale: Locale): string {
+  const start = from instanceof Date ? from : new Date(from);
+  const end = to instanceof Date ? to : new Date(to);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return `${formatDate(from, locale)} – ${formatDate(to, locale)}`;
+  }
+  const formatter = new Intl.DateTimeFormat(locale, MONTH_DAY_YEAR_OPTIONS);
+  try {
+    return formatter.formatRange(start, end);
+  } catch {
+    return `${formatDate(from, locale)} – ${formatDate(to, locale)}`;
+  }
 }

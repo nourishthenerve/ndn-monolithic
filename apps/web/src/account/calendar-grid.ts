@@ -1,14 +1,25 @@
-// 2026-09-06: the date arithmetic behind the dashboard's month calendar.
+// 2026-09-06: the date arithmetic behind the dashboard's calendar.
 //
-// The owner: *"At the very top I want to show calender not the form of a
-// list of all past and future appointments but as literally a calender where
-// the patient/clinician/principal clinician can scroll left and right to see
-// all past and upcoming appointments."*
+// The owner: *"in calender view place todays date in the middle so that I
+// see a 2 weeks backward and 2 weeks forward."*
+//
+// **This replaces a calendar-month grid, and the change is the point.** A
+// month grid cannot put today in the middle — on the 2nd, today is in the
+// top row; on the 30th, the bottom. What is wanted is a *rolling window*
+// anchored on today: two weeks of context behind, two ahead, with today's
+// week in the middle row. So the unit this module works in is a window of
+// whole weeks, not a named month.
+//
+// Whole weeks, not exactly ±14 days: the columns have to keep lining up
+// under Mon…Sun headers, which is most of what makes a grid read as a
+// calendar rather than a table of dates. A 29-day exact window would put a
+// different weekday at the start of each row. The cost is that the window
+// reaches a little past two weeks in one direction and a little short in the
+// other, depending on which weekday today is — 35 days either way.
 //
 // Every function here is pure and takes its own clock, so the grid, the
-// fetch window and the grouping can be tested without a DOM, a timer or a
-// network — the component that uses them (`AppointmentCalendar.tsx`) is then
-// left with rendering and fetching only.
+// fetch range and the grouping can be tested without a DOM, a timer or a
+// network.
 //
 // ## The one decision that runs through all of it: days are *local*
 //
@@ -34,31 +45,63 @@ export const WEEK_STARTS_ON = 1;
 
 export const DAYS_IN_WEEK = 7;
 
-export interface CalendarMonth {
-  readonly year: number;
-  /** 0-11, matching `Date.prototype.getMonth` rather than human numbering. */
-  readonly month: number;
-}
+/** Weeks of history the default view opens on — the owner's "2 weeks backward". */
+export const WEEKS_BEFORE = 2;
+/** Weeks ahead the default view opens on — "2 weeks forward". */
+export const WEEKS_AFTER = 2;
 
-export function monthOf(date: Date): CalendarMonth {
-  return { year: date.getFullYear(), month: date.getMonth() };
-}
+/** Rows in the grid: two behind, today's own, two ahead. */
+export const WINDOW_WEEKS = WEEKS_BEFORE + 1 + WEEKS_AFTER;
 
 /**
- * The month `delta` months away — this is what "scroll left and right" is.
+ * How far one press of the back/forward control moves the window.
  *
- * No wrap arithmetic: `new Date(y, m + delta, 1)` normalises an out-of-range
- * month itself, so month 12 becomes January of the next year and month -1
- * becomes December of the previous one. Hand-rolled modulo here is a classic
- * source of off-by-one-year bugs at exactly the two boundaries nobody tests.
+ * Two weeks, not five: the window is the unit the owner described, and
+ * paging by its full width would swap the whole view for an unrelated one.
+ * Moving by half of it keeps three weeks of what was on screen still on
+ * screen, so a run of appointments is followed rather than jumped over. The
+ * cost is more presses to reach distant history, which is what the "Today"
+ * control exists to undo in one.
  */
-export function shiftMonth(month: CalendarMonth, delta: number): CalendarMonth {
-  return monthOf(new Date(month.year, month.month + delta, 1));
-}
+export const WINDOW_STEP_WEEKS = 2;
 
 /** The first instant of a local calendar day. */
 export function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+/** The start of the local week `date` falls in, per `WEEK_STARTS_ON`. */
+export function startOfWeek(date: Date): Date {
+  const offset = (date.getDay() - WEEK_STARTS_ON + DAYS_IN_WEEK) % DAYS_IN_WEEK;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() - offset);
+}
+
+/**
+ * Where the window sits when it is centred on `date` — the start of the week
+ * `WEEKS_BEFORE` weeks before `date`'s own week.
+ *
+ * This is what "today in the middle" means concretely: `date`'s week becomes
+ * the middle row of `WINDOW_WEEKS`.
+ */
+export function windowStartFor(date: Date): Date {
+  const week = startOfWeek(date);
+  return new Date(
+    week.getFullYear(),
+    week.getMonth(),
+    week.getDate() - WEEKS_BEFORE * DAYS_IN_WEEK,
+  );
+}
+
+/** The window `weeks` weeks away — this is what "scroll left and right" is. */
+export function shiftWindow(windowStart: Date, weeks: number): Date {
+  // No wrap arithmetic: `Date` normalises a day number past the end of its
+  // month itself, which is what makes crossing a month or year boundary a
+  // non-event here.
+  return new Date(
+    windowStart.getFullYear(),
+    windowStart.getMonth(),
+    windowStart.getDate() + weeks * DAYS_IN_WEEK,
+  );
 }
 
 /**
@@ -80,37 +123,28 @@ export function isSameDay(a: Date, b: Date): boolean {
   return dayKey(a) === dayKey(b);
 }
 
-export function isInMonth(date: Date, month: CalendarMonth): boolean {
-  return date.getFullYear() === month.year && date.getMonth() === month.month;
+/** Whether `day` is a calendar day already past on `now`'s clock. */
+export function isPastDay(day: Date, now: Date): boolean {
+  return startOfDay(day).getTime() < startOfDay(now).getTime();
 }
 
 /**
- * The weeks a month is drawn as: whole weeks, starting on `WEEK_STARTS_ON`,
- * padded at both ends with the neighbouring months' days so every row has
- * seven cells.
+ * The window as rows of seven, starting at `windowStart`.
  *
- * The row count is derived, not fixed at six. A fixed six-row grid keeps the
- * calendar's height stable between months, which is a real benefit — but it
- * also renders up to a whole empty week of the *next* month, and on the
- * narrow layout this component has to work in, that is a screenful of
- * nothing between the grid and the day panel below it.
+ * Every row begins on `WEEK_STARTS_ON` by construction, because
+ * `windowStart` is itself a week start and each row is seven days on from
+ * the last.
  */
-export function monthGrid(month: CalendarMonth): readonly (readonly Date[])[] {
-  // Day 0 of the following month is the last day of this one — the standard
-  // way to ask JavaScript how long a month is without a leap-year table.
-  const daysInMonth = new Date(month.year, month.month + 1, 0).getDate();
-  const firstWeekday = new Date(month.year, month.month, 1).getDay();
-  const lead = (firstWeekday - WEEK_STARTS_ON + DAYS_IN_WEEK) % DAYS_IN_WEEK;
-  const weekCount = Math.ceil((lead + daysInMonth) / DAYS_IN_WEEK);
-
-  return Array.from({ length: weekCount }, (_unusedWeek, week) =>
+export function windowGrid(windowStart: Date): readonly (readonly Date[])[] {
+  return Array.from({ length: WINDOW_WEEKS }, (_unusedWeek, week) =>
     Array.from(
       { length: DAYS_IN_WEEK },
-      // A day number below 1 or above the month's length is not an error
-      // here: `Date` rolls it into the neighbouring month, which is exactly
-      // the padding this grid wants.
       (_unusedDay, day) =>
-        new Date(month.year, month.month, 1 - lead + week * DAYS_IN_WEEK + day),
+        new Date(
+          windowStart.getFullYear(),
+          windowStart.getMonth(),
+          windowStart.getDate() + week * DAYS_IN_WEEK + day,
+        ),
     ),
   );
 }
@@ -118,11 +152,6 @@ export function monthGrid(month: CalendarMonth): readonly (readonly Date[])[] {
 /**
  * The UTC instants spanning everything a grid can show, for the ranged
  * `GET /clinicians/me/calendar?from=&to=`.
- *
- * Spans the **whole grid**, not the whole month, and that is not a detail:
- * the first and last rows carry days from the neighbouring months, and a
- * range clipped to the month itself would draw those squares permanently
- * empty however many appointments were in them.
  *
  * `to` is the start of the day *after* the last one — a half-open interval,
  * so an appointment at 23:59 on the final square is inside the range and no
@@ -136,9 +165,9 @@ export function gridRange(weeks: readonly (readonly Date[])[]): {
   const lastWeek = weeks[weeks.length - 1];
   const lastDay = lastWeek?.[lastWeek.length - 1];
   if (!firstDay || !lastDay) {
-    // An empty grid is not reachable from `monthGrid` — every month has at
-    // least one week — but the type says it could be, and an empty range is
-    // the honest answer rather than a thrown error on a render path.
+    // Not reachable from `windowGrid`, which always builds `WINDOW_WEEKS`
+    // rows — but the type says it could be, and an empty range is the honest
+    // answer rather than a thrown error on a render path.
     const now = new Date();
     return { from: now.toISOString(), to: now.toISOString() };
   }
@@ -188,17 +217,16 @@ export function groupByDay<T extends DatedEntry>(
 }
 
 /**
- * The day a freshly-opened calendar should describe below the grid: today
- * when today is in view, otherwise the first day of the month that has
- * anything on it, otherwise nothing.
+ * The day a freshly-drawn window should describe below the grid: today when
+ * today is on it, otherwise the first day of the window that has anything on
+ * it, otherwise nothing.
  *
- * "Otherwise nothing" rather than "otherwise the 1st": an empty panel headed
- * with an arbitrary date reads as though that date were meaningful. A month
- * with no appointments says so instead.
+ * "Otherwise nothing" rather than "otherwise the first square": an empty
+ * panel headed with an arbitrary date reads as though that date were
+ * meaningful. A window with no appointments says so instead.
  */
 export function defaultSelectedDay(
   weeks: readonly (readonly Date[])[],
-  month: CalendarMonth,
   byDay: ReadonlyMap<string, readonly DatedEntry[]>,
   now: Date,
 ): string | undefined {
@@ -207,8 +235,6 @@ export function defaultSelectedDay(
   if (today) {
     return dayKey(today);
   }
-  const firstBusy = days.find(
-    (day) => isInMonth(day, month) && (byDay.get(dayKey(day))?.length ?? 0) > 0,
-  );
+  const firstBusy = days.find((day) => (byDay.get(dayKey(day))?.length ?? 0) > 0);
   return firstBusy ? dayKey(firstBusy) : undefined;
 }

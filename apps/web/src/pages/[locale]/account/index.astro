@@ -51,8 +51,6 @@ import { AppointmentCalendar } from '../../../account/AppointmentCalendar.js';
 import { AssessmentForm } from '../../../account/AssessmentForm.js';
 import { appointmentCalendarStylesCss } from '../../../account/calendar-styles.js';
 import { ChangePasswordPanel } from '../../../account/ChangePasswordPanel.js';
-import { ClinicalRecordTimeline } from '../../../account/ClinicalRecordTimeline.js';
-import { NextAppointmentPanel } from '../../../account/NextAppointmentPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
 import { TestimonialPanel } from '../../../account/TestimonialPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
@@ -116,13 +114,13 @@ const PANEL_HEADING_LEVEL = 3;
           loadingLabel: t('accountCalendar.loading', undefined, locale),
           forbiddenLabel: t('accountCalendar.forbidden', undefined, locale),
           errorLabel: t('accountCalendar.error', undefined, locale),
-          previousMonthLabel: t('accountCalendar.previousMonth', undefined, locale),
-          nextMonthLabel: t('accountCalendar.nextMonth', undefined, locale),
+          previousWeeksLabel: t('accountCalendar.previousWeeks', undefined, locale),
+          nextWeeksLabel: t('accountCalendar.nextWeeks', undefined, locale),
           todayLabel: t('accountCalendar.today', undefined, locale),
           gridCaption: t('accountCalendar.gridCaption', undefined, locale),
           todayMarker: t('accountCalendar.todayMarker', undefined, locale),
           noAppointmentsOnDay: t('accountCalendar.noAppointmentsOnDay', undefined, locale),
-          emptyMonth: t('accountCalendar.emptyMonth', undefined, locale),
+          emptyWindow: t('accountCalendar.emptyWindow', undefined, locale),
           durationLabel: t('accountCalendar.duration', undefined, locale),
           minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
           statusLabel: t('accountCalendar.status', undefined, locale),
@@ -142,16 +140,23 @@ const PANEL_HEADING_LEVEL = 3;
       />
     </RequireAuth>
 
-    {/* ## 2. Personal details — the whole of `account/patient` inlined.
-        *"just underneath this calender show the entire Your details
-        content."* Every panel that page renders, in that page's own order,
-        each one level down so they read as this section's contents.
+    {/* ## 2. Personal details — `account/patient`'s content, less three
+        panels the owner has since cut.
 
-        `NextAppointmentPanel` is kept because "the entire Your details
-        content" is what was asked for — but it is worth naming that it is
-        now the third view of the same appointments on one screen, after the
-        calendar's grid and its day panel. It is one line to remove if the
-        owner agrees. */}
+        *"remove the next appointment panel too, its redundant"* —
+        `NextAppointmentPanel` showed one appointment, the next one, directly
+        beneath a calendar that draws all of them and a day panel that
+        details them. It was the third rendering of the same data on one
+        screen.
+
+        *"remove care plan and diagnosis plan as I dont know when I define
+        these sections"* — both `ClinicalRecordTimeline` panels are gone.
+        They are not deleted, only unmounted here: `account/patient` still
+        renders them, the API and its history are untouched, and putting
+        them back is a matter of restoring these props once the clinic knows
+        what belongs in them.
+
+        What remains is the profile form and the assessment form. */}
     <RequireAuth client:only="react" allowRoles={['patient']}>
       <section aria-labelledby="personal-details-heading">
         <Heading level={2} id="personal-details-heading">
@@ -170,46 +175,6 @@ const PANEL_HEADING_LEVEL = 3;
             marketingOptInLabel: t('patientProfile.marketingOptIn', undefined, locale),
             saveLabel: t('patientProfile.save', undefined, locale),
             savingLabel: t('patientProfile.saving', undefined, locale),
-          }}
-        />
-        <NextAppointmentPanel
-          client:only="react"
-          locale={locale}
-          headingLevel={PANEL_HEADING_LEVEL}
-          strings={{
-            heading: t('nextAppointment.heading', undefined, locale),
-            loadingLabel: t('nextAppointment.loading', undefined, locale),
-            forbiddenLabel: t('nextAppointment.forbidden', undefined, locale),
-            errorLabel: t('nextAppointment.error', undefined, locale),
-            emptyLabel: t('nextAppointment.empty', undefined, locale),
-            durationLabel: t('nextAppointment.duration', undefined, locale),
-            joinCallLabel: t('nextAppointment.joinCall', undefined, locale),
-          }}
-        />
-        <ClinicalRecordTimeline
-          client:only="react"
-          kind="diagnosis"
-          headingLevel={PANEL_HEADING_LEVEL}
-          strings={{
-            heading: t('clinicalRecordTimeline.diagnosisHeading', undefined, locale),
-            loadingLabel: t('clinicalRecordTimeline.loading', undefined, locale),
-            forbiddenLabel: t('clinicalRecordTimeline.forbidden', undefined, locale),
-            errorLabel: t('clinicalRecordTimeline.error', undefined, locale),
-            emptyLabel: t('clinicalRecordTimeline.diagnosisEmpty', undefined, locale),
-            versionLabel: t('clinicalRecordTimeline.version', undefined, locale),
-          }}
-        />
-        <ClinicalRecordTimeline
-          client:only="react"
-          kind="care-plan"
-          headingLevel={PANEL_HEADING_LEVEL}
-          strings={{
-            heading: t('clinicalRecordTimeline.carePlanHeading', undefined, locale),
-            loadingLabel: t('clinicalRecordTimeline.loading', undefined, locale),
-            forbiddenLabel: t('clinicalRecordTimeline.forbidden', undefined, locale),
-            errorLabel: t('clinicalRecordTimeline.error', undefined, locale),
-            emptyLabel: t('clinicalRecordTimeline.carePlanEmpty', undefined, locale),
-            versionLabel: t('clinicalRecordTimeline.version', undefined, locale),
           }}
         />
         {/* Resolves to the signed-in patient's own form (`me`), so no `?id=`
