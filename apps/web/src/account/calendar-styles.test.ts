@@ -63,6 +63,40 @@ describe('appointmentCalendarStylesCss', () => {
     expect(appointmentCalendarStylesCss).toContain('min-height: 2.75rem');
   });
 
+  // 2026-09-06: the banner that appears when a call is open.
+  it('marks the live appointment in both the chip and the dot rendering', () => {
+    // A phone shows dots instead of chips, and "a call is open right now" is
+    // exactly the thing that must not be the one fact only a wide screen
+    // carries.
+    expect(appointmentCalendarStylesCss).toContain('.ndn-cal-chip--live');
+    expect(appointmentCalendarStylesCss).toContain('.ndn-cal-dot--live');
+  });
+
+  it('puts the live marks last, so they win over the status rule on the same chip', () => {
+    // `--live` is not a sixth status but a state a confirmed appointment
+    // passes through, so both classes land on one element and source order
+    // is what decides. Written as a check on order rather than on presence:
+    // moving these rules up the file would silently restore the green.
+    for (const status of KNOWN_STATUSES) {
+      expect(
+        appointmentCalendarStylesCss.indexOf('.ndn-cal-chip--live'),
+        `the live chip rule must come after .ndn-cal-chip--${status}`,
+      ).toBeGreaterThan(appointmentCalendarStylesCss.indexOf(`.ndn-cal-chip--${status}`));
+      expect(
+        appointmentCalendarStylesCss.indexOf('.ndn-cal-dot--live'),
+        `the live dot rule must come after .ndn-cal-dot--${status}`,
+      ).toBeGreaterThan(appointmentCalendarStylesCss.indexOf(`.ndn-cal-dot--${status}`));
+    }
+  });
+
+  it('beats packages/ui’s own .ndn-link on specificity rather than on source order', () => {
+    // `Link` carries `.ndn-link`, which sets a brand colour and an
+    // underline. The two stylesheets are injected by different parts of the
+    // layout, so a rule that only wins because of where it lands stops
+    // winning the moment something moves.
+    expect(appointmentCalendarStylesCss).toContain('.ndn-cal-live .ndn-cal-live-join');
+  });
+
   it('carries no backtick, which would end the template literal it lives in', () => {
     expect(appointmentCalendarStylesCss).not.toContain('`');
   });

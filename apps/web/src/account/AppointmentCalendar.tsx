@@ -56,6 +56,31 @@
 // is the second half of that, so the component is safe wherever it is
 // mounted.
 //
+// ## 2026-09-06: the call is reachable from the calendar, not only from a day
+//
+// *"in patient and clinician landing dashboard there is a calender that shows
+// the next coming appointment. when the appointment comes I want to have a
+// 'join call' button on the calender that both can click to join the call."*
+//
+// A join control has been in the day panel since this view was built, and
+// that is not where the request is unmet: it is drawn for the **selected**
+// day, below a five-week grid, so at the instant a call opens the link is on
+// a part of the page nobody is looking at, and nothing says it has appeared.
+// A reader who has scrolled to last month has no join control at all.
+//
+// So `liveAppointment` asks a question of the whole loaded set rather than of
+// one square — *is a call open right now* — and its answer is a banner above
+// the grid with the link in it, plus a `--live` mark on the appointment's own
+// chip and dot. It is derived from the ticking clock, so it arrives on its own
+// within `CLOCK_TICK_MS` of the slot opening and leaves when the slot ends.
+// One component, so the patient and the clinician get the identical thing and
+// cannot disagree about whether the call is open.
+//
+// The same change gates the join control on `mayJoinCalls`. A helpdesk reads
+// the practice's calendar and holds no `join-call` in `authz-matrix.ts`, so
+// until now they were shown countdowns and links into calls the server would
+// refuse — the failure mode `JoinCallCell`'s header is written against.
+//
 // **A token this bundle cannot read is not a refusal.** It falls through to
 // trying the patient route and then the clinician one, letting the server
 // answer — the same direction `token-claims.ts` documents at length: hide on
@@ -72,7 +97,7 @@ import {
   t,
 } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Heading, visuallyHiddenClassName } from '@ndn/ui';
+import { Heading, Link, visuallyHiddenClassName } from '@ndn/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -93,7 +118,8 @@ import {
   windowStartFor,
   WINDOW_STEP_WEEKS,
 } from './calendar-grid.js';
-import { JoinCallCell } from './JoinCallCell.js';
+import { joinPhase } from './join-window.js';
+import { callHref, JoinCallCell } from './JoinCallCell.js';
 import { useNow } from './useNow.js';
 
 /** The fields both endpoints return that this view reads. */
@@ -163,6 +189,79 @@ export function calendarSourcesFor(role: ViewerRole | undefined): readonly Calen
  */
 export function mayActOnAppointments(role: ViewerRole | undefined): boolean {
   return role === undefined || role === 'principal-clinician' || role === 'sub-clinician';
+}
+
+/**
+ * Whether this role is ever a *party* to a call, and so should be offered a
+ * way into one.
+ *
+ * A third answer alongside "has a calendar" and "may change what is on it",
+ * because since 2026-09-06 all three differ. `authz-matrix.ts`'s
+ * `Appointments` row grants `join-call` to the patient, the assigned
+ * sub-clinician and the principal, and **withholds it from Helpdesk**, who
+ * hold plain `R` — so a helpdesk reading the practice's calendar would be
+ * shown a link `ws-join.ts` is certain to refuse with
+ * `not-your-appointment`. `JoinCallCell`'s own header states the rule this
+ * is applying: a link that looks live and is refused on arrival is worse
+ * than no link, because by then the person has already believed in it.
+ *
+ * `undefined` (a token this bundle could not read) is `true`, on this
+ * file's standing rule — hide on a positive answer, never on a shrug — and
+ * the server is the boundary either way.
+ */
+export function mayJoinCalls(role: ViewerRole | undefined): boolean {
+  return role !== 'helpdesk' && role !== 'visitor';
+}
+
+/**
+ * The appointment happening **right now**, or nothing.
+ *
+ * 2026-09-06. The owner: *"in patient and clinician landing dashboard there
+ * is a calender that shows the next coming appointment. when the
+ * appointment comes I want to have a 'join call' button on the calender
+ * that both can click to join the call."*
+ *
+ * The join control itself already existed — `JoinCallCell` has rendered one
+ * per row in the day panel since this view was built. What it lacked was
+ * *reach*: it is drawn only for the day the reader currently has selected,
+ * below a five-week grid, so at the moment a call opens the link exists on
+ * a part of the page nobody is looking at and nothing says it has appeared.
+ * This is the question the banner above the grid asks instead — one whose
+ * answer changes on its own as the clock ticks past `scheduledAt`.
+ *
+ * Only `scheduled` counts: `ws-join.ts` denies `pending-approval` with
+ * `not-confirmed` and every other status as `cancelled`, so an appointment
+ * in any of them has no call to join however live its slot looks.
+ *
+ * The **earliest** open one when several overlap — a real possibility on a
+ * clinician's calendar, and the one that started first is the one they are
+ * late for. `find` would return whichever the API happened to list first.
+ */
+export function liveAppointment(
+  items: readonly CalendarAppointment[],
+  now: Date,
+): CalendarAppointment | undefined {
+  let earliest: CalendarAppointment | undefined;
+  for (const item of items) {
+    if (item.appointment_status !== 'scheduled') {
+      continue;
+    }
+    const scheduledAt = new Date(item.scheduledAt);
+    // A malformed instant is not live. `joinPhase` alone could not say so —
+    // every `NaN` comparison is false, so it would fall through to `'open'`
+    // and offer a link for an appointment that cannot be addressed. The
+    // same deny-by-default reading `isLiveOrUpcoming` takes.
+    if (Number.isNaN(scheduledAt.getTime())) {
+      continue;
+    }
+    if (joinPhase(scheduledAt, item.durationMinutes, now) !== 'open') {
+      continue;
+    }
+    if (!earliest || item.scheduledAt < earliest.scheduledAt) {
+      earliest = item;
+    }
+  }
+  return earliest;
 }
 
 /**
@@ -293,6 +392,26 @@ function dayAppointmentsLabel(count: number, locale: Locale): string {
   return t('accountCalendar.dayAppointments', { count }, locale);
 }
 
+/**
+ * The second string resolved here rather than passed in, and for a harder
+ * reason than the plural above: it *cannot* be passed in.
+ *
+ * The sentence names the time the call started, so its catalogue entry
+ * carries a `{time}` placeholder — and `t()` formats through
+ * `IntlMessageFormat`, which **throws** when a template's argument is not
+ * supplied. The Astro page resolves every other label with
+ * `t(key, undefined, locale)` at build time; doing that to this one would
+ * fail the build rather than hand down a template to fill in later. So the
+ * value and the sentence have to meet in the same call, and the only place
+ * that knows the value is here.
+ *
+ * A whole sentence, not a label with a time appended: it is inserted into a
+ * live region and read out on its own, with nothing before it for context.
+ */
+function liveNowLabel(scheduledAt: string, locale: Locale): string {
+  return t('accountCalendar.liveNow', { time: formatTimeOfDay(scheduledAt, locale) }, locale);
+}
+
 const defaultClient = createSessionClient();
 
 /** Module scope, one identity for the lifetime of the module — see `useNow.ts`. */
@@ -372,6 +491,14 @@ export function AppointmentCalendar({
    * `mayActOnAppointments`.
    */
   const [mayAct, setMayAct] = useState(true);
+  /**
+   * Whether this reader is ever a party to a call. A third answer again,
+   * and not derivable from the other two: a helpdesk has a calendar
+   * (`calendarSourcesFor`) and may change nothing on it (`mayAct`), and is
+   * *also* not on the call — `authz-matrix.ts` withholds `join-call` from
+   * them. See `mayJoinCalls`; same starting value and same rule.
+   */
+  const [mayJoin, setMayJoin] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -389,6 +516,7 @@ export function AppointmentCalendar({
         const role = resolved.session.viewerRole;
         setSources(calendarSourcesFor(role));
         setMayAct(mayActOnAppointments(role));
+        setMayJoin(mayJoinCalls(role));
         if (role !== undefined) {
           setMayDecide(role === 'principal-clinician');
         }
@@ -539,6 +667,18 @@ export function AppointmentCalendar({
   const windowHasAppointments = weeks
     .flat()
     .some((day) => (byDay.get(dayKey(day))?.length ?? 0) > 0);
+  /**
+   * Re-derived on every tick of `currentTime`, so this appears the moment
+   * the slot opens and goes again when it ends — no reload, and no reliance
+   * on the reader happening to have the right day selected.
+   *
+   * Read from `state.items`, not from the selected day's bucket: a call that
+   * is open right now is worth surfacing whatever square the reader has
+   * wandered off to. A role that is not on the call gets nothing at all
+   * rather than a banner with no way out of it.
+   */
+  const live = mayJoin ? liveAppointment(state.items, currentTime) : undefined;
+  const liveKey = live ? `${live.patientId}#${live.scheduledAt}` : undefined;
   const selectedEntries = selectedDay ? (byDay.get(selectedDay) ?? []) : [];
   const selectedDate = weeks.flat().find((day) => dayKey(day) === selectedDay);
   /** Whose calendar this is — a patient is offered none of the decisions below. */
@@ -604,6 +744,57 @@ export function AppointmentCalendar({
             <span className={visuallyHiddenClassName}>{strings.nextWeeksLabel}</span>
           </button>
         </div>
+      </div>
+
+      {/* ## The join button, when there is a call to join
+          2026-09-06: *"when the appointment comes I want to have a 'join
+          call' button on the calender that both can click to join the
+          call."*
+
+          Above the grid, not inside a square and not in the day panel: at
+          the moment a call opens, the one thing worth putting in front of
+          both parties is the way into it, and neither of those places is
+          where a reader is looking. The panel below still carries its own
+          per-row control — this does not replace it, it makes it reachable
+          without first finding the right day.
+
+          `Link`, not a `<button>`: this navigates to `call.astro`, so it
+          must open in a new tab on a middle-click and show its target on
+          hover like every other link on the site. It is styled as a
+          call-to-action; that is a matter for the stylesheet, not for the
+          element.
+
+          **The wrapper is always rendered and the banner is not.** An
+          `aria-live` region has to already exist for an insertion into it
+          to be announced — a region that appears with its content is
+          unreliable across screen readers — and this is the one thing on
+          the calendar whose whole purpose is to arrive unprompted, thirty
+          seconds after the clock crossed `scheduledAt`. `aria-live` alone
+          and never `role="status"`, for the reason the region further down
+          spells out: `account-a11y.setup.ts` waits for the status count to
+          reach zero, and a permanent one pinned it at 1 and cost 28
+          authenticated axe scans. */}
+      <div className="ndn-cal-live-region" aria-live="polite">
+        {live && (
+          <p className="ndn-cal-live">
+            <span>
+              {liveNowLabel(live.scheduledAt, locale)}
+              {/* Who it is with — the *other* party, which is a different
+                  field depending on whose calendar this is. Worth the line
+                  for a clinician working back-to-back slots, who needs to
+                  know which patient is waiting before pressing anything.
+                  Rendered only when the API sent a name; see
+                  `CalendarAppointment` on why an absent one is an answer
+                  rather than a gap. */}
+              {isClinician
+                ? live.patientName && ` ${strings.patientLabel} ${live.patientName}`
+                : live.clinicianName && ` ${strings.clinicianLabel} ${live.clinicianName}`}
+            </span>
+            <Link className="ndn-cal-live-join" href={callHref(locale, live)}>
+              {strings.joinCallLabel}
+            </Link>
+          </p>
+        )}
       </div>
 
       {/* The span the window covers, which is no longer a single month —
@@ -703,23 +894,39 @@ export function AppointmentCalendar({
                               visually-hidden label already says the date and
                               the count, so announcing either of these would
                               read the same day twice. */}
+                          {/* The one in progress is marked in both
+                              renderings, so the square itself says a call is
+                              open rather than only the banner above. Both
+                              are still `aria-hidden`: the banner announces
+                              it in words, and a second announcement of the
+                              same fact from a grid cell is noise. */}
                           <span className="ndn-cal-chips" aria-hidden="true">
-                            {entries.map((entry) => (
-                              <span
-                                key={`${entry.patientId}#${entry.scheduledAt}`}
-                                className={`ndn-cal-chip ndn-cal-chip--${entry.appointment_status}`}
-                              >
-                                {formatTimeOfDay(entry.scheduledAt, locale)}
-                              </span>
-                            ))}
+                            {entries.map((entry) => {
+                              const entryKey = `${entry.patientId}#${entry.scheduledAt}`;
+                              return (
+                                <span
+                                  key={entryKey}
+                                  className={`ndn-cal-chip ndn-cal-chip--${entry.appointment_status}${
+                                    entryKey === liveKey ? ' ndn-cal-chip--live' : ''
+                                  }`}
+                                >
+                                  {formatTimeOfDay(entry.scheduledAt, locale)}
+                                </span>
+                              );
+                            })}
                           </span>
                           <span className="ndn-cal-dots" aria-hidden="true">
-                            {entries.map((entry) => (
-                              <span
-                                key={`${entry.patientId}#${entry.scheduledAt}`}
-                                className={`ndn-cal-dot ndn-cal-dot--${entry.appointment_status}`}
-                              />
-                            ))}
+                            {entries.map((entry) => {
+                              const entryKey = `${entry.patientId}#${entry.scheduledAt}`;
+                              return (
+                                <span
+                                  key={entryKey}
+                                  className={`ndn-cal-dot ndn-cal-dot--${entry.appointment_status}${
+                                    entryKey === liveKey ? ' ndn-cal-dot--live' : ''
+                                  }`}
+                                />
+                              );
+                            })}
                           </span>
                         </button>
                       )}
@@ -807,8 +1014,14 @@ export function AppointmentCalendar({
                         its own window — the same three phases `ws-join.ts`
                         enforces, from the same component both existing
                         appointment views already use, so no two screens can
-                        disagree about whether a call is open. */}
-                    {entry.appointment_status === 'scheduled' && (
+                        disagree about whether a call is open.
+
+                        `mayJoin` as well, since 2026-09-06: a helpdesk reads
+                        the practice's calendar and holds no `join-call`, so
+                        this row would have shown them a countdown to a call
+                        they cannot enter and then a link refused on
+                        arrival. See `mayJoinCalls`. */}
+                    {entry.appointment_status === 'scheduled' && mayJoin && (
                       <p>
                         <JoinCallCell
                           appointment={entry}

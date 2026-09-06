@@ -7,12 +7,14 @@
 // second request while a clinician's must, that a patient never sees an
 // unapproved slot, and that scrolling back a month actually reaches the past
 // — which is the whole point of the view.
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   AppointmentCalendar,
   calendarSourcesFor,
+  liveAppointment,
+  mayJoinCalls,
   visibleForPatient,
 } from './AppointmentCalendar.js';
 import type { CalendarAppointment } from './AppointmentCalendar.js';
@@ -147,6 +149,64 @@ describe('visibleForPatient', () => {
   it('keeps attendance history, which is what a past month is for', () => {
     const statuses = visibleForPatient(all).map((item) => item.appointment_status);
     expect(statuses).toEqual(['scheduled', 'completed', 'no-show']);
+  });
+});
+
+// 2026-09-06: *"when the appointment comes I want to have a 'join call'
+// button on the calender that both can click to join the call."*
+describe('liveAppointment', () => {
+  /** 11:45 + 45 minutes brackets NOW (12:00); 9:00 + 45 ended at 9:45. */
+  const inProgress = appointment(local(2026, 8, 15, 11, 45));
+  const finished = appointment(local(2026, 8, 15, 9, 0));
+  const later = appointment(local(2026, 8, 15, 14, 30));
+
+  it('finds the appointment whose slot is open right now', () => {
+    expect(liveAppointment([finished, inProgress, later], NOW)).toBe(inProgress);
+  });
+
+  it('has no answer when nothing is open — before, after, and both at once', () => {
+    expect(liveAppointment([finished, later], NOW)).toBeUndefined();
+    expect(liveAppointment([], NOW)).toBeUndefined();
+  });
+
+  it('ignores a slot that is open but not confirmed, which ws-join.ts would refuse', () => {
+    // `not-confirmed` and `cancelled` are two of that file's own denial
+    // reasons: the slot being live is not enough to have a call in it.
+    for (const status of ['pending-approval', 'cancelled', 'completed', 'no-show']) {
+      expect(liveAppointment([appointment(local(2026, 8, 15, 11, 45), status)], NOW)).toBeUndefined();
+    }
+  });
+
+  it('takes the earliest of several open at once, not whichever the API listed first', () => {
+    // A clinician can have overlapping slots, and the one that started
+    // first is the one they are late for. `find` would answer with the
+    // 11:50 row here purely because it arrived first.
+    const later0 = appointment(local(2026, 8, 15, 11, 50));
+    expect(liveAppointment([later0, inProgress], NOW)).toBe(inProgress);
+  });
+
+  it('treats an unparseable instant as not live, rather than offering a link for it', () => {
+    // Every `NaN` comparison is false, so a phase check alone would fall
+    // through to "open" and build a call id nothing can resolve.
+    const malformed = { ...inProgress, scheduledAt: 'not-a-date' };
+    expect(liveAppointment([malformed], NOW)).toBeUndefined();
+  });
+});
+
+describe('mayJoinCalls', () => {
+  it('gives a call to the two parties on it', () => {
+    expect(mayJoinCalls('patient')).toBe(true);
+    expect(mayJoinCalls('sub-clinician')).toBe(true);
+    expect(mayJoinCalls('principal-clinician')).toBe(true);
+  });
+
+  it('withholds it from a helpdesk, who hold read on Appointments and no join-call', () => {
+    expect(mayJoinCalls('helpdesk')).toBe(false);
+    expect(mayJoinCalls('visitor')).toBe(false);
+  });
+
+  it('offers it on an unreadable token, letting the server answer', () => {
+    expect(mayJoinCalls(undefined)).toBe(true);
   });
 });
 
@@ -430,6 +490,141 @@ describe('a clinician', () => {
     expect(screen.getAllByText(/Waiting for approval/).length).toBeGreaterThan(0);
     // Nothing to join until it is confirmed — `ws-join.ts` would refuse it.
     expect(screen.queryByRole('link', { name: 'Join call' })).toBeNull();
+  });
+});
+
+// 2026-09-06: *"in patient and clinician landing dashboard there is a
+// calender that shows the next coming appointment. when the appointment comes
+// I want to have a 'join call' button on the calender that both can click to
+// join the call."*
+//
+// The day panel has always carried a join control. What is pinned here is the
+// part that was missing: it appears **on the calendar**, without the reader
+// having found the right square first, and both sides get the identical
+// thing.
+describe('the join button, once a call is open', () => {
+  /** Brackets NOW (12:00): 11:45 + 45 minutes runs to 12:30. */
+  const openNow = local(2026, 8, 15, 11, 45);
+
+  /** The banner above the grid, not the day panel's own row. */
+  function banner(container: HTMLElement): HTMLElement | null {
+    return container.querySelector('.ndn-cal-live');
+  }
+
+  function renderFor(role: string, items: readonly CalendarAppointment[]) {
+    return render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor(role)}
+        fetchPatientAppointments={vi.fn().mockResolvedValue(jsonResponse(items))}
+        fetchClinicianCalendar={vi.fn().mockResolvedValue(jsonResponse(items))}
+      />,
+    );
+  }
+
+  it('puts a join link on a patient calendar the moment the slot is open', async () => {
+    const { container } = renderFor('patient', [appointment(openNow)]);
+    await screen.findByText(DEFAULT_WINDOW);
+
+    const live = banner(container);
+    expect(live).not.toBeNull();
+    const join = within(live as HTMLElement).getByRole('link', { name: 'Join call' });
+    // `call.astro` reads one composite id off the query string
+    // (`ws-join.ts`'s `parseAppointmentId`) — the `#` is encoded, so the
+    // fragment is a real query value rather than a URL fragment.
+    expect(join.getAttribute('href')).toBe(
+      `/en/account/call?appointmentId=patient-1%23${encodeURIComponent(openNow.toISOString())}`,
+    );
+  });
+
+  it('puts the same one on a clinician calendar — "both can click to join"', async () => {
+    const { container } = renderFor('principal-clinician', [appointment(openNow)]);
+    await screen.findByText(DEFAULT_WINDOW);
+
+    const live = banner(container);
+    expect(live).not.toBeNull();
+    expect(within(live as HTMLElement).getByRole('link', { name: 'Join call' })).toBeDefined();
+  });
+
+  it('says the call is under way, not merely that a link exists', async () => {
+    const { container } = renderFor('patient', [appointment(openNow)]);
+    await screen.findByText(DEFAULT_WINDOW);
+    expect((banner(container) as HTMLElement).textContent).toMatch(/is under way now/);
+  });
+
+  it('shows nothing at all until the slot opens, and nothing once it has closed', async () => {
+    // 9:00 finished at 9:45; 14:30 has not begun. Between them sits NOW.
+    const { container } = renderFor('patient', [
+      appointment(local(2026, 8, 15, 9, 0)),
+      appointment(local(2026, 8, 15, 14, 30)),
+    ]);
+    await screen.findByText(DEFAULT_WINDOW);
+    expect(banner(container)).toBeNull();
+  });
+
+  it('stays put when the reader has scrolled the window somewhere else', async () => {
+    // The whole reason this is not a day-panel-only control: a call opening
+    // while someone is reading last month must still reach them.
+    const { container } = renderFor('patient', [appointment(openNow)]);
+    await screen.findByText(DEFAULT_WINDOW);
+
+    (await screen.findByRole('button', { name: 'Previous two weeks' })).click();
+    await screen.findByText(EARLIER_WINDOW);
+
+    expect(banner(container)).not.toBeNull();
+  });
+
+  it('names the patient to a clinician, so a busy day says who is waiting', async () => {
+    const { container } = renderFor('sub-clinician', [
+      { ...appointment(openNow), patientName: 'Jane Doe', clinicianName: 'Dr Smith' },
+    ]);
+    await screen.findByText(DEFAULT_WINDOW);
+    const text = (banner(container) as HTMLElement).textContent ?? '';
+    expect(text).toMatch(/Jane Doe/);
+    // The other party, not both — a clinician knows who they are.
+    expect(text).not.toMatch(/Dr Smith/);
+  });
+
+  it('names the clinician to a patient, which is the other half of the same rule', async () => {
+    const { container } = renderFor('patient', [
+      { ...appointment(openNow), patientName: 'Jane Doe', clinicianName: 'Dr Smith' },
+    ]);
+    await screen.findByText(DEFAULT_WINDOW);
+    const text = (banner(container) as HTMLElement).textContent ?? '';
+    expect(text).toMatch(/Dr Smith/);
+    expect(text).not.toMatch(/Jane Doe/);
+  });
+
+  it('marks the live appointment in the grid itself, in both renderings', async () => {
+    // Chips on a wide screen, dots below 34rem — the square has to say a
+    // call is open either way, not only the banner above it.
+    const { container } = renderFor('patient', [appointment(openNow)]);
+    await screen.findByText(DEFAULT_WINDOW);
+    expect(container.querySelector('.ndn-cal-chip--live')).not.toBeNull();
+    expect(container.querySelector('.ndn-cal-dot--live')).not.toBeNull();
+  });
+
+  it('offers a helpdesk no way into a call, live or otherwise', async () => {
+    // `authz-matrix.ts` gives Helpdesk `read` on Appointments and no
+    // `join-call`, so every one of these would be refused on arrival —
+    // including the day panel's own countdown, which promises one later.
+    const { container } = renderFor('helpdesk', [appointment(openNow)]);
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+
+    expect(banner(container)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Join call' })).toBeNull();
+    // Still a fully readable calendar — read-only, not hidden.
+    expect(screen.getAllByText(/Duration:/).length).toBe(1);
+  });
+
+  it('keeps the day panel row as well, rather than moving the control', async () => {
+    // The positive control for the helpdesk assertion above, and the check
+    // that the banner is an addition: two join links, one in each place.
+    renderFor('patient', [appointment(openNow)]);
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(screen.getAllByRole('link', { name: 'Join call' })).toHaveLength(2);
   });
 });
 
