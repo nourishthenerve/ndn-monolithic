@@ -37,13 +37,24 @@
 // re-downloaded a patient's entire appointment history on every press of the
 // back arrow.
 //
-// Helpdesk and visitor get **nothing rendered** — the owner's "no concept of
-// calendar" — and neither endpoint would serve them anyway: `GET
-// /clinicians/me/calendar` resolves a helpdesk principal to a column with no
-// `read` on another clinician's appointments, and the patient route needs a
-// `patientId` they do not have. The page gates them out too
-// (`account/index.astro`'s `allowRoles`); this is the second half of that,
-// so the component is safe wherever it is mounted.
+// **A visitor gets nothing rendered** — the surviving half of the owner's
+// "there is no concept of calender for help desk and visitor" — and neither
+// endpoint would serve one anyway: the patient route needs a `patientId` they
+// do not have, and the clinician route would answer with an empty range.
+//
+// **Helpdesk changed on 2026-09-06**, at the owner's word: *"for help desk I
+// want to show on the landing dashboard both ready only calender and patient
+// dashboard — the two stuff the principal clinician is seeing but in read only
+// mode."* They read the clinician route and the server answers with the
+// *practice's* calendar rather than their own empty one — `appointment.ts`
+// carries the reasoning, and `authz-matrix.ts`'s Helpdesk column already
+// granted the unnarrowed `R` that makes it legitimate. What "read only"
+// means here is `mayActOnAppointments`: the four decisions below the day
+// panel are not rendered for them at all.
+//
+// The page gates the roles too (`account/index.astro`'s `allowRoles`); this
+// is the second half of that, so the component is safe wherever it is
+// mounted.
 //
 // **A token this bundle cannot read is not a refusal.** It falls through to
 // trying the patient route and then the clinician one, letting the server
@@ -111,22 +122,47 @@ export type CalendarSource = 'patient' | 'clinician';
 /**
  * Which endpoint(s) to try for a role, in order.
  *
- * Helpdesk and visitor get an empty list — the owner's "there is no concept
- * of calender for help desk and visitor" — and `undefined` (a token this
- * bundle could not read) gets **both**, so an unreadable claim costs a
- * wasted request rather than a blank dashboard for someone entitled to one.
+ * **2026-09-06: helpdesk joins the clinician route.** The owner: *"for help
+ * desk I want to show on the landing dashboard both ready only calender and
+ * patient dashboard — the two stuff the principal clinician is seeing but in
+ * read only mode."* This reverses the "no concept of calender for help desk
+ * and visitor" half of 2026-09-06's first pass **for helpdesk only** —
+ * a visitor still gets nothing, which is the half that was never questioned.
+ *
+ * The server answers a helpdesk with the *practice's* calendar rather than
+ * their own empty one (`appointment.ts`'s own note on why "me" means the desk
+ * for that role), so the same request key serves both.
+ *
+ * `undefined` (a token this bundle could not read) gets **both**, so an
+ * unreadable claim costs a wasted request rather than a blank dashboard for
+ * someone entitled to one.
  */
 export function calendarSourcesFor(role: ViewerRole | undefined): readonly CalendarSource[] {
   if (role === 'patient') {
     return ['patient'];
   }
-  if (role === 'principal-clinician' || role === 'sub-clinician') {
+  if (role === 'principal-clinician' || role === 'sub-clinician' || role === 'helpdesk') {
     return ['clinician'];
   }
   if (role === undefined) {
     return ['patient', 'clinician'];
   }
   return [];
+}
+
+/**
+ * Whether this role may *change* an appointment from the calendar — the four
+ * decisions below the day panel.
+ *
+ * Separate from "does this role have a calendar at all", because since
+ * 2026-09-06 those two answers differ: a helpdesk reads the practice's
+ * calendar and decides nothing on it, which is the whole of what "in read
+ * only mode" asked for. `undefined` is `true` on this file's standing rule —
+ * hide on a positive answer, never on a shrug — and the server refuses
+ * anything the caller may not do.
+ */
+export function mayActOnAppointments(role: ViewerRole | undefined): boolean {
+  return role === undefined || role === 'principal-clinician' || role === 'sub-clinician';
 }
 
 /**
@@ -327,6 +363,15 @@ export function AppointmentCalendar({
    * answer, never on a shrug.
    */
   const [mayDecide, setMayDecide] = useState(true);
+  /**
+   * Whether *any* of the four decisions is offered. Distinct from
+   * `mayDecide`, which is approve/decline alone: since 2026-09-06 a helpdesk
+   * reads this calendar and may change nothing on it, so complete/no-show
+   * need their own answer rather than riding "is this a clinician's
+   * calendar". Same starting value and same rule — see
+   * `mayActOnAppointments`.
+   */
+  const [mayAct, setMayAct] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -343,6 +388,7 @@ export function AppointmentCalendar({
         }
         const role = resolved.session.viewerRole;
         setSources(calendarSourcesFor(role));
+        setMayAct(mayActOnAppointments(role));
         if (role !== undefined) {
           setMayDecide(role === 'principal-clinician');
         }
@@ -785,7 +831,12 @@ export function AppointmentCalendar({
                         every "appointments so far" figure reads zero
                         forever. Deleting that page without moving this would
                         have quietly broken those counts. */}
-                    {isClinician && (
+                    {/* `mayAct` as well as `isClinician`: the first says this
+                        is a clinician-route calendar rather than a patient's,
+                        the second says this particular role may change what
+                        is on it. A helpdesk satisfies the first and not the
+                        second, which is exactly "read only mode". */}
+                    {isClinician && mayAct && (
                       <p className="ndn-cal-actions">
                         {entry.appointment_status === 'pending-approval' && mayDecide && (
                           <>

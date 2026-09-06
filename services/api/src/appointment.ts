@@ -31,6 +31,7 @@
 // name a different clinician's calendar (05-execution-plan.md's own "Do
 // NOT: let the calendar query accept a clinicianId parameter a caller
 // could point at someone else").
+import { TREATING_CLINICIAN_ROLES } from '@ndn/shared-types';
 import type { PatientNotificationKind, Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
@@ -256,6 +257,29 @@ export function createAppointmentHandler(
         }),
       );
 
+    /**
+     * Every treating clinician's slice of a range, gathered into one list.
+     *
+     * Fanned out over the directory rather than scanned: `list()` is a single
+     * GSI2 `Query` plus a `GetItem` per clinician, and only the *treating*
+     * roles are queried at all — a helpdesk or visitor row can own no
+     * appointment, so querying GSI1 for one would be a read that can only
+     * ever return nothing.
+     */
+    const practiceCalendar = async (from: string, to: string) => {
+      const directory = await deps.clinicians.list();
+      const perClinician = await Promise.all(
+        directory
+          .filter((clinician) => TREATING_CLINICIAN_ROLES.includes(clinician.role))
+          .map((clinician) => deps.appointments.listForClinicianCalendar(clinician.id, from, to)),
+      );
+      // Each clinician's own slice arrives chronological; their union is not,
+      // and every consumer of this route treats `items` as one ordered list.
+      // Sorted on the ISO instant, which orders correctly as a string at a
+      // fixed offset — the same property the client's `groupByDay` relies on.
+      return perClinician.flat().sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt));
+    };
+
     if (routeKey === 'GET /clinicians/me/calendar') {
       // A patient principal has no `clinicianId` at all — `resource`
       // below then names `assignedClinicianId: undefined`, which can
@@ -275,16 +299,43 @@ export function createAppointmentHandler(
       if (!from || !to) {
         return respond(400, { error: 'RANGE_REQUIRED' });
       }
+      // ## 2026-09-06: for a helpdesk, "me" is the desk — not a caseload
+      //
+      // The owner: *"for help desk I want to show on the landing dashboard
+      // both ready only calender and patient dashboard - the two stuff the
+      // principal clinician is seeing but in read only mode."*
+      //
+      // A helpdesk account is a `CLI#` row and so *has* a `clinicianId`, but
+      // no patient is ever assigned to one — `listForClinicianCalendar` on
+      // their own id returns an empty calendar, today and forever. The
+      // reading that is actually useful is also the one that matches what
+      // they already get one section below on the same dashboard: the
+      // **practice's** calendar. `caseload-repository.ts` hands a helpdesk
+      // every patient rather than a filtered set, because `authz-matrix.ts`'s
+      // Helpdesk column is role-alone with no relationship narrowing;
+      // `Appointments` grants them the identical unnarrowed `R`. So this
+      // discloses nothing the matrix did not already allow — it is the same
+      // rows they may read one at a time, gathered into one answer.
+      //
+      // **This is not the parameter the plan forbids.** 05-execution-plan.md's
+      // *"Do NOT: let the calendar query accept a clinicianId parameter a
+      // caller supplies"* is about a caller *naming* whose calendar to read,
+      // and nothing here is supplied: the expansion is derived from the
+      // caller's own role. A sub-clinician asking for this route still gets
+      // their own single calendar, byte for byte as before.
+      //
       // `clinicianId` is guaranteed non-empty for both clinician roles by
       // `requirePrincipal`'s own schema — the `can()` check above already
       // depended on it being set for a sub-clinician, and a principal's
       // own `clinicianId` is always their own subject id regardless.
-      const clinicianId = principal.clinicianId as string;
-      const appointments = await deps.appointments.listForClinicianCalendar(
-        clinicianId,
-        from,
-        to,
-      );
+      const appointments =
+        principal.role === 'helpdesk'
+          ? await practiceCalendar(from, to)
+          : await deps.appointments.listForClinicianCalendar(
+              principal.clinicianId as string,
+              from,
+              to,
+            );
       const items = projectAllFor(principal, await withNames(appointments), resource);
       return respond(200, { items });
     }

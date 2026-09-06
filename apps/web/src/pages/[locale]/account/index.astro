@@ -112,15 +112,24 @@ const PANEL_HEADING_LEVEL = 3;
         see all past and upcoming appointments. There is no concept of
         calender for help desk and visitor."*
 
-        The three roles named are exactly this gate's `allowRoles`; the
-        component refuses the other two as well (`calendarSourcesFor`), so it
-        is safe wherever it is mounted — but the gate here means a helpdesk
+        **Helpdesk joined them on 2026-09-06**: *"for help desk I want to
+        show on the landing dashboard both ready only calender and patient
+        dashboard — the two stuff the principal clinician is seeing but in
+        read only mode."* They read the same island; the server answers a
+        helpdesk with the practice's calendar rather than their own empty
+        one, and `mayActOnAppointments` is what makes it read-only, so
+        nothing here needs a second set of props. Only **visitor** is left
+        outside now, which is the half of the original instruction nobody
+        has questioned.
+
+        The component refuses a visitor as well (`calendarSourcesFor`), so it
+        is safe wherever it is mounted — but the gate here means a visitor
         session never downloads the island at all. No `forbidden` slot: a
         role with no calendar should see no trace of one, not an explanation
         of its absence. The section heading is the component's own. */}
     <RequireAuth
       client:only="react"
-      allowRoles={['patient', 'principal-clinician', 'sub-clinician']}
+      allowRoles={['patient', 'principal-clinician', 'sub-clinician', 'helpdesk']}
     >
       <AppointmentCalendar
         client:only="react"

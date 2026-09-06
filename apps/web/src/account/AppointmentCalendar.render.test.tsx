@@ -116,8 +116,11 @@ describe('calendarSourcesFor', () => {
     expect(calendarSourcesFor('sub-clinician')).toEqual(['clinician']);
   });
 
-  it('gives helpdesk and visitor no calendar at all — the owner\'s own exclusion', () => {
-    expect(calendarSourcesFor('helpdesk')).toEqual([]);
+  it('sends helpdesk to the clinician route — the practice calendar, from 2026-09-06', () => {
+    expect(calendarSourcesFor('helpdesk')).toEqual(['clinician']);
+  });
+
+  it('still gives a visitor no calendar at all — the half of the exclusion that stands', () => {
     expect(calendarSourcesFor('visitor')).toEqual([]);
   });
 
@@ -148,22 +151,76 @@ describe('visibleForPatient', () => {
 });
 
 describe('who gets a calendar', () => {
-  it('renders nothing at all for helpdesk', async () => {
+  it('gives helpdesk the clinician calendar, and never the patient route', async () => {
     const fetchPatient = vi.fn();
-    const { container } = render(
+    const fetchClinician = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([appointment(local(2026, 8, 15, 9, 0))]));
+    render(
       <AppointmentCalendar
         strings={STRINGS}
         locale="en"
         now={now}
         client={sessionFor('helpdesk')}
         fetchPatientAppointments={fetchPatient}
-        fetchClinicianCalendar={vi.fn()}
+        fetchClinicianCalendar={fetchClinician}
       />,
     );
-    await waitFor(() => {
-      expect(container.textContent).toBe('');
-    });
+    expect(await screen.findByText(DEFAULT_WINDOW)).toBeDefined();
+    expect(fetchClinician).toHaveBeenCalledTimes(1);
     expect(fetchPatient).not.toHaveBeenCalled();
+  });
+
+  it('offers a helpdesk none of the four decisions — "in read only mode"', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('helpdesk')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={vi.fn().mockResolvedValue(
+          jsonResponse([
+            appointment(local(2026, 8, 15, 9, 0), 'scheduled'),
+            appointment(local(2026, 8, 15, 11, 0), 'pending-approval'),
+          ]),
+        )}
+      />,
+    );
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    // Both halves: approve/decline (the principal's) and complete/no-show
+    // (which every treating clinician holds and a helpdesk does not).
+    for (const label of ['Approve', 'Decline', 'Mark as attended', 'Mark as no-show']) {
+      expect(screen.queryByRole('button', { name: label })).toBeNull();
+    }
+    // The appointments themselves are still fully readable — read-only, not
+    // hidden.
+    expect(screen.getAllByText(/Duration:/).length).toBe(2);
+  });
+
+  it('offers the principal those same four, so the check above is not vacuous', async () => {
+    // The positive control for the test above: identical data, identical
+    // labels, a different role. Without this, a renamed label would make
+    // every `queryByRole(...).toBeNull()` pass for the wrong reason.
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('principal-clinician')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={vi.fn().mockResolvedValue(
+          jsonResponse([
+            appointment(local(2026, 8, 15, 9, 0), 'scheduled'),
+            appointment(local(2026, 8, 15, 11, 0), 'pending-approval'),
+          ]),
+        )}
+      />,
+    );
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    for (const label of ['Approve', 'Decline', 'Mark as attended', 'Mark as no-show']) {
+      expect(screen.getByRole('button', { name: label })).toBeDefined();
+    }
   });
 
   it('renders nothing for a visitor', async () => {
