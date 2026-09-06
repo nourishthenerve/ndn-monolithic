@@ -11,7 +11,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatDate,
+  formatDateRange,
   formatDateTime,
+  formatDayMonthShort,
   formatDayOfMonth,
   formatMonthYear,
   formatTimeOfDay,
@@ -113,5 +115,44 @@ describe('the calendar formatters', () => {
     expect(formatTimeOfDay('nope', 'en')).toBe('nope');
     expect(formatWeekdayShort('nope', 'en')).toBe('nope');
     expect(formatWeekdayLong('nope', 'en')).toBe('nope');
+  });
+});
+
+// 2026-09-06: the calendar became a rolling window spanning two months, so
+// its heading is a range rather than a month name.
+describe('formatDateRange', () => {
+  it('collapses what the two ends share, rather than printing two full dates', () => {
+    // Within one month the month and year are said once — which is the whole
+    // reason this is `formatRange` and not two `formatDate`s and a dash.
+    const within = formatDateRange(new Date(2026, 8, 17), new Date(2026, 8, 20), 'en');
+    expect(within).toContain('September');
+    expect(within.match(/September/g)).toHaveLength(1);
+    expect(within.match(/2026/g)).toHaveLength(1);
+  });
+
+  it('names both months when the range crosses one', () => {
+    const across = formatDateRange(new Date(2026, 7, 31), new Date(2026, 9, 4), 'en');
+    expect(across).toContain('August');
+    expect(across).toContain('October');
+  });
+
+  it('names both years when the range crosses one', () => {
+    const across = formatDateRange(new Date(2026, 11, 28), new Date(2027, 0, 31), 'en');
+    expect(across).toContain('2026');
+    expect(across).toContain('2027');
+  });
+
+  it('falls back to a plain join rather than throwing on an unparseable end', () => {
+    // A formatter that threw would take the whole calendar down with it.
+    expect(() => formatDateRange('nope', new Date(2026, 8, 20), 'en')).not.toThrow();
+    expect(formatDateRange('nope', 'also-nope', 'en')).toContain('nope');
+  });
+});
+
+describe('formatDayMonthShort', () => {
+  it('names the month beside the day, for the square where a month turns over', () => {
+    const label = formatDayMonthShort(new Date(2026, 8, 1), 'en');
+    expect(label).toContain('1');
+    expect(label).toMatch(/Sep/);
   });
 });

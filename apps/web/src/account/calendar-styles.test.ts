@@ -54,6 +54,11 @@ describe('appointmentCalendarStylesCss', () => {
     expect(appointmentCalendarStylesCss).toContain('.ndn-cal-day--busy:focus-visible');
   });
 
+  it('marks past days rather than out-of-month ones, which a rolling window has none of', () => {
+    expect(appointmentCalendarStylesCss).toContain('.ndn-cal-cell--past');
+    expect(appointmentCalendarStylesCss).not.toContain('.ndn-cal-cell--outside');
+  });
+
   it('keeps the day controls above the WCAG 2.2 target-size floor', () => {
     expect(appointmentCalendarStylesCss).toContain('min-height: 2.75rem');
   });

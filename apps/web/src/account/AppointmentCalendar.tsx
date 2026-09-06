@@ -50,7 +50,8 @@ import {
   formatDate,
   formatDateTime,
   formatDayOfMonth,
-  formatMonthYear,
+  formatDateRange,
+  formatDayMonthShort,
   formatTimeOfDay,
   formatWeekdayLong,
   formatWeekdayShort,
@@ -71,13 +72,13 @@ import {
   defaultSelectedDay,
   gridRange,
   groupByDay,
-  isInMonth,
+  isPastDay,
   isSameDay,
-  monthGrid,
-  monthOf,
-  shiftMonth,
+  shiftWindow,
+  windowGrid,
+  windowStartFor,
+  WINDOW_STEP_WEEKS,
 } from './calendar-grid.js';
-import type { CalendarMonth } from './calendar-grid.js';
 import { JoinCallCell } from './JoinCallCell.js';
 import { useNow } from './useNow.js';
 
@@ -150,13 +151,13 @@ export interface AppointmentCalendarStrings {
   readonly loadingLabel: string;
   readonly forbiddenLabel: string;
   readonly errorLabel: string;
-  readonly previousMonthLabel: string;
-  readonly nextMonthLabel: string;
+  readonly previousWeeksLabel: string;
+  readonly nextWeeksLabel: string;
   readonly todayLabel: string;
   readonly gridCaption: string;
   readonly todayMarker: string;
   readonly noAppointmentsOnDay: string;
-  readonly emptyMonth: string;
+  readonly emptyWindow: string;
   readonly durationLabel: string;
   readonly minutesSuffix: string;
   readonly statusLabel: string;
@@ -238,7 +239,10 @@ export function AppointmentCalendar({
   // Ticks on its own so a join countdown stays honest; `now` (the function)
   // stays stable so this can never become a dependency of the fetch.
   const currentTime = useNow(now);
-  const [month, setMonth] = useState<CalendarMonth>(() => monthOf(now()));
+  // The window's first day, not a month. Opens centred on today — the
+  // owner's *"place todays date in the middle so that I see a 2 weeks
+  // backward and 2 weeks forward"*.
+  const [windowStart, setWindowStart] = useState<Date>(() => windowStartFor(now()));
   const [state, setState] = useState<ViewState>({ status: 'loading' });
   const [sources, setSources] = useState<readonly CalendarSource[] | undefined>(undefined);
   /** `null` is "the reader has chosen nothing yet", so the default can still apply. */
@@ -270,7 +274,7 @@ export function AppointmentCalendar({
     };
   }, [client]);
 
-  const weeks = useMemo(() => monthGrid(month), [month]);
+  const weeks = useMemo(() => windowGrid(windowStart), [windowStart]);
 
   // Only a clinician's endpoint takes a range, so only a clinician's calendar
   // makes the visible month part of the fetch. For a patient both of these
@@ -338,19 +342,19 @@ export function AppointmentCalendar({
     [state],
   );
 
-  // The reader's own choice wins; otherwise today, or the month's first busy
-  // day. Derived rather than stored so moving to another month re-answers it
+  // The reader's own choice wins; otherwise today, or the window's first
+  // busy day. Derived rather than stored so moving the window re-answers it
   // instead of leaving a stale selection pointing at a square that is no
   // longer drawn.
-  const fallbackDay = defaultSelectedDay(weeks, month, byDay, currentTime);
+  const fallbackDay = defaultSelectedDay(weeks, byDay, currentTime);
   const selectedDay =
     chosenDay !== null && weeks.flat().some((day) => dayKey(day) === chosenDay)
       ? chosenDay
       : fallbackDay;
 
-  const goToMonth = (next: CalendarMonth) => {
-    setMonth(next);
-    // A day chosen in the month being left must not survive into the next
+  const goToWindow = (next: Date) => {
+    setWindowStart(next);
+    // A day chosen in the window being left must not survive into the next
     // one — see `selectedDay`.
     setChosenDay(null);
   };
@@ -372,11 +376,25 @@ export function AppointmentCalendar({
     return <p role="alert">{strings.errorLabel}</p>;
   }
 
-  const monthHasAppointments = weeks
+  const windowHasAppointments = weeks
     .flat()
-    .some((day) => isInMonth(day, month) && (byDay.get(dayKey(day))?.length ?? 0) > 0);
+    .some((day) => (byDay.get(dayKey(day))?.length ?? 0) > 0);
   const selectedEntries = selectedDay ? (byDay.get(selectedDay) ?? []) : [];
   const selectedDate = weeks.flat().find((day) => dayKey(day) === selectedDay);
+  const firstDayOnGrid = weeks[0]?.[0];
+  const lastWeekOnGrid = weeks[weeks.length - 1];
+  const lastDayOnGrid = lastWeekOnGrid?.[lastWeekOnGrid.length - 1];
+
+  /**
+   * The number in a square — but on the 1st, the month with it.
+   *
+   * A window of five weeks nearly always spans two months, and a bare "1"
+   * between a 31 and a 2 says nothing about which month just began. The
+   * range label above the grid names both ends; this is what marks the seam
+   * between them, in the one square where it changes.
+   */
+  const dayLabel = (day: Date): string =>
+    day.getDate() === 1 ? formatDayMonthShort(day, locale) : formatDayOfMonth(day, locale);
 
   return (
     <section className="ndn-cal" aria-labelledby="account-calendar-heading">
@@ -389,42 +407,44 @@ export function AppointmentCalendar({
               both practical: these are icon-sized controls in a toolbar
               rather than the page's own actions, and `.ndn-button` is what
               `tests/pr-env/keyboard-authenticated.test.ts` probes for its
-              "Enter and Space both activate" step — a month-navigation
+              "Enter and Space both activate" step — a window-navigation
               control re-rendering the grid under that probe is not the
               button it wants to be testing. Focus styling is restated in
               this component's own stylesheet rather than inherited. */}
           <button
             type="button"
             className="ndn-cal-step"
-            onClick={() => goToMonth(shiftMonth(month, -1))}
+            onClick={() => goToWindow(shiftWindow(windowStart, -WINDOW_STEP_WEEKS))}
           >
             <span aria-hidden="true">&#8592;</span>
-            <span className={visuallyHiddenClassName}>{strings.previousMonthLabel}</span>
+            <span className={visuallyHiddenClassName}>{strings.previousWeeksLabel}</span>
           </button>
           <button
             type="button"
             className="ndn-cal-today"
-            onClick={() => goToMonth(monthOf(now()))}
+            onClick={() => goToWindow(windowStartFor(now()))}
           >
             {strings.todayLabel}
           </button>
           <button
             type="button"
             className="ndn-cal-step"
-            onClick={() => goToMonth(shiftMonth(month, 1))}
+            onClick={() => goToWindow(shiftWindow(windowStart, WINDOW_STEP_WEEKS))}
           >
             <span aria-hidden="true">&#8594;</span>
-            <span className={visuallyHiddenClassName}>{strings.nextMonthLabel}</span>
+            <span className={visuallyHiddenClassName}>{strings.nextWeeksLabel}</span>
           </button>
         </div>
       </div>
 
-      {/* `aria-live`, because the month name changes in response to a button
-          press somewhere else on the toolbar — the reader who pressed it is
-          not looking here. Present from the first render, so it announces
+      {/* The span the window covers, which is no longer a single month —
+          `formatDateRange` collapses whatever the two ends share, per
+          locale. `aria-live`, because it changes in response to a button
+          press elsewhere on the toolbar and the reader who pressed it is not
+          looking here. Present from the first render, so it announces
           changes only. */}
       <p className="ndn-cal-month" aria-live="polite">
-        {formatMonthYear(new Date(month.year, month.month, 1), locale)}
+        {formatDateRange(firstDayOnGrid ?? currentTime, lastDayOnGrid ?? currentTime, locale)}
       </p>
 
       <div className="ndn-cal-scroll">
@@ -447,18 +467,22 @@ export function AppointmentCalendar({
           </thead>
           <tbody>
             {weeks.map((week, weekIndex) => (
-              // Row position within the month is the row's identity — the
-              // whole grid is rebuilt when the month changes, so there is no
+              // Row position within the window is the row's identity — the
+              // whole grid is rebuilt when the window moves, so there is no
               // reordering for an index key to get wrong.
               <tr key={`week-${weekIndex}`}>
                 {week.map((day) => {
                   const key = dayKey(day);
                   const entries = byDay.get(key) ?? [];
-                  const outside = !isInMonth(day, month);
+                  // A rolling window has no "days from the next month" to
+                  // grey out — every square is equally part of the view. What
+                  // is worth marking instead is the split this view exists to
+                  // straddle: what has already happened, and what has not.
+                  const past = isPastDay(day, currentTime);
                   const today = isSameDay(day, currentTime);
                   const classes = [
                     'ndn-cal-cell',
-                    outside ? 'ndn-cal-cell--outside' : '',
+                    past ? 'ndn-cal-cell--past' : '',
                     today ? 'ndn-cal-cell--today' : '',
                     key === selectedDay ? 'ndn-cal-cell--selected' : '',
                   ]
@@ -471,7 +495,7 @@ export function AppointmentCalendar({
                         // and forty-two tab stops to reach three of them is
                         // a worse keyboard experience than six.
                         <span className="ndn-cal-day">
-                          {formatDayOfMonth(day, locale)}
+                          {dayLabel(day)}
                           {today && (
                             <span className={visuallyHiddenClassName}>
                               {' '}
@@ -486,7 +510,7 @@ export function AppointmentCalendar({
                           aria-pressed={key === selectedDay}
                           onClick={() => setChosenDay(key)}
                         >
-                          <span aria-hidden="true">{formatDayOfMonth(day, locale)}</span>
+                          <span aria-hidden="true">{dayLabel(day)}</span>
                           {/* The button's accessible name: the full date,
                               how many appointments, and whether it is today.
                               The visible "3" is inside it, so SC 2.5.3
@@ -560,7 +584,7 @@ export function AppointmentCalendar({
       </p>
 
       <div className="ndn-cal-day-panel">
-        {!monthHasAppointments && <p>{strings.emptyMonth}</p>}
+        {!windowHasAppointments && <p>{strings.emptyWindow}</p>}
         {selectedDate && (
           <>
             <Heading level={3} className="ndn-cal-day-heading">

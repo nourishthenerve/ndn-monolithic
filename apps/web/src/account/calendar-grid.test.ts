@@ -5,13 +5,17 @@ import {
   defaultSelectedDay,
   gridRange,
   groupByDay,
-  isInMonth,
+  isPastDay,
   isSameDay,
-  monthGrid,
-  monthOf,
-  shiftMonth,
+  shiftWindow,
   startOfDay,
+  startOfWeek,
   WEEK_STARTS_ON,
+  WEEKS_BEFORE,
+  windowGrid,
+  windowStartFor,
+  WINDOW_STEP_WEEKS,
+  WINDOW_WEEKS,
 } from './calendar-grid.js';
 
 // Every date here is built with the **local** `Date(y, m, d)` form and every
@@ -27,24 +31,112 @@ function at(year: number, month: number, day: number, hour = 0, minute = 0): str
   return local(year, month, day, hour, minute).toISOString();
 }
 
-describe('shiftMonth', () => {
-  it('moves forward and back within a year', () => {
-    expect(shiftMonth({ year: 2026, month: 8 }, 1)).toEqual({ year: 2026, month: 9 });
-    expect(shiftMonth({ year: 2026, month: 8 }, -1)).toEqual({ year: 2026, month: 7 });
+/** 15 September 2026 is a Tuesday — a mid-week anchor, so off-by-one padding shows up. */
+const TODAY = local(2026, 8, 15);
+
+describe('startOfWeek', () => {
+  it('walks back to the configured first day of the week', () => {
+    // Tuesday 15 September 2026 -> Monday the 14th.
+    expect(dayKey(startOfWeek(TODAY))).toBe('2026-09-14');
   });
 
-  it('rolls over December and January — the two boundaries hand-rolled modulo gets wrong', () => {
-    expect(shiftMonth({ year: 2026, month: 11 }, 1)).toEqual({ year: 2027, month: 0 });
-    expect(shiftMonth({ year: 2026, month: 0 }, -1)).toEqual({ year: 2025, month: 11 });
+  it('is the identity on a day that already starts a week', () => {
+    const monday = local(2026, 8, 14);
+    expect(dayKey(startOfWeek(monday))).toBe('2026-09-14');
   });
 
-  it('handles a jump of more than a year in either direction', () => {
-    expect(shiftMonth({ year: 2026, month: 5 }, 14)).toEqual({ year: 2027, month: 7 });
-    expect(shiftMonth({ year: 2026, month: 5 }, -18)).toEqual({ year: 2024, month: 11 });
+  it('crosses a month boundary backwards when it has to', () => {
+    // Wednesday 1 July 2026 -> Monday 29 June.
+    expect(dayKey(startOfWeek(local(2026, 6, 1)))).toBe('2026-06-29');
+  });
+});
+
+describe('windowStartFor', () => {
+  it('puts the anchor day\'s week in the middle row', () => {
+    const weeks = windowGrid(windowStartFor(TODAY));
+    const middle = weeks[WEEKS_BEFORE];
+    expect(middle?.some((day) => isSameDay(day, TODAY))).toBe(true);
   });
 
-  it('is the identity for a delta of zero', () => {
-    expect(shiftMonth({ year: 2026, month: 5 }, 0)).toEqual({ year: 2026, month: 5 });
+  it('opens on exactly two weeks behind and two ahead', () => {
+    expect(WINDOW_WEEKS).toBe(5);
+    const weeks = windowGrid(windowStartFor(TODAY));
+    expect(weeks).toHaveLength(5);
+    // Monday 31 August through Sunday 4 October — the whole weeks either
+    // side of Tuesday the 15th's own week.
+    expect(dayKey(weeks[0]?.[0] as Date)).toBe('2026-08-31');
+    const lastWeek = weeks[weeks.length - 1] as readonly Date[];
+    expect(dayKey(lastWeek[lastWeek.length - 1] as Date)).toBe('2026-10-04');
+  });
+
+  it('reaches at least a fortnight in both directions, whichever weekday today is', () => {
+    const FORTNIGHT_MS = 14 * 24 * 60 * 60 * 1000;
+    for (let offset = 0; offset < 7; offset += 1) {
+      const anchor = local(2026, 8, 14 + offset);
+      const days = windowGrid(windowStartFor(anchor)).flat();
+      const first = startOfDay(days[0] as Date).getTime();
+      const last = startOfDay(days[days.length - 1] as Date).getTime();
+      const anchorDay = startOfDay(anchor).getTime();
+      expect(anchorDay - first).toBeGreaterThanOrEqual(FORTNIGHT_MS);
+      expect(last - anchorDay).toBeGreaterThanOrEqual(FORTNIGHT_MS);
+    }
+  });
+});
+
+describe('windowGrid', () => {
+  it('starts every row on the configured first day of the week', () => {
+    for (const week of windowGrid(windowStartFor(TODAY))) {
+      expect(week[0]?.getDay()).toBe(WEEK_STARTS_ON);
+      expect(week).toHaveLength(7);
+    }
+  });
+
+  it('runs consecutively, with no gap or repeat across the whole window', () => {
+    const days = windowGrid(windowStartFor(TODAY)).flat();
+    expect(days).toHaveLength(35);
+    expect(new Set(days.map(dayKey)).size).toBe(35);
+    for (let i = 1; i < days.length; i += 1) {
+      const gap =
+        startOfDay(days[i] as Date).getTime() - startOfDay(days[i - 1] as Date).getTime();
+      // Days are compared at local midnight, so a DST transition inside the
+      // window cannot make this 23 or 25 hours.
+      expect(gap).toBe(24 * 60 * 60 * 1000);
+    }
+  });
+
+  it('crosses a year boundary without special-casing', () => {
+    const days = windowGrid(windowStartFor(local(2026, 11, 31))).flat();
+    expect(days.some((day) => day.getFullYear() === 2027)).toBe(true);
+    expect(days.some((day) => day.getFullYear() === 2026)).toBe(true);
+  });
+});
+
+describe('shiftWindow', () => {
+  it('moves whole weeks, so every row still starts on the same weekday', () => {
+    const start = windowStartFor(TODAY);
+    const shifted = shiftWindow(start, -WINDOW_STEP_WEEKS);
+    expect(shifted.getDay()).toBe(WEEK_STARTS_ON);
+    expect(dayKey(shifted)).toBe('2026-08-17');
+  });
+
+  it('keeps three of the five rows on screen, so a run of appointments is followed not jumped', () => {
+    const before = windowGrid(windowStartFor(TODAY)).flat().map(dayKey);
+    const after = windowGrid(shiftWindow(windowStartFor(TODAY), WINDOW_STEP_WEEKS))
+      .flat()
+      .map(dayKey);
+    const overlap = after.filter((day) => before.includes(day));
+    expect(overlap).toHaveLength((WINDOW_WEEKS - WINDOW_STEP_WEEKS) * 7);
+  });
+
+  it('is reversible, and the identity for a shift of zero', () => {
+    const start = windowStartFor(TODAY);
+    expect(dayKey(shiftWindow(shiftWindow(start, 4), -4))).toBe(dayKey(start));
+    expect(dayKey(shiftWindow(start, 0))).toBe(dayKey(start));
+  });
+
+  it('crosses month and year boundaries', () => {
+    expect(dayKey(shiftWindow(local(2026, 11, 28), 1))).toBe('2027-01-04');
+    expect(dayKey(shiftWindow(local(2027, 0, 4), -1))).toBe('2026-12-28');
   });
 });
 
@@ -58,60 +150,24 @@ describe('dayKey', () => {
     // The whole reason this is not `toISOString().slice(0, 10)`: at 23:30
     // local, that call returns *tomorrow* anywhere west of UTC, putting the
     // appointment in the wrong square.
-    const lateEvening = local(2026, 8, 3, 23, 30);
-    expect(dayKey(lateEvening)).toBe('2026-09-03');
+    expect(dayKey(local(2026, 8, 3, 23, 30))).toBe('2026-09-03');
   });
 });
 
-describe('monthGrid', () => {
-  it('starts every row on the configured first day of the week', () => {
-    for (const week of monthGrid({ year: 2026, month: 8 })) {
-      expect(week[0]?.getDay()).toBe(WEEK_STARTS_ON);
-      expect(week).toHaveLength(7);
-    }
+describe('isPastDay', () => {
+  it('compares whole days, so earlier today is not "past"', () => {
+    expect(isPastDay(local(2026, 8, 15, 1, 0), local(2026, 8, 15, 23, 0))).toBe(false);
   });
 
-  it('covers every day of the month exactly once', () => {
-    const days = monthGrid({ year: 2026, month: 8 }).flat();
-    const inMonth = days.filter((day) => isInMonth(day, { year: 2026, month: 8 }));
-    expect(inMonth).toHaveLength(30);
-    expect(new Set(inMonth.map(dayKey)).size).toBe(30);
-  });
-
-  it('pads both ends with the neighbouring months rather than leaving gaps', () => {
-    const weeks = monthGrid({ year: 2026, month: 8 });
-    const days = weeks.flat();
-    // 1 September 2026 is a Tuesday, so a Monday-first grid leads with one
-    // day of August.
-    expect(dayKey(days[0] as Date)).toBe('2026-08-31');
-    expect(days.length % 7).toBe(0);
-  });
-
-  it('handles a leap February', () => {
-    const days = monthGrid({ year: 2024, month: 1 })
-      .flat()
-      .filter((day) => isInMonth(day, { year: 2024, month: 1 }));
-    expect(days).toHaveLength(29);
-    expect(dayKey(days[days.length - 1] as Date)).toBe('2024-02-29');
-  });
-
-  it('uses exactly four rows for a February that starts on the first weekday', () => {
-    // February 2027 has 28 days and begins on a Monday — the one shape that
-    // needs no padding at all, and the case a fixed six-row grid would pad
-    // with two entire empty weeks.
-    expect(monthGrid({ year: 2027, month: 1 })).toHaveLength(4);
-  });
-
-  it('uses six rows when a 31-day month starts on the last day of the week', () => {
-    // 1 March 2026 is a Sunday, so a Monday-first grid leads with six
-    // padding days: 6 + 31 needs a sixth row. The widest a month can get.
-    expect(monthGrid({ year: 2026, month: 2 })).toHaveLength(6);
+  it('is true for yesterday and false for tomorrow', () => {
+    expect(isPastDay(local(2026, 8, 14), TODAY)).toBe(true);
+    expect(isPastDay(local(2026, 8, 16), TODAY)).toBe(false);
   });
 });
 
 describe('gridRange', () => {
   it('spans local midnight of the first square to local midnight after the last', () => {
-    const weeks = monthGrid({ year: 2026, month: 8 });
+    const weeks = windowGrid(windowStartFor(TODAY));
     const { from, to } = gridRange(weeks);
     const days = weeks.flat();
     const firstDay = days[0] as Date;
@@ -123,17 +179,8 @@ describe('gridRange', () => {
     );
   });
 
-  it('covers the padding days, not just the month', () => {
-    // A range clipped to the month itself would draw the leading and
-    // trailing squares permanently empty however many appointments were in
-    // them — the bug this function's own doc names.
-    const weeks = monthGrid({ year: 2026, month: 8 });
-    const { from } = gridRange(weeks);
-    expect(new Date(from).getTime()).toBeLessThan(local(2026, 8, 1).getTime());
-  });
-
   it('is half-open, so an appointment late on the final day is inside it', () => {
-    const weeks = monthGrid({ year: 2026, month: 8 });
+    const weeks = windowGrid(windowStartFor(TODAY));
     const { to } = gridRange(weeks);
     const days = weeks.flat();
     const lastDay = days[days.length - 1] as Date;
@@ -145,6 +192,12 @@ describe('gridRange', () => {
       59,
     );
     expect(lateOnLastDay.getTime()).toBeLessThan(new Date(to).getTime());
+  });
+
+  it('moves with the window, so scrolling back actually fetches the past', () => {
+    const now = gridRange(windowGrid(windowStartFor(TODAY)));
+    const earlier = gridRange(windowGrid(shiftWindow(windowStartFor(TODAY), -WINDOW_STEP_WEEKS)));
+    expect(new Date(earlier.from).getTime()).toBeLessThan(new Date(now.from).getTime());
   });
 });
 
@@ -162,8 +215,7 @@ describe('groupByDay', () => {
   });
 
   it('orders each day chronologically, whatever order they arrived in', () => {
-    const byDay = groupByDay(items);
-    expect(byDay.get('2026-09-03')?.map((item) => item.scheduledAt)).toEqual([
+    expect(groupByDay(items).get('2026-09-03')?.map((item) => item.scheduledAt)).toEqual([
       at(2026, 8, 3, 9, 0),
       at(2026, 8, 3, 16, 0),
     ]);
@@ -180,47 +232,41 @@ describe('groupByDay', () => {
 });
 
 describe('defaultSelectedDay', () => {
-  const month = { year: 2026, month: 8 };
-  const weeks = monthGrid(month);
+  const weeks = windowGrid(windowStartFor(TODAY));
 
   it('picks today when today is on the grid, busy or not', () => {
     const byDay = groupByDay([{ scheduledAt: at(2026, 8, 20, 10, 0) }]);
-    expect(defaultSelectedDay(weeks, month, byDay, local(2026, 8, 9))).toBe('2026-09-09');
+    expect(defaultSelectedDay(weeks, byDay, TODAY)).toBe('2026-09-15');
   });
 
-  it('picks the month\'s first busy day when today is elsewhere', () => {
+  it('picks the window\'s first busy day when today is elsewhere', () => {
     const byDay = groupByDay([
       { scheduledAt: at(2026, 8, 20, 10, 0) },
       { scheduledAt: at(2026, 8, 14, 10, 0) },
     ]);
-    expect(defaultSelectedDay(weeks, month, byDay, local(2026, 1, 1))).toBe('2026-09-14');
+    expect(defaultSelectedDay(weeks, byDay, local(2026, 1, 1))).toBe('2026-09-14');
   });
 
-  it('ignores a busy padding day belonging to the neighbouring month', () => {
-    // 31 August is drawn on September's grid; opening September and being
-    // shown an August appointment would misreport which month you are in.
+  it('will pick a busy day from either month the window straddles', () => {
+    // A rolling window has no "outside month" to skip — 31 August is as much
+    // part of this view as 15 September.
     const byDay = groupByDay([{ scheduledAt: at(2026, 7, 31, 10, 0) }]);
-    expect(defaultSelectedDay(weeks, month, byDay, local(2026, 1, 1))).toBeUndefined();
+    expect(defaultSelectedDay(weeks, byDay, local(2026, 1, 1))).toBe('2026-08-31');
   });
 
-  it('selects nothing at all for an empty month, rather than an arbitrary date', () => {
-    expect(defaultSelectedDay(weeks, month, groupByDay([]), local(2026, 1, 1))).toBeUndefined();
+  it('selects nothing at all for an empty window, rather than an arbitrary date', () => {
+    expect(defaultSelectedDay(weeks, groupByDay([]), local(2026, 1, 1))).toBeUndefined();
   });
 });
 
-describe('isSameDay / isInMonth / monthOf', () => {
+describe('isSameDay', () => {
   it('compares local days, not instants', () => {
     expect(isSameDay(local(2026, 8, 3, 1, 0), local(2026, 8, 3, 23, 0))).toBe(true);
     expect(isSameDay(local(2026, 8, 3), local(2026, 8, 4))).toBe(false);
   });
 
   it('distinguishes the same day number in a different month or year', () => {
-    expect(isInMonth(local(2026, 8, 3), { year: 2026, month: 8 })).toBe(true);
-    expect(isInMonth(local(2026, 7, 3), { year: 2026, month: 8 })).toBe(false);
-    expect(isInMonth(local(2025, 8, 3), { year: 2026, month: 8 })).toBe(false);
-  });
-
-  it('reads a date back as its own month', () => {
-    expect(monthOf(local(2026, 8, 3))).toEqual({ year: 2026, month: 8 });
+    expect(isSameDay(local(2026, 8, 3), local(2026, 7, 3))).toBe(false);
+    expect(isSameDay(local(2026, 8, 3), local(2025, 8, 3))).toBe(false);
   });
 });

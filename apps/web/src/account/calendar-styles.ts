@@ -136,9 +136,15 @@ export const appointmentCalendarStylesCss = `
   background-color: rgba(10, 110, 90, 0.06);
 }
 
-/* Muted rather than faded: opacity on top of a muted token is how a
-   neighbouring month's dates quietly drop below 4.5:1. */
-.ndn-cal-cell--outside .ndn-cal-day {
+/* A rolling window has no "days from the next month" to grey out — every
+   square is equally part of the view. What is marked instead is the split
+   this view exists to straddle: days already past read muted, days ahead
+   read full strength, so the boundary between history and what is coming is
+   visible without reading a single date.
+
+   Muted rather than faded: opacity on top of a muted token is how text
+   quietly drops below 4.5:1. */
+.ndn-cal-cell--past .ndn-cal-day {
   color: var(--ndn-color-text-muted);
 }
 
