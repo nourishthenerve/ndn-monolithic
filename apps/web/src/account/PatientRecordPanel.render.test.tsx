@@ -438,3 +438,104 @@ describe('approving a pending booking', () => {
     },
   );
 });
+
+// 2026-09-07: the owner's rework splits this panel's two halves across two
+// named areas of the patient record — "Patient Details" and "Patient
+// Appointments" — with other content between them, so the page mounts it
+// twice and each mount renders one half.
+describe('the two halves, placed separately', () => {
+  function half(which: 'details' | 'appointments' | 'both') {
+    return (
+      <PatientRecordPanel
+        strings={STRINGS}
+        dashboardHref="/en/account"
+        half={which}
+        locale="en"
+        patientId={PATIENT_ID}
+        client={clientAs('principal-clinician')}
+        fetchPatient={patientOk}
+        fetchAppointments={appointmentsOk([scheduled])}
+        now={midSlot}
+      />
+    );
+  }
+
+  it('renders the identity form and no appointment table under "details"', async () => {
+    render(half('details'));
+
+    expect(await screen.findByLabelText(STRINGS.fullNameLabel)).toBeDefined();
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('renders the appointment table and no identity form under "appointments"', async () => {
+    render(half('appointments'));
+
+    expect(await screen.findByRole('table')).toBeDefined();
+    expect(screen.queryByLabelText(STRINGS.fullNameLabel)).toBeNull();
+  });
+
+  // Once per page, not once per mount — two "back to dashboard" links on
+  // one screen is what mounting this twice would otherwise produce.
+  it('carries the back link with the details half alone', async () => {
+    const { rerender } = render(half('details'));
+    expect(await screen.findByText(STRINGS.backToDashboard)).toBeDefined();
+
+    rerender(half('appointments'));
+    await waitFor(() => expect(screen.queryByText(STRINGS.backToDashboard)).toBeNull());
+  });
+
+  // The old single-mount rendering, unchanged and still the default, so a
+  // page that wants the whole panel keeps its own headings.
+  it('renders both halves and their headings by default', async () => {
+    render(half('both'));
+
+    expect(await screen.findByText(STRINGS.detailsHeading)).toBeDefined();
+    expect(screen.getByRole('heading', { name: STRINGS.appointmentsHeading })).toBeDefined();
+  });
+});
+
+// 2026-09-07: `patient-record.astro` began admitting visitors, because the
+// matrix has granted them `R` on a patient profile (IIC-tagged) all along
+// and the page was refusing ahead of the server. `Patient profile` grants
+// them read and *not* update, so the identity fields have to arrive as
+// facts rather than as a form whose every save returns 403.
+describe('a visitor reads the details and cannot edit them', () => {
+  function panelAs(viewerRole: string | undefined) {
+    return (
+      <PatientRecordPanel
+        strings={STRINGS}
+        dashboardHref="/en/account"
+        half="details"
+        locale="en"
+        patientId={PATIENT_ID}
+        client={clientAs(viewerRole)}
+        fetchPatient={patientOk}
+        fetchAppointments={appointmentsOk([])}
+        now={midSlot}
+      />
+    );
+  }
+
+  it('shows a visitor the name as text, with no input and no save button', async () => {
+    render(panelAs('visitor'));
+
+    expect(await screen.findByText('Test Patient 1')).toBeDefined();
+    expect(screen.queryByLabelText(STRINGS.fullNameLabel)).toBeNull();
+    expect(screen.queryByRole('button', { name: STRINGS.saveButton })).toBeNull();
+  });
+
+  it('still offers helpdesk the form — the role that exists to type these fields', async () => {
+    render(panelAs('helpdesk'));
+
+    expect(await screen.findByLabelText(STRINGS.fullNameLabel)).toBeDefined();
+    expect(screen.getByRole('button', { name: STRINGS.saveButton })).toBeDefined();
+  });
+
+  // Same posture as `mayDecide`/`mayJoin`: narrow on a known role that
+  // cannot write, never on a shrug.
+  it('offers the form when the viewer role cannot be read at all', async () => {
+    render(panelAs(undefined));
+
+    expect(await screen.findByLabelText(STRINGS.fullNameLabel)).toBeDefined();
+  });
+});

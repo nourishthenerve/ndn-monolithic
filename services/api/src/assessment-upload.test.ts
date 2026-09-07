@@ -164,7 +164,7 @@ describe('who may upload into which section', () => {
   });
 
   it.each([
-    ['the patient section', 'patient'],
+    ['the prescription section', 'prescription'],
     ['the clinician section', 'private'],
     ['the calendar section', 'calendar'],
   ])('is 403, and signs nothing, for the patient uploading into %s', async (_l, section) => {
@@ -184,7 +184,7 @@ describe('who may upload into which section', () => {
 
   it('lets helpdesk upload into the general and patient sections, and refuses the other two', async () => {
     const { handler } = await build();
-    for (const section of ['general', 'patient']) {
+    for (const section of ['general', 'prescription']) {
       const allowed = await invoke(
         handler,
         fakeEvent({
@@ -208,7 +208,7 @@ describe('who may upload into which section', () => {
 
   it('lets the principal upload into every section', async () => {
     const { handler } = await build();
-    for (const section of ['general', 'patient', 'private', 'calendar']) {
+    for (const section of ['general', 'private', 'prescription', 'calendar']) {
       const response = await invoke(
         handler,
         fakeEvent({
@@ -225,7 +225,7 @@ describe('who may upload into which section', () => {
     ['a visitor', VISITOR],
   ])('is 403 for %s, in every section', async (_l, principal) => {
     const { handler } = await build();
-    for (const section of ['general', 'patient', 'private', 'calendar']) {
+    for (const section of ['general', 'private', 'prescription', 'calendar']) {
       const response = await invoke(
         handler,
         fakeEvent({
@@ -427,7 +427,7 @@ describe('downloading an attachment', () => {
       fakeEvent({
         routeKey: DOWNLOAD_ROUTE,
         principal: OWNING_PATIENT,
-        body: { section: 'patient', key: 'assessments/pat-1/intake-v1/patient/fixed-uuid-x.pdf' },
+        body: { section: 'prescription', key: 'assessments/pat-1/intake-v1/prescription/fixed-uuid-x.pdf' },
       }),
     );
     expect(download.statusCode).toBe(200);
@@ -435,7 +435,7 @@ describe('downloading an attachment', () => {
       handler,
       fakeEvent({
         principal: OWNING_PATIENT,
-        body: { section: 'patient', fileName: 'x.pdf', contentType: 'application/pdf' },
+        body: { section: 'prescription', fileName: 'x.pdf', contentType: 'application/pdf' },
       }),
     );
     expect(upload.statusCode).toBe(403);

@@ -121,7 +121,7 @@ describe('fieldValue', () => {
   it('blanks a checkbox as false, not as an empty string', () => {
     // `String(undefined)` in a `checked` prop is how a checkbox ends up
     // permanently ticked; this is the guard against that.
-    expect(fieldValue('patient', CONSENT_FIELD, {}, latest, undefined)).toBe(false);
+    expect(fieldValue('prescription', CONSENT_FIELD, {}, latest, undefined)).toBe(false);
   });
 
   it('blanks every other field type as an empty string', () => {
@@ -162,8 +162,8 @@ describe('responsesToSave', () => {
 
   it('ignores a draft belonging to a different section', () => {
     // Drafts are one flat map across the whole form; the key prefix is what
-    // keeps a patient-section edit out of a general-section save.
-    expect(responsesToSave(section, { [draftKey('patient', 'preferredName')]: 'x' })).toEqual({});
+    // keeps a prescription-section edit out of a general-section save.
+    expect(responsesToSave(section, { [draftKey('prescription', 'preferredName')]: 'x' })).toEqual({});
   });
 });
 
@@ -181,8 +181,8 @@ describe('sectionOf', () => {
     const latest: VersionItem = {
       version: 1,
       updated_at: '2026-09-01T09:00:00.000Z',
-      patient: { responses: { goals: 'walk unaided' }, attachments: [] },
+      prescription: { responses: { goals: 'walk unaided' }, attachments: [] },
     };
-    expect(sectionOf(latest, 'patient').responses.goals).toBe('walk unaided');
+    expect(sectionOf(latest, 'prescription').responses.goals).toBe('walk unaided');
   });
 });

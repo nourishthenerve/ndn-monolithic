@@ -18,7 +18,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AssessmentForm } from './AssessmentForm.js';
+import { AssessmentForm, ASSESSMENT_SAVED_EVENT } from './AssessmentForm.js';
 import type { AssessmentFormStrings } from './AssessmentForm.js';
 
 afterEach(cleanup);
@@ -48,25 +48,25 @@ const STRINGS: AssessmentFormStrings = {
 
 const GENERAL_SECTION = {
   fieldSet: 'general',
-  title: 'General info',
+  title: 'Patient Details',
   fields: [
     { id: 'tag', label: 'Programme tag', type: 'select', options: ['IIC', 'NDN'], staffOnly: true },
     { id: 'preferredName', label: 'Preferred name', type: 'text' },
   ],
 };
-const PATIENT_SECTION = {
-  fieldSet: 'patient',
-  title: 'Specific to the patient',
+const PRESCRIPTION_SECTION = {
+  fieldSet: 'prescription',
+  title: 'Patient Prescription',
   fields: [{ id: 'goals', label: 'What you would like to achieve', type: 'textarea' }],
 };
 const PRIVATE_SECTION = {
   fieldSet: 'private',
-  title: 'Specific to the clinician',
+  title: 'Patient Assessment Form',
   fields: [{ id: 'clinicianImpression', label: 'Clinical impression', type: 'textarea' }],
 };
 const CALENDAR_SECTION = {
   fieldSet: 'calendar',
-  title: 'Calendar',
+  title: 'Patient Appointments',
   fields: [
     { id: 'sessionsCompleted', label: 'Sessions so far', type: 'number', derived: true },
     { id: 'schedulingNotes', label: 'Scheduling notes', type: 'textarea' },
@@ -129,10 +129,10 @@ describe('what each role is shown', () => {
         fetchForm={() =>
           ok(
             payloadFor({
-              template: [GENERAL_SECTION, PATIENT_SECTION, CALENDAR_SECTION],
+              template: [GENERAL_SECTION, PRESCRIPTION_SECTION, CALENDAR_SECTION],
               permissions: [
                 { fieldSet: 'general', read: true, write: true },
-                { fieldSet: 'patient', read: true, write: false },
+                { fieldSet: 'prescription', read: true, write: false },
                 { fieldSet: 'private', read: false, write: false },
                 { fieldSet: 'calendar', read: true, write: false },
               ],
@@ -141,7 +141,7 @@ describe('what each role is shown', () => {
                   version: 1,
                   updated_at: '2026-09-01T09:00:00.000Z',
                   general: { responses: { preferredName: 'Sam' }, attachments: [] },
-                  patient: { responses: { goals: 'walk unaided' }, attachments: [] },
+                  prescription: { responses: { goals: 'walk unaided' }, attachments: [] },
                   calendar: { responses: {}, attachments: [] },
                 },
               ],
@@ -152,14 +152,14 @@ describe('what each role is shown', () => {
       />,
     );
 
-    await screen.findByText('General info');
+    await screen.findByText('Patient Details');
     // Editable: a real input, findable by its label.
     expect(screen.getByLabelText('Preferred name')).toBeDefined();
     // Read-only: the answer is on the page, but not as a form control.
     expect(screen.getByText(/walk unaided/)).toBeDefined();
     expect(screen.queryByLabelText('What you would like to achieve')).toBeNull();
     // R-09, at the level a person actually experiences it.
-    expect(screen.queryByText('Specific to the clinician')).toBeNull();
+    expect(screen.queryByText('Patient Assessment Form')).toBeNull();
     expect(screen.queryByLabelText('Clinical impression')).toBeNull();
     // One save button — general is the only writable section.
     expect(screen.getAllByRole('button', { name: 'Save this section' })).toHaveLength(1);
@@ -174,10 +174,10 @@ describe('what each role is shown', () => {
         fetchForm={() =>
           ok(
             payloadFor({
-              template: [GENERAL_SECTION, PATIENT_SECTION, PRIVATE_SECTION, CALENDAR_SECTION],
+              template: [GENERAL_SECTION, PRESCRIPTION_SECTION, PRIVATE_SECTION, CALENDAR_SECTION],
               permissions: [
                 { fieldSet: 'general', read: true, write: true },
-                { fieldSet: 'patient', read: true, write: true },
+                { fieldSet: 'prescription', read: true, write: true },
                 { fieldSet: 'private', read: true, write: true },
                 { fieldSet: 'calendar', read: true, write: true },
               ],
@@ -188,7 +188,7 @@ describe('what each role is shown', () => {
       />,
     );
 
-    await screen.findByText('Specific to the clinician');
+    await screen.findByText('Patient Assessment Form');
     expect(screen.getByLabelText('Clinical impression')).toBeDefined();
     expect(screen.getAllByRole('button', { name: 'Save this section' })).toHaveLength(4);
   });
@@ -205,7 +205,7 @@ describe('what each role is shown', () => {
               template: [CALENDAR_SECTION],
               permissions: [
                 { fieldSet: 'general', read: false, write: false },
-                { fieldSet: 'patient', read: false, write: false },
+                { fieldSet: 'prescription', read: false, write: false },
                 { fieldSet: 'private', read: false, write: false },
                 { fieldSet: 'calendar', read: true, write: false },
               ],
@@ -216,7 +216,7 @@ describe('what each role is shown', () => {
       />,
     );
 
-    await screen.findByText('Calendar');
+    await screen.findByText('Patient Appointments');
     expect(screen.getByText(STRINGS.readOnlyLabel)).toBeDefined();
     expect(screen.queryByLabelText('Scheduling notes')).toBeNull();
   });
@@ -233,7 +233,7 @@ describe('what each role is shown', () => {
               template: [CALENDAR_SECTION],
               permissions: [
                 { fieldSet: 'general', read: false, write: false },
-                { fieldSet: 'patient', read: false, write: false },
+                { fieldSet: 'prescription', read: false, write: false },
                 { fieldSet: 'private', read: false, write: false },
                 { fieldSet: 'calendar', read: true, write: true },
               ],
@@ -244,7 +244,7 @@ describe('what each role is shown', () => {
       />,
     );
 
-    await screen.findByText('Calendar');
+    await screen.findByText('Patient Appointments');
     // The figure is shown…
     expect(screen.getByText('7')).toBeDefined();
     // …and there is no control through which it could be sent back.
@@ -331,7 +331,7 @@ describe('attachments', () => {
         }
       />,
     );
-    await screen.findByText('General info');
+    await screen.findByText('Patient Details');
     expect(screen.getByText(STRINGS.attachmentsEmpty)).toBeDefined();
     expect(screen.queryByLabelText('Add a file')).toBeNull();
   });
@@ -463,7 +463,7 @@ describe('states that are not a form', () => {
       />,
     );
     // A fresh form and an empty form look the same, which is the point.
-    await screen.findByText('General info');
+    await screen.findByText('Patient Details');
     expect((screen.getByLabelText('Preferred name') as HTMLInputElement).value).toBe('');
   });
 });
@@ -590,5 +590,138 @@ describe('saving', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save this section' }));
 
     expect(await screen.findByText(STRINGS.saveForbiddenLabel)).toBeDefined();
+  });
+});
+
+// 2026-09-07: the owner's rework gives each section of the record a named
+// area of the page, and two of those areas carry non-assessment content
+// too. So a page mounts this component once per area and tells each mount
+// which sections belong to it. These pin the three props that makes
+// possible — and, more importantly, pin that `fieldSets` cannot widen what
+// the server sent.
+describe('one component, several placements', () => {
+  const ALL_SECTIONS = [GENERAL_SECTION, PRESCRIPTION_SECTION, PRIVATE_SECTION, CALENDAR_SECTION];
+  const ALL_WRITABLE = [
+    { fieldSet: 'general', read: true, write: true },
+    { fieldSet: 'prescription', read: true, write: true },
+    { fieldSet: 'private', read: true, write: true },
+    { fieldSet: 'calendar', read: true, write: true },
+  ];
+
+  it('renders only the sections a placement names', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        fieldSets={['prescription']}
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() => ok(payloadFor({ template: ALL_SECTIONS, permissions: ALL_WRITABLE }))}
+      />,
+    );
+
+    expect(await screen.findByText('Patient Prescription')).toBeDefined();
+    expect(screen.queryByText('Patient Details')).toBeNull();
+    expect(screen.queryByText('Patient Assessment Form')).toBeNull();
+    expect(screen.queryByText('Patient Appointments')).toBeNull();
+  });
+
+  // The property the whole arrangement rests on. A page is free to ask for
+  // a section on behalf of someone who may not read it — `patient-record`
+  // does exactly that for a helpdesk session, gated only by a role guess —
+  // and the answer has to be "nothing", decided by the payload rather than
+  // by the page's guess.
+  it('renders nothing at all when the server did not send the named section', async () => {
+    const { container } = render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        fieldSets={['private']}
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() =>
+          ok(
+            payloadFor({
+              // A patient's payload: the clinician section is absent, not
+              // present-and-empty.
+              template: [GENERAL_SECTION, PRESCRIPTION_SECTION, CALENDAR_SECTION],
+              permissions: [
+                { fieldSet: 'general', read: true, write: true },
+                { fieldSet: 'prescription', read: true, write: false },
+                { fieldSet: 'private', read: false, write: false },
+                { fieldSet: 'calendar', read: true, write: false },
+              ],
+            }),
+          )
+        }
+      />,
+    );
+
+    // Not even the version line, which would otherwise stand alone under a
+    // heading the page has already written.
+    await waitFor(() => expect(container.textContent).toBe(''));
+  });
+
+  it('omits the section title when the page has written the heading itself', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        fieldSets={['general']}
+        showTitles={false}
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() => ok(payloadFor({ template: ALL_SECTIONS, permissions: ALL_WRITABLE }))}
+      />,
+    );
+
+    // The field is there, so the section rendered; only its own title is
+    // gone.
+    expect(await screen.findByLabelText('Preferred name')).toBeDefined();
+    expect(screen.queryByText('Patient Details')).toBeNull();
+  });
+
+  it('omits the version line on the placements that are not the first on the page', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        fieldSets={['calendar']}
+        showVersion={false}
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() => ok(payloadFor({ template: ALL_SECTIONS, permissions: ALL_WRITABLE }))}
+      />,
+    );
+
+    expect(await screen.findByText('Patient Appointments')).toBeDefined();
+    expect(screen.queryByText(STRINGS.versionLabel)).toBeNull();
+  });
+
+  // The 409 this exists to prevent: two placements of one record each hold
+  // a `currentVersion`, and the first save moves the record past the
+  // second one's copy. Without the listener the second save is refused by a
+  // concurrency check meant for two people, not two halves of one page.
+  it('re-reads when another placement on the page saves', async () => {
+    const fetchForm = vi
+      .fn()
+      .mockReturnValueOnce(
+        ok(payloadFor({ template: ALL_SECTIONS, permissions: ALL_WRITABLE, currentVersion: 1 })),
+      )
+      .mockReturnValue(
+        ok(payloadFor({ template: ALL_SECTIONS, permissions: ALL_WRITABLE, currentVersion: 2 })),
+      );
+
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        fieldSets={['general']}
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={fetchForm}
+      />,
+    );
+
+    expect(await screen.findByText('Version: 1')).toBeDefined();
+
+    window.dispatchEvent(new Event(ASSESSMENT_SAVED_EVENT));
+
+    expect(await screen.findByText('Version: 2')).toBeDefined();
   });
 });

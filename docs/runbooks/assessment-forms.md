@@ -99,7 +99,7 @@ The owner specified the form in full: *"this assessment form will have three sec
 
 ### Why `visible{}` had to go, and why `private{}` stayed
 
-The old record was `visible{}` + `private{}` — one boundary. The owner has drawn three, and no arrangement of two rows expresses them, because helpdesk's reach is not a prefix of anyone else's: wider than the patient's on `patient{}`, narrower than the clinician's on `private{}`. So the record now has **one property per section, named exactly as `FieldSet` names it**, and `authz-matrix.ts` has four assessment rows instead of two.
+The old record was `visible{}` + `private{}` — one boundary. The owner has drawn three, and no arrangement of two rows expresses them, because helpdesk's reach is not a prefix of anyone else's: wider than the patient's on `prescription{}` (named `patient{}` until 2026-09-07), narrower than the clinician's on `private{}`. So the record now has **one property per section, named exactly as `FieldSet` names it**, and `authz-matrix.ts` has four assessment rows instead of two.
 
 `private{}` keeps its name even though the owner calls it "specific to the clinician". The label lives in `assessment-template.ts`; the *attribute* stays `private` because `projection.ts`'s `stripPrivate`, `containsPrivateField` and `redactPrivateText` all key off that literal name, and those three are R-09's runtime boundary — the thing keeping a clinical note out of a log line and out of an error message. Renaming the attribute to match the phrasing would have unhooked all of it silently, and nothing would have failed until something leaked.
 
@@ -188,3 +188,45 @@ x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32
 `requestChecksumCalculation: 'WHEN_REQUIRED'` omits it. Confirmed by presigning both ways and reading the query string back, which is also what `presigner-wiring.test.ts` now does — it asserts the SDK behaviour (so the premise is checked, not assumed), asserts both production handlers set the option, and asserts it is finding the handlers it means to guard. `media-upload-handler.ts` had the identical bug; it simply had no caller to reveal it.
 
 **The lesson, stated plainly:** for three rounds on the blog bug and two here, the failure was diagnosed from the outside — a plausible cause identified, fixed, and reported as *the* cause without confirming the request got past it. A `curl` of the endpoint, and a read of the presigned URL's own query string, each took seconds and each named the real defect immediately. **When a request fails, find out how far it got before designing the fix.**
+
+## Amendment, 2026-09-07 — the four sections become four named areas of the patient record
+
+The owner: *"I want the following sections for a patient - 'Patient Details', 'Patient Assessment Form', 'Patient Prescription', and 'Patient Appointments'."* With each one's audience given in the same message, and then: *"for patient it will be Patient Details, Patient Assessment Form, Patient Prescription, Patient Appointments, Patient Account and Patient Testimonial. … other items should be gone now."*
+
+### No permission changed
+
+Read the four stated audiences against the four `Assessment —` rows in `docs/plan/04-data-model-rbac.md` and they match cell for cell, the IIC narrowing on both visitor cells included. What the rework changed is names, page structure and one page's `allowRoles`; `authz.test.ts`'s independent copy of the table needed one row renamed and no cell touched.
+
+### What moved
+
+| Area | `FieldSet` | Changed how |
+|---|---|---|
+| Patient Details | `general` | retitled |
+| Patient Assessment Form | `private` | retitled; **attribute deliberately not renamed** — `projection.ts` keys R-09's runtime boundary off the literal string `private` |
+| Patient Prescription | `prescription` | renamed from `patient` *and* retitled |
+| Patient Appointments | `calendar` | retitled |
+
+`ASSESSMENT_SECTION_ORDER` now declares the owner's order (Details, Assessment Form, Prescription, Appointments) and the API's `template` response iterates it, so a page chooses *which* sections it shows and never their order.
+
+### One component, several placements
+
+`AssessmentForm` gained three props: `fieldSets` (which sections belong in this placement), `showTitles` (off when the page has written the heading) and `showVersion` (on for the first placement only). A placement whose section the server did not send renders `null` — that is what keeps a "Patient Assessment Form" heading off a helpdesk or patient screen rather than standing over an empty area.
+
+**`fieldSets` is a placement filter and never a permission.** It narrows what the server already chose to send. The page-level `RequireAuth` gates around the headings are a second, weaker thing — they guess a role from an unverified claim, exactly as every nav link in this app does, and they exist only so a heading is not printed above nothing.
+
+**Placements resync through a `window` event** (`ASSESSMENT_SAVED_EVENT`). Astro mounts each `client:only` island as its own React root, so no React context spans them; without the event, two placements hold two copies of `currentVersion`, the first save moves the record past the second, and the second save gets a 409 from a concurrency check meant for two people rather than two halves of one page.
+
+`PatientRecordPanel` gained `half` for the same reason: its identity form belongs under Patient Details and its appointment table under Patient Appointments, with other content between them, so `patient-record.astro` mounts it twice. Two `GET`s of one item, accepted deliberately — an island renders one contiguous subtree, and the alternative was not available.
+
+### Two behaviour changes worth knowing about
+
+* **`patient-record.astro` admits visitors now.** It refused them while the matrix had granted a visitor `R` on `general{}` and `calendar{}` (IIC-tagged) since 2026-09-01, and the dashboard's caseload table had linked visitors straight at it for just as long — so a visitor clicking a patient got "you do not have access" for a record they were allowed to read. The server was always the decision; the page was refusing ahead of it.
+* **`PatientRecordPanel` renders the identity fields read-only for a visitor** (`mayEditDetails`). `Patient profile` gives them `R` and not `U`, and a name field whose every save returns 403 is the mistake the approval buttons made before `mayDecide` existed.
+
+### Pages deleted
+
+`account/patient`, `account/appointments` and `account/testimonial` are deleted, not merely unregistered. All three were second renderings of dashboard sections, nothing in the app linked to any of them, and `account/patient` had drifted into showing a patient the three panels the owner cut on 2026-09-06. `account/content` (assigned content) is **kept** — it is not in the owner's six, but it is a capability rather than a duplicate, so removing it would have deleted a feature.
+
+### Still outstanding
+
+The **fields** under each section are still the 2026-09-01 placeholders, and the ones under "Patient Prescription" in particular still read as the intake questions they were written as. The owner's standing promise (*"there will be all kinds of info that I will provided later on"*) is unchanged, and the arrays in `assessment-template.ts` are the whole of what has to change when it arrives.

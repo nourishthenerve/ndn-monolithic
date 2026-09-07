@@ -76,9 +76,22 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // content of its own, just the sign-in/out shell every identity lands
   // on.
   { segment: '', ownerRole: 'either' },
-  // TASK 3.1.1/3.2.1/3.2.2/3.3.1/3.3.2: the patient's own profile,
-  // diagnosis, care plan and assessment timeline.
-  { segment: 'patient', ownerRole: 'patient' },
+  // `patient` is **deleted, not merely unregistered** (2026-09-07), and with
+  // it `appointments` and `testimonial` below. All three were pages whose
+  // whole content the dashboard had already absorbed on 2026-09-06 and which
+  // nothing in the app linked to any more; the owner's rework — *"other
+  // items should be gone now"* — is what settled that a page reachable only
+  // by typed URL, showing a second copy of a dashboard section, is not worth
+  // keeping as a deep-link target.
+  //
+  // `account/patient` in particular had drifted into showing a patient
+  // *more* than the dashboard deliberately shows them: it still mounted
+  // `NextAppointmentPanel` and both `ClinicalRecordTimeline`s, the three
+  // panels the owner cut on 2026-09-06 (*"remove the next appointment panel
+  // too, its redundant"*, *"remove care plan and diagnosis plan as I dont
+  // know when I define these sections"*). Those components and their
+  // endpoints are untouched — see the dashboard's own note on putting them
+  // back — but nothing mounts them now.
   // `caseload` is **deleted, not merely unregistered** (2026-09-06): its
   // cross-caseload table is a section of the dashboard now rather than a
   // page a clinician has to click through to.
@@ -124,22 +137,15 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // no other home in the UI at all, and losing it would have left
   // `appointment_status` never reaching `completed`.
   //
-  // 2026-09-04: the patient's own appointment list, read from
-  // `/patients/me/appointments`. Unlinked from the dashboard (the calendar
-  // shows the same slots) but still a real page.
-  { segment: 'appointments', ownerRole: 'patient' },
-  // TASK 3.5.2: the patient's own assigned-content list.
+  // TASK 3.5.2: the patient's own assigned-content list. **The one patient
+  // page left standing after 2026-09-07**, and the only one that is not a
+  // second rendering of a dashboard section: assigned content has no place
+  // among the owner's six ("Patient Details, Patient Assessment Form,
+  // Patient Prescription, Patient Appointments, Patient Account and Patient
+  // Testimonial"), and it is a real capability rather than a duplicate, so
+  // deleting it would have removed a feature rather than a copy. Kept, and
+  // flagged: it is unlinked from the dashboard and reachable only by URL.
   { segment: 'content', ownerRole: 'patient' },
-  // 2026-09-02: the patient's own testimonial — `authz-matrix.ts`'s
-  // `Testimonial (own)` row, the one authoring surface in this app that is
-  // a patient's and nobody else's.
-  //
-  // **Missing since the page shipped, found 2026-09-04** by this file's own
-  // new on-disk cross-check, and it had been silently absent from the
-  // live-session a11y and keyboard sweeps for two days — precisely the
-  // failure this registry's header describes and precisely why a
-  // hand-maintained list needed a test.
-  { segment: 'testimonial', ownerRole: 'patient' },
   // TASK 3.6.2: both parties read and compose on the same page.
   { segment: 'messages', ownerRole: 'either' },
   // TASK 4.3.1/4.5.1: both parties join the same call from the same page.

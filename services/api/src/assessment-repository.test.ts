@@ -35,7 +35,7 @@ describe('AssessmentRepository.instantiate', () => {
     const form = await repository.instantiate('pat-1', DEFAULT_ASSESSMENT_ID, CLINICIAN, {});
     expect(form.version).toBe(1);
     expect(form.general).toEqual({ responses: {}, attachments: [] });
-    expect(form.patient).toEqual({ responses: {}, attachments: [] });
+    expect(form.prescription).toEqual({ responses: {}, attachments: [] });
     expect(form.calendar).toEqual({ responses: {}, attachments: [] });
   });
 
@@ -93,7 +93,7 @@ describe('AssessmentRepository.applySectionPatch', () => {
     const v1 = await built.repository.latest('pat-1', DEFAULT_ASSESSMENT_ID);
     await built.repository.applySectionPatch(v1!, 2, CLINICIAN, {
       general: { responses: { preferredName: 'Sam' } },
-      patient: { responses: { goals: 'walk unaided' } },
+      prescription: { responses: { goals: 'walk unaided' } },
       private: { responses: { clinicianImpression: 'guarded' } },
       calendar: { responses: { schedulingNotes: 'mornings only' } },
     });
@@ -114,7 +114,7 @@ describe('AssessmentRepository.applySectionPatch', () => {
     const v3 = await repository.latest('pat-1', DEFAULT_ASSESSMENT_ID);
     expect(v3?.general.responses.preferredName).toBe('Samantha');
     expect(v3?.private?.responses.clinicianImpression).toBe('guarded');
-    expect(v3?.patient.responses.goals).toBe('walk unaided');
+    expect(v3?.prescription.responses.goals).toBe('walk unaided');
     expect(v3?.calendar.responses.schedulingNotes).toBe('mornings only');
   });
 

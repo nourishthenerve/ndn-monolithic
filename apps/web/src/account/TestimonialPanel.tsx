@@ -17,12 +17,15 @@
 // on the public page. A withdrawn testimonial keeps its text, so the form
 // still shows the patient their own words; what changes is that saving is
 // labelled as publishing again rather than updating.
+import { Heading } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
+
+import type { PanelHeadingLevel } from './heading-level.js';
 
 type Display = 'full' | 'firstNameOnly' | 'anonymous';
 
@@ -71,6 +74,14 @@ export interface TestimonialPanelStrings {
 
 export interface TestimonialPanelProps {
   readonly strings: TestimonialPanelStrings;
+  /**
+   * 2026-09-07: the level this panel's heading renders at — 2 on its own
+   * page, 3 inside the dashboard's "Patient Testimonial" section. Until
+   * then this panel *was* that section's heading; the owner's rework gives
+   * the section a name of its own, and a panel `<h2>` under a section `<h2>`
+   * would read as its sibling. See `heading-level.ts`.
+   */
+  readonly headingLevel?: PanelHeadingLevel;
   readonly client?: SessionClient;
   readonly fetchMine?: (accessToken: string) => Promise<Response>;
   readonly save?: (accessToken: string, body: unknown) => Promise<Response>;
@@ -94,6 +105,7 @@ function authorised(accessToken: string, init: RequestInit = {}): RequestInit {
 
 export function TestimonialPanel({
   strings,
+  headingLevel = 2,
   client = defaultClient,
   fetchMine,
   save,
@@ -246,7 +258,9 @@ export function TestimonialPanel({
 
   return (
     <section aria-labelledby="testimonial-panel-heading">
-      <h2 id="testimonial-panel-heading">{strings.heading}</h2>
+      <Heading level={headingLevel} id="testimonial-panel-heading">
+        {strings.heading}
+      </Heading>
       <p>{strings.intro}</p>
       {status === 'withdrawn' && <p role="status">{strings.withdrawnNotice}</p>}
 

@@ -37,8 +37,8 @@ export type MatrixRow =
   | 'Patient assignment'
   | 'Diagnosis / care plan'
   | 'Assessment — `general{}`'
-  | 'Assessment — `patient{}`'
   | 'Assessment — `private{}`'
+  | 'Assessment — `prescription{}`'
   | 'Assessment — `calendar{}`'
   | 'Appointments'
   | 'Appointment approval'
@@ -153,19 +153,11 @@ export const RBAC_MATRIX: RbacMatrix = {
     Visitor: ['read'],
     Principal: ['create', 'read', 'update'],
   },
-  // | Assessment — `patient{}` | R | — | C R U | — | **C R U** | **—** | C R U |
-  'Assessment — `patient{}`': {
-    'Patient (own)': ['read'],
-    'Patient (other)': DENIED,
-    'Sub-clinician (assigned)': ['create', 'read', 'update'],
-    'Sub-clinician (unassigned)': DENIED,
-    Helpdesk: ['create', 'read', 'update'],
-    Visitor: DENIED,
-    Principal: ['create', 'read', 'update'],
-  },
-  // Unchanged in every cell, 2026-09-01 included — this is the row R-09's
-  // own register entry names, and the one whose attribute name
-  // projection.ts keys its runtime boundary off.
+  // Unchanged in every cell, 2026-09-01 and 2026-09-07 included — this is
+  // the row R-09's own register entry names, and the one whose attribute
+  // name projection.ts keys its runtime boundary off. Titled "Patient
+  // Assessment Form" since 2026-09-07; the title is the template's, the
+  // attribute is the boundary's.
   // | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | **—** | C R U |
   'Assessment — `private{}`': {
     'Patient (own)': DENIED,
@@ -173,6 +165,21 @@ export const RBAC_MATRIX: RbacMatrix = {
     'Sub-clinician (assigned)': ['create', 'read', 'update'],
     'Sub-clinician (unassigned)': DENIED,
     Helpdesk: DENIED,
+    Visitor: DENIED,
+    Principal: ['create', 'read', 'update'],
+  },
+  // 2026-09-07: `Assessment — `patient{}`` renamed, not re-celled. The
+  // owner's *"Patient Prescription will be visible to only patient,
+  // clinician, principal clinician and help desk"* is this row's existing
+  // seven cells read back verbatim — see the doc's own 2026-09-07 note on
+  // why the whole rework moved no permission at all.
+  // | Assessment — `prescription{}` | R | — | C R U | — | **C R U** | **—** | C R U |
+  'Assessment — `prescription{}`': {
+    'Patient (own)': ['read'],
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': ['create', 'read', 'update'],
+    'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: ['create', 'read', 'update'],
     Visitor: DENIED,
     Principal: ['create', 'read', 'update'],
   },
@@ -421,7 +428,7 @@ export const ASSESSMENT_ENTITY_TYPE = 'assessment';
  */
 export const ASSESSMENT_ROWS = {
   general: 'Assessment — `general{}`',
-  patient: 'Assessment — `patient{}`',
   private: 'Assessment — `private{}`',
+  prescription: 'Assessment — `prescription{}`',
   calendar: 'Assessment — `calendar{}`',
 } as const satisfies Readonly<Record<FieldSet, MatrixRow>>;

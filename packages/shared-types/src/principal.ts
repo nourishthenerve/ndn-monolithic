@@ -103,12 +103,25 @@ export type AccountStatus =
  * property it governs, which is what lets a section-scoped write index the
  * stored record by the same string `can()` was asked about.
  *
- * `'private'` is the clinician-only section ("specific to the clinician").
- * It keeps that name so that `projection.ts`'s runtime boundary — the one
- * thing standing between a clinical note and a log line — goes on keying
- * off the literal attribute name it always has. See assessment.ts's header.
+ * `'private'` is the clinician-only section (titled "Patient Assessment
+ * Form" since 2026-09-07). It keeps that name so that `projection.ts`'s
+ * runtime boundary — the one thing standing between a clinical note and a
+ * log line — goes on keying off the literal attribute name it always has.
+ * See assessment.ts's header.
+ *
+ * **2026-09-07: `'patient'` became `'prescription'`.** The owner's rework
+ * names the four sections "Patient Details", "Patient Assessment Form",
+ * "Patient Prescription" and "Patient Appointments", and the section a
+ * patient may only read — staff-written, patient-visible, helpdesk-writable
+ * — is the prescription. The old member name said whose section it was
+ * rather than what it holds, which stopped being useful the moment the
+ * *other* three were also "the patient's". Renamed rather than retitled
+ * alone because this union's whole contract is that a member is exactly the
+ * `Assessment` property it governs; a `prescription` section stored under
+ * `patient{}` would break the one rule that lets a section-scoped write
+ * index the record by the same string `can()` was asked about.
  */
-export type FieldSet = 'general' | 'patient' | 'private' | 'calendar';
+export type FieldSet = 'general' | 'prescription' | 'private' | 'calendar';
 
 export interface Principal {
   /** The Cognito `sub`. Opaque here — this layer never resolves it. */

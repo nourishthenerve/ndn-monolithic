@@ -147,7 +147,7 @@ Only handler tests and `curl` ever exercised those routes, and neither preflight
 
 The role model itself is unchanged: the same five roles, the same two sign-in buttons, the same pools. What changed is the *granularity* of one entity.
 
-The assessment form used to be two matrix rows (`visible{}`/`private{}`). It is now four — `general{}`, `patient{}`, `private{}`, `calendar{}` — one per section of the owner's own form, because the four sections have four different sets of writers and no arrangement of two rows expresses that. Read the four rows down `docs/plan/04-data-model-rbac.md`'s table rather than across this file; what follows is only what each role's *reach* now amounts to.
+The assessment form used to be two matrix rows (`visible{}`/`private{}`). It is now four — `general{}`, `private{}`, `prescription{}`, `calendar{}` (titled, since 2026-09-07, "Patient Details", "Patient Assessment Form", "Patient Prescription" and "Patient Appointments") — one per section of the owner's own form, because the four sections have four different sets of writers and no arrangement of two rows expresses that. Read the four rows down `docs/plan/04-data-model-rbac.md`'s table rather than across this file; what follows is only what each role's *reach* now amounts to.
 
 | Role | What the assessment form gives them |
 |---|---|
@@ -179,7 +179,7 @@ On the **assessment form** (`assessment.ts`), for one `IIC`-tagged patient:
 - the whole `general{}` section — its answers and its attachments
 - from `calendar{}`: the total number of appointments, and the next appointment with its length. **Nothing else** — not the clinician's scheduling notes, not the count of sessions completed, not how many bookings await the principal's approval.
 
-And nothing at all from `patient{}` or `private{}`, no messages, no diagnosis, no care plan, no account status, no assigned clinician, no email, no phone.
+And nothing at all from `prescription{}` or `private{}`, no messages, no diagnosis, no care plan, no account status, no assigned clinician, no email, no phone.
 
 A visitor writes nothing anywhere, on any route, including their own `tag`. The only thing they may change is their own password, through the same page every other signed-in role uses.
 
