@@ -62,6 +62,7 @@ import { viewerRoleFromAccessToken } from '../auth/token-claims.js';
 import { contentApiUrl } from '../site-config.js';
 
 import type { PanelHeadingLevel } from './heading-level.js';
+import { nestedHeadingLevel } from './heading-level.js';
 
 /** The form every patient's record is instantiated from. One template, one form per patient — `assessment-repository.ts`'s `DEFAULT_ASSESSMENT_ID`. */
 export const ASSESSMENT_ID = 'intake-v1';
@@ -83,13 +84,41 @@ export const ASSESSMENT_SAVED_EVENT = 'ndn:assessment-saved';
 // because a section the caller may not read is absent, not empty.
 export type AssessmentFieldSet = 'general' | 'private' | 'prescription' | 'calendar';
 
-export type AssessmentValue = string | number | boolean;
+/** One box's answer. */
+export type AssessmentRowValue = string | number | boolean;
+
+/** One row of a `type: 'rows'` field, keyed by that field's column ids. */
+export type AssessmentRow = Readonly<Record<string, AssessmentRowValue>>;
+
+/** A scalar, or the rows of a grid — see `AssessmentValue` in @ndn/shared-types for why a field may hold rows at all. */
+export type AssessmentValue = AssessmentRowValue | readonly AssessmentRow[];
+
+export type AssessmentFieldType =
+  | 'text'
+  | 'textarea'
+  | 'select'
+  | 'date'
+  | 'datetime'
+  | 'number'
+  | 'checkbox'
+  | 'rows';
+
+/** One column of a grid. Cannot itself be a grid, so a table never nests. */
+export interface AssessmentColumnDef {
+  readonly id: string;
+  readonly label: string;
+  readonly type: Exclude<AssessmentFieldType, 'rows' | 'textarea'>;
+  readonly options?: readonly string[];
+}
 
 export interface AssessmentFieldDef {
   readonly id: string;
   readonly label: string;
-  readonly type: 'text' | 'textarea' | 'select' | 'date' | 'datetime' | 'number' | 'checkbox';
+  readonly type: AssessmentFieldType;
   readonly options?: readonly string[];
+  readonly columns?: readonly AssessmentColumnDef[];
+  /** A sub-heading, rendered once above the run of fields that name it. Presentation only — the server neither reads nor enforces it. */
+  readonly group?: string;
   readonly staffOnly?: boolean;
   readonly derived?: boolean;
 }
@@ -162,6 +191,14 @@ export interface AssessmentFormStrings {
   readonly uploadingLabel: string;
   readonly uploadFailedLabel: string;
   readonly downloadLabel: string;
+  readonly addRowLabel: string;
+  readonly removeRowLabel: string;
+  /** `{field}` — the grid's own label. */
+  readonly addRowAriaTemplate: string;
+  /** `{row}` and `{field}`. */
+  readonly removeRowAriaTemplate: string;
+  /** `{field}`, `{column}` and `{row}` — see `renderCell` on why a cell needs its own name. */
+  readonly cellLabelTemplate: string;
   readonly noNextAppointmentLabel: string;
   readonly versionLabel: string;
 }
@@ -470,9 +507,50 @@ export function fieldValue(
     const summary = calendarSummary as Record<string, AssessmentValue> | undefined;
     return summary?.[field.id] ?? '';
   }
-  return (
-    sectionOf(latest, fieldSet).responses[field.id] ?? (field.type === 'checkbox' ? false : '')
-  );
+  const stored = sectionOf(latest, fieldSet).responses[field.id];
+  if (stored !== undefined) {
+    return stored;
+  }
+  // A type-correct blank: an unticked checkbox is `false` and an unfilled
+  // grid is no rows. Both matter for the same reason the comment above
+  // gives — `String(undefined)` in a `checked` prop is a permanently
+  // ticked box, and `''.map` is a crash.
+  if (field.type === 'checkbox') {
+    return false;
+  }
+  return field.type === 'rows' ? [] : '';
+}
+
+/** A field's answer as rows, whatever shape it actually arrived in. A scalar stored under an id that later became a grid reads as no rows rather than as a crash. */
+export function rowsOf(value: AssessmentValue): readonly AssessmentRow[] {
+  return Array.isArray(value) ? (value as readonly AssessmentRow[]) : [];
+}
+
+/**
+ * The section's fields cut into the runs that share a `group`, in
+ * declaration order.
+ *
+ * Runs, not a map: two fields naming the same group with a different one
+ * between them are two headings, because the template's order is the paper
+ * form's order and reordering a clinical form to tidy its headings would be
+ * the wrong way round. A field with no group starts an unnamed run, which
+ * renders with no heading at all — which is what every section other than
+ * the assessment form still is.
+ */
+export function groupsOf(
+  fields: readonly AssessmentFieldDef[],
+): readonly (readonly [string, readonly AssessmentFieldDef[]])[] {
+  const runs: [string, AssessmentFieldDef[]][] = [];
+  for (const field of fields) {
+    const group = field.group ?? '';
+    const last = runs.at(-1);
+    if (last && last[0] === group) {
+      last[1].push(field);
+    } else {
+      runs.push([group, [field]]);
+    }
+  }
+  return runs;
 }
 
 /**
@@ -778,9 +856,200 @@ export function AssessmentForm({
     );
   };
 
+  /**
+   * One cell of a grid.
+   *
+   * **Every cell carries its own `aria-label`** rather than relying on the
+   * column's `<th>`. A header cell names a *column*, and an input inside
+   * the body of that column is not reliably announced by it — so on a
+   * four-row medication table a screen-reader user would meet four boxes
+   * all called "Dose" and nothing to say which row they were in. The row
+   * number is one-based because it is being read aloud to a person.
+   */
+  const renderCell = (
+    section: AssessmentSectionDef,
+    field: AssessmentFieldDef,
+    column: AssessmentColumnDef,
+    index: number,
+    rows: readonly AssessmentRow[],
+  ): ReactNode => {
+    const cell = rows[index]?.[column.id];
+    const label = strings.cellLabelTemplate
+      .replace('{field}', field.label)
+      .replace('{column}', column.label)
+      .replace('{row}', String(index + 1));
+    const write = (next: AssessmentRowValue) =>
+      setDraft(
+        section.fieldSet,
+        field.id,
+        rows.map((row, i) => (i === index ? { ...row, [column.id]: next } : row)),
+      );
+
+    if (column.type === 'select') {
+      return (
+        <select aria-label={label} value={String(cell ?? '')} onChange={(e) => write(e.target.value)}>
+          <option value="">—</option>
+          {(column.options ?? []).map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    if (column.type === 'checkbox') {
+      return (
+        <input
+          type="checkbox"
+          aria-label={label}
+          checked={cell === true}
+          onChange={(e) => write(e.target.checked)}
+        />
+      );
+    }
+    const inputType = column.type === 'date' ? 'date' : column.type === 'number' ? 'number' : 'text';
+    return (
+      <input
+        type={inputType}
+        aria-label={label}
+        value={cell === undefined ? '' : String(cell)}
+        onChange={(e) => write(column.type === 'number' ? Number(e.target.value) : e.target.value)}
+      />
+    );
+  };
+
+  /**
+   * A grid, editable — the paper form's tables, which are about a third of
+   * the assessment form's sections.
+   *
+   * Rows are appended and removed, never reordered, which is why the array
+   * index is an honest React key here: it identifies the same row across a
+   * re-render for as long as that row exists, and a removal re-keys only
+   * the rows after it. A row has no id of its own, and inventing one would
+   * be a stored value nobody reads.
+   */
+  const renderRows = (section: AssessmentSectionDef, field: AssessmentFieldDef): ReactNode => {
+    const labelId = `assessment-${section.fieldSet}-${field.id}-label`;
+    const rows = rowsOf(valueOf(section, field));
+    const columns = field.columns ?? [];
+    const writeRows = (next: readonly AssessmentRow[]) =>
+      setDraft(section.fieldSet, field.id, next);
+
+    return (
+      <div key={field.id}>
+        <p id={labelId}>{field.label}</p>
+        {/* Some grids run to seven columns. A table that cannot scroll
+            inside its own box makes the whole page scroll sideways, which
+            on a phone means the save button is off-screen. */}
+        <div style={{ overflowX: 'auto' }}>
+          <table aria-labelledby={labelId}>
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th key={column.id} scope="col">
+                    {column.label}
+                  </th>
+                ))}
+                {/* The remove column's header is deliberately empty: this
+                    app has no visually-hidden utility class, and a visible
+                    "Remove this row" above a column of buttons that each
+                    already say so would be the label twice. Every button in
+                    the column carries its own `aria-label` naming the row
+                    it removes, which is the part that has to be right. */}
+                <th scope="col" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, index) => (
+                <tr key={index}>
+                  {columns.map((column) => (
+                    <td key={column.id}>{renderCell(section, field, column, index, rows)}</td>
+                  ))}
+                  <td>
+                    <button
+                      type="button"
+                      aria-label={strings.removeRowAriaTemplate
+                        .replace('{row}', String(index + 1))
+                        .replace('{field}', field.label)}
+                      onClick={() => writeRows(rows.filter((_, i) => i !== index))}
+                    >
+                      {strings.removeRowLabel}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <button
+            type="button"
+            aria-label={strings.addRowAriaTemplate.replace('{field}', field.label)}
+            onClick={() => writeRows([...rows, {}])}
+          >
+            {strings.addRowLabel}
+          </button>
+        </p>
+      </div>
+    );
+  };
+
+  /** The same grid for someone who may read it and not change it. A `<dl>` cannot hold a table, so a read-only grid sits beside the definition list rather than inside it. */
+  const renderReadOnlyRows = (
+    section: AssessmentSectionDef,
+    field: AssessmentFieldDef,
+  ): ReactNode => {
+    const labelId = `assessment-${section.fieldSet}-${field.id}-label`;
+    const rows = rowsOf(valueOf(section, field));
+    const columns = field.columns ?? [];
+    return (
+      <div key={field.id}>
+        <p id={labelId}>{field.label}</p>
+        {rows.length === 0 ? (
+          <p>{'\u2014'}</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table aria-labelledby={labelId}>
+              <thead>
+                <tr>
+                  {columns.map((column) => (
+                    <th key={column.id} scope="col">
+                      {column.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => (
+                  <tr key={index}>
+                    {columns.map((column) => {
+                      const cell = row[column.id];
+                      return (
+                        <td key={column.id}>
+                          {column.type === 'checkbox'
+                            ? String(cell === true)
+                            : cell === undefined || cell === ''
+                              ? '\u2014'
+                              : String(cell)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderField = (section: AssessmentSectionDef, field: AssessmentFieldDef): ReactNode => {
     const inputId = `assessment-${section.fieldSet}-${field.id}`;
     const value = valueOf(section, field);
+    if (field.type === 'rows') {
+      return renderRows(section, field);
+    }
 
     if (field.type === 'select') {
       return (
@@ -950,23 +1219,45 @@ export function AssessmentForm({
               payload.calendarSummary?.nextAppointmentAt === undefined && (
                 <p>{strings.noNextAppointmentLabel}</p>
               )}
-            {/* Read-only answers are grouped into one definition list and
-                editable ones follow as controls. Grouping is what `<dl>`
-                requires — a term/value list is one list, not one per pair
-                — and the consequence is that a section a caller can only
-                partly edit shows its read-only half first. Worth the
-                reordering: the alternative is either invalid markup or a
-                `<dl>` per field. */}
-            {section.fields.some((field) => !isEditable(section, field)) && (
-              <dl>
-                {section.fields
-                  .filter((field) => !isEditable(section, field))
-                  .map((field) => renderReadOnly(section, field))}
-              </dl>
-            )}
-            {section.fields
-              .filter((field) => isEditable(section, field))
-              .map((field) => renderField(section, field))}
+            {/* Grouped first, then split.
+
+                The owner's assessment form is 44 numbered headings and
+                nearly six hundred controls; a flat run of those under one
+                title is not a form anyone can fill in. So a heading is
+                emitted above each run of fields that names a group
+                (`groupsOf`). Sections whose fields name none — Patient
+                Details, Prescription, Appointments — are one unnamed run
+                and render exactly as they did.
+
+                Within a run, read-only answers come first as one
+                definition list, because grouping is what `<dl>` requires:
+                a term/value list is one list, not one per pair. Read-only
+                *grids* sit beside it rather than in it, since a `<dl>`
+                cannot contain a table. The consequence is unchanged from
+                when this was section-wide — a run a caller can only partly
+                edit shows its read-only half first — and so is the reason
+                for accepting it: the alternative is invalid markup. */}
+            {groupsOf(section.fields).map(([group, fields], index) => {
+              const readOnlyScalars = fields.filter(
+                (field) => !isEditable(section, field) && field.type !== 'rows',
+              );
+              const readOnlyGrids = fields.filter(
+                (field) => !isEditable(section, field) && field.type === 'rows',
+              );
+              const editable = fields.filter((field) => isEditable(section, field));
+              return (
+                <Fragment key={`${section.fieldSet}-${index}`}>
+                  {group !== '' && (
+                    <Heading level={nestedHeadingLevel(headingLevel)}>{group}</Heading>
+                  )}
+                  {readOnlyScalars.length > 0 && (
+                    <dl>{readOnlyScalars.map((field) => renderReadOnly(section, field))}</dl>
+                  )}
+                  {readOnlyGrids.map((field) => renderReadOnlyRows(section, field))}
+                  {editable.map((field) => renderField(section, field))}
+                </Fragment>
+              );
+            })}
             {writable && (
               <p>
                 <button

@@ -267,3 +267,57 @@ Two places enforce it, and they answer different questions:
 ### One thing the screenshot changed that is worth flagging
 
 The paper form's "Preferred contact" box offers **Phone / SMS / Email**. The placeholder it replaced offered Email / Phone / **WhatsApp**, and D-29 says WhatsApp is how the practice actually contacts patients. The screenshot is the instruction, so the options are the screenshot's three — flagged here rather than quietly re-added, because the owner is better placed than this runbook to say which is right.
+
+## Amendment, 2026-09-07 (third) — the real Patient Assessment Form, and the template's first structural change
+
+The owner supplied the second of the four sections as photographs of the paper original: the *Comprehensive Neurorehabilitation and Mental Well-Being Assessment*, 15 pages and 45 numbered sections in SOAP order. Sections 2 to 45 are now the `private` section. **Section 1, Patient Demographics, is deliberately not transcribed** — it is the `general` section already, and the instruction said so: *"Exception Personal Demographics"*.
+
+`private{}` went from 4 placeholder fields to 597.
+
+### This one did not fit "editing one array"
+
+The two previous reworks changed no structure, and this runbook and the template header both said so with some satisfaction. This one could not. **Roughly a third of the paper form's sections are grids** — Medication Review is drug × dose × route × frequency × indication × started × physio-relevant effects, and there are about thirty like it — and a template whose values were `string | number | boolean` had exactly two ways to hold one, both bad:
+
+- **one free-text box per table.** Ships in an afternoon, and throws away the columns. Nothing could ever read a drug name or an outcome score back out, and the clinician gets a blank rectangle where the paper form gave them a ruled grid.
+- **seven-times-N numbered fields** (`medication1Drug`, `medication2Drug`, …). Keeps the columns, fixes the row count in advance, and turns a 597-field form into a 1,200-field one.
+
+So the model grew a third thing, which is the change to read this amendment for:
+
+- **`type: 'rows'`** on a field, with **`AssessmentColumnDef[]`** declaring its columns. `AssessmentValue` is now `AssessmentRowValue | readonly AssessmentRow[]`, and a row is a flat bag of scalars — **one level, and no table inside a table**, which the paper form does not do either.
+- **`group`**, a string on a field, rendered once above the run of fields that names it. Presentation only: nothing authorises, validates or filters on it.
+
+`group` being a string on a flat field list rather than a nesting of the section is what kept a 45-section form from being a refactor. `section.fields` is still one array, so `validateResponses`, `templateField` and the visitor filter are untouched by grouping — the form does it on render, in `groupsOf`.
+
+### A column is policed exactly as a field is
+
+The template is the schema for which fields exist. A grid's `columns` are the schema for which cells exist inside it, and `validateRows` enforces the second half with the same refusals as the first: a row naming an undeclared column is `UNKNOWN_FIELD`, a cell of the wrong type is `INVALID_FIELD_TYPE`, a select column off its options is `INVALID_FIELD_OPTION`. Without that, `rows` would be exactly the arbitrary key/value store on a clinical record that `UNKNOWN_FIELD` exists to prevent, nested one level deeper and unwatched.
+
+A row *missing* a column is fine and is the ordinary case — a half-filled medication line is a real thing a clinician writes.
+
+Two bounds live in the body schema rather than the template, because they are about an untrusted request and not about clinical content: a row is a record of scalars (so a `responses` bag is at most three deep, which is what keeps `projection.ts`'s walk over it total and cheap), and a grid is capped at 100 rows. The cap is not an opinion about how many medications a patient may be on; a `rows` field is the first thing in this API a caller can make arbitrarily long.
+
+### R-09 needed no change, and that is worth stating
+
+`private{}` now carries far more clinical content than it did — a medication list, red-flag screening, psychosocial scores, a working diagnosis. The boundary that withholds it is unchanged: `projection.ts` keys off the literal attribute name `private`, and `stripPrivate`/`containsPrivateField` already walked arrays and plain objects recursively, so rows pass through them without a line changing. The 100% coverage threshold on that file still holds.
+
+### Four places the transcription made a judgement call
+
+Flagged rather than buried, because each is a place the screen deliberately differs from the paper:
+
+1. **Mutually exclusive tick columns became one `select` column.** Functional Limitations (§16) prints Independent / Aid / Assist needed / Unable as four tick boxes per row, and Functional Assessment (§33) prints Independent / Supervision / Assist ×1 / Assist ×2. A row ticked in two of them is not a finding, it is a slip, so each is a single `level` column.
+2. **The body chart (§14) is an attachment, not a field.** Three blank body outlines are a drawing; this template has no drawing type and should not grow one for a single use. The section's existing attachment mechanism takes a photo or scan of the marked-up chart, and the fields hold the written conclusions the paper form asks for underneath it.
+3. **The three signature lines (§45) are not captured as signatures.** A typed name is an attestation, not a signature. What is recorded is who completed the assessment, their registration number, who countersigned, and the dates. If the practice needs a real signature that is its own decision — an attachment, or a signing step — and not a text box.
+4. **Range of Motion (§26) is three grids, not one.** The spine table has one AROM/PROM pair per movement; the limb tables have a left and a right of each. One table with six mostly-empty columns would be a worse record than three that match the page.
+
+### Two ids were kept
+
+`clinicianImpression` and `workingDiagnosis` are the placeholder section's ids, reused where the owner's form asks the same questions (§35 and §37). A template is not history — a stored answer survives whatever the template does — but reusing the id is what puts an existing answer back in the box it was written in rather than beside an empty one.
+
+### Where a field id is written down outside the template
+
+Two places now, both deliberate and both guarded:
+
+- `AssessmentForm.tsx` names five `general` ids for its age and BMI arithmetic (the previous amendment).
+- The 200-odd tick-list checkboxes are declared through a `ticks()` helper in the template itself. **It takes explicit `[id, label]` pairs and never derives an id from a label** — a clinical record keys its answers by id, so a generated id would mean a wording change silently orphaning every answer stored under the old one.
+
+`assessment-template.test.ts` holds the grid invariants that are not compile errors: every grid declares columns, column ids are unique within their grid, select columns have options and nothing else does, no grid is `derived` or `staffOnly`, and no group is ever interleaved — that last one is what makes `groupsOf`'s run-based headings correct rather than merely usually correct.

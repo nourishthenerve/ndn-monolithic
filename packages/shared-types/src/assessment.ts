@@ -53,13 +53,40 @@ import type { FieldSet } from './principal.js';
 import type { BaseRecord } from './types.js';
 
 /**
- * What a template field's answer may be. Deliberately narrow: an
- * assessment answer is something a person typed or picked, never a nested
- * structure. A section that needs richer content gets an attachment
- * (below), not a deeper `responses` tree — which also keeps `stripPrivate`'s
- * depth-first walk over a response bag cheap and total.
+ * What a single box on the form holds: something a person typed or picked.
+ * One level, no nesting — a section that needs richer content than this
+ * gets an attachment (below).
  */
-export type AssessmentValue = string | number | boolean;
+export type AssessmentRowValue = string | number | boolean;
+
+/**
+ * One row of a `type: 'rows'` field, keyed by the column ids that field
+ * declares. A row is a flat bag of scalars and is **not** recursive: the
+ * form's grids are one table deep and a table inside a table is not a
+ * thing the paper form does either.
+ */
+export type AssessmentRow = Readonly<Record<string, AssessmentRowValue>>;
+
+/**
+ * What a template field's answer may be — a scalar, or the rows of a grid.
+ *
+ * **2026-09-07: this used to be scalars only**, and the note here said an
+ * answer is "never a nested structure". That held while the template's
+ * three real sections were placeholders. The owner's Comprehensive
+ * Neurorehabilitation assessment is a 45-section clinical document of which
+ * roughly thirty sections are *grids* — Medication Review is drug × dose ×
+ * route × frequency × indication × started × effects, and flattening that
+ * into either one free-text box or seven-times-N numbered fields loses the
+ * thing that makes it a medication list. So a field may now hold rows.
+ *
+ * The bound is deliberate and is one level: `AssessmentRow` is a bag of
+ * scalars, so a `responses` bag is at most three deep (field → row →
+ * column). `projection.ts`'s `stripPrivate` and `containsPrivateField`
+ * already walk arrays and plain objects recursively, so R-09's runtime
+ * boundary needed no change to stay total over this — which is the property
+ * the old note was really protecting.
+ */
+export type AssessmentValue = AssessmentRowValue | readonly AssessmentRow[];
 
 /**
  * A file uploaded into one section. The bytes live in S3 under

@@ -42,6 +42,11 @@ const STRINGS: AssessmentFormStrings = {
   uploadingLabel: 'Uploading…',
   uploadFailedLabel: 'That file could not be uploaded.',
   downloadLabel: 'Open',
+  addRowLabel: 'Add a row',
+  removeRowLabel: 'Remove this row',
+  addRowAriaTemplate: 'Add a row to {field}',
+  removeRowAriaTemplate: 'Remove row {row} from {field}',
+  cellLabelTemplate: '{field} — {column}, row {row}',
   noNextAppointmentLabel: 'No appointment is booked yet.',
   versionLabel: 'Version:',
 };
@@ -819,5 +824,135 @@ describe('the general section’s derived pair', () => {
     await waitFor(() => {
       expect(screen.getByText('27.7')).toBeDefined();
     });
+  });
+});
+
+// 2026-09-07, second amendment. `AssessmentForm.test.ts` pins `groupsOf`
+// and `rowsOf`; this pins what a clinician actually meets — a heading per
+// numbered section of the paper form, and a grid they can add a row to and
+// take one away from without saving in between.
+describe('groups and grids', () => {
+  const MEDICATIONS = {
+    id: 'medications',
+    label: 'Medications',
+    type: 'rows',
+    group: '7. Medication review',
+    columns: [
+      { id: 'drug', label: 'Drug (generic)', type: 'text' },
+      { id: 'dose', label: 'Dose', type: 'text' },
+      { id: 'route', label: 'Route', type: 'select', options: ['PO', 'IV'] },
+      { id: 'taughtAndChecked', label: 'Checked', type: 'checkbox' },
+    ],
+  };
+  const ASSESSMENT_SECTION = {
+    fieldSet: 'private',
+    title: 'Patient Assessment Form',
+    fields: [
+      { id: 'clinicianImpression', label: 'Clinical impression', type: 'textarea', group: '35. Clinical impression' },
+      MEDICATIONS,
+    ],
+  };
+  const PERMISSIONS = (write: boolean) => [
+    { fieldSet: 'general', read: false, write: false },
+    { fieldSet: 'prescription', read: false, write: false },
+    { fieldSet: 'private', read: true, write },
+    { fieldSet: 'calendar', read: false, write: false },
+  ];
+
+  function renderAssessment(options: { write?: boolean; rows?: unknown[] } = {}) {
+    const rows = options.rows;
+    return render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() =>
+          ok(
+            payloadFor({
+              template: [ASSESSMENT_SECTION],
+              permissions: PERMISSIONS(options.write ?? true),
+              items:
+                rows === undefined
+                  ? []
+                  : [
+                      {
+                        version: 1,
+                        updated_at: '2026-09-07T09:00:00.000Z',
+                        private: { responses: { medications: rows }, attachments: [] },
+                      },
+                    ],
+            }),
+          )
+        }
+      />,
+    );
+  }
+
+  it('writes a heading for each numbered section of the paper form', async () => {
+    renderAssessment();
+    // Under the section's own title, not beside it: the form is 44 of these
+    // and a flat run of controls under one title is not a form.
+    expect(await screen.findByRole('heading', { name: '35. Clinical impression' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: '7. Medication review' })).toBeDefined();
+  });
+
+  it('renders a grid as a table with a column per declared column', async () => {
+    renderAssessment({ rows: [{ drug: 'Gabapentin', dose: '300 mg' }] });
+    await screen.findByRole('table');
+    for (const header of ['Drug (generic)', 'Dose', 'Route', 'Checked']) {
+      expect(screen.getByRole('columnheader', { name: header })).toBeDefined();
+    }
+    expect(screen.getByDisplayValue('Gabapentin')).toBeDefined();
+    expect(screen.getByDisplayValue('300 mg')).toBeDefined();
+  });
+
+  it('names every cell by its column and its row number', async () => {
+    // A `<th>` names a column; it does not name an input in the body of
+    // that column. Without this a four-row table is four boxes all called
+    // "Dose" as far as a screen reader is concerned.
+    renderAssessment({ rows: [{ drug: 'Gabapentin' }, { drug: 'Amitriptyline' }] });
+    await screen.findByRole('table');
+    expect(screen.getByLabelText('Medications — Drug (generic), row 1')).toBeDefined();
+    expect(screen.getByLabelText('Medications — Drug (generic), row 2')).toBeDefined();
+  });
+
+  it('adds a row, and the new row is editable straight away', async () => {
+    renderAssessment({ rows: [] });
+    const add = await screen.findByRole('button', { name: 'Add a row to Medications' });
+    fireEvent.click(add);
+    await waitFor(() => {
+      expect(screen.getByLabelText('Medications — Drug (generic), row 1')).toBeDefined();
+    });
+    fireEvent.change(screen.getByLabelText('Medications — Drug (generic), row 1'), {
+      target: { value: 'Gabapentin' },
+    });
+    expect(screen.getByDisplayValue('Gabapentin')).toBeDefined();
+  });
+
+  it('removes the row it was asked to remove, not the last one', async () => {
+    // The row key is the array index, which is honest only because rows are
+    // appended and removed and never reordered — this is the assertion that
+    // says so.
+    renderAssessment({ rows: [{ drug: 'Gabapentin' }, { drug: 'Amitriptyline' }] });
+    await screen.findByRole('table');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove row 1 from Medications' }));
+    await waitFor(() => {
+      expect(screen.queryByDisplayValue('Gabapentin')).toBeNull();
+    });
+    expect(screen.getByDisplayValue('Amitriptyline')).toBeDefined();
+  });
+
+  it('renders a grid as a plain table, with no inputs, for a reader who may not edit', async () => {
+    renderAssessment({ write: false, rows: [{ drug: 'Gabapentin', dose: '300 mg' }] });
+    await screen.findByRole('table');
+    expect(screen.getByText('Gabapentin')).toBeDefined();
+    expect(screen.queryByLabelText('Medications — Drug (generic), row 1')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add a row to Medications' })).toBeNull();
+  });
+
+  it('renders an empty grid without a table rather than an empty one', async () => {
+    renderAssessment({ write: false, rows: [] });
+    await screen.findByText('Medications');
+    expect(screen.queryByRole('table')).toBeNull();
   });
 });
