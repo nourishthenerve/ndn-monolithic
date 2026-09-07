@@ -25,7 +25,7 @@
 // behaviours live together in testimonial-moderation.ts instead.
 import { createHash } from 'node:crypto';
 
-import type { Testimonial } from '@ndn/shared-types';
+import type { Testimonial, TestimonialCuration } from '@ndn/shared-types';
 
 import { auditEventFor, type ActorContext, type AuditWriter } from './audit.js';
 import type { Clock } from './clock.js';
@@ -45,6 +45,17 @@ export interface TestimonialStore {
   update(item: Testimonial): Promise<void>;
   /** Every testimonial id ever created, in no particular order. */
   listAllIds(): Promise<string[]>;
+  /**
+   * The practice's picks, or `undefined` if the principal has never saved
+   * any. That distinction is load-bearing — see
+   * `TestimonialRepository.readCuration`.
+   *
+   * One record for the whole site, so this takes no key: there is exactly
+   * one, the same way `/testimonials/mine` has no id in its path.
+   */
+  getCuration(): Promise<TestimonialCuration | undefined>;
+  /** Overwrites the picks wholesale. There is nothing on this record to protect from a second write — it *is* the current selection, and every save replaces it. */
+  putCuration(curation: TestimonialCuration): Promise<void>;
 }
 
 function consentsMatch(a: Testimonial['consent'], b: Testimonial['consent']): boolean {
@@ -57,6 +68,7 @@ function consentsMatch(a: Testimonial['consent'], b: Testimonial['consent']): bo
 
 export class InMemoryTestimonialStore implements TestimonialStore {
   private readonly items = new Map<string, Testimonial>();
+  private curation: TestimonialCuration | undefined;
 
   async get(id: string): Promise<Testimonial | undefined> {
     return this.items.get(id);
@@ -82,6 +94,14 @@ export class InMemoryTestimonialStore implements TestimonialStore {
 
   async listAllIds(): Promise<string[]> {
     return [...this.items.keys()];
+  }
+
+  async getCuration(): Promise<TestimonialCuration | undefined> {
+    return this.curation;
+  }
+
+  async putCuration(curation: TestimonialCuration): Promise<void> {
+    this.curation = curation;
   }
 }
 
@@ -112,6 +132,23 @@ export type SubmitTestimonialInput = Pick<Testimonial, 'quote' | 'attribution'> 
   readonly authorPatientId: string;
   readonly consentTextVersion: string;
 };
+
+/**
+ * The curation record's own id. There is one for the whole site, so it is
+ * a constant rather than anything derived — `TESTIMONIAL_CURATION#site`
+ * in the table, and the `entityId` of the audit row a save writes.
+ */
+export const TESTIMONIAL_CURATION_ID = 'site';
+
+/**
+ * Newest first, by `created_at` — when the patient first published, not
+ * when they last edited it. An edit is the same testimonial, and letting a
+ * typo correction jump a two-year-old quote to the top of the page would
+ * make "recent at the top" mean something nobody asked for.
+ */
+function newestFirst(a: Testimonial, b: Testimonial): number {
+  return b.created_at.localeCompare(a.created_at);
+}
 
 export class TestimonialRepository {
   constructor(
@@ -181,9 +218,74 @@ export class TestimonialRepository {
     return this.store.get(testimonialIdForPatient(patientId));
   }
 
-  /** Only ever returns published testimonials — the public read boundary the public page relies on. */
+  /**
+   * Only ever returns published testimonials — the public read boundary
+   * the public page relies on.
+   *
+   * **Newest first (2026-09-07).** It used to return them in
+   * `listAllIds()` order, which is DynamoDB's GSI2 order over hashed ids —
+   * arbitrary, stable, and meaningless. The owner read it exactly as it
+   * looked: *"on webpage the testimonials are shown in some random manner
+   * I assume."* The testimonials page is specified as *"chronological
+   * order with recent at the top"*, and sorting here rather than in the
+   * page means the homepage strip, the archive and the principal's own
+   * curation screen all agree without three sorts to keep in step.
+   */
   async findPublished(): Promise<Testimonial[]> {
-    return this.findByStatus('published');
+    return (await this.findByStatus('published')).sort(newestFirst);
+  }
+
+  /**
+   * The practice's picks, or `undefined` when the principal has never
+   * saved any.
+   *
+   * `undefined` is **not** "nothing is picked" — it is "nobody has picked
+   * yet", and the public read treats the two differently on purpose: an
+   * empty selection is a deliberate blank page, while no selection at all
+   * keeps the pre-curation behaviour (every published testimonial, newest
+   * first). Collapsing them would have emptied a live site the moment this
+   * feature deployed.
+   */
+  async readCuration(): Promise<TestimonialCuration | undefined> {
+    return this.store.getCuration();
+  }
+
+  /**
+   * Replaces the practice's picks.
+   *
+   * Writes nothing to any testimonial — this is the whole reason the picks
+   * live in their own record. `authz-matrix.ts`'s `Testimonial (own)` row
+   * still denies the principal every cell; `Testimonial placement` is what
+   * this write is governed by.
+   *
+   * Audited as an `update` on `TestimonialCuration`, not on the
+   * testimonials named in it. A row per pick would say a principal
+   * "updated" someone's testimonial, which is exactly the thing that did
+   * not happen.
+   */
+  async saveCuration(
+    actor: ActorContext,
+    picks: { readonly featured: readonly string[]; readonly listed: readonly string[] },
+  ): Promise<TestimonialCuration> {
+    const now = this.clock.now().toISOString();
+    const existing = await this.store.getCuration();
+    const record: TestimonialCuration = {
+      featured: [...picks.featured],
+      listed: [...picks.listed],
+      status: 'active',
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
+    await this.store.putCuration(record);
+    await this.audit.write(
+      auditEventFor(actor, {
+        at: now,
+        action: existing ? 'update' : 'create',
+        entityType: 'TestimonialCuration',
+        entityId: TESTIMONIAL_CURATION_ID,
+      }),
+    );
+    return record;
   }
 
   /**

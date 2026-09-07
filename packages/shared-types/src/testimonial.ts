@@ -56,6 +56,58 @@ export interface TestimonialAttribution {
   readonly name?: string;
 }
 
+/**
+ * Where a published testimonial appears on the public site — the owner's
+ * *"principal clinician will have option to cherry pick these testimonials
+ * that goes on the websites landing page and those that go inside read more
+ * testimonial page."*
+ *
+ * Three values rather than two booleans, because the landing page is a
+ * subset of the testimonials page and never a separate set: a quote on the
+ * homepage that vanished when a reader clicked "Read more testimonials"
+ * would read as a bug. `'landing'` therefore means *both* surfaces.
+ */
+export type TestimonialPlacement = 'landing' | 'page' | 'hidden';
+
+/**
+ * The practice's picks — **one record for the whole site**, not a field on
+ * each testimonial.
+ *
+ * That is the whole reason this type exists separately. `authz-matrix.ts`'s
+ * `Testimonial (own)` row denies every clinician column, the principal's
+ * included, and curation must not quietly reopen it: choosing which of a
+ * patient's published words to put on the homepage is the practice's
+ * decision about its own marketing, while the words, the credit and the
+ * consent stay the patient's alone. Keeping the picks in a record the
+ * patient does not own and the principal does means neither role can reach
+ * the other's — a principal's write here cannot touch a quote, and a
+ * patient's write to their own testimonial cannot promote it.
+ *
+ * It also removes a race: `TestimonialStore.update` overwrites the whole
+ * item, so a placement field living on the testimonial would be lost by a
+ * patient editing their quote at the wrong moment.
+ *
+ * `featured` is **ordered** — it is the landing page's order, the "top
+ * rated" of the request, chosen by hand. `listed` is not: the testimonials
+ * page is chronological, newest first, so any order stored here would be
+ * discarded on the way out.
+ */
+export interface TestimonialCuration extends BaseRecord<'active'> {
+  /** Testimonial ids on the landing page *and* the testimonials page, in the order the landing page shows them. */
+  readonly featured: readonly string[];
+  /** Testimonial ids on the testimonials page only. Order is not meaningful. */
+  readonly listed: readonly string[];
+}
+
+/**
+ * How many testimonials the landing page will carry. A cap rather than a
+ * fixed count: the principal picks however many up to this, and picking
+ * none is a legitimate (if empty-looking) choice. Six is two full rows of
+ * the homepage's three-column grid — beyond that the strip stops being a
+ * highlight and becomes the archive it links to.
+ */
+export const MAX_FEATURED_TESTIMONIALS = 6;
+
 export interface Testimonial extends BaseRecord<TestimonialStatus> {
   /**
    * Derived from `authorPatientId` — see `testimonialIdForPatient`. This

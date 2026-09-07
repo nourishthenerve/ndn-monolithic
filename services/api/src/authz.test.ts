@@ -33,6 +33,7 @@ const DOC_TABLE: Readonly<Record<MatrixRow, Readonly<Record<MatrixColumn, string
   'Audit log':                { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',   Helpdesk: '—',   Visitor: '—',   Principal: 'R' },
   'Content item':             { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '**R**',            'Sub-clinician (unassigned)': '**R**', Helpdesk: '**R**',   Visitor: '—',   Principal: 'C R U' },
   'Testimonial (own)':        { 'Patient (own)': '**C R U D**',    'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',     Helpdesk: '—',   Visitor: '—',   Principal: '—' },
+  'Testimonial placement':    { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '—',                'Sub-clinician (unassigned)': '—',     Helpdesk: '—',   Visitor: '—',   Principal: '**C R U**' },
   Workshop:                   { 'Patient (own)': '—',              'Patient (other)': '—', 'Sub-clinician (assigned)': '**R**',            'Sub-clinician (unassigned)': '**R**', Helpdesk: '—',   Visitor: '—',   Principal: 'C R U' },
 };
 
@@ -108,6 +109,7 @@ const ROW_ENTITY_TYPES: Readonly<Record<MatrixRow, string>> = {
   'Audit log': 'audit',
   'Content item': 'content-item',
   'Testimonial (own)': 'testimonial',
+  'Testimonial placement': 'testimonial-placement',
   Workshop: 'workshop',
 };
 

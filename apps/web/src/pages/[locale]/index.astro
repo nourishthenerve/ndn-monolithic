@@ -46,7 +46,14 @@ import { fetchPublishedTestimonials } from '../../testimonials/testimonial-clien
 import { LiveWorkshopList } from '../../workshops/LiveWorkshopList.js';
 import { fetchPublishedWorkshops } from '../../workshops/workshop-client.js';
 
-/** How many of each the landing page shows before handing off to the archive. */
+/**
+ * How many blog posts and workshops the landing page shows before handing
+ * off to the archive.
+ *
+ * **Testimonials no longer use it** (2026-09-07): the principal picks those
+ * by hand, so their count is a decision made in `account/testimonials`, not
+ * a constant here. See the strip's own comment.
+ */
 const HOME_LIST_LIMIT = 3;
 
 export async function getStaticPaths() {
@@ -387,11 +394,19 @@ const homeStylesCss = `
           {t('home.testimonials.heading', undefined, locale)}
         </Heading>
         <div class="ndn-home-grid">
+          {/* 2026-09-07: `featuredOnly`, not `limit`. The owner: *"I want
+              the principal clinician to have option to cherry pick top rated
+              testimonials on the landing page."* Which quotes appear here,
+              and how many, is now the principal's selection
+              (`account/testimonials`) rather than "the newest three" — so
+              this strip takes no count at all. Until anyone curates, the API
+              ranks the newest three, which is exactly what this rendered
+              before. */}
           <LiveTestimonialList
             client:load
             locale={locale}
             initialTestimonials={testimonials}
-            limit={HOME_LIST_LIMIT}
+            featuredOnly
             strings={{
               empty: t('testimonials.index.empty', undefined, locale),
               anonymous: t('testimonials.form.attributionDisplay.anonymous', undefined, locale),

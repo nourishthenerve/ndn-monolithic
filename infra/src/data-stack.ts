@@ -71,6 +71,15 @@ import { createWebSocketConnectAuthorizer } from './ws-authorizer.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 
+/**
+ * Mirrors `services/api/src/dynamo-store.ts`'s `TESTIMONIAL_CURATION_PK` —
+ * the one partition key `TestimonialCurationFunction` may write, named here
+ * so its IAM condition and the store agree. The same mirroring
+ * `guardrails.ts` does for the `AUDIT#` prefix, and for the same reason:
+ * infra and the API are separate builds, so the string is the contract.
+ */
+const TESTIMONIAL_CURATION_PARTITION_KEY = 'TESTIMONIAL_CURATION#site';
+
 const GSI1_INDEX_NAME = 'GSI1';
 const GSI2_INDEX_NAME = 'GSI2';
 const GSI3_INDEX_NAME = 'GSI3';
@@ -664,6 +673,111 @@ export class DataStack extends Stack {
       path: '/testimonials/mine',
       methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE],
       integration: testimonialAuthoringIntegration,
+    });
+
+    // 2026-09-07: the principal's picks — which published testimonials the
+    // landing page carries and which the testimonials page carries. The
+    // owner: *"Principal clinician will have option to cherry pick these
+    // testimonials that goes on the websites landing page and those that go
+    // inside read more testimonial page."*
+    //
+    // **A third function rather than two more routes on the authoring one,
+    // and the reason is this role's write grant.** The authoring function
+    // may write `TESTIMONIAL#<id>` rows because a patient edits their own
+    // testimonial through it. The principal must never be able to, and
+    // "must never" is only true if the code that serves them cannot — which
+    // means a separate role, whose `PutItem` is conditioned on the one
+    // partition key the curation record lives at. `authz-matrix.ts`'s
+    // `Testimonial (own)` row already refuses a principal at the policy
+    // layer; this is the same refusal in IAM, so a bug in the handler still
+    // cannot rewrite a patient's words.
+    const testimonialCurationLogGroupName = props.prLabel
+      ? `/ndn/${props.prLabel}/testimonial-curation-function`
+      : '/ndn/testimonial-curation-function';
+
+    const testimonialCurationRole = new Role(this, 'TestimonialCurationFunctionRole', {
+      assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    const testimonialCurationFunction = new NodejsFunction(
+      this,
+      'TestimonialCurationFunction',
+      {
+        entry: `${moduleDir}../../services/api/src/testimonial-curation-handler.ts`,
+        handler: 'handler',
+        runtime: Runtime.NODEJS_22_X,
+        architecture: Architecture.ARM_64,
+        memorySize: 128,
+        timeout: Duration.seconds(5),
+        role: testimonialCurationRole,
+        environment: {
+          TESTIMONIAL_TABLE_NAME: this.table.tableName,
+          AUDIT_TABLE_NAME: this.table.tableName,
+          ...FLAG_ENVIRONMENT,
+        },
+        logGroup: createLogGroup(
+          this,
+          'TestimonialCurationFunctionLogGroup',
+          testimonialCurationLogGroupName,
+          testimonialCurationRole,
+        ),
+      },
+    );
+
+    grantFlagReads(this, testimonialCurationRole);
+
+    this.table.grantReadData(testimonialCurationRole);
+    // Two statements, not one, because they say two different things.
+    //
+    // The curation record is the only item this role may write, and
+    // `dynamodb:LeadingKeys` is how that is expressed against a
+    // single-table design: a `PutItem` naming any other partition key —
+    // `TESTIMONIAL#<id>` above all — is not covered by the Allow and is
+    // therefore denied. The audit row it also writes lives in `AUDIT#<date>`
+    // and needs its own.
+    testimonialCurationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'TestimonialCurationWrite',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringEquals': {
+            'dynamodb:LeadingKeys': [TESTIMONIAL_CURATION_PARTITION_KEY],
+          },
+        },
+      }),
+    );
+    testimonialCurationRole.addToPrincipalPolicy(
+      new PolicyStatement({
+        sid: 'TestimonialCurationAuditWrite',
+        effect: Effect.ALLOW,
+        actions: ['dynamodb:PutItem'],
+        resources: [this.table.tableArn],
+        conditions: {
+          'ForAllValues:StringLike': {
+            'dynamodb:LeadingKeys': [`${AUDIT_PARTITION_KEY_PREFIX}*`],
+          },
+        },
+      }),
+    );
+    attachDestructiveActionGuardrail(testimonialCurationRole, {
+      buckets: [],
+      tables: [this.table],
+    });
+    attachAuditPartitionReadGuardrail(testimonialCurationRole, this.table);
+
+    // No `authorizer:` override — `defaultAuthorizer` applies, and
+    // `authz-matrix.ts`'s `Testimonial placement` row (Principal only) does
+    // the rest.
+    const testimonialCurationIntegration = new HttpLambdaIntegration(
+      'TestimonialCurationIntegration',
+      testimonialCurationFunction,
+    );
+    httpApi.addRoutes({
+      path: '/testimonials/curation',
+      methods: [HttpMethod.GET, HttpMethod.PUT],
+      integration: testimonialCurationIntegration,
     });
 
     // TASK 1.5.1: workshops — same table, one more entity. Public read

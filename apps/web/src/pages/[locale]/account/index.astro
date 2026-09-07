@@ -495,6 +495,16 @@ const PANEL_HEADING_LEVEL = 3;
               {t('account.workshopsLink', undefined, locale)}
             </Link>
           </li>
+          {/* 2026-09-07: choosing which published testimonials the site
+              shows. A fourth link rather than a section inlined here, unlike
+              the patient panels above: the page is a list of every published
+              testimonial in full, which is not a panel — and it is read at
+              the pace of a marketing decision, not on every sign-in. */}
+          <li>
+            <Link href={`/${locale}/account/testimonials`}>
+              {t('account.testimonialCurationLink', undefined, locale)}
+            </Link>
+          </li>
         </ul>
       </nav>
     </RequireAuth>

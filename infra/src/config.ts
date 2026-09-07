@@ -237,6 +237,13 @@ export const UNMONITORED_LOG_GROUP_NAMES = [
   // by the same low call-volume every prior video function on this list
   // already is. Displacing nothing.
   '/ndn/turn-credentials-function',
+  // 2026-09-07: the principal choosing which testimonials the site shows.
+  // One person, deciding a marketing question a few times a year —
+  // alongside `caseload-function` as the smallest volume in the estate, and
+  // smaller than `testimonial-authoring-function`, which keeps its
+  // monitored slot because it is the path a *patient* writes on.
+  // Displacing nothing.
+  '/ndn/testimonial-curation-function',
   // D-22: a fixed rate(1 day) schedule — one invocation, one log line, per
   // day, the lowest and most predictable volume of any function in the
   // estate — the same "scheduled, not traffic-driven" reasoning D-32

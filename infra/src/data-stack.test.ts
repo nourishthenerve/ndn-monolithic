@@ -494,6 +494,10 @@ describe('DataStack — feature-flag reads', () => {
     // read takes no flag, and now that the moderation routes it shared a
     // function with are gone, it has none to read.
     'testimonial-authoring-handler',
+    // 2026-09-07: the principal's landing-page/testimonials-page picks,
+    // gated on the same `testimonials.enabled` as authoring — curating a
+    // list nobody can see is not a separate capability.
+    'testimonial-curation-handler',
     'workshop-read-handler',
     'workshop-authoring-handler',
     'stripe-checkout-handler',
@@ -659,8 +663,10 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // never writes through the audit log either, only ever reads). TASK
     // 3.4.3's reminder-sweep function used to be on this list too — D-32
     // (2026-08-30) deleted it. The two authorizers are deliberately
-    // absent — both read a status and write nothing.
-    expect(withAuditTable).toHaveLength(20);
+    // absent — both read a status and write nothing. 2026-09-07 adds the
+    // testimonial-curation function, whose repository writes one audit row
+    // per saved selection.
+    expect(withAuditTable).toHaveLength(21);
   });
 
   it('grants the reader dynamodb:Query and nothing that could change a row', () => {
@@ -722,8 +728,9 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
     // role, which reads and marks read the patient's own dashboard feed
     // and — alone among the writers in this stack — has no `AUDIT#` write
     // grant to pair this denial with, because the repository behind it
-    // takes no `AuditWriter` at all.
-    expect(denials).toHaveLength(24);
+    // takes no `AuditWriter` at all. 2026-09-07 adds the
+    // testimonial-curation role.
+    expect(denials).toHaveLength(25);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual([
@@ -742,8 +749,9 @@ describe('DataStack — audit log (TASK 2.1.3)', () => {
 
     // Same role count as the AUDIT# denial above — TASK 3.4.3's
     // reminder-sweep role used to be on this list too, deleted by D-32;
-    // 2026-09-01's patient-notification role added.
-    expect(denials).toHaveLength(24);
+    // 2026-09-01's patient-notification role added, and 2026-09-07's
+    // testimonial-curation role.
+    expect(denials).toHaveLength(25);
     for (const statement of denials) {
       expect(statement.Effect).toBe('Deny');
       expect(statement.Action).toEqual(['dynamodb:Scan', 'dynamodb:PartiQLSelect']);
@@ -881,6 +889,13 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
         // `GET /testimonials/pending` and the publish/reject pair are gone
         // — the owner: *"there is no concept of review a testimonial."*
         'GET /testimonials/mine',
+        // 2026-09-07: the principal's picks — which published testimonials
+        // the landing page carries and which the testimonials page does.
+        // Behind the real authorizer like every other authenticated route;
+        // `authz-matrix.ts`'s `Testimonial placement` row narrows it to the
+        // principal from there.
+        'GET /testimonials/curation',
+        'PUT /testimonials/curation',
         'GET /workshops/authored',
         'DELETE /testimonials/mine',
         'PUT /testimonials/mine',

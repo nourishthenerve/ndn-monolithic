@@ -24,9 +24,15 @@ const attributionSchema = z.object({
 // testimonial. Found live: a patient published one and the public page
 // stayed empty. Nothing caught it because the fixtures in this file's own
 // test were written against the old shape and kept an `id`.
+//
+// 2026-09-07 adds `featuredRank` — optional, because most testimonials do
+// not have one. It is the position the principal gave this quote on the
+// landing page (`testimonial-read.ts`'s `curatedTestimonials`); the
+// testimonials page ignores it and renders the list in the order it came.
 const testimonialSchema = z.object({
   quote: z.record(z.string(), z.string()),
   attribution: attributionSchema,
+  featuredRank: z.number().int().nonnegative().optional(),
 });
 
 export type PublishedTestimonial = z.infer<typeof testimonialSchema>;

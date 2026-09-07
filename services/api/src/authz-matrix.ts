@@ -49,6 +49,7 @@ export type MatrixRow =
   | 'Audit log'
   | 'Content item'
   | 'Testimonial (own)'
+  | 'Testimonial placement'
   | 'Workshop';
 
 /** The doc's table columns, verbatim. */
@@ -335,6 +336,37 @@ export const RBAC_MATRIX: RbacMatrix = {
     Visitor: DENIED,
     Principal: DENIED,
   },
+  // | **Testimonial placement** | — | — | — | — | — | — | **C R U** |
+  //
+  // 2026-09-07. The owner: *"Principal clinician will have option to cherry
+  // pick these testimonials that goes on the websites landing page and those
+  // that go inside read more testimonial page."*
+  //
+  // **A separate row from `Testimonial (own)` above, which is unchanged.**
+  // The principal is still denied every cell of that row — they cannot
+  // write a quote, edit a credit, publish, unpublish or withdraw. This row
+  // governs a different record entirely: one site-wide list of *which*
+  // already-published testimonials the practice puts on which page, which
+  // is a decision about the practice's own marketing surfaces rather than
+  // about anybody's words.
+  //
+  // Every other column is denied. A sub-clinician, helpdesk account or
+  // visitor has no say in what the site shows, and a patient does not
+  // promote their own testimonial — the one thing a patient controls here
+  // is whether it is published at all, which `Testimonial (own)`'s `D`
+  // already gives them.
+  //
+  // No `'withdraw'`: unpicking is an `update` to the picks, and it leaves
+  // the testimonial exactly as it was.
+  'Testimonial placement': {
+    'Patient (own)': DENIED,
+    'Patient (other)': DENIED,
+    'Sub-clinician (assigned)': DENIED,
+    'Sub-clinician (unassigned)': DENIED,
+    Helpdesk: DENIED,
+    Visitor: DENIED,
+    Principal: ['create', 'read', 'update'],
+  },
   // | Workshop | — | — | **R** | **R** | — | — | C R U |
   Workshop: {
     'Patient (own)': DENIED,
@@ -372,6 +404,10 @@ export const ENTITY_TYPE_ROWS = {
   audit: 'Audit log',
   'content-item': 'Content item',
   testimonial: 'Testimonial (own)',
+  // Deliberately a second entity type rather than a `fieldSet`-style split
+  // of `testimonial`: the two rows govern two different *records*, not two
+  // halves of one. See the `Testimonial placement` row's own note.
+  'testimonial-placement': 'Testimonial placement',
   workshop: 'Workshop',
 } as const satisfies Readonly<Record<string, MatrixRow>>;
 

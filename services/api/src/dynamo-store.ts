@@ -45,6 +45,7 @@ import type {
   PatientNotification,
   Registration,
   Testimonial,
+  TestimonialCuration,
   Workshop,
 } from '@ndn/shared-types';
 
@@ -78,6 +79,14 @@ const GSI2_INDEX_NAME = 'GSI2';
 const TESTIMONIAL_PK = (id: string) => `TESTIMONIAL#${id}`;
 const TESTIMONIAL_INDEX_SORT_KEY = 'INDEX';
 const TESTIMONIAL_INDEX_GSI2PK = 'TESTIMONIAL_INDEX#all';
+
+// 2026-09-07: the practice's landing-page/testimonials-page picks. A
+// **distinct partition prefix**, not a second sort key under some
+// testimonial's own `TESTIMONIAL#<id>` — the point of the separate record
+// is that a principal's write never addresses a patient's row, and sharing
+// a partition with one would undo that in the only place it is enforced.
+// Singular by construction: one site, one key, no id in it.
+export const TESTIMONIAL_CURATION_PK = 'TESTIMONIAL_CURATION#site';
 
 // TASK 1.5.1: same table, same GSI2, a third entity type. `WORKSHOP#<id>`
 // can't collide with `CONTENT#<id>`/`TESTIMONIAL#<id>` (distinct pk
@@ -445,6 +454,33 @@ export class DynamoTestimonialStore implements TestimonialStore {
       }
     }
     return ids;
+  }
+
+  async getCuration(): Promise<TestimonialCuration | undefined> {
+    const result = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { pk: TESTIMONIAL_CURATION_PK, sk: META_SORT_KEY },
+      }),
+    );
+    if (!result.Item) {
+      return undefined;
+    }
+    return withoutTableKeys<TestimonialCuration>(result.Item);
+  }
+
+  // A plain overwrite, with no condition on it. Unlike a testimonial's
+  // `consent`, there is nothing on this record a later write must preserve
+  // — it *is* the current selection, and saving is how it changes. No GSI2
+  // projection row either: nothing lists curation records, because there is
+  // one.
+  async putCuration(curation: TestimonialCuration): Promise<void> {
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: { ...curation, pk: TESTIMONIAL_CURATION_PK, sk: META_SORT_KEY },
+      }),
+    );
   }
 }
 

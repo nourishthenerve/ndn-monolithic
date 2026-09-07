@@ -41,6 +41,7 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 | Audit log | — | — | — | — | — | — | R |
 | Content item | — | — | **R** | **R** | **R** | — | C R U |
 | **Testimonial (own)** | **C R U D** | — | — | — | — | — | — |
+| **Testimonial placement** | — | — | — | — | — | — | **C R U** |
 | Workshop | — | — | **R** | **R** | — | — | C R U |
 
 **2026-08-31 adds the `Helpdesk` column.** The owner: *"Besides principal clinician and clinician I also want to create an account for helpdesk person who will be able to either create a new patient account/registration or edit/upload content to existing patients including providing them new temporary password. This account will be able to login using the clinician sign in button."*
@@ -150,3 +151,21 @@ And explicitly not: the stored `schedulingNotes`, any attachment, `sessionsCompl
 This is the **third** narrowing applied to the `Visitor` column outside the matrix, after the tag filter and the field-level projection in `caseload-repository.ts`, and the reason is unchanged each time: the matrix says which *rows* a role may reach, never which *fields* of a row. Each one is therefore named here in words and enforced at one chokepoint in code (`VISITOR_CALENDAR_FIELDS` in `assessment.ts`), not left to be discovered.
 
 **"Total number of appointments" is defined once, in `@ndn/shared-types`.** `COUNTED_APPOINTMENT_STATUSES` is `scheduled`, `completed` and `no-show`: an appointment counts once it stands. `cancelled` never happened, and `pending-approval` is not confirmed. The definition is shared because a visitor sees this figure on **two** screens — the dashboard list and the assessment form — and one patient showing two different totals would be worse than either figure alone. The dashboard's own column moved with it (`countCompletedAppointments` → `countAppointments`, "Appointments attended" → "Appointments in total"), so the two now cannot drift.
+
+## 2026-09-07 — `Testimonial placement`, the row that lets the principal curate without authoring
+
+The owner: *"I want the principal clinician to have option to cherry pick top rated testimonials on the landing page. However, when someone clicks Read more testimonials, there will be more cherry picked shown in chronological order with recent at the top. Principal clinician will have option to cherry pick these testimonials that goes on the websites landing page and those that go inside read more testimonial page."*
+
+**This is a new row, not a widening of `Testimonial (own)`, and the distinction is the whole design.** The 2026-09-02 amendment above denies every clinician column on that row — *"a practice that can write, edit, or approve those words is not collecting testimonials"* — and this amendment does not touch it. Nothing here lets the principal write a quote, change a credit, publish an unpublished testimonial, or unpublish a published one. What it grants is a decision about the practice's own marketing surfaces: which of the testimonials patients have already chosen to publish appear on the landing page, and which appear on the testimonials page.
+
+The two are kept apart in the data as well as in the table. The picks live in **one site-wide record** (`TESTIMONIAL_CURATION#site`), not as a field on each testimonial, so:
+
+* the principal's write never addresses a patient's row at all — the separation is structural rather than a field-level rule a handler has to honour;
+* a patient editing their quote cannot lose a placement, and a principal saving picks cannot overwrite a quote, though `TestimonialStore.update` overwrites whole items;
+* the landing page's *order* is expressible, because a list has one and a boolean per row does not. "Top rated" is a hand-made ranking, so the record stores it as an ordered array.
+
+**What curation cannot do, deliberately.** There is no cell here for any other column: a sub-clinician, helpdesk and visitor have no say in the site's marketing, and a patient does not promote their own testimonial. There is no `D`: unpicking is an `update` to the picks, and the testimonial itself is untouched — only its author can withdraw it.
+
+**One consequence to state plainly, because it is a change in default.** Once the principal saves a selection, a published testimonial that is in neither list appears nowhere public. Before this row existed every published testimonial was on the testimonials page. A patient still controls whether their words are published at all and can withdraw them at any time; what they no longer control is whether the practice puts them on the site. Until the first selection is saved the site behaves exactly as it did — every published testimonial, newest first — so shipping this does not silently empty the page.
+
+**The principal reads testimonial ids to do this, and that is not a privacy regression.** An id is `sha256(authorPatientId)`, and the public read still projects it away. The curation endpoints are principal-only, and the practice already knows who wrote each testimonial — the record carries `authorPatientId`, and the author is a patient in its own caseload. `attribution: 'anonymous'` is anonymity *from the public reader*, never from the clinic. Ids stay out of logs here as everywhere else: they travel in request bodies, which are not logged.
