@@ -190,3 +190,87 @@ export function formatCountdown(
   const last = parts[parts.length - 1] as string;
   return `${parts.slice(0, -1).join(', ')} ${units.and} ${last}`;
 }
+
+/**
+ * **2026-09-07: when a call under way must stop, as one absolute instant
+ * both parties can compute for themselves.**
+ *
+ * The owner: *"there should be a timer showing how much time is left
+ * before the call auto gets dropped. Once the timelimit has reached the
+ * call should auto drop."*
+ *
+ * Two limits, and the earlier of them wins:
+ *
+ *   1. **The booked slot's own end.** This is the honest one — the same
+ *      instant `joinPhase` calls `'expired'` and the same instant
+ *      `ws-join.ts` starts refusing joins. A call must not outlive the
+ *      appointment it exists for, and a 15-minute check-in must not keep
+ *      running for half an hour.
+ *   2. **`maxCallMs` from the moment this side joined.** A backstop for a
+ *      long booking, and the only limit available at all when the
+ *      appointment's own duration could not be resolved.
+ *
+ * Derived from `scheduledAt` rather than from either party's own clock
+ * reading of "when the call started", so both browsers arrive at the same
+ * answer however far apart they joined — the previous behaviour (30
+ * minutes from each side's own join) gave two people on one call two
+ * different deadlines.
+ */
+export function callDeadline(
+  joinedAt: Date,
+  maxCallMs: number,
+  appointment?: { readonly scheduledAt: Date; readonly durationMinutes: number },
+): Date {
+  const cap = joinedAt.getTime() + maxCallMs;
+  if (!appointment) {
+    return new Date(cap);
+  }
+  const windowEnd = joinWindowClosesAt(appointment.scheduledAt, appointment.durationMinutes).getTime();
+  return new Date(Math.min(cap, windowEnd));
+}
+
+/**
+ * `mm:ss`, or `h:mm:ss` once there is an hour to show — the shape a
+ * countdown clock has everywhere else a person has met one, rather than
+ * `formatCountdown`'s prose. Prose is right for "in 2 days and 3 hours"
+ * on an appointment list; a call that ends in ninety seconds wants digits.
+ *
+ * Clamped at zero: a deadline that has passed reads `0:00`, never a
+ * negative. Seconds round **up**, so the display only reaches `0:00` at
+ * the actual deadline rather than a second early.
+ */
+export function formatRemaining(remainingMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const paddedSeconds = String(seconds).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${paddedSeconds}`;
+  }
+  return `${minutes}:${paddedSeconds}`;
+}
+
+/**
+ * The next instant at which `joinPhase` would answer differently — the
+ * start of the slot while waiting for it, its end while inside it, and
+ * `undefined` once it is over and nothing further will change.
+ *
+ * Exists because a ticking clock is the wrong tool for a boundary: the
+ * countdown ticks every 15 seconds, so without this a caller could sit on
+ * "the appointment has not started yet" for a quarter of a minute after it
+ * had, and — worse — stay on a live call screen for up to 15 seconds after
+ * the window shut. A caller schedules one timer for exactly this instant
+ * and the transition happens on it.
+ */
+export function nextPhaseChangeAt(
+  scheduledAt: Date,
+  durationMinutes: number,
+  now: Date,
+): Date | undefined {
+  if (now.getTime() < scheduledAt.getTime()) {
+    return scheduledAt;
+  }
+  const closesAt = joinWindowClosesAt(scheduledAt, durationMinutes);
+  return now.getTime() < closesAt.getTime() ? closesAt : undefined;
+}

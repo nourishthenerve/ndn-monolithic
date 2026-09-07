@@ -188,6 +188,65 @@ describe('recordCallJoin (TASK 4.2.1)', () => {
     });
   });
 
+  // 2026-09-07: `ws-relay.ts`'s own `chooseOtherParty` orders by this.
+  // "The other party" used to be whichever row DynamoDB returned first,
+  // which is `CONN#<connectionId>` order, which is an API-Gateway-assigned
+  // opaque string — arbitrary.
+  it('stamps when this participant joined, so the relay has something to order by', async () => {
+    noExistingParticipants();
+    await repository().recordCallJoin({
+      appointmentId: APPOINTMENT_ID,
+      connectionId: 'conn-1',
+      principalId: 'sub-1',
+      role: 'patient',
+      ttl: 1,
+    });
+
+    const item = ddbMock.commandCalls(PutCommand)[0]?.args[0].input.Item as { joinedAt: string };
+    expect(item.joinedAt).toBe(NOW.toISOString());
+  });
+
+  // 2026-09-07: so `ws-join-handler.ts` can tell those connections they are
+  // no longer on the call. A retired socket that is never told sits there
+  // believing it is — and once a dropped socket started reconnecting on its
+  // own, two tabs would retire each other's row in turn for ever.
+  it('reports which of this principal’s own connections it retired', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { connectionId: 'conn-old', principalId: 'sub-1', role: 'patient', ttl: 1 },
+        { connectionId: 'conn-other-person', principalId: 'sub-2', role: 'sub-clinician', ttl: 1 },
+        { connectionId: 'conn-already-left', principalId: 'sub-1', role: 'patient', ttl: 1, leftAt: NOW.toISOString() },
+      ],
+    });
+    ddbMock.on(PutCommand).resolves({});
+    ddbMock.on(UpdateCommand).resolves({});
+
+    const superseded = await repository().recordCallJoin({
+      appointmentId: APPOINTMENT_ID,
+      connectionId: 'conn-new',
+      principalId: 'sub-1',
+      role: 'patient',
+      ttl: 1,
+    });
+
+    // This principal's own live earlier row, and nothing else: the other
+    // party's rows are not this join's business, and a row already retired
+    // has nobody left to tell.
+    expect(superseded).toEqual(['conn-old']);
+  });
+
+  it('reports nothing when there was nothing to retire', async () => {
+    noExistingParticipants();
+    const superseded = await repository().recordCallJoin({
+      appointmentId: APPOINTMENT_ID,
+      connectionId: 'conn-1',
+      principalId: 'sub-1',
+      role: 'patient',
+      ttl: 1,
+    });
+    expect(superseded).toEqual([]);
+  });
+
   it('carries the ttl handed in, never recomputing its own', async () => {
     noExistingParticipants();
     await repository().recordCallJoin({

@@ -46,6 +46,13 @@ export interface RelayCallParticipant {
    * connection must not be picked in the meantime.
    */
   readonly ttl?: number;
+  /**
+   * 2026-09-07: an ISO instant, written by `recordCallJoin`. See
+   * `chooseOtherParty` for what it is for. Optional because rows written
+   * before this field existed will not carry it, and a call in progress
+   * across a deploy must keep working.
+   */
+  readonly joinedAt?: string;
 }
 
 /**
@@ -65,6 +72,50 @@ export function liveParticipants(
       participant.leftAt === undefined &&
       (participant.ttl === undefined || participant.ttl > nowSeconds),
   );
+}
+
+/**
+ * **2026-09-07: which live row is "the other party", decided rather than
+ * stumbled upon.**
+ *
+ * This used to be `participants.find((p) => p.connectionId !== sender)` —
+ * the first non-sender row in DynamoDB's sort-key order, which is
+ * `CONN#<connectionId>` order, which is an API-Gateway-assigned opaque
+ * string. In other words: arbitrary. That was invisible while a call
+ * could only ever hold two rows, and it is not true that it can:
+ * `authz-matrix.ts` grants `join-call` to `Principal` for **every**
+ * appointment ("the principal here is the clinic's own practising
+ * clinician, so they routinely are" a party to a call), so a supervising
+ * principal joining a sub-clinician's appointment makes three. Two of the
+ * three could then pick each other while the third talked into a
+ * connection that was answering someone else.
+ *
+ * Most-recently-joined wins. For the two-party case that every real call
+ * is, it is symmetric and identical to what came before. Beyond it, the
+ * newest arrival is the deterministic answer for both of the others, so
+ * the pairing is at least stable and explicable instead of depending on
+ * the shape of a connection id. Rows with no `joinedAt` (written before
+ * that field existed) sort oldest, which is the safe direction: a row from
+ * before a deploy is the more likely of the two to be stale.
+ *
+ * A real multi-party call needs more than one peer connection per browser
+ * and is a feature, not a bug fix — this makes the two-party case correct
+ * and the three-party case predictable.
+ */
+export function chooseOtherParty(
+  participants: readonly RelayCallParticipant[],
+  senderConnectionId: string,
+): RelayCallParticipant | undefined {
+  let chosen: RelayCallParticipant | undefined;
+  for (const participant of participants) {
+    if (participant.connectionId === senderConnectionId) {
+      continue;
+    }
+    if (!chosen || (participant.joinedAt ?? '') > (chosen.joinedAt ?? '')) {
+      chosen = participant;
+    }
+  }
+  return chosen;
 }
 
 export interface CallParticipantLookup {
@@ -136,7 +187,7 @@ export function createRelayMessageHandler(
 
     const estimatedTurnRelayGb = estimatedTurnRelayGbFor(input.type, input.payload);
 
-    const other = participants.find((p) => p.connectionId !== input.senderConnectionId);
+    const other = chooseOtherParty(participants, input.senderConnectionId);
     if (!other) {
       return { kind: 'peer-unavailable', estimatedTurnRelayGb };
     }

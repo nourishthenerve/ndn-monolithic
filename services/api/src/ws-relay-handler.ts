@@ -15,10 +15,7 @@
 // failure never fails the relay itself, the same "an internal failure here
 // is not a reason to break the call" discipline this file already keeps
 // for a `GoneException` below.
-import {
-  ApiGatewayManagementApiClient,
-  PostToConnectionCommand,
-} from '@aws-sdk/client-apigatewaymanagementapi';
+import { PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
@@ -26,6 +23,7 @@ import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { systemClock } from './clock.js';
 import { DynamoConnectionRepository } from './connection-repository.js';
 import { managementApiClientFor } from './ws-management-client.js';
+import { postToConnection } from './ws-post.js';
 import { createRelayMessageHandler, type RelayMessageType } from './ws-relay.js';
 
 const client = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -105,11 +103,23 @@ export async function handleRelayMessage(event: RelayRequestEvent, message: Rela
   });
 
   if (decision.kind === 'not-authorised') {
-    // No lookup beyond the CALL# query above runs, and nothing is sent
-    // back — there is no authorised recipient for a sender who never
-    // joined this call, and unlike 4.2.1's own join decision this is not
-    // an access decision worth auditing: the join itself already recorded
-    // that fact, once, when it happened (or didn't).
+    // Nothing is relayed: there is no authorised recipient for a sender
+    // who is not one of this call's participants. Unlike 4.2.1's own join
+    // decision this is still not an access decision worth auditing — the
+    // join itself already recorded that fact, once, when it happened (or
+    // didn't).
+    //
+    // **2026-09-07: but the sender is now told, and that is a bug fix.**
+    // This used to answer nothing at all, which left the only client that
+    // can reach this branch — one whose own `CALL#` row was retired
+    // because the same person joined again from a newer connection —
+    // sitting on "Connecting…" indefinitely, with no event of any kind to
+    // act on. It got worse when a dropped socket started reconnecting by
+    // itself: two tabs of one call would retire each other's row in turn
+    // for ever, and neither could hold the call. `not-on-call` is terminal
+    // on the client, so the older tab stands down and the newer one keeps
+    // the call.
+    await postToConnection(management, connectionId, { type: 'not-on-call' });
     logIdentifiersOnly({ type: message.type, appointmentId: message.appointmentId, relayed: false });
     return;
   }
@@ -166,22 +176,3 @@ export async function handleRelayMessage(event: RelayRequestEvent, message: Rela
   }
 }
 
-async function postToConnection(
-  management: ApiGatewayManagementApiClient,
-  connectionId: string,
-  payload: { type: 'peer-unavailable' },
-): Promise<void> {
-  try {
-    await management.send(
-      new PostToConnectionCommand({
-        ConnectionId: connectionId,
-        Data: new TextEncoder().encode(JSON.stringify(payload)),
-      }),
-    );
-  } catch {
-    // The sender's own socket may already be gone by the time this runs —
-    // nothing actionable follows, the same "identifiers only, no retry"
-    // discipline ws-join-handler.ts's own postToConnection already keeps.
-    logIdentifiersOnly({ connectionId, posted: false });
-  }
-}

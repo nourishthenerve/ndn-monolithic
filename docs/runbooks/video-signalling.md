@@ -294,3 +294,40 @@ A call now starts audio-only on both sides, so the ordinary state of a freshly c
 ### Coverage
 
 `VideoCall.render.test.tsx` grew to 48 tests. The ones that pin this amendment: one retry armed however many messages bounce; retries that do not multiply over successive rounds; the loop stopping the moment the peer speaks; an unapplicable answer restarting negotiation rather than dying silently; queued candidates flushed once a remote description lands; a genuine duplicate still ignored; a failed negotiation step not ending the call; waiting indefinitely without a failure message; and the remote camera notice appearing, clearing and returning.
+
+## Amendment, 2026-09-07 — the server half of the stability pass
+
+The client half is in [video-calls.md](video-calls.md)'s own 2026-09-07 amendment, which is where the reasoning for all of this lives. Four changes on this side.
+
+### `ping` / `pong` on `$default`
+
+**API Gateway closes a WebSocket that has carried no traffic for ten minutes, and that limit is a service quota — not a property `data-stack.ts` can set.** A connected call's signalling goes completely silent the moment ICE finishes: the media is peer-to-peer and this socket has nothing left to carry. So every call in this system was guaranteed to lose its socket at the ten-minute mark, and the browser read that as the call ending. A 30-minute appointment was not physically possible to hold.
+
+`ws-default-handler.ts` now answers `{ type: 'ping' }` with `{ type: 'pong' }` and nothing else — checked before the join and relay branches, because it arrives every four minutes for every open socket and must not cost a DynamoDB read. Deliberately never relayed: a heartbeat is between one browser and the gateway, and forwarding it to the peer would double the traffic to say nothing. The reply matters as much as the keep-alive — it is the only way a client can tell a live socket from one whose network has gone while `readyState` still says `OPEN`, which it will do for minutes.
+
+### `joinedAt` on the `CALL#` row, and a deterministic peer
+
+`ws-relay.ts` chose the other party with `participants.find((p) => p.connectionId !== sender)`. That returns the first row in `CONN#<connectionId>` order — an API-Gateway-assigned opaque string — so it was arbitrary.
+
+Invisible while a call holds two rows, and it cannot be relied on to hold two: `authz-matrix.ts` grants `join-call` to `Principal` for **every** appointment (that row's own note: "the principal here is the clinic's own practising clinician, so they routinely are" a party to a call). A supervising principal joining a sub-clinician's appointment makes three live rows, and two of them could pick each other while the third talked into a connection that was answering somebody else.
+
+`recordCallJoin` stamps `joinedAt`, and `chooseOtherParty` takes the most recently joined live row. For the two-party case every real call is, that is symmetric and identical to the old behaviour; beyond it, the newest arrival is the answer both of the others agree on, so the pairing is stable and explicable rather than a function of connection-id spelling. Rows written before this field existed sort oldest, which is the safe direction — a pre-deploy row is the likelier stale one — and a call in progress across the deploy keeps working. A genuine multi-party call needs more than one peer connection per browser and remains a feature, not a bug fix.
+
+### `not-on-call`, from two places
+
+A retired `CALL#` row left the socket behind it open and believing it was on the call. Its messages reached the relay's `not-authorised` branch, which **answered nothing at all** — so a second tab sat on "Connecting…" indefinitely with no event of any kind to act on.
+
+That became a worse problem the moment the client started reconnecting dropped sockets by itself: two tabs of one call would have retired each other's row in turn, for ever, and neither could ever hold the call. `not-on-call` is terminal on the client, which is what breaks the cycle — the older connection stands down and the newer one keeps the call.
+
+Sent from two places, because there are two moments the fact becomes known:
+
+- `ws-join-handler.ts`, to each row a successful join has just retired. `recordCallJoin` returns those connection ids and `createJoinMessageHandler` passes them out as `JoinOutcome.superseded` — deliberately alongside `JoinResult` rather than on it, since `JoinResult` is serialised straight to the client and a list of another socket's connection ids is not something to send a browser. Posted *after* the joiner's own `joined`, so a failure here cannot cost the person who actually joined their answer.
+- `ws-relay-handler.ts`'s `not-authorised` branch, for a socket that discovers it the next time it tries to say something.
+
+### `ws-post.ts`
+
+`postToConnection` existed three times — a private copy in `ws-join-handler.ts`, another in `ws-relay-handler.ts`, and the heartbeat reply would have been a third. One module now, with `OutboundMessage` as a closed union of every shape this service pushes to a client, and the same contract all three copies had: failure is logged with identifiers only and never propagated, because the caller's socket may simply be gone and there is nobody to report it to.
+
+### Verification
+
+`ws-relay.test.ts`, `ws-join.test.ts` and `connection-repository.test.ts` cover the decisions and the writes. The `$default` dispatcher itself has no test, for the reason every handler file in this service has none: it constructs real DynamoDB and management-API clients at module scope. The heartbeat is therefore verified by holding a real call past ten minutes, which is step 1 of [video-calls.md](video-calls.md)'s own verification list.

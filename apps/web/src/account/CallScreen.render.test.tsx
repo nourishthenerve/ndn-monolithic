@@ -61,7 +61,12 @@ const CALL_STRINGS: VideoCallStrings = {
   turnCameraOffLabel: 'Turn off camera',
   cameraOffLabel: 'Your camera is off',
   remoteCameraOffLabel: "The other participant's camera is off.",
-  timeLimitReachedLabel: 'This call has reached its 30-minute limit and has ended.',
+  timeLimitReachedLabel: 'This call has reached its time limit and has ended.',
+  expiredLabel: 'This appointment has expired.',
+  rejoinLabel: 'Rejoin call',
+  supersededLabel: 'This call was opened in another window.',
+  connectionLostLabel: 'The connection was lost and could not be restored.',
+  peerLeftLabel: 'The other participant has left the call.',
 };
 
 const ASSESSMENT_STRINGS: AssessmentFormStrings = {
