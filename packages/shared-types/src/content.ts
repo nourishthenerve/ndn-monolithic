@@ -28,5 +28,27 @@ export interface ContentItem extends BaseRecord<ContentStatus> {
    * asking for the same file twice.
    */
   imageKey?: string;
+  /**
+   * 2026-09-07: when this post first went live, which is what a reader
+   * means by "the date on the article" — the owner: *"for blog post and
+   * workshops also show the date of publication on the thumbnail box."*
+   *
+   * **Not `created_at`, and not `updated_at`.** `created_at` is when the
+   * draft was started, which for a post written over a week is a date the
+   * article never had; `updated_at` moves every time a typo is fixed, and
+   * a post that appeared to be published afresh each time it was corrected
+   * would be lying about its own history.
+   *
+   * Stamped once, on the transition into `published` (or at creation, when
+   * the authoring form publishes immediately — which it does by default),
+   * and **kept across an unpublish/republish**: that is the same article
+   * going back up, not a new one.
+   *
+   * Optional because every post written before this date has none. The
+   * site falls back to `created_at` for those rather than showing nothing
+   * — see `apps/web/src/publication-date.ts`, which is the only place that
+   * fallback is expressed.
+   */
+  publishedAt?: string;
   translations: Record<Locale, { title: string; body: string; excerpt: string }>;
 }

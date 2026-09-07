@@ -149,6 +149,21 @@ export function formatDate(value: string | Date, locale: Locale): string {
   return format(value, locale, DATE_OPTIONS);
 }
 
+/**
+ * "3 September 2026" — a date on its own, with no weekday.
+ *
+ * 2026-09-07, for the publication date on a blog post and a workshop. The
+ * weekday `formatDate` carries is what someone needs to *plan around* a
+ * day; on a byline it is noise, and "Thursday, 3 September 2026" under a
+ * headline reads as the date of an event rather than of the writing.
+ *
+ * Shares `MONTH_DAY_YEAR_OPTIONS` with `formatDateRange` below, which is
+ * already the "a date, without the weekday" shape.
+ */
+export function formatDayMonthYear(value: string | Date, locale: Locale): string {
+  return format(value, locale, MONTH_DAY_YEAR_OPTIONS);
+}
+
 /** "1 Sep" — the marker the calendar puts on the first day of a month, where the grid spans two. */
 export function formatDayMonthShort(value: string | Date, locale: Locale): string {
   return format(value, locale, { day: 'numeric', month: 'short' });

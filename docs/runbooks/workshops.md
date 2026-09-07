@@ -42,3 +42,11 @@ None. No new SES/Turnstile/Stripe setup: workshops have no public-facing form in
 ## Cost
 
 £0.00 net-new DynamoDB/Lambda line (same table, a handful more routes, per TASK 1.5.1's own cost note) plus a second S3 bucket + CloudFront behavior, both within `03-cost-model.md`'s existing M1 S3/CloudFront lines — re-verify at the next gate if poster files turn out large.
+
+---
+
+## Amendment, 2026-09-07 — `publishedAt`: when it was announced, not when it happens
+
+The owner asked for a publication date on blog posts and workshops. `Workshop.publishedAt` is that date, stamped on the transition into `published` (or at creation when a workshop is announced immediately) and kept across a cancel-and-republish. [content-authoring.md](content-authoring.md)'s own amendment carries the full reasoning — why neither `created_at` nor `updated_at` would do, and the `created_at` fallback that covers every workshop announced before the field existed.
+
+The one thing specific to workshops: **a workshop has two dates, and the site never shows either of them bare.** `dateTimeUtc` is when the workshop is; `publishedAt` is when the listing went up. Cards label the second "Announced", and the detail pages give each its own row in the same `<dl>`. A single unlabelled date on a workshop card would be read as the date of the workshop, which is the one misreading this feature could easily have introduced.

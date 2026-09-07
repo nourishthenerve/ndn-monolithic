@@ -124,3 +124,40 @@ Three things now enforce it, at three layers:
 - **Rendering** — `mediaUrl()` returns `undefined` for anything outside the prefix, so a record written before that validation existed renders no image rather than a link to a private object.
 
 `web-stack.test.ts`'s *"the public media boundary"* block fails if the `/media/*` behaviour ever gains a rewrite function, or if the upload role's grant widens.
+
+---
+
+## Amendment, 2026-09-07 — `publishedAt`, and the byline it draws
+
+> *"for blog post and workshops also show the date of publication on the thumbnail box at websites landing page as well as when someone clicks read more."*
+
+A card and an article now carry a date. That needed a field, because neither timestamp the record already had means "published":
+
+- `created_at` is when the draft was started. For a post written over a week, that is a date the article never had.
+- `updated_at` moves on every typo fix. A post that appeared to be published afresh each time it was corrected would be lying about its own history.
+
+So `ContentItem.publishedAt` (and `Workshop.publishedAt` — see [workshops.md](workshops.md)) is stamped **once**, on the transition into `published`, or at creation when the authoring form publishes immediately, which it does by default. It is **kept across an unpublish and a republish**: an article taken down for a correction and put back is the same article.
+
+### The fallback is a migration, not a design
+
+Every post and workshop live today predates the field. `apps/web/src/publication-date.ts` is the one place that says so — `publishedAt ?? created_at` — and it is the normal path for existing content rather than a defensive branch. For those records the two are usually the same instant anyway: the authoring form has published by default since it was built, so the post was created and published in one request.
+
+Showing nothing was the alternative and is worse: a byline missing from an article that plainly has a date reads as a defect, and `created_at` is a true statement about the record even where it is a day early.
+
+### Where it renders, and what it is called
+
+Six surfaces, one helper, one formatter (`@ndn/i18n`'s new `formatDayMonthYear` — the month spelled, no weekday, formatted in the **site's** locale rather than the reader's browser's, for the reason `datetime.ts` exists at all):
+
+| Surface | Label |
+| --- | --- |
+| Homepage strips, `/blog`, `/workshops` cards | "Published …" / "Announced …" |
+| `blog/[slug]`, `blog/post?slug=` | "Published …" under the headline |
+| `workshops/[slug]`, `workshops/workshop?slug=` | An "Announced" row beside the existing "Date and time" |
+
+**A workshop's date is "Announced", never "Published", and it is never bare.** A workshop card carries two dates that could be confused for one another — when the workshop is, and when it went up — and only the label keeps them apart. The detail pages name both in the same `<dl>` for the same reason.
+
+Each date renders inside a real `<time datetime="…">`, so a crawler reads the instant and not only the words.
+
+### Both client schemas parse it as optional — including `created_at`
+
+`content-client.ts` and `workshop-client.ts` mark both timestamps optional even though every record has `created_at`. A required field there fails `safeParse` for the **whole response** and empties the page, which is exactly how the testimonials listing broke on 2026-09-03 when its schema kept requiring an `id` the API had stopped sending. A missing date costs a line of text; a failed parse costs the page.

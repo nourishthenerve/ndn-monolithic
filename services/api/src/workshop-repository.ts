@@ -72,7 +72,14 @@ export class WorkshopRepository {
 
   async create(actor: ActorContext, data: CreateWorkshopInput): Promise<Workshop> {
     const now = this.clock.now().toISOString();
-    const item: Workshop = { ...data, created_at: now, updated_at: now };
+    // 2026-09-07: announced now, if it is announced at all — the same rule
+    // `ContentRepository.create` states for a post.
+    const item: Workshop = {
+      ...data,
+      ...(data.status === 'published' ? { publishedAt: now } : {}),
+      created_at: now,
+      updated_at: now,
+    };
     await this.store.create(item);
     await this.audit.write(
       auditEventFor(actor, {
@@ -161,7 +168,14 @@ export class WorkshopRepository {
   ): Promise<Workshop> {
     const existing = await this.requireExists(id);
     const now = this.clock.now().toISOString();
-    const record: Workshop = { ...existing, status, updated_at: now };
+    const record: Workshop = {
+      ...existing,
+      status,
+      // First announcement wins, and cancelling never clears it — see
+      // `ContentRepository.transitionStatus`'s own note.
+      ...(status === 'published' && !existing.publishedAt ? { publishedAt: now } : {}),
+      updated_at: now,
+    };
     await this.store.update(record);
     await this.audit.write(
       auditEventFor(actor, { at: now, action, entityType: 'Workshop', entityId: id }),

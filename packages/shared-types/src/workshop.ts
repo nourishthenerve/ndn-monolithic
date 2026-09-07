@@ -35,5 +35,14 @@ export interface Workshop extends BaseRecord<WorkshopStatus> {
    */
   priceMinorUnits?: number;
   posterKey?: string;
+  /**
+   * 2026-09-07: when this workshop was **announced** — the date the listing
+   * went up, not `dateTimeUtc`, which is when the workshop itself happens.
+   * The two are different facts and the site labels them differently; see
+   * `ContentItem.publishedAt` for why it is neither `created_at` nor
+   * `updated_at`, and for the fallback that covers workshops announced
+   * before this field existed.
+   */
+  publishedAt?: string;
   details: Record<Locale, { title: string; description: string }>;
 }

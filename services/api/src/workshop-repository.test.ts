@@ -145,6 +145,61 @@ describe('WorkshopRepository.publish/cancel', () => {
   });
 });
 
+// 2026-09-07: the announcement date on a workshop card — a different fact
+// from `dateTimeUtc`, which is when the workshop happens.
+describe('WorkshopRepository — publishedAt', () => {
+  const laterClock: Clock = { now: () => new Date('2026-06-20T09:00:00.000Z') };
+
+  it('stamps a workshop announced at creation', async () => {
+    const { repository } = buildRepository();
+
+    const created = await repository.create(ACTOR, buildInput({ status: 'published' }));
+
+    expect(created.publishedAt).toBe('2026-06-01T00:00:00.000Z');
+    // And it is emphatically not the workshop's own date.
+    expect(created.publishedAt).not.toBe(created.dateTimeUtc);
+  });
+
+  it('leaves a draft workshop undated until it is announced', async () => {
+    const { repository } = buildRepository();
+
+    const draft = await repository.create(ACTOR, buildInput({ status: 'draft' }));
+
+    expect(draft.publishedAt).toBeUndefined();
+  });
+
+  it('stamps the moment a draft is published', async () => {
+    const store = new InMemoryWorkshopStore();
+    await new WorkshopRepository(store, new InMemoryAuditLog(), fixedClock).create(
+      ACTOR,
+      buildInput({ status: 'draft' }),
+    );
+
+    const published = await new WorkshopRepository(
+      store,
+      new InMemoryAuditLog(),
+      laterClock,
+    ).publish(ACTOR, 'workshop-1');
+
+    expect(published.publishedAt).toBe('2026-06-20T09:00:00.000Z');
+  });
+
+  it('keeps the first announcement date when a cancelled workshop is republished', async () => {
+    const store = new InMemoryWorkshopStore();
+    const first = new WorkshopRepository(store, new InMemoryAuditLog(), fixedClock);
+    await first.create(ACTOR, buildInput({ status: 'published' }));
+    await first.cancel(ACTOR, 'workshop-1');
+
+    const republished = await new WorkshopRepository(
+      store,
+      new InMemoryAuditLog(),
+      laterClock,
+    ).publish(ACTOR, 'workshop-1');
+
+    expect(republished.publishedAt).toBe('2026-06-01T00:00:00.000Z');
+  });
+});
+
 describe('WorkshopRepository.findPublishedUpcoming', () => {
   it('excludes draft and cancelled workshops', async () => {
     const { repository } = buildRepository();

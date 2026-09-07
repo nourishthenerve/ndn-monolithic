@@ -345,6 +345,10 @@ const homeStylesCss = `
             strings={{
               empty: t('blog.index.empty', undefined, locale),
               readMore: t('blog.index.readMore', undefined, locale),
+              // The placeholder survives into the island: `t()` runs here,
+              // at build time, and cannot format a date for a post
+              // published since. Same arrangement as `posterAltTemplate`.
+              publishedOnTemplate: t('common.publishedOn', { date: '{date}' }, locale),
             }}
           />
         </div>
@@ -377,6 +381,7 @@ const homeStylesCss = `
               empty: t('workshops.index.empty', undefined, locale),
               viewDetails: t('workshops.index.viewDetails', undefined, locale),
               posterAltTemplate: t('workshops.index.posterAlt', { title: '{title}' }, locale),
+              publishedOnTemplate: t('common.announcedOn', { date: '{date}' }, locale),
             }}
           />
         </div>

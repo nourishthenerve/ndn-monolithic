@@ -14,10 +14,13 @@
 // and no hreflang here and why the page carries `noindex`: two indexable
 // URLs for one article is the problem this shape could easily create, and
 // the prerendered one is the one that should win.
+import { formatDayMonthYear } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { publicationDateOf } from '../publication-date.js';
 import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { blogContentType, contentApiUrl, mediaUrl } from '../site-config.js';
 
@@ -31,6 +34,9 @@ export interface LiveBlogPostRecord {
   readonly id: string;
   /** 2026-09-02: optional lead image, as a media-bucket key. */
   readonly imageKey?: string;
+  /** 2026-09-07: the byline date — see `publication-date.ts`. */
+  readonly publishedAt?: string;
+  readonly created_at?: string;
   readonly translations: Readonly<Record<string, Translation | undefined>>;
 }
 
@@ -47,11 +53,13 @@ export interface LiveBlogPostStrings {
    * a fabricated one that does not describe the picture at all.
    */
   readonly imageAlt: string;
+  /** 2026-09-07: `"Published {date}"`, filled here — the build cannot format a date for a post it has never seen. */
+  readonly publishedOnTemplate: string;
 }
 
 export interface LiveBlogPostProps {
   readonly strings: LiveBlogPostStrings;
-  readonly locale: string;
+  readonly locale: Locale;
   /** Injectable for tests; defaults to `?slug=` on the current URL. */
   readonly slug?: string;
   readonly fetchPosts?: () => Promise<readonly LiveBlogPostRecord[] | undefined>;
@@ -100,6 +108,7 @@ export function LiveBlogPost({
   const [state, setState] = useState<ViewState>('loading');
   const [translation, setTranslation] = useState<Translation | undefined>();
   const [imageKey, setImageKey] = useState<string | undefined>();
+  const [publishedIso, setPublishedIso] = useState<string | undefined>();
 
   useEffect(() => {
     if (!id) {
@@ -130,6 +139,9 @@ export function LiveBlogPost({
       // belongs to the post, not to a language, and the post itself is not
       // held in state.
       setImageKey(post?.imageKey);
+      // Same reasoning as the image: a date belongs to the post, not to a
+      // language, and the post itself is not held in state.
+      setPublishedIso(post ? publicationDateOf(post) : undefined);
       setState('ready');
     });
     return () => {
@@ -164,6 +176,18 @@ export function LiveBlogPost({
   return (
     <article>
       <Heading level={1}>{translation.title}</Heading>
+      {/* The byline, before the lead image, so it reads as the article's
+          own date rather than a caption on the picture. */}
+      {publishedIso && (
+        <p className="ndn-card-meta">
+          <time dateTime={publishedIso}>
+            {strings.publishedOnTemplate.replace(
+              '{date}',
+              formatDayMonthYear(publishedIso, locale),
+            )}
+          </time>
+        </p>
+      )}
       {image && <img src={image} alt={strings.imageAlt} />}
       {bodyHtml ? (
         <div className="ndn-prose" dangerouslySetInnerHTML={{ __html: bodyHtml }} />

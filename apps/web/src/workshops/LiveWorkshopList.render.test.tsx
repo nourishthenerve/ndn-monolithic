@@ -17,12 +17,14 @@ const STRINGS = {
   empty: 'No workshops yet.',
   viewDetails: 'View details',
   posterAltTemplate: 'Poster for {title}',
+  publishedOnTemplate: 'Announced {date}',
 };
 
 function workshop(id: string): LiveWorkshop {
   return {
     id,
     dateTimeUtc: '2026-10-01T10:00:00.000Z',
+    publishedAt: '2026-09-03T09:00:00.000Z',
     details: { en: { title: `${id} title`, description: `${id} description` } },
   };
 }
@@ -93,5 +95,69 @@ describe('the homepage strip', () => {
       />,
     );
     expect(screen.getByRole('heading', { name: 'a title', level: 2 })).toBeDefined();
+  });
+});
+
+// 2026-09-07: the announcement date on a workshop card.
+describe('the announcement date', () => {
+  const metaText = (container: HTMLElement): string =>
+    container.querySelector('.ndn-card-meta')?.textContent ?? '';
+
+  it('says announced, not published, and never the workshop’s own date', () => {
+    const { container } = render(
+      <LiveWorkshopList
+        strings={STRINGS}
+        locale="en"
+        initialWorkshops={[workshop('a')]}
+        fetchWorkshops={() => new Promise(() => {})}
+      />,
+    );
+
+    // The workshop itself is on 1 October; this line is about the day the
+    // listing went up, and a card showing one bare date would be read as
+    // the other one.
+    expect(metaText(container)).toContain('Announced');
+    expect(metaText(container)).toContain('September');
+    expect(screen.queryByText(/October/)).toBeNull();
+  });
+
+  it('falls back to created_at for a workshop announced before publishedAt existed', () => {
+    const { container } = render(
+      <LiveWorkshopList
+        strings={STRINGS}
+        locale="en"
+        initialWorkshops={[
+          {
+            id: 'legacy',
+            dateTimeUtc: '2026-10-01T10:00:00.000Z',
+            created_at: '2026-07-04T09:00:00.000Z',
+            details: { en: { title: 'legacy title', description: 'legacy description' } },
+          },
+        ]}
+        fetchWorkshops={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(metaText(container)).toContain('July');
+  });
+
+  it('renders a card with no date rather than a broken one when the record has neither', () => {
+    render(
+      <LiveWorkshopList
+        strings={STRINGS}
+        locale="en"
+        initialWorkshops={[
+          {
+            id: 'dateless',
+            dateTimeUtc: '2026-10-01T10:00:00.000Z',
+            details: { en: { title: 'dateless title', description: 'x' } },
+          },
+        ]}
+        fetchWorkshops={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(screen.getByText('dateless title')).toBeDefined();
+    expect(screen.queryByText(/Announced/)).toBeNull();
   });
 });

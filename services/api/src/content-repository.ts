@@ -118,6 +118,12 @@ export class ContentRepository {
     const item: ContentItem = {
       ...data,
       keywords: withContentTypeKeyword(data.keywords, data.contentType),
+      // 2026-09-07: a post created already published — which is what the
+      // authoring form does by default — is published *now*. A draft gets
+      // no `publishedAt` until it goes live, which is the whole point of
+      // the field: `created_at` would date the article to the day someone
+      // started writing it.
+      ...(data.status === 'published' ? { publishedAt: now } : {}),
       created_at: now,
       updated_at: now,
     };
@@ -217,7 +223,16 @@ export class ContentRepository {
   ): Promise<ContentItem> {
     const existing = await this.requireExists(id);
     const now = this.clock.now().toISOString();
-    const record: ContentItem = { ...existing, status, updated_at: now };
+    const record: ContentItem = {
+      ...existing,
+      status,
+      // First publication wins, and unpublishing never clears it. An
+      // article taken down for a correction and put back is the same
+      // article, and re-dating it to the day of the correction would make
+      // the site claim it is new.
+      ...(status === 'published' && !existing.publishedAt ? { publishedAt: now } : {}),
+      updated_at: now,
+    };
     await this.store.update(record);
     await this.audit.write(
       auditEventFor(actor, { at: now, action, entityType: 'Content', entityId: id }),
