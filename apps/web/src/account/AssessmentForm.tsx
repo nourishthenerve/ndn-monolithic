@@ -337,10 +337,113 @@ export function isFieldEditable(
 }
 
 /**
- * What a field shows: the draft if it was touched, the derived summary if
+ * The five `general` field ids the age and BMI arithmetic below names.
+ *
+ * Field ids are otherwise never written down outside the template — every
+ * other part of this form iterates whatever sections the server sent. These
+ * are the exception, for the same reason `ASSESSMENT_TAG_FIELD_ID` exists:
+ * the arithmetic *is* about these specific boxes and cannot be expressed by
+ * iterating. They are declared here rather than imported from
+ * `@ndn/shared-types` because this bundle does not depend on it (see the
+ * note above the local type declarations), so — exactly as
+ * `caseload-styles.test.ts` says of its own restatement — nothing makes the
+ * compiler check that these five still name fields the template ships. What
+ * guards the other side is `assessment-template.test.ts`, which fails if the
+ * ids move or if either derived field loses the answers it is computed from;
+ * its failure message is the pointer back to this constant block.
+ *
+ * A drifted id is a blank box, not a wrong number: `answerOf` returns `''`
+ * for a field that is not there, and `''` is what both functions below
+ * return when they cannot compute.
+ */
+const DATE_OF_BIRTH_FIELD_ID = 'dateOfBirth';
+const AGE_FIELD_ID = 'age';
+const HEIGHT_FIELD_ID = 'heightCm';
+const WEIGHT_FIELD_ID = 'weightKg';
+const BMI_FIELD_ID = 'bmi';
+
+/**
+ * Whole years, counted the way a birthday is: the difference in years, less
+ * one if this year's birthday has not come round yet.
+ *
+ * The paper form prints an "Age: ___ yrs" box next to the date of birth,
+ * and a *typed* age is wrong from the patient's next birthday onward — so
+ * the date of birth is the fact stored and this is a view of it, recomputed
+ * on every render. Both sides are read in UTC so the answer does not depend
+ * on which side of Greenwich the viewer is sitting.
+ *
+ * An empty, unparseable or future date of birth is `''` rather than a
+ * number: an age box is blank until there is a date to compute it from, and
+ * a date in the future is a typo, not a negative age.
+ */
+export function ageFromDateOfBirth(dateOfBirth: AssessmentValue, now: Date): number | '' {
+  if (typeof dateOfBirth !== 'string') {
+    return '';
+  }
+  // The value of an `<input type="date">`, and tolerant of a longer ISO
+  // string in case an older stored answer carries a time as well.
+  const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateOfBirth);
+  if (!parts) {
+    return '';
+  }
+  const [, year, month, day] = parts;
+  let age = now.getUTCFullYear() - Number(year);
+  const monthsSinceBirthday = now.getUTCMonth() + 1 - Number(month);
+  if (monthsSinceBirthday < 0 || (monthsSinceBirthday === 0 && now.getUTCDate() < Number(day))) {
+    age -= 1;
+  }
+  return age < 0 ? '' : age;
+}
+
+/**
+ * `kg / m²`, to one decimal place — the precision a BMI is quoted to.
+ *
+ * Blank unless both boxes hold a positive number, which is also what makes
+ * a half-filled form render an empty BMI rather than `Infinity` or `NaN`:
+ * an unanswered height is `''`, and `Number('')` is `0`.
+ */
+export function bmiFromHeightAndWeight(
+  heightCm: AssessmentValue,
+  weightKg: AssessmentValue,
+): number | '' {
+  const height = Number(heightCm);
+  const weight = Number(weightKg);
+  if (!Number.isFinite(height) || !Number.isFinite(weight) || height <= 0 || weight <= 0) {
+    return '';
+  }
+  const metres = height / 100;
+  return Math.round((weight / (metres * metres)) * 10) / 10;
+}
+
+/** One field's current answer — draft first, stored second — so the arithmetic above sees a height as it is being typed and not only once it is saved. */
+function answerOf(
+  fieldSet: AssessmentFieldSet,
+  fieldId: string,
+  drafts: Readonly<Record<string, AssessmentValue>>,
+  latest: VersionItem | undefined,
+): AssessmentValue {
+  const key = draftKey(fieldSet, fieldId);
+  if (key in drafts) {
+    return drafts[key] as AssessmentValue;
+  }
+  return sectionOf(latest, fieldSet).responses[fieldId] ?? '';
+}
+
+/**
+ * What a field shows: the draft if it was touched, the computed value if
  * the field is derived, otherwise the stored answer — and a type-correct
  * blank when there is none, so a checkbox never renders as the string
  * `"undefined"`.
+ *
+ * **A derived field has two kinds and this is the only place that knows
+ * it.** The calendar's figures are facts about `APPT#` rows this client has
+ * never read, so the server computes them and sends them alongside as
+ * `calendarSummary`. `age` and `bmi` are arithmetic on other answers *in
+ * their own section*, which this client is already holding — including the
+ * ones typed and not yet saved, so a corrected weight moves the BMI beside
+ * it immediately, which a server-computed value could not do. Neither kind
+ * is editable and neither is ever sent to a save; `isFieldEditable` and
+ * `responsesToSave` both key off the same `derived` flag.
  */
 export function fieldValue(
   fieldSet: AssessmentFieldSet,
@@ -348,12 +451,22 @@ export function fieldValue(
   drafts: Readonly<Record<string, AssessmentValue>>,
   latest: VersionItem | undefined,
   calendarSummary: CalendarSummary | undefined,
+  now: Date = new Date(),
 ): AssessmentValue {
   const key = draftKey(fieldSet, field.id);
   if (key in drafts) {
     return drafts[key] as AssessmentValue;
   }
   if (field.derived) {
+    if (fieldSet === 'general' && field.id === AGE_FIELD_ID) {
+      return ageFromDateOfBirth(answerOf(fieldSet, DATE_OF_BIRTH_FIELD_ID, drafts, latest), now);
+    }
+    if (fieldSet === 'general' && field.id === BMI_FIELD_ID) {
+      return bmiFromHeightAndWeight(
+        answerOf(fieldSet, HEIGHT_FIELD_ID, drafts, latest),
+        answerOf(fieldSet, WEIGHT_FIELD_ID, drafts, latest),
+      );
+    }
     const summary = calendarSummary as Record<string, AssessmentValue> | undefined;
     return summary?.[field.id] ?? '';
   }

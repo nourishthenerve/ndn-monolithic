@@ -13,6 +13,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ageFromDateOfBirth,
+  bmiFromHeightAndWeight,
   draftKey,
   fieldValue,
   isFieldEditable,
@@ -184,5 +186,205 @@ describe('sectionOf', () => {
       prescription: { responses: { goals: 'walk unaided' }, attachments: [] },
     };
     expect(sectionOf(latest, 'prescription').responses.goals).toBe('walk unaided');
+  });
+});
+
+// 2026-09-07 — the owner's Patient Details form prints an "Age: ___ yrs"
+// box and a "BMI: ___ kg/m²" box beside the answers they are computed
+// from. Both are `derived` on the template, so neither is typed and
+// neither is saved; the arithmetic is the form's because the inputs are
+// answers this client is already holding. See `fieldValue`'s doc for why
+// that is the opposite choice from the calendar's figures.
+
+describe('ageFromDateOfBirth', () => {
+  // Every case is measured against one fixed "today" so the assertions do
+  // not go stale on a real calendar.
+  const today = new Date('2026-09-07T00:00:00.000Z');
+
+  it('counts whole years when the birthday has already come round', () => {
+    expect(ageFromDateOfBirth('1990-05-14', today)).toBe(36);
+  });
+
+  it('does not count the year whose birthday has not arrived yet', () => {
+    expect(ageFromDateOfBirth('1990-11-14', today)).toBe(35);
+  });
+
+  it('counts the year on the birthday itself, not the day after', () => {
+    expect(ageFromDateOfBirth('1990-09-07', today)).toBe(36);
+  });
+
+  it('still withholds the year the day before the birthday', () => {
+    expect(ageFromDateOfBirth('1990-09-08', today)).toBe(35);
+  });
+
+  it('is blank when there is no date of birth to compute from', () => {
+    // The state every record is in the moment it is created — an empty age
+    // box, not a `NaN` next to the empty date.
+    expect(ageFromDateOfBirth('', today)).toBe('');
+  });
+
+  it('is blank for a date it cannot parse', () => {
+    expect(ageFromDateOfBirth('14/05/1990', today)).toBe('');
+    expect(ageFromDateOfBirth('sometime in the nineties', today)).toBe('');
+  });
+
+  it('is blank rather than negative for a date of birth in the future', () => {
+    // A mistyped year, which is a blank box to go and fix — not a patient
+    // aged minus four.
+    expect(ageFromDateOfBirth('2030-01-01', today)).toBe('');
+  });
+
+  it('is blank for a value that is not a string at all', () => {
+    // `AssessmentValue` also covers numbers and booleans, and a stored
+    // answer from an older version is whatever it was written as.
+    expect(ageFromDateOfBirth(0, today)).toBe('');
+    expect(ageFromDateOfBirth(false, today)).toBe('');
+  });
+
+  it('reads a stored answer that carries a time as well as a date', () => {
+    expect(ageFromDateOfBirth('1990-05-14T00:00:00.000Z', today)).toBe(36);
+  });
+
+  it('is the same age either side of midnight local time, because both sides are read in UTC', () => {
+    // The bug this guards is a viewer west of Greenwich reading an age a
+    // day early on the morning of a birthday.
+    expect(ageFromDateOfBirth('1990-09-07', new Date('2026-09-07T23:59:00.000Z'))).toBe(36);
+    expect(ageFromDateOfBirth('1990-09-07', new Date('2026-09-07T00:01:00.000Z'))).toBe(36);
+  });
+});
+
+describe('bmiFromHeightAndWeight', () => {
+  it('is kg over metres squared', () => {
+    expect(bmiFromHeightAndWeight(180, 81)).toBe(25);
+  });
+
+  it('rounds to one decimal place, the precision a BMI is quoted to', () => {
+    // 70 / 1.7² = 24.2214…
+    expect(bmiFromHeightAndWeight(170, 70)).toBe(24.2);
+  });
+
+  it('reads numbers that arrived as strings', () => {
+    // A number input's value is a string, so a draft holds one.
+    expect(bmiFromHeightAndWeight('170', '70')).toBe(24.2);
+  });
+
+  it('is blank until both boxes are answered', () => {
+    // The guard against `Infinity`: `Number('')` is `0`, and a height of
+    // zero would otherwise divide.
+    expect(bmiFromHeightAndWeight('', 70)).toBe('');
+    expect(bmiFromHeightAndWeight(170, '')).toBe('');
+    expect(bmiFromHeightAndWeight('', '')).toBe('');
+  });
+
+  it('is blank for a height or weight that is not a positive number', () => {
+    expect(bmiFromHeightAndWeight(0, 70)).toBe('');
+    expect(bmiFromHeightAndWeight(-170, 70)).toBe('');
+    expect(bmiFromHeightAndWeight(170, 0)).toBe('');
+    expect(bmiFromHeightAndWeight('tall', 70)).toBe('');
+  });
+});
+
+describe('fieldValue computes the general section’s derived pair', () => {
+  const AGE_FIELD: AssessmentFieldDef = {
+    id: 'age',
+    label: 'Age (years)',
+    type: 'number',
+    derived: true,
+  };
+  const BMI_FIELD: AssessmentFieldDef = {
+    id: 'bmi',
+    label: 'BMI (kg/m²)',
+    type: 'number',
+    derived: true,
+  };
+  const today = new Date('2026-09-07T00:00:00.000Z');
+  const stored: VersionItem = {
+    version: 2,
+    updated_at: '2026-09-01T09:00:00.000Z',
+    general: {
+      responses: { dateOfBirth: '1990-05-14', heightCm: 170, weightKg: 70 },
+      attachments: [],
+    },
+  };
+
+  it('reads age from the stored date of birth, never from a stored age', () => {
+    expect(fieldValue('general', AGE_FIELD, {}, stored, undefined, today)).toBe(36);
+  });
+
+  it('reads BMI from the stored height and weight', () => {
+    expect(fieldValue('general', BMI_FIELD, {}, stored, undefined, today)).toBe(24.2);
+  });
+
+  it('follows a date of birth that is still being typed, before any save', () => {
+    // The reason this arithmetic is here and not on the server: the
+    // corrected answer exists only in this client until someone saves.
+    expect(
+      fieldValue(
+        'general',
+        AGE_FIELD,
+        { [draftKey('general', 'dateOfBirth')]: '2000-01-01' },
+        stored,
+        undefined,
+        today,
+      ),
+    ).toBe(26);
+  });
+
+  it('follows a weight that is still being typed', () => {
+    expect(
+      fieldValue(
+        'general',
+        BMI_FIELD,
+        { [draftKey('general', 'weightKg')]: '80' },
+        stored,
+        undefined,
+        today,
+      ),
+    ).toBe(27.7);
+  });
+
+  it('is blank on a record nobody has filled in yet', () => {
+    expect(fieldValue('general', AGE_FIELD, {}, undefined, undefined, today)).toBe('');
+    expect(fieldValue('general', BMI_FIELD, {}, undefined, undefined, today)).toBe('');
+  });
+
+  it('ignores a stored answer under the derived id itself', () => {
+    // A version written before these two became derived — or by any client
+    // that sent one — must not be able to put a stale age on the screen.
+    const withStaleAge: VersionItem = {
+      version: 1,
+      updated_at: '2020-01-01T00:00:00.000Z',
+      general: { responses: { dateOfBirth: '1990-05-14', age: 29, bmi: 99 }, attachments: [] },
+    };
+    expect(fieldValue('general', AGE_FIELD, {}, withStaleAge, undefined, today)).toBe(36);
+    expect(fieldValue('general', BMI_FIELD, {}, withStaleAge, undefined, today)).toBe('');
+  });
+
+  it('leaves the calendar’s derived figures to the server’s summary', () => {
+    // The two kinds must not cross: a calendar figure has no inputs in this
+    // client to compute from.
+    const summary: CalendarSummary = {
+      sessionsCompleted: 4,
+      appointmentsAwaitingApproval: 1,
+    };
+    expect(fieldValue('calendar', SESSIONS_FIELD, {}, stored, summary, today)).toBe(4);
+  });
+
+  it('is never editable and is never sent to a save', () => {
+    const writable: SectionPermission = { fieldSet: 'general', read: true, write: true };
+    expect(isFieldEditable(AGE_FIELD, writable, false)).toBe(false);
+    expect(isFieldEditable(BMI_FIELD, writable, false)).toBe(false);
+    const section: AssessmentSectionDef = {
+      fieldSet: 'general',
+      title: 'Patient Details',
+      fields: [AGE_FIELD, BMI_FIELD, NAME_FIELD],
+    };
+    expect(
+      responsesToSave(section, {
+        [draftKey('general', 'age')]: 41,
+        [draftKey('general', 'bmi')]: 22,
+        [draftKey('general', 'preferredName')]: 'Sam',
+      }),
+    ).toEqual({ preferredName: 'Sam' });
   });
 });
