@@ -371,4 +371,14 @@ Three properties it has deliberately:
 
 `load` now takes `{ silent: true }` for the resync path, which does neither — and a successful save clears only the saved section's drafts (`clearDraftsFor`) instead of the whole bag. The unconditional clear is still right for the initial read: the server's copy is the truth and a surviving draft would show an edit that may not have been stored. It was never right for a sibling's save.
 
+### The save button was already there; it was just unreachable
+
+The owner, on the same message as auto-save: *"also have a save button just in case someone wants to click it before autosave hits."* One had existed per writable section since the form did — the change is where it sits.
+
+Patient Assessment Form is 597 controls under 44 sub-headings, so a single button after the last of them is a button you scroll past the entire form to reach, which is not a control anyone can use to pre-empt a thirty-second timer. The save controls are now rendered **twice per writable section**, once under the heading and once after the fields, from one `saveControls` helper.
+
+**Both copies carry the status message**, and that half matters as much as the button: it is how "Saved automatically." reaches somebody working at the top of a long section, who would otherwise never see the form confirm anything.
+
+Two buttons with the same accessible name in one section is deliberate. They do the same thing, which is why they should read the same; top-and-bottom controls on a long form are a pattern people already know, and "Save (top)" would be naming an implementation detail out loud.
+
 `AssessmentForm.autosave.test.tsx` is **its own file on purpose**: installing `vi.useFakeTimers()` leaves `@testing-library`'s polling unable to advance, so every test after it in the same file hangs. Vitest gives each file its own environment, which makes the file boundary the isolation.

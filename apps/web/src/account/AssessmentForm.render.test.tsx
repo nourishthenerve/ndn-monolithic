@@ -168,7 +168,9 @@ describe('what each role is shown', () => {
     expect(screen.queryByText('Patient Assessment Form')).toBeNull();
     expect(screen.queryByLabelText('Clinical impression')).toBeNull();
     // One save button — general is the only writable section.
-    expect(screen.getAllByRole('button', { name: 'Save this section' })).toHaveLength(1);
+    // Two per writable section — under the heading and after the fields.
+    // General is the only one this patient may write.
+    expect(screen.getAllByRole('button', { name: 'Save this section' })).toHaveLength(2);
   });
 
   it('offers a clinician every section, each with its own save button', async () => {
@@ -196,7 +198,8 @@ describe('what each role is shown', () => {
 
     await screen.findByText('Patient Assessment Form');
     expect(screen.getByLabelText('Clinical impression')).toBeDefined();
-    expect(screen.getAllByRole('button', { name: 'Save this section' })).toHaveLength(4);
+    // Four writable sections, two controls each.
+    expect(screen.getAllByRole('button', { name: 'Save this section' })).toHaveLength(8);
   });
 
   it('marks a read-only section as such rather than silently offering nothing', async () => {
@@ -501,7 +504,7 @@ describe('saving', () => {
     fireEvent.change(await screen.findByLabelText('Preferred name'), {
       target: { value: 'Sammy' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save this section' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save this section' })[0]!);
 
     await waitFor(() => {
       expect(saveSection).toHaveBeenCalledWith(UNKNOWN_POOL_TOKEN, 'pat-1', {
@@ -529,7 +532,7 @@ describe('saving', () => {
         }
       />,
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Save this section' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Save this section' }))[0]!);
     await waitFor(() => {
       expect(saveSection).not.toHaveBeenCalled();
     });
@@ -561,9 +564,11 @@ describe('saving', () => {
     fireEvent.change(await screen.findByLabelText('Preferred name'), {
       target: { value: 'Sammy' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save this section' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save this section' })[0]!);
 
-    await screen.findByText(STRINGS.conflictLabel);
+    // Reported at both save controls — the message has to reach whoever
+    // is at the top of a long section as well as the bottom.
+    expect(await screen.findAllByText(STRINGS.conflictLabel)).toHaveLength(2);
     // Re-read, because the draft was computed against a version that no
     // longer exists.
     expect(calls).toBeGreaterThan(1);
@@ -593,9 +598,9 @@ describe('saving', () => {
     fireEvent.change(await screen.findByLabelText('Preferred name'), {
       target: { value: 'Sammy' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save this section' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save this section' })[0]!);
 
-    expect(await screen.findByText(STRINGS.saveForbiddenLabel)).toBeDefined();
+    expect(await screen.findAllByText(STRINGS.saveForbiddenLabel)).toHaveLength(2);
   });
 });
 
@@ -1035,5 +1040,96 @@ describe('a resync from another placement', () => {
     fireEvent(window, new Event(ASSESSMENT_SAVED_EVENT));
     expect(screen.queryByText(STRINGS.loadingLabel)).toBeNull();
     expect(screen.getByLabelText('Preferred name')).toBeDefined();
+  });
+});
+
+// 2026-09-07: the owner, on autosave — *"but also have a save button just
+// in case someone wants to click it before autosave hits."*
+//
+// The button had existed since the form did. What had changed is how far
+// away it was: Patient Assessment Form is 597 controls under 44
+// sub-headings, so one button after the last of them is a button you have
+// to scroll past the whole form to reach — which is not a control you can
+// use to pre-empt a thirty-second timer.
+describe('save controls', () => {
+  const SECTION = {
+    fieldSet: 'general',
+    title: 'Patient Details',
+    fields: [
+      { id: 'preferredName', label: 'Preferred name', type: 'text' },
+      { id: 'email', label: 'Email', type: 'text' },
+    ],
+  };
+  const PERMISSIONS = [
+    { fieldSet: 'general', read: true, write: true },
+    { fieldSet: 'prescription', read: false, write: false },
+    { fieldSet: 'private', read: false, write: false },
+    { fieldSet: 'calendar', read: false, write: false },
+  ];
+
+  function renderSection(extra: Record<string, unknown> = {}) {
+    const saveSection = vi.fn(() => ok({ item: { version: 2 } }));
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() => ok(payloadFor({ template: [SECTION], permissions: PERMISSIONS }))}
+        saveSection={saveSection as never}
+        {...extra}
+      />,
+    );
+    return saveSection;
+  }
+
+  it('puts one above the fields and one below them', async () => {
+    renderSection();
+    await screen.findByText('Patient Details');
+    const buttons = screen.getAllByRole('button', { name: 'Save this section' });
+    expect(buttons).toHaveLength(2);
+    // DOM order, which is what decides whether the top one is reachable
+    // without scrolling: heading, save, fields, save.
+    const firstField = screen.getByLabelText('Preferred name');
+    expect(buttons[0]!.compareDocumentPosition(firstField)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(buttons[1]!.compareDocumentPosition(firstField)).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
+  });
+
+  it('saves from the top control, not only the bottom one', async () => {
+    const saveSection = renderSection();
+    await screen.findByText('Patient Details');
+    fireEvent.change(screen.getByLabelText('Preferred name'), { target: { value: 'Sam' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save this section' })[0]!);
+    await waitFor(() => {
+      expect(saveSection).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('offers neither to a reader who may not write the section', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() =>
+          ok(
+            payloadFor({
+              template: [SECTION],
+              permissions: [
+                { fieldSet: 'general', read: true, write: false },
+                { fieldSet: 'prescription', read: false, write: false },
+                { fieldSet: 'private', read: false, write: false },
+                { fieldSet: 'calendar', read: false, write: false },
+              ],
+            }),
+          )
+        }
+      />,
+    );
+    await screen.findByText('Patient Details');
+    expect(screen.queryAllByRole('button', { name: 'Save this section' })).toHaveLength(0);
   });
 });

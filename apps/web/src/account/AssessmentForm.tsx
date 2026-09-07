@@ -1312,6 +1312,54 @@ export function AssessmentForm({
     );
   };
 
+  /**
+   * A section's save button and its status message, **rendered twice — once
+   * under the heading and once after the fields.**
+   *
+   * The button has always existed; what changed is how far away it was.
+   * Patient Assessment Form is 597 controls under 44 sub-headings, so a
+   * single button after the last of them is a button a clinician would
+   * have to scroll past the entire form to reach. The owner asked for one
+   * *"just in case someone wants to click it before autosave hits"*, and a
+   * control you cannot reach in the thirty seconds you are trying to
+   * pre-empt is not that control.
+   *
+   * Both copies carry the status too, and that half matters as much: it is
+   * how "Saved automatically." reaches somebody working at the top of a
+   * long section, who would otherwise never see the form confirm anything.
+   *
+   * Two buttons with the same accessible name in one section is
+   * deliberate. They do the same thing, which is exactly why they should
+   * read the same; top-and-bottom controls on a long form are a pattern
+   * people already know, and inventing "Save (top)" would be naming an
+   * implementation detail out loud.
+   */
+  const saveControls = (
+    section: AssessmentSectionDef,
+    saveState: SaveState,
+    position: 'top' | 'bottom',
+  ): ReactNode => {
+    if (permissionFor(section.fieldSet)?.write !== true) {
+      return null;
+    }
+    return (
+      <p key={`${section.fieldSet}-save-${position}`}>
+        <button
+          type="button"
+          disabled={saveState === 'saving'}
+          onClick={() => void handleSave(section)}
+        >
+          {saveState === 'saving' ? strings.savingLabel : strings.saveLabel}
+        </button>
+        {saveState === 'saved' && <span role="status">{strings.savedLabel}</span>}
+        {saveState === 'autosaved' && <span role="status">{strings.autosavedLabel}</span>}
+        {saveState === 'conflict' && <span role="alert">{strings.conflictLabel}</span>}
+        {saveState === 'forbidden' && <span role="alert">{strings.saveForbiddenLabel}</span>}
+        {saveState === 'error' && <span role="alert">{strings.errorLabel}</span>}
+      </p>
+    );
+  };
+
   // The placement filter. `template` already holds only what this caller
   // may read, so this can narrow and never widen — see the header.
   const shown = fieldSets
@@ -1352,6 +1400,7 @@ export function AssessmentForm({
               payload.calendarSummary?.nextAppointmentAt === undefined && (
                 <p>{strings.noNextAppointmentLabel}</p>
               )}
+            {saveControls(section, saveState, 'top')}
             {/* Grouped first, then split.
 
                 The owner's assessment form is 44 numbered headings and
@@ -1391,26 +1440,7 @@ export function AssessmentForm({
                 </Fragment>
               );
             })}
-            {writable && (
-              <p>
-                <button
-                  type="button"
-                  disabled={saveState === 'saving'}
-                  onClick={() => void handleSave(section)}
-                >
-                  {saveState === 'saving' ? strings.savingLabel : strings.saveLabel}
-                </button>
-                {saveState === 'saved' && <span role="status">{strings.savedLabel}</span>}
-                {saveState === 'autosaved' && (
-                  <span role="status">{strings.autosavedLabel}</span>
-                )}
-                {saveState === 'conflict' && <span role="alert">{strings.conflictLabel}</span>}
-                {saveState === 'forbidden' && (
-                  <span role="alert">{strings.saveForbiddenLabel}</span>
-                )}
-                {saveState === 'error' && <span role="alert">{strings.errorLabel}</span>}
-              </p>
-            )}
+            {saveControls(section, saveState, 'bottom')}
             {renderAttachments(section)}
           </section>
         );

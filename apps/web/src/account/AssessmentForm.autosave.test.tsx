@@ -159,7 +159,9 @@ describe('the interval', () => {
     await settle();
     fireEvent.change(screen.getByLabelText('Clinical impression'), { target: { value: 'x' } });
     await tick();
-    expect(screen.getByText('Saved automatically.')).toBeDefined();
+    // At both save controls, so it reaches whoever is at the top of a long
+    // section as well as the bottom.
+    expect(screen.getAllByText('Saved automatically.')).toHaveLength(2);
     expect(screen.queryByText('Saved.')).toBeNull();
   });
 
