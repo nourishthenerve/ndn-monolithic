@@ -2,6 +2,13 @@
 // TASK 1.2.1: footer built from packages/ui primitives only. Social links
 // come from config/social-links.ts (a checked-in, Zod-validated array) —
 // "configurable" means editing that file, not this markup.
+//
+// 2026-09-07: the landmark now closes the page rather than trailing off it.
+// It sits on the olive band (`--ndn-color-surface-muted`) instead of the
+// paper ground, with the mark and wordmark repeated at the top of it, and its
+// two link rows separated by a rule. Nothing about *what* it contains
+// changed: `tests/pr-env/nav-footer.test.ts` walks every social and legal
+// link out of the same two configs, and both still render from them.
 import { t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link, visuallyHiddenClassName } from '@ndn/ui';
@@ -31,12 +38,35 @@ const footerStylesCss = `
    /testimonials, just less visible. BaseLayout.astro's own page-shell CSS
    already restricts itself to body > selectors for exactly this reason. */
 body > footer {
-  border-block-start: 1px solid rgba(0, 0, 0, 0.08);
-  padding-block: 1.5rem;
-  /* Full-bleed rule, centred contents — the same 68rem measure the header
+  border-block-start: 1px solid var(--ndn-color-border);
+  background-color: var(--ndn-color-surface-muted);
+  padding-block: 2.5rem 2rem;
+  /* Full-bleed band, centred contents — the same 68rem measure the header
      and the landing page's sections use, without needing a wrapper element
      inside the landmark. */
   padding-inline: max(1.25rem, calc((100% - 68rem) / 2));
+}
+
+/* The mark again, quietly, at the foot of the page. alt="" for the same
+   reason it is empty in the header: the wordmark next to it is real text. */
+.ndn-footer-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-block-end: 1.5rem;
+}
+
+.ndn-footer-mark {
+  display: block;
+  width: auto;
+  height: 2.25rem;
+}
+
+.ndn-footer-wordmark {
+  font-family: var(--ndn-font-family-display);
+  font-weight: var(--ndn-font-weight-display);
+  font-size: 1.375rem;
+  line-height: 1.1;
 }
 
 .ndn-footer-staff {
@@ -47,22 +77,46 @@ body > footer {
 .ndn-footer-legal-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 1rem 1.5rem;
   list-style: none;
   margin-block: 0 1rem;
   margin-inline: 0;
   padding: 0;
 }
 
+.ndn-footer-legal-list {
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid var(--ndn-color-border-strong);
+}
+
+.ndn-footer-legal-list .ndn-link,
+.ndn-footer-social-list .ndn-link,
+.ndn-footer-staff .ndn-link {
+  font-size: 0.875rem;
+  color: var(--ndn-color-text-muted);
+  text-decoration-color: var(--ndn-color-border-strong);
+}
+
+.ndn-footer-legal-list .ndn-link:hover,
+.ndn-footer-social-list .ndn-link:hover,
+.ndn-footer-staff .ndn-link:hover {
+  color: var(--ndn-color-brand-strong);
+}
+
 .ndn-footer-copyright {
   margin: 0;
   color: var(--ndn-color-text-muted);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 `;
 ---
 
 <footer>
+  <div class="ndn-footer-brand">
+    <img class="ndn-footer-mark" src="/logo-mark.png" alt="" width="30" height="36" />
+    <span class="ndn-footer-wordmark">{siteName}</span>
+  </div>
+
   <Heading level={2} className={visuallyHiddenClassName}>
     {t('footer.socialHeading', undefined, locale)}
   </Heading>

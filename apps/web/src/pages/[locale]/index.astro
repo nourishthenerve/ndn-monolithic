@@ -90,7 +90,15 @@ const workshopsForLocale = workshops.filter(
 // `set:html`, not a literal `<style>...</style>` block — the convention
 // Nav.astro and Footer.astro already document.
 //
-// Two things here are load-bearing rather than decorative:
+// ## 2026-09-07: the theme, on the page it was designed for
+//
+// Every colour below is one of `packages/ui`'s tokens; there is no hex here
+// any more. The bands alternate paper / olive / paper / olive with the
+// testimonials on lavender, which is the one place the accent hue gets a
+// whole section rather than a detail — quotes are the warmest thing on the
+// page and the lavender is the warmest ground.
+//
+// Three things here are load-bearing rather than decorative:
 //
 //   * `.ndn-home-grid > astro-island { display: contents }`. Astro wraps a
 //     `client:*` island in an `<astro-island>` element, so the cards a list
@@ -106,6 +114,11 @@ const workshopsForLocale = workshops.filter(
 //     `.ndn-home-cta`. `packages/ui`'s `.ndn-link` (underlined, brand
 //     coloured) has the same specificity as a bare class would, and which of
 //     the two wins would then depend on stylesheet order.
+//   * The heading sizes are written `.ndn-home .ndn-home-hero h1` rather than
+//     `.ndn-home-hero h1`. `primitiveStylesCss` now sets a real type scale on
+//     `h1.ndn-heading`/`h2.ndn-heading` (0,1,1), which the old two-part
+//     selectors merely tied with — leaving which one won down to the order
+//     Astro happens to emit two `<style>` elements in. (0,2,1) settles it.
 const homeStylesCss = `
 .ndn-home {
   --ndn-home-measure: 68rem;
@@ -116,50 +129,109 @@ const homeStylesCss = `
   margin-inline: auto;
 }
 
+/* The hero is the only place the mark appears at size. On a wide viewport it
+   sits beside the copy; below that the column collapses and the mark is
+   hidden outright rather than stacked — a 200px illustration between a
+   headline and its call to action is a scroll a phone visitor has to make
+   before reaching the thing the page is for. */
 .ndn-home-hero {
-  padding-block: clamp(3.5rem, 10vw, 6rem);
+  padding-block: clamp(3.5rem, 10vw, 6.5rem);
   padding-inline: 1.25rem;
-  background-image: linear-gradient(160deg, #eef5f3 0%, #ffffff 72%);
-  border-block-end: 1px solid rgba(0, 0, 0, 0.06);
+  background-image: linear-gradient(
+    155deg,
+    var(--ndn-color-surface-accent) 0%,
+    var(--ndn-color-surface) 45%,
+    var(--ndn-color-brand-wash) 100%
+  );
+  border-block-end: 1px solid var(--ndn-color-border);
 }
 
-.ndn-home-hero h1 {
-  font-size: clamp(2rem, 5.5vw, 3.25rem);
-  max-width: 22ch;
-  margin-block: 0 1rem;
+.ndn-home-hero .ndn-home-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2rem;
+  align-items: center;
+}
+
+.ndn-home-hero-mark {
+  display: none;
+}
+
+@media (min-width: 56rem) {
+  .ndn-home-hero .ndn-home-inner {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: 3rem;
+  }
+
+  .ndn-home-hero-mark {
+    display: block;
+    justify-self: center;
+    width: 100%;
+    max-width: 17rem;
+    height: auto;
+  }
+}
+
+.ndn-home .ndn-home-hero h1 {
+  font-size: clamp(2.25rem, 5.5vw, 3.5rem);
+  line-height: 1.08;
+  max-width: 20ch;
+  margin-block: 0 1.25rem;
 }
 
 .ndn-home-lede {
-  font-size: clamp(1.0625rem, 2vw, 1.25rem);
-  line-height: 1.6;
+  font-size: clamp(1.0625rem, 2vw, 1.1875rem);
+  line-height: 1.65;
   color: var(--ndn-color-text-muted);
-  max-width: 62ch;
+  max-width: 54ch;
   margin-block: 0 2rem;
 }
 
 .ndn-home-section {
-  padding-block: clamp(3rem, 7vw, 4.5rem);
+  padding-block: clamp(3rem, 7vw, 5rem);
   padding-inline: 1.25rem;
 }
 
 .ndn-home-section--tinted {
-  background-color: #f6f8f8;
+  background-color: var(--ndn-color-surface-muted);
 }
 
-.ndn-home-section h2 {
-  font-size: clamp(1.5rem, 3vw, 2rem);
+/* The testimonials band, and the only full section on the lavender. */
+.ndn-home-section--accent {
+  background-color: var(--ndn-color-surface-accent);
+}
+
+.ndn-home .ndn-home-section h2 {
+  font-size: clamp(1.75rem, 3vw, 2.25rem);
   margin-block: 0 0.75rem;
 }
 
-.ndn-home-section h3 {
-  font-size: 1.125rem;
-  margin-block: 0 0.25rem;
+/* A short rule above each section heading, in the section's own accent. It
+   is a ::before on the heading rather than a border on the section so it
+   starts at the text rather than at the band edge, and it is decorative in
+   the strict sense: no content, nothing announced. */
+.ndn-home-section h2::before {
+  content: "";
+  display: block;
+  width: 2.5rem;
+  height: 2px;
+  margin-block-end: 1.25rem;
+  background-color: var(--ndn-color-brand);
+}
+
+.ndn-home-section--accent h2::before {
+  background-color: var(--ndn-color-accent);
+}
+
+.ndn-home .ndn-home-section h3 {
+  font-size: 1.25rem;
+  margin-block: 0 0.375rem;
 }
 
 .ndn-home-intro,
 .ndn-home-prose p {
   color: var(--ndn-color-text-muted);
-  line-height: 1.7;
+  line-height: 1.75;
   max-width: 62ch;
   margin-block: 0 1rem;
 }
@@ -172,7 +244,7 @@ const homeStylesCss = `
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
   gap: 1.25rem;
-  margin-block: 2rem 1.5rem;
+  margin-block: 2rem 1.75rem;
 }
 
 .ndn-home-grid > astro-island {
@@ -183,44 +255,61 @@ const homeStylesCss = `
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  transition: border-color var(--ndn-motion-duration-fast) ease;
+  transition: border-color var(--ndn-motion-duration-base) ease,
+    box-shadow var(--ndn-motion-duration-base) ease,
+    transform var(--ndn-motion-duration-base) ease;
 }
 
+/* Lifts by two pixels, not four, and the shadow is the border token blurred
+   rather than a black wash — on a warm ground a grey shadow reads as dirt.
+   Every duration in the transition above is a motion token, so under
+   prefers-reduced-motion the card arrives at this state without travelling
+   to it (tokens/motion.ts collapses all three at once). */
 .ndn-home-grid .ndn-card:hover {
   border-color: var(--ndn-color-brand);
+  box-shadow: 0 6px 20px var(--ndn-color-border);
+  transform: translateY(-2px);
 }
 
 .ndn-home-grid .ndn-card p {
   color: var(--ndn-color-text-muted);
-  line-height: 1.6;
+  line-height: 1.65;
   margin-block: 0;
 }
 
 .ndn-home-grid .ndn-card img {
   max-width: 100%;
   height: auto;
-  border-radius: 0.375rem;
+  border-radius: 0.5rem;
 }
 
+/* A quote is the one piece of copy on this page set in the display serif at
+   body size — it is someone speaking, not the site explaining. */
 .ndn-home-grid .ndn-card blockquote {
   margin: 0;
-  border-inline-start: 3px solid var(--ndn-color-brand);
-  padding-inline-start: 1rem;
+  border-inline-start: 2px solid var(--ndn-color-accent);
+  padding-inline-start: 1.125rem;
 }
 
 .ndn-home-grid .ndn-card blockquote p {
   color: var(--ndn-color-text);
+  font-family: var(--ndn-font-family-display);
+  font-size: 1.25rem;
+  line-height: 1.45;
 }
 
 .ndn-home-grid .ndn-card blockquote footer {
-  margin-block-start: 0.75rem;
+  margin-block-start: 0.875rem;
+  font-size: 0.8125rem;
   font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--ndn-color-text-muted);
 }
 
-/* Pushes a card's own link to the bottom edge so a row of cards with
+/* Pushes a card own link to the bottom edge so a row of cards with
    different amounts of text still lines its links up. align-self keeps the
-   anchor's hit area to its text rather than the full card width, which a
+   anchor hit area to its text rather than the full card width, which a
    column flex container would otherwise stretch it to. (No backticks in
    this block: it is a JS template literal.) */
 .ndn-home-grid .ndn-card > .ndn-link:last-child {
@@ -238,31 +327,40 @@ const homeStylesCss = `
 
 .ndn-home a.ndn-home-cta {
   text-decoration: none;
-  border-radius: 0.5rem;
-  border: 1px solid var(--ndn-color-brand);
+  border-radius: 999px;
+  border: 1px solid var(--ndn-color-border-strong);
   color: var(--ndn-color-brand);
-  padding-block: 0.75rem;
-  padding-inline: 1.5rem;
+  padding-block: 0.8125rem;
+  padding-inline: 1.625rem;
   font-weight: 500;
-  transition: background-color var(--ndn-motion-duration-fast) ease;
+  transition: background-color var(--ndn-motion-duration-fast) ease,
+    border-color var(--ndn-motion-duration-fast) ease,
+    color var(--ndn-motion-duration-fast) ease;
 }
 
 .ndn-home a.ndn-home-cta:hover {
-  background-color: rgba(10, 110, 90, 0.08);
+  background-color: var(--ndn-color-brand-wash);
+  border-color: var(--ndn-color-brand);
+  color: var(--ndn-color-brand-strong);
 }
 
 .ndn-home a.ndn-home-cta--primary {
   background-color: var(--ndn-color-brand);
-  color: #ffffff;
+  border-color: var(--ndn-color-brand);
+  color: var(--ndn-color-surface-raised);
 }
 
 .ndn-home a.ndn-home-cta--primary:hover {
-  background-color: #085647;
+  background-color: var(--ndn-color-brand-strong);
+  border-color: var(--ndn-color-brand-strong);
+  color: var(--ndn-color-surface-raised);
 }
 
 .ndn-home-contact-number {
-  font-size: 1.25rem;
-  font-weight: 500;
+  font-family: var(--ndn-font-family-display);
+  font-size: 1.75rem;
+  font-weight: var(--ndn-font-weight-display);
+  letter-spacing: 0.01em;
   margin-block: 0 1.5rem;
 }
 `;
@@ -280,20 +378,32 @@ const homeStylesCss = `
   <div class="ndn-home">
     <section class="ndn-home-hero">
       <div class="ndn-home-inner">
-        <Heading level={1}>{t('home.hero.title', undefined, locale)}</Heading>
-        <p class="ndn-home-lede">{t('home.hero.body', undefined, locale)}</p>
-        <div class="ndn-home-cta-row">
-          <Link
-            href={whatsappChatUrl(whatsappBusinessNumber)}
-            external
-            className="ndn-home-cta ndn-home-cta--primary"
-          >
-            {t('home.hero.primaryCta', undefined, locale)}
-          </Link>
-          <Link href="#services" className="ndn-home-cta">
-            {t('home.hero.secondaryCta', undefined, locale)}
-          </Link>
+        <div>
+          <Heading level={1}>{t('home.hero.title', undefined, locale)}</Heading>
+          <p class="ndn-home-lede">{t('home.hero.body', undefined, locale)}</p>
+          <div class="ndn-home-cta-row">
+            <Link
+              href={whatsappChatUrl(whatsappBusinessNumber)}
+              external
+              className="ndn-home-cta ndn-home-cta--primary"
+            >
+              {t('home.hero.primaryCta', undefined, locale)}
+            </Link>
+            <Link href="#services" className="ndn-home-cta">
+              {t('home.hero.secondaryCta', undefined, locale)}
+            </Link>
+          </div>
         </div>
+        {/* Decorative, hence `alt=""`: the mark says nothing the headline
+            beside it does not already say, and a description of it would be
+            one more thing for a screen reader to read before the lede. */}
+        <img
+          class="ndn-home-hero-mark"
+          src="/logo-mark.png"
+          alt=""
+          width="480"
+          height="570"
+        />
       </div>
     </section>
 
@@ -400,7 +510,11 @@ const homeStylesCss = `
       </div>
     </section>
 
-    <section id="testimonials" class="ndn-home-section" aria-labelledby="testimonials-heading">
+    <section
+      id="testimonials"
+      class="ndn-home-section ndn-home-section--accent"
+      aria-labelledby="testimonials-heading"
+    >
       <div class="ndn-home-inner">
         <Heading level={2} id="testimonials-heading">
           {t('home.testimonials.heading', undefined, locale)}

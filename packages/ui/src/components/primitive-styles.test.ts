@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { getCssRuleBody } from '../test-support/css-rule.js';
+import { colorSchemeCssVariables } from '../tokens/color.js';
 import { minInteractiveTargetPx } from '../tokens/space.js';
 
 import {
@@ -14,6 +15,42 @@ describe('primitiveStylesCss — base typography', () => {
     const body = getCssRuleBody(primitiveStylesCss, 'body');
     expect(body).toContain('font-family: var(--ndn-font-family-base)');
     expect(body).toContain('color: var(--ndn-color-text)');
+  });
+
+  // 2026-09-07: the page ground is the warm paper surface, not the browser's
+  // white. Cards, inputs and the header paint the raised surface on top of
+  // it, and that one step of separation is what the card styling relies on
+  // instead of a heavier border or a shadow.
+  it('paints the page surface token on <body>', () => {
+    expect(getCssRuleBody(primitiveStylesCss, 'body')).toContain(
+      'background-color: var(--ndn-color-surface)',
+    );
+  });
+
+  it('sets headings in the display family at the one weight it is self-hosted at', () => {
+    const heading = getCssRuleBody(primitiveStylesCss, '.ndn-heading');
+    expect(heading).toContain('font-family: var(--ndn-font-family-display)');
+    expect(heading).toContain('font-weight: var(--ndn-font-weight-display)');
+  });
+});
+
+describe('primitiveStylesCss — every colour comes from a token', () => {
+  // The whole point of theming the primitives rather than the pages is that
+  // the palette lives in exactly one file. A literal colour here would be a
+  // value `tokens/color.ts` cannot change and `color.test.ts` never checks
+  // for contrast — so it is a failure, not a style preference.
+  it('contains no literal hex, rgb() or hsl() colour', () => {
+    const literals = primitiveStylesCss.match(/#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(/g);
+    expect(literals ?? []).toEqual([]);
+  });
+
+  it('names only custom properties that exist in the emitted scheme', () => {
+    const declared = new Set(Object.keys(colorSchemeCssVariables('light')));
+    const referenced = primitiveStylesCss.match(/var\(--ndn-color-[a-z-]+\)/g) ?? [];
+    expect(referenced.length).toBeGreaterThan(0);
+    for (const reference of new Set(referenced)) {
+      expect(declared).toContain(reference.slice('var('.length, -1));
+    }
   });
 });
 

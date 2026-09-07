@@ -92,15 +92,32 @@ body > main {
   order: 2;
   flex: 1 0 auto;
 }
-/* The default reading column. max-width caps the stretched flex item and
-   the padding sits inside that box, so this needs no box-sizing reset and
-   cannot overflow the viewport. (No backticks in here: this block is a JS
-   template literal, and one would end it mid-stylesheet.) */
+/* The default reading column: full-bleed element, contents centred inside a
+   68rem measure by its own padding. Written this way — rather than as
+   max-width plus margin-inline: auto — because of a flexbox rule that made
+   the obvious version silently wrong.
+
+   The body is a flex column, so main is a flex item, and **an auto margin on
+   the cross axis suppresses the stretch a flex item would otherwise get**
+   (CSS Flexbox 9.4: a stretch only applies when neither cross-axis margin is
+   auto). With margin-inline: auto the column therefore did not fill the
+   68rem it was capped at — it shrink-wrapped to its own max-content width, so
+   every page but the landing one rendered as a narrow ribbon floating in the
+   middle of the viewport. On /blog that was a 410px column on a 1280px
+   screen. Invisible while the pages were unstyled text; obvious the moment
+   they carried cards on a tinted ground.
+
+   The padding form has no such problem, needs no box-sizing reset, and is the
+   same construction body > footer already uses (see Footer.astro, which
+   documents it). 2026-09-07 also opened up the block padding: every page that
+   uses this column opens with a serif h1 straight on the paper ground, and a
+   heading that close to the header rule reads as a caption for it.
+
+   (No backticks in here: this block is a JS template literal, and one would
+   end it mid-stylesheet.) */
 body > main.ndn-main--contained {
-  max-width: 68rem;
-  margin-inline: auto;
-  padding-block: 2rem;
-  padding-inline: 1.25rem;
+  padding-block: 3rem 4rem;
+  padding-inline: max(1.25rem, calc((100% - 68rem) / 2));
 }
 body > .ndn-nav-header {
   order: 1;
