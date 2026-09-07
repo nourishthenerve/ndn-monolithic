@@ -79,10 +79,17 @@
 // answers with nothing would announce the existence of notes written about
 // them, which is the one thing R-09 is careful never to do.
 //
-// **Section order is the owner's**, and it moves the calendar down from the
-// top of the page for the first time since 2026-09-06. Details first, then
-// Prescription, then Appointments; the calendar is inside the last of those
-// rather than above all of them.
+// **Section order is the owner's**, given twice on 2026-09-07 and settled
+// by the second: *"for patient dashboard, I want the content to be in this
+// order - at the top Calender, then Patient Details, Patient Prescriptions,
+// Patient Account, and Patient Testimonial."*
+//
+// So the calendar is back at the very top, where 2026-09-06 put it — the
+// first list read as Details-first and moved it down, and it was wrong for
+// half a day. The area keeps its "Patient Appointments" heading rather than
+// becoming "Calendar": that is the name the owner gave it in the message
+// before, it is what staff see on `patient-record.astro`, and the second
+// instruction is about *where the content sits*, not what it is called.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link } from '@ndn/ui';
@@ -344,12 +351,45 @@ const changePasswordStrings = {
       </section>
     </RequireAuth>
 
-    {/* The patient's five sections, in the owner's own order. Everything
-        from here to the staff Account block is gated to `patient`, and the
-        staff blocks above and below are gated to the other roles, so no
-        session ever renders both. */}
+    {/* The patient's five sections, in the owner's own order — revised
+        2026-09-07, second pass: *"for patient dashboard, I want the content
+        to be in this order - at the top Calender, then Patient Details,
+        Patient Prescriptions, Patient Account, and Patient Testimonial."*
+
+        The calendar goes back to the top, where 2026-09-06 first put it
+        (*"At the very top I want to show calender"*) and where a patient's
+        own screen had it until earlier today. It keeps the "Patient
+        Appointments" heading — the area name from the same owner's previous
+        message, and the one `patient-record.astro` shows staff — so the
+        instruction moved the section rather than renaming it.
+
+        Everything from here to the staff Account block is gated to
+        `patient`, and the staff blocks above and below are gated to the
+        other roles, so no session ever renders both. */}
     <RequireAuth client:only="react" allowRoles={['patient']}>
-      {/* ## 1. Patient Details — the identity form, then the record's own
+      {/* ## 1. Patient Appointments — the calendar (*"Inside 'My Calender'
+          we already have a nice looking calender"*), with the record's own
+          `calendar{}` figures below it. Both are read-only for a patient.
+
+          A second placement of `AppointmentCalendar`; the staff one above is
+          gated to the three staff roles and this to `patient`, so exactly
+          one of the two ever renders. */}
+      <section aria-labelledby="patient-appointments-heading">
+        <Heading level={2} id="patient-appointments-heading">
+          {t('account.section.patientAppointments', undefined, locale)}
+        </Heading>
+        <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
+        <AssessmentForm
+          client:only="react"
+          fieldSets={['calendar']}
+          showTitles={false}
+          showVersion={false}
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={assessmentStrings}
+        />
+      </section>
+
+      {/* ## 2. Patient Details — the identity form, then the record's own
           `general{}` section. The same area name `patient-record.astro`
           gives staff, and the same two stores behind it.
 
@@ -391,7 +431,7 @@ const changePasswordStrings = {
         />
       </section>
 
-      {/* ## 2. Patient Prescription — read-only for a patient
+      {/* ## 3. Patient Prescription — read-only for a patient
           (`prescription{}` grants them `R` and not `U`), which the form says
           in as many words rather than by offering disabled inputs. */}
       <section aria-labelledby="patient-prescription-heading">
@@ -401,25 +441,6 @@ const changePasswordStrings = {
         <AssessmentForm
           client:only="react"
           fieldSets={['prescription']}
-          showTitles={false}
-          showVersion={false}
-          headingLevel={PANEL_HEADING_LEVEL}
-          strings={assessmentStrings}
-        />
-      </section>
-
-      {/* ## 3. Patient Appointments — the calendar the owner asked to keep
-          (*"Inside 'My Calender' we already have a nice looking calender"*),
-          now inside the area that names it, with the record's own
-          `calendar{}` figures below it. Both are read-only for a patient. */}
-      <section aria-labelledby="patient-appointments-heading">
-        <Heading level={2} id="patient-appointments-heading">
-          {t('account.section.patientAppointments', undefined, locale)}
-        </Heading>
-        <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
-        <AssessmentForm
-          client:only="react"
-          fieldSets={['calendar']}
           showTitles={false}
           showVersion={false}
           headingLevel={PANEL_HEADING_LEVEL}

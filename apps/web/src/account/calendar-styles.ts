@@ -161,7 +161,22 @@ export const appointmentCalendarStylesCss = `
   background-color: rgba(10, 110, 90, 0.08);
 }
 
+/* 2026-09-07: box-sizing, and the bug it fixes.
+
+   A day with appointments renders as a <button>, one without as a <span>
+   (see the component). Form controls get box-sizing: border-box from the UA
+   stylesheet and spans do not, and this project has no global reset — so
+   width: 100% plus 0.75rem of horizontal padding made the span's border box
+   0.75rem wider than its own cell, overhanging the next day. The two
+   elements have to size identically, which means saying so here rather than
+   inheriting one answer from the UA and one from nowhere.
+
+   Invisible until the day is today: nothing else paints the overhanging
+   border box, and the today ring below is an inset shadow drawn on exactly
+   that edge. Reported as today's box overlapping the next day, which is
+   precisely what it was. */
 .ndn-cal-day {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: stretch;

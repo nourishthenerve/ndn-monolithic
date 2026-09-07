@@ -63,6 +63,26 @@ describe('appointmentCalendarStylesCss', () => {
     expect(appointmentCalendarStylesCss).toContain('min-height: 2.75rem');
   });
 
+  // 2026-09-07, reported as today's square overlapping the next day.
+  //
+  // `.ndn-cal-day` is a <button> on a day with appointments and a <span> on
+  // one without. The UA stylesheet gives form controls `border-box` and
+  // gives a span nothing, this project has no global reset, and the rule
+  // sets `width: 100%` with horizontal padding — so the span's border box
+  // was 0.75rem wider than its cell and overhung the neighbouring day.
+  // Nothing painted that edge except the today ring, which is why exactly
+  // one square in the grid ever showed it.
+  it('sizes a day square with border-box, so the span and the button agree', () => {
+    const dayRule = appointmentCalendarStylesCss.slice(
+      appointmentCalendarStylesCss.indexOf('.ndn-cal-day {'),
+      appointmentCalendarStylesCss.indexOf('.ndn-cal-day--busy {'),
+    );
+    expect(dayRule).toContain('box-sizing: border-box');
+    // The pairing that made it a bug: either one alone is harmless.
+    expect(dayRule).toContain('width: 100%');
+    expect(dayRule).toContain('padding: 0.375rem');
+  });
+
   // 2026-09-06: the banner that appears when a call is open.
   it('marks the live appointment in both the chip and the dot rendering', () => {
     // A phone shows dots instead of chips, and "a call is open right now" is

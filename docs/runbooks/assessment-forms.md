@@ -206,7 +206,7 @@ Read the four stated audiences against the four `Assessment —` rows in `docs/p
 | Patient Prescription | `prescription` | renamed from `patient` *and* retitled |
 | Patient Appointments | `calendar` | retitled |
 
-`ASSESSMENT_SECTION_ORDER` now declares the owner's order (Details, Assessment Form, Prescription, Appointments) and the API's `template` response iterates it, so a page chooses *which* sections it shows and never their order.
+`ASSESSMENT_SECTION_ORDER` now declares the owner's order (Details, Assessment Form, Prescription, Appointments) and the API's `template` response iterates it, so a placement showing several sections cannot order them differently from any other. Where the *areas* sit on a page is the page's own decision, and the two answers already differ: `patient-record.astro` follows the declared order, while a patient's dashboard puts Appointments at the top on the owner's instruction (*"at the top Calender, then Patient Details, Patient Prescriptions, Patient Account, and Patient Testimonial"*).
 
 ### One component, several placements
 
