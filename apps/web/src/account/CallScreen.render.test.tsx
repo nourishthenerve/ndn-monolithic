@@ -83,6 +83,11 @@ const ASSESSMENT_STRINGS: AssessmentFormStrings = {
   uploadingLabel: 'Uploading…',
   uploadFailedLabel: 'That upload failed.',
   downloadLabel: 'Download',
+  addRowLabel: 'Add a row',
+  removeRowLabel: 'Remove this row',
+  addRowAriaTemplate: 'Add a row to {field}',
+  removeRowAriaTemplate: 'Remove row {row} from {field}',
+  cellLabelTemplate: '{field} — {column}, row {row}',
   noNextAppointmentLabel: 'No next appointment.',
   versionLabel: 'Version',
 };

@@ -1399,3 +1399,154 @@ describe("the visitor's Patient Details is their dashboard row, and nothing else
     expect(body.items[0]?.general?.responses).toMatchObject(SECRETS);
   });
 });
+
+// 2026-09-07, second amendment: `type: 'rows'`. The owner's assessment form
+// is about a third grids, so a response value may now be an array of rows —
+// the first time this API accepts anything but a scalar into `responses`.
+//
+// The rule being pinned is that a *column* is policed exactly as a field is.
+// The template is the schema for which fields exist; a grid's `columns` are
+// the schema for which cells exist inside it, and without the second half
+// `rows` would be the arbitrary key/value store on a clinical record that
+// `UNKNOWN_FIELD` exists to prevent — nested one level deeper and unwatched.
+describe('a grid is validated against its columns, not just its field', () => {
+  const row = {
+    drug: 'Gabapentin',
+    dose: '300 mg',
+    route: 'PO',
+    frequency: 'TDS',
+    indication: 'Neuropathic pain',
+    started: '2026-03-01',
+    physioRelevantEffects: 'Sedation, falls risk',
+  };
+
+  it('stores a well-formed grid', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: [row, { drug: 'Amitriptyline', dose: '10 mg' }] } },
+    });
+    expect(response.statusCode).toBe(201);
+    const body = JSON.parse(response.body) as { item: { private?: { responses: Record<string, unknown> } } };
+    expect(body.item.private?.responses.medications).toEqual([
+      row,
+      { drug: 'Amitriptyline', dose: '10 mg' },
+    ]);
+  });
+
+  it('accepts a half-filled row — a clinician writing one is the ordinary case', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: [{ drug: 'Gabapentin' }] } },
+    });
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('accepts an empty grid — a section with no medications is an answer', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: [] } },
+    });
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('is 400 for a column the field does not declare', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: [{ drug: 'Gabapentin', prescriberNotes: 'x' }] } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'UNKNOWN_FIELD' });
+  });
+
+  it('is 400 for a cell of the wrong type for its column', async () => {
+    const { handler } = await build();
+    // `priority` on the problem list is a number column.
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { problemList: [{ priority: 'high' }] } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_FIELD_TYPE' });
+  });
+
+  it('is 400 for a value outside a select column’s options', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { differentialDiagnoses: [{ status: 'maybe' }] } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_FIELD_OPTION' });
+  });
+
+  it('is 400 for a scalar sent to a grid field', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: 'Gabapentin 300mg TDS' } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_FIELD_TYPE' });
+  });
+
+  it('is 400 for a grid sent to a scalar field', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { clinicianImpression: [{ drug: 'Gabapentin' }] } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_FIELD_TYPE' });
+  });
+
+  it('refuses a nested row — a table inside a table is not a shape this record has', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: [{ drug: [{ name: 'Gabapentin' }] }] } },
+    });
+    // Refused by the body schema before the template is consulted: `ROW` is
+    // a record of scalars, which is what keeps a `responses` bag three deep
+    // and `projection.ts`'s walk over it bounded.
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_BODY' });
+  });
+
+  it('refuses a grid longer than the row cap', async () => {
+    // Not a clinical opinion about how many medications a patient may be
+    // on — a bound on the one thing in this API a caller can make
+    // arbitrarily long. A hundred rows is past every grid on the paper form.
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: Array.from({ length: 101 }, () => ({ drug: 'x' })) } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_BODY' });
+  });
+
+  it('still refuses the whole patch when only the grid is bad — a section write is atomic', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: {
+        responses: {
+          clinicianImpression: 'Reads as a radicular presentation.',
+          medications: [{ prescriberNotes: 'x' }],
+        },
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    // The good field must not have landed either: a section patch is one
+    // write, and a refused one leaves no half of itself behind.
+    const after = read(
+      await invoke(
+        handler,
+        fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: PRINCIPAL }),
+      ),
+    );
+    expect(after.items[0]?.private?.responses.clinicianImpression).toBeUndefined();
+  });
+
+  it('keeps a grid out of a patient’s reach, like the rest of the section', async () => {
+    // `private{}` is the R-09 boundary and grids changed nothing about it.
+    const { handler } = await build();
+    const response = await write(handler, OWNING_PATIENT, {
+      private: { responses: { medications: [{ drug: 'Gabapentin' }] } },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+});

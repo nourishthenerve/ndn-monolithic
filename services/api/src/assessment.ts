@@ -67,7 +67,9 @@
 // nothing derived to accidentally POST back.
 import type {
   Appointment,
+  AssessmentColumnDef,
   AssessmentFieldDef,
+  AssessmentRow,
   AssessmentSection,
   AssessmentSectionDef,
   AssessmentValue,
@@ -128,9 +130,27 @@ const attachmentSchema = z
  * `AssessmentSectionPatch`'s own doc for why a caller can never send an
  * attachment *list*.
  */
+/**
+ * A response value's two shapes. `ROW` is one row of a `type: 'rows'`
+ * field and is deliberately **not** recursive — the same bound
+ * `AssessmentRow` states in @ndn/shared-types, restated here because this
+ * is where an untrusted body is parsed and depth is what makes a body
+ * expensive to walk.
+ *
+ * `MAX_ROWS` is a cap on the body, not a clinical opinion about how many
+ * medications a patient may be on. It exists because a `rows` field is the
+ * first thing in this API a caller can make arbitrarily long, and an
+ * unbounded array is a way to write a very large record one patch at a
+ * time. A hundred rows is far past any of the paper form's grids and far
+ * short of a problem.
+ */
+const SCALAR = z.union([z.string().max(20000), z.number(), z.boolean()]);
+const ROW = z.record(z.string().max(100), SCALAR);
+const MAX_ROWS = 100;
+
 const sectionPatchSchema = z
   .object({
-    responses: z.record(z.string().max(100), z.union([z.string().max(20000), z.number(), z.boolean()])).optional(),
+    responses: z.record(z.string().max(100), z.union([SCALAR, z.array(ROW).max(MAX_ROWS)])).optional(),
     addAttachments: z.array(attachmentSchema).max(20).optional(),
   })
   .strict();
@@ -396,17 +416,75 @@ function validateResponses(
     if (field.staffOnly && isPatient) {
       return { ok: false, forbidden: true };
     }
-    if (field.type === 'number' && typeof value !== 'number') {
-      return INVALID('INVALID_FIELD_TYPE');
+    const scalar =
+      field.type === 'rows' ? validateRows(field, value) : validateScalar(field, value);
+    if (!scalar.ok) {
+      return scalar;
     }
-    if (field.type === 'checkbox' && typeof value !== 'boolean') {
-      return INVALID('INVALID_FIELD_TYPE');
-    }
-    if (field.type !== 'number' && field.type !== 'checkbox' && typeof value !== 'string') {
-      return INVALID('INVALID_FIELD_TYPE');
-    }
-    if (field.type === 'select' && !(field.options ?? []).includes(value as string)) {
-      return INVALID('INVALID_FIELD_OPTION');
+  }
+  return { ok: true };
+}
+
+/** One box's answer against its field — or one cell's against its column, which is the same question asked of a narrower declaration. */
+function validateScalar(
+  field: AssessmentFieldDef | AssessmentColumnDef,
+  value: AssessmentValue,
+): SectionValidation {
+  if (field.type === 'rows') {
+    // Unreachable through `validateResponses`, which branches before here,
+    // and impossible for a column, whose type excludes it. Refusing rather
+    // than falling through keeps this function total over its own input.
+    return INVALID('INVALID_FIELD_TYPE');
+  }
+  if (field.type === 'number' && typeof value !== 'number') {
+    return INVALID('INVALID_FIELD_TYPE');
+  }
+  if (field.type === 'checkbox' && typeof value !== 'boolean') {
+    return INVALID('INVALID_FIELD_TYPE');
+  }
+  if (field.type !== 'number' && field.type !== 'checkbox' && typeof value !== 'string') {
+    return INVALID('INVALID_FIELD_TYPE');
+  }
+  if (field.type === 'select' && !(field.options ?? []).includes(value as string)) {
+    return INVALID('INVALID_FIELD_OPTION');
+  }
+  return { ok: true };
+}
+
+/**
+ * A grid's answer: an array of rows, each row a bag of cells keyed by the
+ * columns the template declares.
+ *
+ * **The same rule as the section itself, one level down.** The template is
+ * the schema for which fields exist; a field's `columns` are the schema for
+ * which cells exist inside it. A row naming a column the field does not
+ * declare is the identical mistake as a patch naming a field the section
+ * does not declare, and gets the identical refusal — otherwise `rows` would
+ * be the arbitrary key/value store that `UNKNOWN_FIELD` exists to keep this
+ * record from becoming, just nested one deeper and unpoliced.
+ *
+ * A row missing a column is fine, and is the ordinary case: a half-filled
+ * medication line is a real thing a clinician writes.
+ */
+function validateRows(field: AssessmentFieldDef, value: AssessmentValue): SectionValidation {
+  if (!Array.isArray(value)) {
+    return INVALID('INVALID_FIELD_TYPE');
+  }
+  const columns = new Map((field.columns ?? []).map((column) => [column.id, column]));
+  for (const row of value as readonly AssessmentRow[]) {
+    // Zod has already refused anything that is not a flat record of
+    // scalars; this is the template's half of the same question. The cast
+    // is `Array.isArray` narrowing to `any[]` and nothing more — every
+    // cell below is checked against its column before it is believed.
+    for (const [columnId, cell] of Object.entries(row)) {
+      const column = columns.get(columnId);
+      if (!column) {
+        return INVALID('UNKNOWN_FIELD');
+      }
+      const checked = validateScalar(column, cell);
+      if (!checked.ok) {
+        return checked;
+      }
     }
   }
   return { ok: true };

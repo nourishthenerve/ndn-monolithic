@@ -121,3 +121,114 @@ describe('the template as a whole', () => {
     expect(templateSection('calendar')?.title).toBe('Patient Appointments');
   });
 });
+
+// 2026-09-07, second amendment: `type: 'rows'` arrived with the owner's
+// Comprehensive Neurorehabilitation assessment, about a third of whose 44
+// sections are grids. A malformed grid is not a compile error — `columns`
+// is optional on the field because only one field type uses it — so the
+// invariants that make a grid renderable and writable are asserted here.
+describe('grids', () => {
+  const grids = ASSESSMENT_TEMPLATE.flatMap((section) =>
+    section.fields
+      .filter((field) => field.type === 'rows')
+      .map((field) => [`${section.fieldSet}.${field.id}`, field] as const),
+  );
+
+  it('ships some, so the assertions below are not vacuous', () => {
+    expect(grids.length).toBeGreaterThan(20);
+  });
+
+  it.each(grids)('%s declares at least one column', (_name, field) => {
+    // A grid with no columns renders a table with a header row, no cells,
+    // and an "add row" button that appends an object nothing can fill in.
+    expect(field.columns?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it.each(grids)('%s gives every column a unique id', (_name, field) => {
+    const ids = (field.columns ?? []).map((column) => column.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it.each(grids)('%s gives options to its select columns and to nothing else', (_name, field) => {
+    for (const column of field.columns ?? []) {
+      expect(column.options !== undefined, `${field.id}.${column.id} (${column.type})`).toBe(
+        column.type === 'select',
+      );
+    }
+  });
+
+  it.each(grids)('%s is never derived or staff-only', (_name, field) => {
+    // Neither combination has a meaning: a derived grid would be computed
+    // from nothing, and `staffOnly` is a rule about the one section a
+    // patient may write, which has no grids in it.
+    expect(field.derived).toBeUndefined();
+    expect(field.staffOnly).toBeUndefined();
+  });
+
+  it('never gives a non-grid field columns', () => {
+    for (const section of ASSESSMENT_TEMPLATE) {
+      for (const field of section.fields) {
+        if (field.type !== 'rows') {
+          expect(field.columns, `${section.fieldSet}.${field.id}`).toBeUndefined();
+        }
+      }
+    }
+  });
+});
+
+describe('the assessment form section', () => {
+  const assessment = templateSection('private');
+  const fields = assessment?.fields ?? [];
+
+  it('is the owner’s 45-section form, less the demographics that are Patient Details', () => {
+    // The instruction was "use the content of these screenshots to prepare
+    // Patient Assessment Form", with "Exception Personal Demographics" —
+    // section 1 of the paper form, which is already `general`.
+    expect(fields.length).toBeGreaterThan(500);
+    const groups = new Set(fields.map((field) => field.group));
+    expect(groups.has(undefined)).toBe(false);
+    // Section 1's fields must not have been transcribed twice.
+    for (const id of ['familyName', 'dateOfBirth', 'nationalId', 'heightCm']) {
+      expect(fields.some((field) => field.id === id), id).toBe(false);
+    }
+  });
+
+  it('keeps the two ids the placeholder section already used', () => {
+    // A template is not history: an answer stored under `clinicianImpression`
+    // survives whatever the template does. Reusing the id where the real
+    // form asks the same question is what puts that answer back in the box
+    // it was written in rather than beside an empty one.
+    expect(templateField('private', 'clinicianImpression')?.type).toBe('textarea');
+    expect(templateField('private', 'workingDiagnosis')?.type).toBe('textarea');
+  });
+
+  it('carries the SOAP bands in its group names, in the paper form’s order', () => {
+    const bands = [...new Set(fields.map((field) => field.group ?? ''))]
+      .filter((group) => group.includes(' · '))
+      .map((group) => group.split(' · ')[0]);
+    expect([...new Set(bands)]).toEqual([
+      'S — Subjective',
+      'O — Objective',
+      'A — Assessment',
+      'P — Plan',
+    ]);
+  });
+
+  it('never splits one group into two runs', () => {
+    // `groupsOf` in AssessmentForm.tsx cuts the field list into *runs* of a
+    // shared group and emits one heading per run, deliberately: the
+    // template's order is the paper form's order. That is only the right
+    // behaviour if the template does not interleave groups — otherwise the
+    // same heading would appear twice on screen.
+    const seen = new Set<string>();
+    let previous: string | undefined;
+    for (const field of fields) {
+      const group = field.group ?? '';
+      if (group !== previous) {
+        expect(seen.has(group), `${group} is interleaved`).toBe(false);
+        seen.add(group);
+        previous = group;
+      }
+    }
+  });
+});

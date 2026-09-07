@@ -14,6 +14,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ageFromDateOfBirth,
+  groupsOf,
+  rowsOf,
   bmiFromHeightAndWeight,
   draftKey,
   fieldValue,
@@ -386,5 +388,121 @@ describe('fieldValue computes the general section’s derived pair', () => {
         [draftKey('general', 'preferredName')]: 'Sam',
       }),
     ).toEqual({ preferredName: 'Sam' });
+  });
+});
+
+// 2026-09-07, second amendment: the owner's assessment form is 44 numbered
+// headings and about a third grids, so the template grew a `group` string
+// and a `rows` field type. Both are rendering concerns and neither is
+// authorisation, which is why they are pinned here rather than in
+// `assessment.test.ts` — the server neither reads a group nor cares which
+// order two runs come in.
+
+describe('groupsOf', () => {
+  const field = (id: string, group?: string): AssessmentFieldDef => ({
+    id,
+    label: id,
+    type: 'text',
+    ...(group === undefined ? {} : { group }),
+  });
+
+  it('is one unnamed run when nothing names a group', () => {
+    // Patient Details, Prescription and Appointments are all like this, and
+    // must render exactly as they did before groups existed.
+    const fields = [field('a'), field('b'), field('c')];
+    expect(groupsOf(fields)).toEqual([['', fields]]);
+  });
+
+  it('cuts the list into runs of a shared group, in declaration order', () => {
+    const [a, b, c, d] = [
+      field('a', '2. Referral'),
+      field('b', '2. Referral'),
+      field('c', '3. Presenting complaint'),
+      field('d', '3. Presenting complaint'),
+    ];
+    expect(groupsOf([a, b, c, d])).toEqual([
+      ['2. Referral', [a, b]],
+      ['3. Presenting complaint', [c, d]],
+    ]);
+  });
+
+  it('emits a second run rather than reordering an interleaved group', () => {
+    // The template's order is the paper form's order. If a group ever did
+    // appear twice, two headings is the honest rendering — silently moving
+    // a clinical field to sit under an earlier heading is not.
+    // `assessment-template.test.ts` asserts the shipped template never
+    // does this, so the two files together mean it cannot happen by
+    // accident.
+    const [a, b, c] = [field('a', 'X'), field('b', 'Y'), field('c', 'X')];
+    expect(groupsOf([a, b, c]).map(([group]) => group)).toEqual(['X', 'Y', 'X']);
+  });
+
+  it('is empty for no fields', () => {
+    expect(groupsOf([])).toEqual([]);
+  });
+});
+
+describe('rowsOf', () => {
+  it('passes a row array through', () => {
+    const rows = [{ drug: 'Gabapentin' }, { drug: 'Amitriptyline' }];
+    expect(rowsOf(rows)).toEqual(rows);
+  });
+
+  it('is no rows for a scalar stored under an id that later became a grid', () => {
+    // A record is history and a template is the current form, so this is a
+    // real state: the answer stays stored, and the grid renders empty
+    // rather than crashing on `''.map`.
+    expect(rowsOf('Gabapentin 300mg TDS')).toEqual([]);
+    expect(rowsOf(0)).toEqual([]);
+    expect(rowsOf(false)).toEqual([]);
+    expect(rowsOf('')).toEqual([]);
+  });
+});
+
+describe('fieldValue blanks a grid as no rows', () => {
+  const GRID_FIELD: AssessmentFieldDef = {
+    id: 'medications',
+    label: 'Medications',
+    type: 'rows',
+    columns: [
+      { id: 'drug', label: 'Drug', type: 'text' },
+      { id: 'dose', label: 'Dose', type: 'text' },
+    ],
+  };
+
+  it('is an empty array on a record nobody has filled in', () => {
+    // The `''` every other blank uses would be a crash the first time the
+    // table tried to map it.
+    expect(fieldValue('private', GRID_FIELD, {}, undefined, undefined)).toEqual([]);
+  });
+
+  it('reads the stored rows when there are some', () => {
+    const latest: VersionItem = {
+      version: 1,
+      updated_at: '2026-09-07T09:00:00.000Z',
+      private: { responses: { medications: [{ drug: 'Gabapentin' }] }, attachments: [] },
+    };
+    expect(fieldValue('private', GRID_FIELD, {}, latest, undefined)).toEqual([
+      { drug: 'Gabapentin' },
+    ]);
+  });
+
+  it('prefers a touched draft, as for any other field', () => {
+    const drafts = { [draftKey('private', 'medications')]: [{ drug: 'Amitriptyline' }] };
+    expect(fieldValue('private', GRID_FIELD, drafts, undefined, undefined)).toEqual([
+      { drug: 'Amitriptyline' },
+    ]);
+  });
+
+  it('sends a touched grid to the save like any other answer', () => {
+    const section: AssessmentSectionDef = {
+      fieldSet: 'private',
+      title: 'Patient Assessment Form',
+      fields: [GRID_FIELD],
+    };
+    const rows = [{ drug: 'Gabapentin', dose: '300 mg' }];
+    expect(
+      responsesToSave(section, { [draftKey('private', 'medications')]: rows }),
+    ).toEqual({ medications: rows });
   });
 });
