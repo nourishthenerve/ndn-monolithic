@@ -3116,11 +3116,39 @@ export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
     fieldSet: 'prescription',
     title: 'Patient Prescription',
     fields: [
-      { id: 'presentingConcerns', label: 'What brings you here', type: 'textarea' },
-      { id: 'goals', label: 'What you would like to achieve', type: 'textarea' },
-      { id: 'medicalHistorySummary', label: 'Relevant medical history', type: 'textarea' },
-      { id: 'mobilityAids', label: 'Mobility aids in use', type: 'text' },
-      { id: 'consentToRecordSessions', label: 'Happy for sessions to be recorded', type: 'checkbox' },
+      // 2026-09-07: the owner, on this section in full — *"for Patient
+      // Prescription have a table which is expandable as we go. there will
+      // be the following columns - Sno, Medication/Excercise/Comment,
+      // Duration, Date."*
+      //
+      // So the section is **one grid and nothing else**, which is the first
+      // time a section has been specified as a single field. The five
+      // placeholders it replaces (`presentingConcerns`, `goals`,
+      // `medicalHistorySummary`, `mobilityAids`,
+      // `consentToRecordSessions`) are gone from the form; answers already
+      // stored under those ids survive on the versions that carry them,
+      // which is the template-is-not-history rule `assessment.ts` states.
+      //
+      // "Expandable as we go" is what `type: 'rows'` already is — the form
+      // renders an "add a row" button and appends. It needed no new
+      // mechanism, only this declaration.
+      {
+        id: 'prescriptionItems',
+        label: 'Prescription',
+        type: 'rows',
+        columns: [
+          // The owner's "Sno". A number the clinician writes rather than
+          // the row's position: a prescription log is a numbered document
+          // the practice may renumber, skip or continue from a previous
+          // sheet, and a serial derived from array position could not do
+          // any of those. The row's position is already announced to
+          // assistive tech separately (`renderCell`).
+          { id: 'sno', label: 'S. no.', type: 'number' },
+          { id: 'item', label: 'Medication / exercise / comment', type: 'text' },
+          { id: 'duration', label: 'Duration', type: 'text' },
+          { id: 'date', label: 'Date', type: 'date' },
+        ],
+      },
     ],
   },
   {

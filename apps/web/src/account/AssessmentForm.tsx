@@ -74,6 +74,9 @@ export const ASSESSMENT_ID = 'intake-v1';
  */
 export const ASSESSMENT_SAVED_EVENT = 'ndn:assessment-saved';
 
+/** The owner asked for thirty seconds. Exported so a test can assert the interval rather than wait one out. */
+export const AUTOSAVE_INTERVAL_MS = 30_000;
+
 // The response shapes, declared locally rather than imported from
 // `@ndn/shared-types` — the same choice `PatientRecordPanel.tsx` and every
 // other island here already makes, and `apps/web`'s dependency list is the
@@ -170,7 +173,7 @@ interface FormPayload {
 type ViewState = 'loading' | 'ready' | 'forbidden' | 'notFound' | 'error';
 
 /** Per section, because one section saving must not blank another's message. */
-type SaveState = 'idle' | 'saving' | 'saved' | 'conflict' | 'forbidden' | 'error';
+type SaveState = 'idle' | 'saving' | 'saved' | 'autosaved' | 'conflict' | 'forbidden' | 'error';
 
 export interface AssessmentFormStrings {
   readonly heading: string;
@@ -182,6 +185,8 @@ export interface AssessmentFormStrings {
   readonly saveLabel: string;
   readonly savingLabel: string;
   readonly savedLabel: string;
+  /** Distinct from `savedLabel` on purpose: a clinician needs to know the form is saving itself, or they will keep reaching for the button. */
+  readonly autosavedLabel: string;
   readonly conflictLabel: string;
   readonly saveForbiddenLabel: string;
   readonly readOnlyLabel: string;
@@ -602,8 +607,28 @@ export function AssessmentForm({
   );
   const fileInputs = useRef<Partial<Record<AssessmentFieldSet, HTMLInputElement | null>>>({});
 
-  const load = useCallback(async () => {
-    setState('loading');
+  /**
+   * `silent` is the resync path, and it differs in exactly two ways that
+   * both matter once a save can happen on a timer rather than only on a
+   * click.
+   *
+   * It does not show the loading state, because a form that blanked itself
+   * to "Loading…" every thirty seconds would be unusable — and unusable
+   * mid-consultation, which is where the owner asked for this to work.
+   *
+   * It does not clear drafts. The unconditional clear below is right for
+   * the initial read and for the reader's *own* save (the server's copy is
+   * the truth, and a surviving draft would show an edit that may not have
+   * been stored) — but a resync is triggered by a *different* placement of
+   * this form saving a *different* section, and wiping this one's
+   * in-progress typing because a sibling saved is losing work nobody asked
+   * to discard. That was already true of the manual button; auto-save
+   * would have made it happen to somebody every half minute.
+   */
+  const load = useCallback(async (options: { readonly silent?: boolean } = {}) => {
+    if (options.silent !== true) {
+      setState('loading');
+    }
     const accessToken = await client.authorization();
     if (!accessToken) {
       setState('forbidden');
@@ -637,10 +662,9 @@ export function AssessmentForm({
         return;
       }
       setPayload((await response.json()) as FormPayload);
-      // Drafts are cleared on every reload, including the reload after a
-      // save: the server's copy is the truth, and a draft that survived it
-      // would show an edit that may not have been the one stored.
-      setDrafts({});
+      if (options.silent !== true) {
+        setDrafts({});
+      }
       setState('ready');
     } catch {
       setState('error');
@@ -662,11 +686,164 @@ export function AssessmentForm({
    */
   useEffect(() => {
     const resync = () => {
-      void load();
+      void load({ silent: true });
     };
     window.addEventListener(ASSESSMENT_SAVED_EVENT, resync);
     return () => window.removeEventListener(ASSESSMENT_SAVED_EVENT, resync);
   }, [load]);
+
+  /** One section's drafts, dropped. The bag is keyed `<fieldSet>.<fieldId>`, so a section's own entries are a prefix match. */
+  const clearDraftsFor = (fieldSet: AssessmentFieldSet) => {
+    const prefix = `${fieldSet}.`;
+    setDrafts((current) =>
+      Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(prefix))),
+    );
+  };
+
+  const setDraft = (fieldSet: AssessmentFieldSet, fieldId: string, value: AssessmentValue) => {
+    setDrafts((current) => ({ ...current, [draftKey(fieldSet, fieldId)]: value }));
+    setSaveStates((current) => ({ ...current, [fieldSet]: 'idle' }));
+  };
+
+  const handleSave = async (section: AssessmentSectionDef, automatic = false) => {
+    // These two are only ever unset before the first read finishes, and
+    // nothing can click a button or fire the autosave timer into a form
+    // that has not rendered — but this function now lives above the
+    // loading branch, so it says so rather than asserting it.
+    if (!payload || !resolvedId) {
+      return;
+    }
+    const responses = responsesToSave(section, drafts);
+    if (Object.keys(responses).length === 0) {
+      return;
+    }
+    setSaveStates((current) => ({ ...current, [section.fieldSet]: 'saving' }));
+    const accessToken = await client.authorization();
+    if (!accessToken) {
+      setSaveStates((current) => ({ ...current, [section.fieldSet]: 'forbidden' }));
+      return;
+    }
+    try {
+      const response = await saveSection(accessToken, resolvedId, {
+        baseVersion: payload.currentVersion,
+        sections: { [section.fieldSet]: { responses } },
+      });
+      if (response.status === 409) {
+        // Someone else wrote a version while this form was open. Re-reading
+        // is the only honest recovery: the draft was computed against a
+        // record that no longer exists.
+        setSaveStates((current) => ({ ...current, [section.fieldSet]: 'conflict' }));
+        clearDraftsFor(section.fieldSet);
+        await load({ silent: true });
+        return;
+      }
+      if (response.status === 401 || response.status === 403) {
+        setSaveStates((current) => ({ ...current, [section.fieldSet]: 'forbidden' }));
+        return;
+      }
+      if (!response.ok) {
+        setSaveStates((current) => ({ ...current, [section.fieldSet]: 'error' }));
+        return;
+      }
+      window.dispatchEvent(new Event(ASSESSMENT_SAVED_EVENT));
+      // Only *this* section's drafts are spent. Clearing the whole bag —
+      // which `load()` used to do — threw away typing in every other
+      // section a clinician had open, which on a page that mounts this
+      // form twice is the ordinary case rather than an edge one.
+      clearDraftsFor(section.fieldSet);
+      await load({ silent: true });
+      setSaveStates((current) => ({
+        ...current,
+        [section.fieldSet]: automatic ? 'autosaved' : 'saved',
+      }));
+    } catch {
+      setSaveStates((current) => ({ ...current, [section.fieldSet]: 'error' }));
+    }
+  };
+
+  /**
+   * **Auto-save.** The owner: *"while editing Patient Assessment Form, make
+   * it auto saved every 30 seconds, both while filling it normally as well
+   * as filling it during Video Call."*
+   *
+   * The video-call half needs no code of its own — `CallScreen` renders
+   * this same component, so the timer comes with it. That is worth saying
+   * because the alternative reading (a second implementation on the call
+   * screen) would have been two behaviours to keep in step.
+   *
+   * **It applies to every section this placement renders that the caller
+   * may write, not only the assessment form.** The instruction named that
+   * section, and it is the one a clinician spends a consultation in — but
+   * the same screen shows Patient Details above it, and a form where the
+   * lower half saves itself and the upper half silently does not is a lost
+   * edit waiting to be reported as a bug. Auto-save that is conditional on
+   * which heading you are under is not a feature anyone can hold in mind.
+   *
+   * Three properties this deliberately has:
+   *
+   *   * **It sends only what was touched.** Each section is saved by the
+   *     same `handleSave` the button uses, and `responsesToSave` sends the
+   *     dirty fields alone — so an autosave cannot overwrite a field this
+   *     person never looked at, and two clinicians in different sections
+   *     of one record do not fight.
+   *   * **It never runs two at once.** A save re-reads the record on the
+   *     way out, so an overlapping tick would compute its patch against a
+   *     version being replaced. The ref is checked and set synchronously,
+   *     which an interval callback makes sufficient.
+   *   * **It does not retry a conflict.** A 409 means somebody else wrote
+   *     while this form was open; the section is re-read and its drafts
+   *     dropped, exactly as the manual button has always done. Retrying
+   *     automatically would mean silently overwriting another clinician's
+   *     edit to the same field thirty seconds later, which is not a thing
+   *     to do to a clinical record without a person deciding to.
+   */
+  const autosaving = useRef(false);
+  const runAutosave = async () => {
+    if (state !== 'ready' || !payload || !resolvedId || autosaving.current) {
+      return;
+    }
+    const candidates = (fieldSets
+      ? payload.template.filter((section) => fieldSets.includes(section.fieldSet))
+      : payload.template
+    ).filter(
+      (section) =>
+        payload.permissions.find((permission) => permission.fieldSet === section.fieldSet)
+          ?.write === true &&
+        Object.keys(responsesToSave(section, drafts)).length > 0,
+    );
+    if (candidates.length === 0) {
+      return;
+    }
+    autosaving.current = true;
+    try {
+      // Sequential, not `Promise.all`: each save bumps the record's
+      // version and the next patch needs the new one, which the re-read
+      // inside `handleSave` supplies.
+      for (const section of candidates) {
+        await handleSave(section, true);
+      }
+    } finally {
+      autosaving.current = false;
+    }
+  };
+
+  // The latest-callback pattern, and the reason for it is the interval
+  // below: an effect with `[]` must not close over this render's `drafts`,
+  // or the timer would spend the session saving whatever was on screen
+  // thirty seconds after mount. Held in a ref updated after every render,
+  // so the tick always runs the current one. Written in an effect rather
+  // than during render because render has to stay pure.
+  const autosave = useRef(runAutosave);
+  useEffect(() => {
+    autosave.current = runAutosave;
+  });
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void autosave.current();
+    }, AUTOSAVE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
 
   if (state === 'loading') {
     return (
@@ -698,50 +875,6 @@ export function AssessmentForm({
   const isEditable = (section: AssessmentSectionDef, field: AssessmentFieldDef): boolean =>
     isFieldEditable(field, permissionFor(section.fieldSet), isPatientViewer);
 
-  const setDraft = (fieldSet: AssessmentFieldSet, fieldId: string, value: AssessmentValue) => {
-    setDrafts((current) => ({ ...current, [draftKey(fieldSet, fieldId)]: value }));
-    setSaveStates((current) => ({ ...current, [fieldSet]: 'idle' }));
-  };
-
-  const handleSave = async (section: AssessmentSectionDef) => {
-    const responses = responsesToSave(section, drafts);
-    if (Object.keys(responses).length === 0) {
-      return;
-    }
-    setSaveStates((current) => ({ ...current, [section.fieldSet]: 'saving' }));
-    const accessToken = await client.authorization();
-    if (!accessToken) {
-      setSaveStates((current) => ({ ...current, [section.fieldSet]: 'forbidden' }));
-      return;
-    }
-    try {
-      const response = await saveSection(accessToken, resolvedId, {
-        baseVersion: payload.currentVersion,
-        sections: { [section.fieldSet]: { responses } },
-      });
-      if (response.status === 409) {
-        // Someone else wrote a version while this form was open. Re-reading
-        // is the only honest recovery: the draft was computed against a
-        // record that no longer exists.
-        setSaveStates((current) => ({ ...current, [section.fieldSet]: 'conflict' }));
-        await load();
-        return;
-      }
-      if (response.status === 401 || response.status === 403) {
-        setSaveStates((current) => ({ ...current, [section.fieldSet]: 'forbidden' }));
-        return;
-      }
-      if (!response.ok) {
-        setSaveStates((current) => ({ ...current, [section.fieldSet]: 'error' }));
-        return;
-      }
-      window.dispatchEvent(new Event(ASSESSMENT_SAVED_EVENT));
-      await load();
-      setSaveStates((current) => ({ ...current, [section.fieldSet]: 'saved' }));
-    } catch {
-      setSaveStates((current) => ({ ...current, [section.fieldSet]: 'error' }));
-    }
-  };
 
   /**
    * Three steps, and the middle one does not go through this API at all:
@@ -1268,6 +1401,9 @@ export function AssessmentForm({
                   {saveState === 'saving' ? strings.savingLabel : strings.saveLabel}
                 </button>
                 {saveState === 'saved' && <span role="status">{strings.savedLabel}</span>}
+                {saveState === 'autosaved' && (
+                  <span role="status">{strings.autosavedLabel}</span>
+                )}
                 {saveState === 'conflict' && <span role="alert">{strings.conflictLabel}</span>}
                 {saveState === 'forbidden' && (
                   <span role="alert">{strings.saveForbiddenLabel}</span>

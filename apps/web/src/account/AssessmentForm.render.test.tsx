@@ -33,6 +33,7 @@ const STRINGS: AssessmentFormStrings = {
   saveLabel: 'Save this section',
   savingLabel: 'Saving…',
   savedLabel: 'Saved.',
+  autosavedLabel: 'Saved automatically.',
   conflictLabel: 'Someone else changed this form.',
   saveForbiddenLabel: 'You do not have permission to change this section.',
   readOnlyLabel: 'You can read this section but not change it.',
@@ -954,5 +955,85 @@ describe('groups and grids', () => {
     renderAssessment({ write: false, rows: [] });
     await screen.findByText('Medications');
     expect(screen.queryByRole('table')).toBeNull();
+  });
+});
+
+// 2026-09-07: the resync no longer throws away what you were typing.
+//
+// `ASSESSMENT_SAVED_EVENT` exists because a page can mount this form more
+// than once and each placement holds its own `currentVersion`. The listener
+// re-read — and `load` cleared *every* draft on the way through, so a
+// sibling placement saving its own section wiped this one's in-progress
+// typing. Latent while saves were clicks; guaranteed every thirty seconds
+// once `AUTOSAVE_INTERVAL_MS` existed, which is what surfaced it.
+describe('a resync from another placement', () => {
+  const SECTION = {
+    fieldSet: 'general',
+    title: 'Patient Details',
+    fields: [{ id: 'preferredName', label: 'Preferred name', type: 'text' }],
+  };
+
+  function renderForm(fetchForm: () => Promise<Response>) {
+    return render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={fetchForm}
+      />,
+    );
+  }
+
+  it('keeps unsaved typing, and takes the newer version', async () => {
+    let currentVersion = 3;
+    renderForm(() =>
+      ok(
+        payloadFor({
+          currentVersion,
+          template: [SECTION],
+          permissions: [
+            { fieldSet: 'general', read: true, write: true },
+            { fieldSet: 'prescription', read: false, write: false },
+            { fieldSet: 'private', read: false, write: false },
+            { fieldSet: 'calendar', read: false, write: false },
+          ],
+        }),
+      ),
+    );
+    await screen.findByText('Patient Details');
+    fireEvent.change(screen.getByLabelText('Preferred name'), { target: { value: 'Sammy' } });
+
+    // The sibling placement saves its own section and announces it.
+    currentVersion = 4;
+    fireEvent(window, new Event(ASSESSMENT_SAVED_EVENT));
+
+    // The version moved — which is the whole reason for the event — and
+    // the half-typed name is still there.
+    await waitFor(() => {
+      expect(screen.getByText(/4/)).toBeDefined();
+    });
+    expect(screen.getByDisplayValue('Sammy')).toBeDefined();
+  });
+
+  it('does not blank the form to a loading message while it re-reads', async () => {
+    // Thirty seconds is not long enough to tolerate a flash of "Loading…"
+    // — and the owner asked for this to work during a video call.
+    renderForm(() =>
+      ok(
+        payloadFor({
+          template: [SECTION],
+          permissions: [
+            { fieldSet: 'general', read: true, write: true },
+            { fieldSet: 'prescription', read: false, write: false },
+            { fieldSet: 'private', read: false, write: false },
+            { fieldSet: 'calendar', read: false, write: false },
+          ],
+        }),
+      ),
+    );
+    await screen.findByText('Patient Details');
+    fireEvent(window, new Event(ASSESSMENT_SAVED_EVENT));
+    expect(screen.queryByText(STRINGS.loadingLabel)).toBeNull();
+    expect(screen.getByLabelText('Preferred name')).toBeDefined();
   });
 });

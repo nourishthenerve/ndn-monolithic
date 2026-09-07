@@ -476,6 +476,7 @@
   "assessment.save": "Save this section",
   "assessment.saving": "Saving…",
   "assessment.saved": "Saved.",
+  "assessment.autosaved": "Saved automatically.",
   "assessment.conflict": "Someone else changed this form while you had it open. It has been reloaded — please make your change again.",
   "assessment.saveForbidden": "You do not have permission to change this section.",
   "assessment.readOnly": "You can read this section but not change it.",

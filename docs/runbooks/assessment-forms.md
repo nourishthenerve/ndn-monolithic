@@ -321,3 +321,54 @@ Two places now, both deliberate and both guarded:
 - The 200-odd tick-list checkboxes are declared through a `ticks()` helper in the template itself. **It takes explicit `[id, label]` pairs and never derives an id from a label** — a clinical record keys its answers by id, so a generated id would mean a wording change silently orphaning every answer stored under the old one.
 
 `assessment-template.test.ts` holds the grid invariants that are not compile errors: every grid declares columns, column ids are unique within their grid, select columns have options and nothing else does, no grid is `derived` or `staffOnly`, and no group is ever interleaved — that last one is what makes `groupsOf`'s run-based headings correct rather than merely usually correct.
+
+## Amendment, 2026-09-07 (fourth) — Patient Prescription, and auto-save
+
+Three instructions, and the third turned up a data-loss bug that had been sitting in the resync path since the form was first mounted twice.
+
+### Patient Prescription is one grid
+
+The owner: *"for Patient Prescription have a table which is expandable as we go. there will be the following columns - Sno, Medication/Excercise/Comment, Duration, Date."*
+
+So `prescription{}` is a single `type: 'rows'` field, `prescriptionItems`, with those four columns and nothing else — the first section specified as one field. The five placeholders it replaces (`presentingConcerns`, `goals`, `medicalHistorySummary`, `mobilityAids`, `consentToRecordSessions`) are gone from the form; answers already stored under those ids survive on the versions carrying them, which is the template-is-not-history rule.
+
+`Sno` is a number the clinician writes rather than the row's position. A prescription log is a numbered document a practice may renumber, skip, or continue from a previous sheet, and a serial derived from array position could do none of those. The row's position is already announced to assistive tech separately.
+
+### "Expandable as we go" was already true of the assessment form
+
+The owner also asked that the assessment form's tables be expandable. **They already were** — `type: 'rows'`, added in the amendment above, renders an "add a row" button and appends; the read-only rendering is a plain table. Nothing was needed for this beyond declaring the prescription grid the same way. The one thing that *did* change is the ceiling, below.
+
+### A version is one DynamoDB item, and that ceiling is now reachable
+
+`PK = PAT#<patientId>`, `SK = ASSESS#<assessmentId>#v<n>` — one item per version, and DynamoDB items stop at **400 KB**. That was unreachable while every answer was a scalar; 600-odd short strings do not come close. Thirty grids that a clinician has been invited to expand indefinitely is a different proposition.
+
+Left alone, the failure would have been a `ValidationException` from the driver surfacing as a **500 at an unpredictable point** — a clinician losing a consultation's notes to an error that explains nothing. So:
+
+- **`assertVersionFitsOneItem`** (`assessment-repository.ts`) measures the merged version's UTF-8 bytes against `MAX_VERSION_BYTES` (320 KB) and throws `ASSESSMENT_TOO_LARGE`, which the handler maps to a **400**. Not a 413: the *patch* is small, and what does not fit is the record it would produce.
+- It is checked **in the repository, not the handler**, because that is where the merged version exists. The handler only ever sees a patch, and a patch is never the problem — what overflows is the carry-forward that assembles the next version from the previous one, which is the line immediately above the check.
+- The headroom to 400 KB is deliberate: the real item also carries `pk`, `sk`, the entity type, the version number and the audit stamps.
+- `MAX_ROWS` went from 100 to 1000. It is a cheap bound on one request's body — enough to stop an absurd array being walked at all — and is no longer pretending to be the ceiling. A prescription log accumulated over a course of treatment can genuinely pass a hundred rows.
+
+A refused save loses only itself; every earlier version is still there.
+
+### Auto-save, every thirty seconds
+
+The owner: *"while editing Patient Assessment Form, make it auto saved every 30 seconds, both while filling it normally as well as filling it during Video Call."*
+
+**The video-call half needed no code.** `CallScreen` renders the same `AssessmentForm`, mounted for the rest of the page's life rather than while `connected` — a decision taken earlier for a related reason (*"a blip in someone's wifi must not throw away what a clinician was writing"*) — so the timer comes with it. Worth stating because the alternative reading, a second implementation on the call screen, would have been two behaviours to keep in step.
+
+**It applies to every section the placement renders that the caller may write**, not only the assessment form. The instruction named that section and it is the one a clinician spends a consultation in, but the same screen shows Patient Details above it, and a form whose lower half saves itself while the upper half silently does not is a lost edit waiting to be filed as a bug. Auto-save conditional on which heading you are under is not a feature anyone can hold in mind.
+
+Three properties it has deliberately:
+
+- **It sends only what was touched.** Each section goes through the same `handleSave` the button uses, and `responsesToSave` sends the dirty fields alone — so an autosave cannot overwrite a field this person never looked at, and two clinicians working in different sections of one record do not fight.
+- **It never runs two at once.** A save re-reads the record on the way out, so an overlapping tick would compute its patch against a version being replaced.
+- **It does not retry a conflict.** A 409 means somebody else wrote while this form was open; the section is re-read and its drafts dropped, exactly as the manual button always did. Retrying automatically would mean silently overwriting another clinician's edit to the same field thirty seconds later, which is not something to do to a clinical record without a person deciding to.
+
+### The bug the timer exposed
+
+`load()` cleared **every** draft and set the loading state, and the `ASSESSMENT_SAVED_EVENT` listener called it. So a placement saving *its* section made every other placement of the form on the page throw away whatever was half-typed in *its* sections, and flash "Loading…" while doing it. Latent while every save was a click; guaranteed to happen to somebody every thirty seconds once a timer could fire one.
+
+`load` now takes `{ silent: true }` for the resync path, which does neither — and a successful save clears only the saved section's drafts (`clearDraftsFor`) instead of the whole bag. The unconditional clear is still right for the initial read: the server's copy is the truth and a surviving draft would show an edit that may not have been stored. It was never right for a sibling's save.
+
+`AssessmentForm.autosave.test.tsx` is **its own file on purpose**: installing `vi.useFakeTimers()` leaves `@testing-library`'s polling unable to advance, so every test after it in the same file hangs. Vitest gives each file its own environment, which makes the file boundary the isolation.

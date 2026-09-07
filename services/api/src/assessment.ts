@@ -137,16 +137,18 @@ const attachmentSchema = z
  * is where an untrusted body is parsed and depth is what makes a body
  * expensive to walk.
  *
- * `MAX_ROWS` is a cap on the body, not a clinical opinion about how many
- * medications a patient may be on. It exists because a `rows` field is the
- * first thing in this API a caller can make arbitrarily long, and an
- * unbounded array is a way to write a very large record one patch at a
- * time. A hundred rows is far past any of the paper form's grids and far
- * short of a problem.
+ * `MAX_ROWS` is a cheap bound on one request's body, not the real ceiling
+ * and not a clinical opinion about how many medications a patient may be
+ * on. The real ceiling is `MAX_VERSION_BYTES` in
+ * `assessment-repository.ts`, which is what the 400 KB DynamoDB item limit
+ * actually permits across every grid at once; this only stops a single
+ * absurd array from being walked at all. It was 100 until the owner asked
+ * for the grids to be "expandable as we go", which a prescription log
+ * accumulated over a course of treatment can genuinely exceed.
  */
 const SCALAR = z.union([z.string().max(20000), z.number(), z.boolean()]);
 const ROW = z.record(z.string().max(100), SCALAR);
-const MAX_ROWS = 100;
+const MAX_ROWS = 1000;
 
 const sectionPatchSchema = z
   .object({
@@ -870,6 +872,15 @@ export function createAssessmentHandler(
         // Two writers who read the same version and both computed the same
         // next one. The loser is told to re-read, not silently merged.
         return respond(409, { error: 'VERSION_CONFLICT' });
+      }
+      if (error instanceof AppError && error.code === 'ASSESSMENT_TOO_LARGE') {
+        // The merged record would not fit one DynamoDB item — see
+        // `assertVersionFitsOneItem`. A 400 and not a 500: the request is
+        // the thing that cannot be honoured, nothing is broken, and every
+        // earlier version is still there. `413` was the other candidate
+        // and is wrong, because the *patch* is small; what does not fit is
+        // the record it would produce.
+        return respond(400, { error: 'ASSESSMENT_TOO_LARGE' });
       }
       throw error;
     }
