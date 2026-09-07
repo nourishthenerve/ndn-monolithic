@@ -49,4 +49,19 @@ None. No new SES/Turnstile/Stripe setup: workshops have no public-facing form in
 
 The owner asked for a publication date on blog posts and workshops. `Workshop.publishedAt` is that date, stamped on the transition into `published` (or at creation when a workshop is announced immediately) and kept across a cancel-and-republish. [content-authoring.md](content-authoring.md)'s own amendment carries the full reasoning — why neither `created_at` nor `updated_at` would do, and the `created_at` fallback that covers every workshop announced before the field existed.
 
-The one thing specific to workshops: **a workshop has two dates, and the site never shows either of them bare.** `dateTimeUtc` is when the workshop is; `publishedAt` is when the listing went up. Cards label the second "Announced", and the detail pages give each its own row in the same `<dl>`. A single unlabelled date on a workshop card would be read as the date of the workshop, which is the one misreading this feature could easily have introduced.
+The one thing specific to workshops: **a workshop has two dates, and the site never shows either of them bare.** `dateTimeUtc` is when the workshop is; `publishedAt` is when the listing went up.
+
+Both are on the card, in that order — the owner, on the first cut: *"For workshop cards show when the workshop is actually happening."* The announcement date alone left the listing silent about the one fact a reader is looking for. So a card reads:
+
+```text
+Happening October 1, 2026 at 11:00 AM GMT+1
+Announced September 3, 2026
+```
+
+Each is labelled, because two unlabelled dates on one card are two chances to read the wrong one. The detail pages give each its own row in the same `<dl>`.
+
+### One workshop-time renderer, `workshops/workshop-date.ts`
+
+Adding the date to the card would have made a third copy of the same `Intl.DateTimeFormat` options — `LiveWorkshop.tsx` and `workshops/[slug].astro` each built their own, kept in step by a comment asking the next person to keep them in step. All three now call `formatWorkshopDate`, which is `@ndn/i18n`'s `formatDateTime`.
+
+**The visible change is that a workshop time now names its zone** ("at 11:00 AM GMT+1"), as every other time in the app already does. The stored instant is UTC and every reader's browser renders it in their own zone; without the label, two people in two countries comparing what the page told them would each be certain the other had misread it. `datetime.ts`'s header argues this for appointments — a workshop is the same problem with more attendees.

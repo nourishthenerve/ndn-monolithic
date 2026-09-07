@@ -26,6 +26,23 @@
 //      edge one, and each still sees the time in their own zone — the
 //      label is what stops that from looking like a disagreement.
 //
+// A fourth, added 2026-09-07 and stated because it had until then been an
+// accident of the locale rather than a choice:
+//
+//   4. **The style is "September 3, 2026" — month first, in `en`.** The
+//      owner, shown that the site rendered US-style rather than the UK
+//      "3 September 2026" a British practice might expect: *"for style, use
+//      September 3, 2026 style across."* Bare `en` is what produces it, so
+//      nothing here changes — but the next person to notice the mismatch
+//      between the practice's country and its dates would reasonably
+//      "correct" the locale to `en-GB` and quietly restyle every date on
+//      the site. It is a decision. `datetime.test.ts` asserts it, so
+//      changing it fails a test named after the reason rather than a
+//      snapshot.
+//
+//      Note rule 2 is what makes this safe either way: the month is spelled
+//      in both styles, so the choice between them is taste, never meaning.
+//
 // `Locale` is imported as a type only, the same shape `format.ts` uses:
 // this module is a leaf, and taking a runtime import from `index.js`
 // (which re-exports this file) would close a cycle. That is also why

@@ -19,6 +19,15 @@ import { publicationDateOf } from '../publication-date.js';
 import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
+import { formatWorkshopDate } from './workshop-date.js';
+
+// 2026-09-07: `formatWorkshopDate` moved out of this file to
+// `workshop-date.ts`, now that the listing cards render the same instant
+// too — see that module's own note on why three formatters kept in step by
+// hand became one. Re-exported here because this is where it lived, and
+// where this module's own test still looks for it.
+export { formatWorkshopDate };
+
 export interface LiveWorkshopRecord {
   readonly id: string;
   readonly dateTimeUtc: string;
@@ -49,18 +58,6 @@ export interface LiveWorkshopProps {
   /** Injectable for tests; defaults to `?slug=` on the current URL. */
   readonly slug?: string;
   readonly fetchWorkshops?: () => Promise<readonly LiveWorkshopRecord[] | undefined>;
-}
-
-/**
- * The same `Intl.DateTimeFormat` shape `[slug].astro` uses at build time.
- * Kept identical on purpose: a workshop rendered here and the same one
- * rendered from its prerendered page after the next deploy must not show
- * its time two different ways.
- */
-export function formatWorkshopDate(dateTimeUtc: string, locale: Locale): string {
-  return new Intl.DateTimeFormat(locale, { dateStyle: 'long', timeStyle: 'short' }).format(
-    new Date(dateTimeUtc),
-  );
 }
 
 function slugFromLocation(): string {

@@ -8,6 +8,7 @@
   "common.contactCtaBody": "Have a question or want to book an appointment? Send us a message and we'll get back to you.",
   "common.publishedOn": "Published {date}",
   "common.announcedOn": "Announced {date}",
+  "common.happeningOn": "Happening {date}",
   "common.redirecting": "Redirecting…",
   "common.continueToSite": "Continue to the site",
   "nav.primaryLabel": "Primary navigation",

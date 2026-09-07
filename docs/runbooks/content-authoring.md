@@ -146,13 +146,17 @@ Showing nothing was the alternative and is worse: a byline missing from an artic
 
 ### Where it renders, and what it is called
 
-Six surfaces, one helper, one formatter (`@ndn/i18n`'s new `formatDayMonthYear` — the month spelled, no weekday, formatted in the **site's** locale rather than the reader's browser's, for the reason `datetime.ts` exists at all):
+Six surfaces, one helper, one formatter (`@ndn/i18n`'s new `formatDayMonthYear` — the month spelled, no weekday, formatted in the **site's** locale rather than the reader's browser's, for the reason `datetime.ts` exists at all).
+
+The house style is **"September 3, 2026" — month first**, which is `datetime.ts`'s own rule 4 as of the same day: an owner decision, recorded there because bare `en` produces it by accident and a later reader might "correct" the locale to `en-GB` for a UK practice and restyle every date on the site. `datetime.test.ts` fails if that happens. Rule 2 is what makes the choice safe either way — the month is spelled in both styles, so it is taste rather than meaning.
 
 | Surface | Label |
 | --- | --- |
 | Homepage strips, `/blog`, `/workshops` cards | "Published …" / "Announced …" |
 | `blog/[slug]`, `blog/post?slug=` | "Published …" under the headline |
 | `workshops/[slug]`, `workshops/workshop?slug=` | An "Announced" row beside the existing "Date and time" |
+
+Workshop cards carry the workshop's **own** date above the announcement date — see [workshops.md](workshops.md).
 
 **A workshop's date is "Announced", never "Published", and it is never bare.** A workshop card carries two dates that could be confused for one another — when the workshop is, and when it went up — and only the label keeps them apart. The detail pages name both in the same `<dl>` for the same reason.
 

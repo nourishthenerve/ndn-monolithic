@@ -174,3 +174,26 @@ describe('formatDayMonthYear', () => {
     expect(formatDayMonthYear('not-a-date', 'en')).toBe('not-a-date');
   });
 });
+
+// 2026-09-07, rule 4 in this module's own header: *"for style, use September
+// 3, 2026 style across."* One test over every formatter that renders a
+// month, so switching the catalogue to `en-GB` — a reasonable-looking
+// "correction" for a UK practice — fails here rather than silently
+// restyling every date on the site.
+describe('the house date style', () => {
+  const instant = '2026-09-03T09:00:00.000Z';
+
+  it.each([
+    ['formatDayMonthYear', formatDayMonthYear(instant, 'en')],
+    ['formatDateTime', formatDateTime(instant, 'en')],
+    ['formatDate', formatDate(instant, 'en')],
+  ])('%s puts the month before the day', (_name, rendered) => {
+    expect(rendered).toContain('September 3, 2026');
+  });
+
+  it('never renders a bare numeric date, whatever the style', () => {
+    // Rule 2, which is the one that carries meaning rather than taste:
+    // "9/3" and "03/09" disagree about the month.
+    expect(formatDayMonthYear(instant, 'en')).not.toMatch(/\d+\/\d+/);
+  });
+});

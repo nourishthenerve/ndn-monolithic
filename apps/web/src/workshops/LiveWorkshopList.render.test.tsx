@@ -18,6 +18,7 @@ const STRINGS = {
   viewDetails: 'View details',
   posterAltTemplate: 'Poster for {title}',
   publishedOnTemplate: 'Announced {date}',
+  happeningOnTemplate: 'Happening {date}',
 };
 
 function workshop(id: string): LiveWorkshop {
@@ -100,11 +101,11 @@ describe('the homepage strip', () => {
 
 // 2026-09-07: the announcement date on a workshop card.
 describe('the announcement date', () => {
-  const metaText = (container: HTMLElement): string =>
-    container.querySelector('.ndn-card-meta')?.textContent ?? '';
+  /** The announcement line specifically — the card carries the workshop's own date above it. */
+  const announcedText = (): string => screen.queryByText(/^Announced/)?.textContent ?? '';
 
-  it('says announced, not published, and never the workshop’s own date', () => {
-    const { container } = render(
+  it('says announced, and says it about the announcement rather than the workshop', () => {
+    render(
       <LiveWorkshopList
         strings={STRINGS}
         locale="en"
@@ -113,16 +114,16 @@ describe('the announcement date', () => {
       />,
     );
 
-    // The workshop itself is on 1 October; this line is about the day the
-    // listing went up, and a card showing one bare date would be read as
-    // the other one.
-    expect(metaText(container)).toContain('Announced');
-    expect(metaText(container)).toContain('September');
-    expect(screen.queryByText(/October/)).toBeNull();
+    // The workshop is in October and was announced in September. Both are
+    // on the card (2026-09-07), so what matters is that each date is
+    // attached to its own label rather than merely present somewhere.
+    const announced = screen.getByText(/^Announced/);
+    expect(announced.textContent).toContain('September');
+    expect(announced.textContent).not.toContain('October');
   });
 
   it('falls back to created_at for a workshop announced before publishedAt existed', () => {
-    const { container } = render(
+    render(
       <LiveWorkshopList
         strings={STRINGS}
         locale="en"
@@ -138,10 +139,10 @@ describe('the announcement date', () => {
       />,
     );
 
-    expect(metaText(container)).toContain('July');
+    expect(announcedText()).toContain('July');
   });
 
-  it('renders a card with no date rather than a broken one when the record has neither', () => {
+  it('drops the announcement line, and only that line, when the record carries neither timestamp', () => {
     render(
       <LiveWorkshopList
         strings={STRINGS}
@@ -158,6 +159,73 @@ describe('the announcement date', () => {
     );
 
     expect(screen.getByText('dateless title')).toBeDefined();
-    expect(screen.queryByText(/Announced/)).toBeNull();
+    expect(screen.queryByText(/^Announced/)).toBeNull();
+    // The workshop's own date is not optional and does not go with it.
+    expect(screen.getByText(/^Happening/)).toBeDefined();
+  });
+});
+
+// 2026-09-07: the owner, on the first cut of the card: *"For workshop cards
+// show when the workshop is actually happening."* The announcement date
+// alone left the listing silent about the one fact someone reading it is
+// looking for.
+describe('the workshop’s own date', () => {
+  it('is on the card, ahead of the announcement date', () => {
+    const { container } = render(
+      <LiveWorkshopList
+        strings={STRINGS}
+        locale="en"
+        initialWorkshops={[workshop('a')]}
+        fetchWorkshops={() => new Promise(() => {})}
+      />,
+    );
+
+    const meta = [...container.querySelectorAll('.ndn-card-meta')].map(
+      (node) => node.textContent ?? '',
+    );
+    expect(meta).toHaveLength(2);
+    expect(meta[0]).toContain('Happening');
+    expect(meta[0]).toContain('October');
+    expect(meta[1]).toContain('Announced');
+  });
+
+  it('names the time zone, so an online workshop cannot be read an hour out', () => {
+    const { container } = render(
+      <LiveWorkshopList
+        strings={STRINGS}
+        locale="en"
+        initialWorkshops={[workshop('a')]}
+        fetchWorkshops={() => new Promise(() => {})}
+      />,
+    );
+
+    // The stored instant is UTC and every reader's browser renders it in
+    // their own zone — `@ndn/i18n`'s `formatDateTime` is what labels it.
+    expect(container.querySelector('.ndn-card-meta')?.textContent).toMatch(/(GMT|UTC)/);
+  });
+
+  it('shows the workshop date even on a card with no announcement date', () => {
+    // `dateTimeUtc` is required on the record; `publishedAt`/`created_at`
+    // are not, so the two lines fail independently.
+    const { container } = render(
+      <LiveWorkshopList
+        strings={STRINGS}
+        locale="en"
+        initialWorkshops={[
+          {
+            id: 'dateless',
+            dateTimeUtc: '2026-10-01T10:00:00.000Z',
+            details: { en: { title: 'dateless title', description: 'x' } },
+          },
+        ]}
+        fetchWorkshops={() => new Promise(() => {})}
+      />,
+    );
+
+    const meta = [...container.querySelectorAll('.ndn-card-meta')].map(
+      (node) => node.textContent ?? '',
+    );
+    expect(meta).toHaveLength(1);
+    expect(meta[0]).toContain('Happening');
   });
 });

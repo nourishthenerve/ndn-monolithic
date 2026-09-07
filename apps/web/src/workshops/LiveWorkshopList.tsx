@@ -24,6 +24,8 @@ import { publicationDateOf } from '../publication-date.js';
 import { richTextToPlainText } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
+import { formatWorkshopDate } from './workshop-date.js';
+
 export interface LiveWorkshop {
   readonly id: string;
   readonly dateTimeUtc: string;
@@ -47,6 +49,16 @@ export interface LiveWorkshopListStrings {
   readonly posterAltTemplate: string;
   /** 2026-09-07: `"Announced {date}"`, filled here for the same reason `posterAltTemplate` is. */
   readonly publishedOnTemplate: string;
+  /**
+   * 2026-09-07: `"Happening {date}"` — the owner: *"For workshop cards show
+   * when the workshop is actually happening."*
+   *
+   * The card carries two dates and this is the one a reader is looking for.
+   * It goes first, and it is worded as an event rather than as a label so
+   * the two lines cannot be swapped in the reading: "Happening October 1,
+   * 2026 at 11:00 AM GMT+1" over "Announced September 3, 2026".
+   */
+  readonly happeningOnTemplate: string;
 }
 
 export interface LiveWorkshopListProps {
@@ -68,6 +80,18 @@ export interface LiveWorkshopListProps {
  */
 export function posterAltFor(template: string, title: string): string {
   return template.replace('{title}', title);
+}
+
+/** When the workshop happens, as the card says it. Always present — `dateTimeUtc` is required on the record, unlike the announcement date. */
+export function happeningLine(
+  workshop: LiveWorkshop,
+  template: string,
+  locale: Locale,
+): { readonly iso: string; readonly text: string } {
+  return {
+    iso: workshop.dateTimeUtc,
+    text: template.replace('{date}', formatWorkshopDate(workshop.dateTimeUtc, locale)),
+  };
 }
 
 /**
@@ -171,6 +195,7 @@ export function LiveWorkshopList({
         // See LiveWorkshop.tsx: guarded on the URL, not the key.
         const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : undefined;
         const announced = announcedLine(workshop, strings.publishedOnTemplate, locale);
+        const happening = happeningLine(workshop, strings.happeningOnTemplate, locale);
         return (
         <Card key={workshop.id}>
           {posterSrc && (
@@ -182,6 +207,13 @@ export function LiveWorkshopList({
             />
           )}
           <Heading level={headingLevel}>{title}</Heading>
+          {/* The workshop's own date first: it is what someone reading a
+              workshop card is looking for, and the announcement date is
+              context for it. Both are labelled, because two bare dates on
+              one card are two chances to read the wrong one. */}
+          <p className="ndn-card-meta">
+            <time dateTime={happening.iso}>{happening.text}</time>
+          </p>
           {announced && (
             <p className="ndn-card-meta">
               <time dateTime={announced.iso}>{announced.text}</time>
