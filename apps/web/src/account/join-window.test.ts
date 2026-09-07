@@ -9,8 +9,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  callDeadline,
   countdownUntil,
   formatCountdown,
+  formatRemaining,
+  nextPhaseChangeAt,
   isLiveOrUpcoming,
   joinPhase,
   joinWindowClosesAt,
@@ -200,6 +203,108 @@ describe('formatCountdown', () => {
   it('singularises each unit independently', () => {
     expect(formatCountdown({ days: 1, hours: 1, minutes: 1 }, UNITS)).toBe(
       '1 day, 1 hour and 1 minute',
+    );
+  });
+});
+
+
+// 2026-09-07, the owner: *"there should be a timer showing how much time is
+// left before the call auto gets dropped. Once the timelimit has reached
+// the call should auto drop."*
+describe('callDeadline', () => {
+  const START = new Date('2026-09-01T10:00:00.000Z');
+  const THIRTY_MINUTES = 30 * 60_000;
+
+  it('is the end of the booked slot when that comes first', () => {
+    // A 15-minute check-in used to keep running for a full 30 minutes from
+    // whenever each side happened to join — twice its own length.
+    expect(
+      callDeadline(START, THIRTY_MINUTES, { scheduledAt: START, durationMinutes: 15 }),
+    ).toEqual(new Date('2026-09-01T10:15:00.000Z'));
+  });
+
+  it('is the cap when the booked slot outlasts it', () => {
+    // A 90-minute assessment: one sitting is capped, and the caller can
+    // rejoin for another — which is the point of it being a cap and not the
+    // whole rule.
+    expect(
+      callDeadline(START, THIRTY_MINUTES, { scheduledAt: START, durationMinutes: 90 }),
+    ).toEqual(new Date('2026-09-01T10:30:00.000Z'));
+  });
+
+  it('does not extend the slot for somebody who joined late — both sides get the same instant', () => {
+    // **The bug this replaces.** The limit was 30 minutes from each side's
+    // own join, so joining at minute 25 of a 30-minute appointment bought
+    // 30 more, and two people who joined ten minutes apart held two
+    // different deadlines.
+    const lateJoin = new Date('2026-09-01T10:25:00.000Z');
+    const early = callDeadline(START, THIRTY_MINUTES, {
+      scheduledAt: START,
+      durationMinutes: 30,
+    });
+    const late = callDeadline(lateJoin, THIRTY_MINUTES, {
+      scheduledAt: START,
+      durationMinutes: 30,
+    });
+    expect(late).toEqual(early);
+    expect(late).toEqual(new Date('2026-09-01T10:30:00.000Z'));
+  });
+
+  it('falls back to the cap alone when the appointment could not be resolved', () => {
+    // The call page is reached with an id that carries `scheduledAt` and
+    // not `durationMinutes`, so "we could not find the row" is a real state
+    // — and it must still produce a limit rather than an unbounded call.
+    expect(callDeadline(START, THIRTY_MINUTES)).toEqual(new Date('2026-09-01T10:30:00.000Z'));
+  });
+});
+
+describe('formatRemaining', () => {
+  it('is m:ss, the shape a countdown clock has everywhere else', () => {
+    expect(formatRemaining(90_000)).toBe('1:30');
+    expect(formatRemaining(9_000)).toBe('0:09');
+    expect(formatRemaining(29 * 60_000)).toBe('29:00');
+  });
+
+  it('grows an hours field only when there is an hour to show', () => {
+    expect(formatRemaining(59 * 60_000)).toBe('59:00');
+    expect(formatRemaining(3_600_000)).toBe('1:00:00');
+    expect(formatRemaining(3_661_000)).toBe('1:01:01');
+  });
+
+  it('rounds seconds up, so it only reads 0:00 at the deadline itself', () => {
+    expect(formatRemaining(1)).toBe('0:01');
+    expect(formatRemaining(1_001)).toBe('0:02');
+    expect(formatRemaining(0)).toBe('0:00');
+  });
+
+  it('clamps a passed deadline rather than counting backwards', () => {
+    expect(formatRemaining(-5_000)).toBe('0:00');
+  });
+});
+
+describe('nextPhaseChangeAt', () => {
+  const START = new Date('2026-09-01T10:00:00.000Z');
+
+  it('is the start while the appointment is still ahead', () => {
+    expect(nextPhaseChangeAt(START, 30, new Date('2026-09-01T09:00:00.000Z'))).toEqual(START);
+  });
+
+  it('is the end of the slot while it is happening', () => {
+    expect(nextPhaseChangeAt(START, 30, new Date('2026-09-01T10:10:00.000Z'))).toEqual(
+      new Date('2026-09-01T10:30:00.000Z'),
+    );
+  });
+
+  it('is nothing once it is over — there is no further transition to wait for', () => {
+    expect(nextPhaseChangeAt(START, 30, new Date('2026-09-01T10:30:00.000Z'))).toBeUndefined();
+  });
+
+  // Why this exists at all: the countdown ticks every fifteen seconds, and
+  // a caller must not be looking at a live join button fifteen seconds
+  // after the window shut.
+  it('is exact at the boundary rather than to the nearest tick', () => {
+    expect(nextPhaseChangeAt(START, 30, new Date('2026-09-01T10:29:59.999Z'))).toEqual(
+      new Date('2026-09-01T10:30:00.000Z'),
     );
   });
 });

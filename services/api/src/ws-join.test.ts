@@ -49,8 +49,11 @@ class InMemoryAppointmentReader implements JoinAppointmentReader {
 
 class RecordingConnections implements JoinCallRecorder {
   readonly calls: RecordCallJoin[] = [];
-  async recordCallJoin(input: RecordCallJoin): Promise<void> {
+  /** 2026-09-07: the real repository answers with this principal's own earlier connections on this call, which it has just retired — see `JoinOutcome.superseded`. Set per test where that matters. */
+  superseded: readonly string[] = [];
+  async recordCallJoin(input: RecordCallJoin): Promise<readonly string[]> {
     this.calls.push(input);
+    return this.superseded;
   }
 }
 
@@ -117,7 +120,7 @@ describe('the appointment’s own two parties can join inside the window', () =>
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'joined' });
+    expect(result.result).toEqual({ type: 'joined' });
   });
 
   it('the assigned sub-clinician joins a scheduled appointment', async () => {
@@ -128,7 +131,7 @@ describe('the appointment’s own two parties can join inside the window', () =>
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'joined' });
+    expect(result.result).toEqual({ type: 'joined' });
   });
 
   it('writes exactly one CALL# row carrying the joining connectionId', async () => {
@@ -182,7 +185,7 @@ describe('not-your-appointment — the authorisation-layer denial, always audite
       origin: ORIGIN,
     });
 
-    expect(result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
     expect(audit.list()).toEqual([
       expect.objectContaining({ action: 'join-denied', entityId: APPOINTMENT_ID }),
     ]);
@@ -197,7 +200,7 @@ describe('not-your-appointment — the authorisation-layer denial, always audite
       origin: ORIGIN,
     });
 
-    expect(result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
   });
 
   it('an unknown appointment id is denied the same way — existence is never leaked', async () => {
@@ -208,7 +211,7 @@ describe('not-your-appointment — the authorisation-layer denial, always audite
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
   });
 
   it('a malformed appointment id (no #) is denied without touching the store', async () => {
@@ -219,7 +222,7 @@ describe('not-your-appointment — the authorisation-layer denial, always audite
       appointmentId: 'not-a-real-id',
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
   });
 
   it('no directory record for the caller is denied', async () => {
@@ -230,7 +233,7 @@ describe('not-your-appointment — the authorisation-layer denial, always audite
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'not-your-appointment' });
   });
 });
 
@@ -243,7 +246,7 @@ describe('appointment state — checked only once authorisation has passed', () 
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'join-denied', reason: 'cancelled' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'cancelled' });
   });
 
   // 2026-09-01: the approval step. A booking waiting on the principal is
@@ -261,7 +264,7 @@ describe('appointment state — checked only once authorisation has passed', () 
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'join-denied', reason: 'not-confirmed' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'not-confirmed' });
   });
 
   it('a pending-approval appointment is denied even inside its own join window', async () => {
@@ -277,7 +280,7 @@ describe('appointment state — checked only once authorisation has passed', () 
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'join-denied', reason: 'not-confirmed' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'not-confirmed' });
   });
 
   // 2026-09-03: the window is the booked slot — `[scheduledAt,
@@ -289,14 +292,16 @@ describe('appointment state — checked only once authorisation has passed', () 
   // been booked."* Previously a fixed ±window that ignored duration
   // entirely, so a 15-minute check-in stayed joinable for 30 minutes after
   // it ended and a 90-minute assessment shut both parties out halfway.
+  /** The decision alone — `superseded` is a different question, covered by its own group below. */
   async function joinAt(now: string) {
     const { join } = build({ now });
-    return join({
+    const outcome = await join({
       connectionId: 'conn-1',
       connection: PATIENT_CONNECTION,
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
+    return outcome.result;
   }
 
   it('a minute before the start is too-early — there is no early grace any more', async () => {
@@ -347,7 +352,7 @@ describe('appointment state — checked only once authorisation has passed', () 
         appointmentId: APPOINTMENT_ID,
         origin: ORIGIN,
       }),
-    ).toEqual({ type: 'joined' });
+    ).toMatchObject({ result: { type: 'joined' } });
   });
 });
 
@@ -361,7 +366,7 @@ describe('the flag', () => {
       origin: ORIGIN,
     });
 
-    expect(result).toEqual({ type: 'join-denied', reason: 'not-available' });
+    expect(result.result).toEqual({ type: 'join-denied', reason: 'not-available' });
     expect(audit.list()).toEqual([]);
   });
 
@@ -373,6 +378,60 @@ describe('the flag', () => {
       appointmentId: APPOINTMENT_ID,
       origin: ORIGIN,
     });
-    expect(result).toEqual({ type: 'joined' });
+    expect(result.result).toEqual({ type: 'joined' });
+  });
+});
+
+
+// 2026-09-07: the join now reports which of this principal's own earlier
+// connections it retired, so `ws-join-handler.ts` can tell them.
+//
+// A retired socket that is never told sits there believing it is on the
+// call: its messages reach `ws-relay.ts`'s `not-authorised` path, which
+// used to answer nothing at all, so a second tab stayed on "Connecting…"
+// indefinitely. It got worse once a dropped socket started reconnecting by
+// itself — two tabs would retire each other's `CALL#` row in turn, for
+// ever, and neither could ever hold the call.
+describe('superseded connections are reported back, never sent to the client', () => {
+  it('names this principal’s own earlier connections on a successful join', async () => {
+    const { join, connections } = build();
+    connections.superseded = ['conn-earlier-tab'];
+
+    const outcome = await join({
+      connectionId: 'conn-2',
+      connection: PATIENT_CONNECTION,
+      appointmentId: APPOINTMENT_ID,
+      origin: ORIGIN,
+    });
+
+    expect(outcome.result).toEqual({ type: 'joined' });
+    expect(outcome.superseded).toEqual(['conn-earlier-tab']);
+  });
+
+  it('is empty on a join that was denied — nothing was retired', async () => {
+    const { join } = build({ now: '2026-09-01T09:00:00.000Z' });
+    const outcome = await join({
+      connectionId: 'conn-1',
+      connection: PATIENT_CONNECTION,
+      appointmentId: APPOINTMENT_ID,
+      origin: ORIGIN,
+    });
+    expect(outcome.result).toEqual({ type: 'join-denied', reason: 'too-early' });
+    expect(outcome.superseded).toEqual([]);
+  });
+
+  it('is empty when the flag is off, before any store is touched', async () => {
+    const { join, connections } = build({ flagsEnabled: false });
+    const outcome = await join({
+      connectionId: 'conn-1',
+      connection: PATIENT_CONNECTION,
+      appointmentId: APPOINTMENT_ID,
+      origin: ORIGIN,
+    });
+    expect(outcome).toEqual({
+      result: { type: 'join-denied', reason: 'not-available' },
+      superseded: [],
+    });
+    expect(connections.calls).toHaveLength(0);
   });
 });

@@ -101,7 +101,7 @@ Two real browser sessions, signed in as the matched patient and clinician for a 
 
 - **No code-level gate for `video.call.enabled`.** No task's Files have ever touched `flags.ts` for that specific flag; the page's real behaviour rides entirely on the flags TASK 4.1.1/4.2.1/4.4.1 already built.
 - **No global, cross-call concurrency counter.** TASK 4.4.2's own cap is deliberately per call (see above) — a system-wide counter would need a new GSI, which is a real, honestly-named gap rather than a mechanism this task's own Files list could build.
-- **No rejoin after leaving.** Pressing "Leave call" stops the device stream's own tracks along with everything else; getting back into the same call needs a fresh page load. Not asked for by this task's own DoD, and not built ahead of it.
+- ~~**No rejoin after leaving.**~~ **Closed, 2026-09-07** — see the amendment below.
 
 Gate G4 §7 named the same construction-time-only accessibility posture every account-shell task since TASK 2.2.4 has stated, for the sixth time, against this page among them — **closed by TASK 5.3.1** ([live-session-accessibility.md](live-session-accessibility.md)): `/en/account/call` is registered in `account-routes.ts` and axe-scanned in a real, signed-in session on a nightly schedule. Its real in-call content stays unscanned until that task's own rolling-appointment fixture exists — named there, not here.
 
@@ -134,3 +134,80 @@ The call stage gained `maxHeight: calc(100vh - 14rem)`. With `aspect-ratio` set,
 ### A loose end found on the way
 
 `AssessmentForm`'s `strings.heading` is declared on its interface and read by nothing — every caller passes it and no version of the component has ever rendered it. Left alone here rather than removed as a drive-by, but worth knowing before anyone tries to anchor a test on it, as this one first did.
+
+## Amendment, 2026-09-07 — the stability pass
+
+> *"in webapp there is a video calling feature that connects a patient to his assigned clinician. VERY THOROUGHLY REVIEW THIS FEATURE AND MAKE SURE THERE IS NO BUG LEFT. For example, what if one of the joinee gets his call dropped or refreshed or computer restarts or joins late or joins multiple times etc etc. This feature should be super stable and should auto connect if the participants are trying to join within call window. Outside call window it should not let to have a join call button (rather say it has expired or will start soon). Also, there should be a timer showing how much time is left before the call auto gets dropped. Once the timelimit has reached the call should auto drop."*
+
+### The one that made every other question academic
+
+**API Gateway closes a WebSocket after ten minutes with no traffic on it, and that limit is a service quota — not a property `data-stack.ts` can set.** A connected call's signalling goes completely silent the moment ICE finishes: the media is peer-to-peer and the socket has nothing left to carry. So every call in this system was guaranteed to lose its socket at the ten-minute mark, `VideoCall.tsx` read `onClose` as the call ending, and there was no way back from that state. **A 30-minute appointment was not physically possible to hold.**
+
+Two changes, in `webrtc-signalling-client.ts`:
+
+- **A heartbeat.** `HEARTBEAT_INTERVAL_MS` is four minutes — two whole intervals inside the quota, so one lost beat cannot cost the socket. `ws-default-handler.ts` answers `ping` with `pong` directly (never relayed: a heartbeat is between one browser and the gateway). The reply is also the only way a client can tell a live socket from one whose network has gone while `readyState` still says `OPEN`, which it will happily do for minutes — an unanswered beat closes the socket from this side so the reconnect path takes over.
+- **Reconnection.** A dropped socket is a reconnect with capped backoff, re-sending `join` on the new one. The server issues a fresh `connectionId` and `recordCallJoin` retires the old row, which is exactly the behaviour a reconnect wants. `onJoined` therefore fires on every re-join, so it is written as "the socket is usable again" and not "the call is starting": a socket that comes back under a healthy peer connection rebuilds nothing, resets no screen, and asks the peer for nothing (`ready` carries `wantsOffer: false`). The caller sees "Reconnecting…", never "The call has ended". It also retries immediately on the `online` event, which is what turns a laptop waking up into an instant recovery rather than a two-minute wait. It stops for good on exactly three outcomes: the caller closed it, the join was denied, or this connection was superseded.
+
+### Who offers is no longer a guess
+
+`resolveRole` was `response.ok ? 'clinician' : 'patient'`, so **a 500, a 502 or a dropped connection silently labelled a clinician a patient.** Both parties then believed they were the offerer, both offered, and each rejected the other's: two black frames and "Connecting…" with nothing to explain it.
+
+Role resolution moved to `call-appointment.ts`, which will not guess — only a definitive `403` means "not a clinician"; a `5xx` or a thrown `fetch` is an error the caller can retry. More to the point, **the role no longer decides who offers.** Each side coins a random `sessionId` on joining, exchanges it on `ready`, and the greater one offers. Symmetric, decided by both sides from the same two values, needs no server, and cannot elect two offerers or none. Glare is survivable on top of that: the polite side rolls its own offer back and answers.
+
+`ready` now carries a `generation` too — which incarnation of the sender's peer connection it is — because "I have rebuilt, offer to me again" and "I am still here, nudging" are otherwise the same message, and a caller then has to choose between renegotiating a handshake that was only slow and never recovering from a rebuild.
+
+### Recovering from things
+
+| What happens | What used to happen | What happens now |
+| --- | --- | --- |
+| Socket drops (wifi, tunnel, lid, idle quota) | "The call has ended", terminal | Reconnect with backoff; call untouched if the media is fine |
+| The other party reloads their page | Frozen last frame, for the rest of the window | A new session id is detected and a fresh peer connection is put under the call |
+| ICE fails past its one retry | "This call could not connect", terminal | Up to three whole-call rebuilds while the window is open, then that message *plus* a Rejoin button |
+| Anyone leaves, or the limit is reached | Terminal; a fresh page load to get back | A Rejoin button, for as long as the window is open |
+| Same person joins twice | The older tab sat on "Connecting…" for ever | The retired connection is told `not-on-call` and stands down |
+| A peer joins twenty minutes late | A 30-second nudge budget, spent and unrecoverable | Nudging slows to every fifteen seconds but never stops |
+| An offer or answer goes missing | Both sides waiting on each other | The offerer replaces a stale offer; the answerer can re-send one |
+
+The two-tab case is worth naming separately, because reconnection made it worse before it made it better: two tabs of one call would have retired each other's `CALL#` row in turn, for ever, with neither able to hold the call. `not-on-call` is terminal on the client, which is what breaks that. It is posted from two places — `ws-join-handler.ts`, to the rows a join has just retired (`JoinOutcome.superseded`), and `ws-relay-handler.ts`, whose `not-authorised` branch previously answered nothing at all.
+
+### The window, and the timer
+
+**The auto-drop was 30 minutes from each side's own join, ignoring `durationMinutes` entirely.** A 60-minute appointment was cut in half; a 15-minute one ran for twice its length; joining at minute 25 of 30 bought another 30; and two people who joined ten minutes apart held two different deadlines. `callDeadline` (`join-window.ts`) is now the earlier of the booked slot's own end and `MAX_CALL_MINUTES` from joining, derived from `scheduledAt` so **both sides compute the same instant**. `MAX_CALL_MINUTES` is a cap on one sitting, not the whole rule: a 90-minute assessment ends its first sitting at 30 minutes and offers a Rejoin.
+
+The countdown to it is on screen — `role="timer"`, with no live region, because a screen reader must not read a number out once a second; the one thing worth announcing is announced once, two minutes out. The drop is driven by both a timeout at the exact instant *and* the per-second tick, because browsers throttle background-tab timers hard and a 30-minute `setTimeout` can come back late.
+
+**"Outside call window it should not let to have a join call button."** The page could not previously answer that: `?appointmentId=` carries `scheduledAt` and not `durationMinutes`, so whether a slot was over was unanswerable here — a caller who opened a finished appointment was taken through a camera permission prompt, shown a join button, and only told the window had shut once the server refused them. `call-appointment.ts` resolves the row (from `GET /clinicians/me/calendar` or `GET /patients/me/appointments`, whichever answers), so the call page now shows the same three phases `JoinCallCell` shows on every appointment list — a countdown, a join button, or "expired" — plus the two the record itself can be in (`pending-approval`, `cancelled`). Boundaries are watched with a timer at the exact instant rather than left to the 15-second tick, so nobody is looking at a live join button a quarter of a minute after the window shut.
+
+Where the row *cannot* be resolved — a covering clinician, a list that does not reach it, a 5xx — the screen makes no claim about the window and behaves exactly as it did before: the countdown from the id alone, and the server's own `too-late` for the far end.
+
+### Two defects found in the fixes themselves
+
+Worth recording because both are the kind that pass a casual reading:
+
+- **The rebuild budget was reset by the thing it bounded.** `automaticRejoins` started as a local inside the join effect — and a rebuild *is* a re-run of that effect, so a call that could not connect would have rebuilt itself every few seconds for the whole appointment window. It is a ref now (`automaticRejoinsRef`), reset on a successful connection and on a deliberate join. A test caught it.
+- **A terminal state left the socket running underneath it.** Setting a stage without tearing the call down meant the next thing the socket said overwrote the message: a `joined` after a failure put "Connecting…" back over "This call could not connect", and a socket idling out ten minutes after a refusal replaced the server's own reason with "the connection was lost" — with the camera still on the whole time. Every terminal state goes through `stopCall` now.
+
+### Also fixed on the way
+
+- **The join effect's dependency array held the caller's callbacks** (`onLifecycleChange`, `onRoleResolved`), so a caller passing an inline function — the ordinary way to pass one — tore the whole call down and rebuilt it on every render of the component above, camera included. They live in refs.
+- **`ws-relay.ts` picked "the other party" arbitrarily.** `participants.find((p) => p.connectionId !== sender)` returns the first row in `CONN#<connectionId>` order, which is an API-Gateway-assigned opaque string. Invisible while a call holds two rows — and it cannot be relied on to: `authz-matrix.ts` grants `join-call` to `Principal` for *every* appointment, so a supervising principal joining a sub-clinician's appointment makes three, and two of them could pick each other while the third talked into a connection that was answering somebody else. Rows now carry `joinedAt` and `chooseOtherParty` takes the most recent live one — identical for the two-party case every real call is, and deterministic rather than arbitrary beyond it. A genuine multi-party call needs more than one peer connection per browser and remains a feature, not a bug fix.
+- **A reconnect asks for a fresh token.** The token that opened the first socket may well have expired by the time a call half an hour in loses its connection; `$connect`'s authorizer would refuse it and every further attempt would fail for the rest of the appointment.
+- **`postToConnection` was three copies of one function.** `ws-post.ts` is now the one place this service pushes anything down a socket, and `OutboundMessage` is a closed union rather than three private shapes.
+
+### Verification steps
+
+Everything below is covered by tests (`VideoCall.render.test.tsx`, `webrtc-signalling-client.test.ts`, `call-appointment.test.ts`, `join-window.test.ts`, `ws-relay.test.ts`, `ws-join.test.ts`, `connection-repository.test.ts`), but these are the manual checks that matter with two real browsers:
+
+1. **Hold a call past ten minutes.** This is the whole point. Watch the timer count down and the call stay up.
+2. **Pull the wifi on one side mid-call and put it back.** "Reconnecting…", then the call returns. Repeat with the lid closed for a minute.
+3. **Reload one side mid-call.** The side that stayed puts a fresh peer connection under the call rather than freezing.
+4. **Join twenty minutes into the slot** while the other side has been waiting the whole time. They should find each other within seconds.
+5. **Open the same call in two tabs.** The older one says it was opened elsewhere; the newer one holds the call.
+6. **Open a finished appointment's URL by hand.** "Expired", with no camera prompt and no join button. Then one that has not started: a countdown.
+7. **Sit on the page across the moment the slot starts** — the join button should appear on the second, not up to fifteen seconds later.
+8. **Let a call reach its deadline.** It drops itself, both sides, and says the time ran out rather than that something broke. On an appointment longer than `MAX_CALL_MINUTES`, a Rejoin is offered.
+9. **Leave and rejoin.** No second device prompt, and the camera really does go out in between (check the indicator light).
+
+### Cost
+
+£0.00 net-new. The heartbeat is one WebSocket message per socket every four minutes — for a 30-minute call, seven extra `$default` invocations per party, against TASK 4.1.1's own modelled message count. The slow nudge is bounded by the same order of magnitude. The appointment probe is one extra request to a route that already exists. No new AWS resource of any kind.

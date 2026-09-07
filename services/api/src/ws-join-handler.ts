@@ -12,7 +12,6 @@
 // response — so the only way to answer the caller on their own socket is
 // `ApiGatewayManagementApiClient`'s `PostToConnectionCommand`, addressed by
 // `connectionId`.
-import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
@@ -24,8 +23,9 @@ import { DynamoAuditLog } from './dynamo-audit-log.js';
 import { DynamoPrincipalDirectory } from './dynamo-principal-directory.js';
 import { DynamoAppointmentStore } from './dynamo-store.js';
 import { createSsmFlagReader } from './ssm-flag-source.js';
-import { createJoinMessageHandler, type JoinResult } from './ws-join.js';
+import { createJoinMessageHandler } from './ws-join.js';
 import { managementApiClientFor } from './ws-management-client.js';
+import { postToConnection } from './ws-post.js';
 
 const client = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const tableName = process.env.PRINCIPAL_TABLE_NAME ?? '';
@@ -67,29 +67,6 @@ export interface JoinRequestEvent {
   };
 }
 
-async function postToConnection(
-  management: ApiGatewayManagementApiClient,
-  connectionId: string,
-  payload: JoinResult,
-): Promise<void> {
-  try {
-    await management.send(
-      new PostToConnectionCommand({
-        ConnectionId: connectionId,
-        Data: new TextEncoder().encode(JSON.stringify(payload)),
-      }),
-    );
-  } catch {
-    // The caller's own socket may already be gone by the time this runs
-    // (a join denial and a disconnect racing each other) — nothing
-    // actionable follows from that, and there is no second caller to
-    // retry a failure to. Identifiers only, never the payload.
-    process.stdout.write(
-      JSON.stringify({ route: '$default', type: 'join', connectionId, posted: false }) + '\n',
-    );
-  }
-}
-
 /**
  * `ws-default-handler.ts`'s only call into this file — everything else
  * here is wiring. `appointmentId` arrives already Zod-validated as a
@@ -118,7 +95,7 @@ export async function handleJoinRequest(
     return;
   }
 
-  const result = await join({
+  const outcome = await join({
     connectionId,
     connection: { principalId: connection.principalId, role: connection.role, ttl: connection.ttl },
     appointmentId,
@@ -128,5 +105,17 @@ export async function handleJoinRequest(
     },
   });
 
-  await postToConnection(management, connectionId, result);
+  await postToConnection(management, connectionId, outcome.result);
+
+  // 2026-09-07: this principal's own earlier sockets on this call, whose
+  // `CALL#` rows this join has just retired, are told so — see
+  // `JoinOutcome.superseded`. After the joiner's own answer, never before:
+  // a failure here must not cost the person who actually joined their
+  // `joined`. Each post already swallows its own failure (the commonest
+  // outcome by far is a socket that is simply gone).
+  await Promise.all(
+    outcome.superseded.map((supersededConnectionId) =>
+      postToConnection(management, supersededConnectionId, { type: 'not-on-call' }),
+    ),
+  );
 }

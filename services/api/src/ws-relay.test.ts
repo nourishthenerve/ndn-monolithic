@@ -271,3 +271,95 @@ describe('the ready announcement', () => {
     });
   });
 });
+
+
+// 2026-09-07. **"The other party" used to be whichever live row DynamoDB
+// happened to return first** — `participants.find((p) => p.connectionId
+// !== sender)` over rows sorted by `CONN#<connectionId>`, which is an
+// API-Gateway-assigned opaque string. Arbitrary, in other words.
+//
+// That was invisible while a call could only hold two rows, and it cannot
+// be relied on to: `authz-matrix.ts` grants `join-call` to `Principal` for
+// **every** appointment ("the principal here is the clinic's own
+// practising clinician, so they routinely are" a party to a call), so a
+// supervising principal joining a sub-clinician's appointment makes three.
+// Two of the three could then pick each other while the third talked into
+// a connection that was answering somebody else.
+describe('choosing the other party', () => {
+  const at = (iso: string) => iso;
+
+  it('is symmetric for the two-party call every real call is', async () => {
+    const relay = createRelayMessageHandler({
+      connections: lookupReturning([
+        { connectionId: 'conn-a', joinedAt: at('2026-09-01T10:00:00.000Z') },
+        { connectionId: 'conn-b', joinedAt: at('2026-09-01T10:01:00.000Z') },
+      ]),
+    });
+    await expect(relay(input({ senderConnectionId: 'conn-a' }))).resolves.toMatchObject({
+      targetConnectionId: 'conn-b',
+    });
+    await expect(relay(input({ senderConnectionId: 'conn-b' }))).resolves.toMatchObject({
+      targetConnectionId: 'conn-a',
+    });
+  });
+
+  it('picks the most recent arrival, not the first row in connectionId order', async () => {
+    // `conn-a` sorts first and joined first. The old `find` chose it for
+    // everyone; the newest arrival is the answer both of the others agree
+    // on.
+    const relay = createRelayMessageHandler({
+      connections: lookupReturning([
+        { connectionId: 'conn-a', joinedAt: at('2026-09-01T10:00:00.000Z') },
+        { connectionId: 'conn-b', joinedAt: at('2026-09-01T10:01:00.000Z') },
+        { connectionId: 'conn-c', joinedAt: at('2026-09-01T10:02:00.000Z') },
+      ]),
+    });
+    await expect(relay(input({ senderConnectionId: 'conn-a' }))).resolves.toMatchObject({
+      targetConnectionId: 'conn-c',
+    });
+    await expect(relay(input({ senderConnectionId: 'conn-b' }))).resolves.toMatchObject({
+      targetConnectionId: 'conn-c',
+    });
+    await expect(relay(input({ senderConnectionId: 'conn-c' }))).resolves.toMatchObject({
+      targetConnectionId: 'conn-b',
+    });
+  });
+
+  it('sorts a row with no joinedAt oldest — a pre-deploy row is the likelier stale one', async () => {
+    const relay = createRelayMessageHandler({
+      connections: lookupReturning([
+        { connectionId: 'conn-old' },
+        { connectionId: 'conn-new', joinedAt: at('2026-09-01T10:00:00.000Z') },
+      ]),
+    });
+    await expect(relay(input({ senderConnectionId: 'conn-old' }))).resolves.toMatchObject({
+      targetConnectionId: 'conn-new',
+    });
+  });
+
+  it('still works when neither row carries one, so a call in progress survives a deploy', async () => {
+    const relay = createRelayMessageHandler({
+      connections: lookupReturning([{ connectionId: 'conn-a' }, { connectionId: 'conn-b' }]),
+    });
+    await expect(relay(input({ senderConnectionId: 'conn-a' }))).resolves.toMatchObject({
+      kind: 'forward',
+      targetConnectionId: 'conn-b',
+    });
+  });
+
+  it('never picks a retired row, however recently it joined', async () => {
+    const relay = createRelayMessageHandler({
+      connections: lookupReturning([
+        { connectionId: 'conn-live', joinedAt: at('2026-09-01T10:00:00.000Z') },
+        {
+          connectionId: 'conn-retired',
+          joinedAt: at('2026-09-01T10:05:00.000Z'),
+          leftAt: at('2026-09-01T10:06:00.000Z'),
+        },
+      ]),
+    });
+    await expect(relay(input({ senderConnectionId: 'conn-live' }))).resolves.toMatchObject({
+      kind: 'peer-unavailable',
+    });
+  });
+});

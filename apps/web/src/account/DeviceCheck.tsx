@@ -67,13 +67,26 @@ export interface DeviceCheckProps {
   readonly strings: DeviceCheckStrings;
   /** Fires exactly once, when the caller confirms the device state they want to join with. */
   readonly onReady: (stream: MediaStream) => void;
+  /**
+   * 2026-09-07: hands off the moment the stream is live, without waiting
+   * for the Continue press.
+   *
+   * For **rejoining**, and only for rejoining. A call that drops has to be
+   * able to come back without walking the caller through a device choice
+   * they already made — permission is granted by then, so re-acquiring is
+   * silent and instant, and a second "Continue" between a dropped call and
+   * its recovery is a gate with nothing behind it. The first join keeps the
+   * gate, which is TASK 4.3.2's own point: a caller must be able to act on
+   * their device state before ever attempting to join.
+   */
+  readonly autoContinue?: boolean;
 }
 
 async function requestStream(constraints: MediaStreamConstraints): Promise<MediaStream> {
   return navigator.mediaDevices.getUserMedia(constraints);
 }
 
-export function DeviceCheck({ strings, onReady }: DeviceCheckProps): ReactNode {
+export function DeviceCheck({ strings, onReady, autoContinue = false }: DeviceCheckProps): ReactNode {
   const [stage, setStage] = useState<Stage>({ kind: 'requesting' });
   const [videoInputs, setVideoInputs] = useState<MediaDeviceInfo[]>([]);
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
@@ -132,6 +145,18 @@ export function DeviceCheck({ strings, onReady }: DeviceCheckProps): ReactNode {
       previewRef.current.srcObject = stage.stream;
     }
   }, [stage]);
+
+  // The hand-off `autoContinue` describes. Guarded by the same ref the
+  // button sets, so a re-render can never hand the same stream over twice
+  // — and so the cleanup above still knows this stream is no longer its
+  // to stop.
+  useEffect(() => {
+    if (!autoContinue || stage.kind !== 'ready' || handedOffRef.current) {
+      return;
+    }
+    handedOffRef.current = true;
+    onReady(stage.stream);
+  }, [autoContinue, stage, onReady]);
 
   async function switchDevice(videoDeviceId: string | undefined, audioDeviceId: string | undefined): Promise<void> {
     if (stage.kind !== 'ready') return;

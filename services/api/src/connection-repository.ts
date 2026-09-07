@@ -82,7 +82,7 @@ export interface ConnectionRepository {
    * each has exactly one live row and the partition holds exactly the two
    * of them.
    */
-  recordCallJoin(input: RecordCallJoinInput): Promise<void>;
+  recordCallJoin(input: RecordCallJoinInput): Promise<string[]>;
   /**
    * TASK 4.2.2: queries `CALL#<appointmentId>` — the same partition
    * `recordCallJoin` writes to — and hands every row back as-is,
@@ -139,6 +139,14 @@ export interface CallParticipant {
    * row carrying it.
    */
   readonly leftAt?: string;
+  /**
+   * 2026-09-07: when this participant joined, ISO. Written so
+   * `ws-relay.ts`'s own `chooseOtherParty` has something to order by —
+   * "the other party" used to be whichever row DynamoDB returned first,
+   * which is `connectionId` order, which is arbitrary. Optional on the
+   * type because rows written before this field existed do not carry it.
+   */
+  readonly joinedAt?: string;
 }
 
 export interface DynamoConnectionRepositoryOptions {
@@ -208,7 +216,7 @@ export class DynamoConnectionRepository implements ConnectionRepository {
     return result.Item as Connection | undefined;
   }
 
-  async recordCallJoin(input: RecordCallJoinInput): Promise<void> {
+  async recordCallJoin(input: RecordCallJoinInput): Promise<string[]> {
     // Read before the write, so this join sees the pile it is replacing.
     // The partition is tiny by construction (two people, plus whatever
     // reloads they have done today), so this is one small Query.
@@ -224,6 +232,8 @@ export class DynamoConnectionRepository implements ConnectionRepository {
           principalId: input.principalId,
           role: input.role,
           ttl: input.ttl,
+          // 2026-09-07: see `joinedAt` on `CallParticipant`.
+          joinedAt: this.clock.now().toISOString(),
         },
       }),
     );
@@ -239,18 +249,30 @@ export class DynamoConnectionRepository implements ConnectionRepository {
     // Scoped to *this* principal's own rows. The other party's rows are
     // not this join's business — theirs are retired by their own join, by
     // the relay's `GoneException` path, or by the `ttl`.
+    const superseded = existing
+      .filter(
+        (participant) =>
+          participant.principalId === input.principalId &&
+          participant.connectionId !== input.connectionId &&
+          participant.leftAt === undefined,
+      )
+      .map((participant) => participant.connectionId);
+
     await Promise.all(
-      existing
-        .filter(
-          (participant) =>
-            participant.principalId === input.principalId &&
-            participant.connectionId !== input.connectionId &&
-            participant.leftAt === undefined,
-        )
-        .map((participant) =>
-          this.markCallParticipantLeft(input.appointmentId, participant.connectionId),
-        ),
+      superseded.map((connectionId) =>
+        this.markCallParticipantLeft(input.appointmentId, connectionId),
+      ),
     );
+
+    // **2026-09-07: returned, so somebody can be told.** Retiring a row
+    // silently left the socket behind it open and believing it was on the
+    // call: its messages hit `ws-relay.ts`'s `not-authorised` path, which
+    // answers nothing, so a second tab sat on "Connecting…" for ever. It
+    // got worse once a dropped socket started reconnecting on its own —
+    // two tabs of the same call would then retire each other's row in turn
+    // and neither could ever hold one. `ws-join-handler.ts` posts
+    // `not-on-call` to these, which is terminal on the client.
+    return superseded;
   }
 
   async markCallParticipantLeft(appointmentId: string, connectionId: string): Promise<void> {

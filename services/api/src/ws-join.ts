@@ -75,9 +75,36 @@ export type JoinDenialReason =
   // reason, never a bare close" discipline the other four exist to serve.
   | 'not-available';
 
+/**
+ * What the *caller* is told. Deliberately the whole of it — the join
+ * decision has never had anything else to say to the person joining.
+ */
 export type JoinResult =
   | { readonly type: 'joined' }
   | { readonly type: 'join-denied'; readonly reason: JoinDenialReason };
+
+/**
+ * 2026-09-07: the decision plus the one thing the *wiring* needs and the
+ * caller must never see.
+ *
+ * `superseded` is this principal's own earlier connections on this call —
+ * an earlier tab, or a socket that outlived the page that opened it —
+ * which `recordCallJoin` has just retired. They have to be told
+ * (`not-on-call`), because a retired socket that is never told sits there
+ * believing it is on the call: its messages reach `ws-relay.ts`'s
+ * `not-authorised` path, which answers nothing at all. That was a stale
+ * tab stuck on "Connecting…" and it became worse the moment a dropped
+ * socket started reconnecting by itself — two tabs would retire each
+ * other's row in turn, for ever, and neither could hold the call.
+ *
+ * Kept off `JoinResult` rather than added to it: `JoinResult` is
+ * serialised straight to the client, and a list of another socket's
+ * connection ids is not something to send a browser.
+ */
+export interface JoinOutcome {
+  readonly result: JoinResult;
+  readonly superseded: readonly string[];
+}
 
 /** What `ws-join-handler.ts` already knows about the caller's connection before calling in here — `connection-repository.ts`'s own `Connection` row, minus the fields this decision has no use for. */
 export interface JoinCallerConnection {
@@ -107,7 +134,8 @@ export interface RecordCallJoin {
 }
 
 export interface JoinCallRecorder {
-  recordCallJoin(input: RecordCallJoin): Promise<void>;
+  /** Resolves with this principal's own earlier connection ids on this call, which it has just retired. */
+  recordCallJoin(input: RecordCallJoin): Promise<readonly string[]>;
 }
 
 export interface JoinMessageDeps {
@@ -182,7 +210,7 @@ function windowMiss(
 
 export function createJoinMessageHandler(
   deps: JoinMessageDeps,
-): (input: JoinMessageInput) => Promise<JoinResult> {
+): (input: JoinMessageInput) => Promise<JoinOutcome> {
   return async (input) => {
     const now = deps.clock.now();
 
@@ -193,7 +221,7 @@ export function createJoinMessageHandler(
       // than an access decision about this caller — the identical "a
       // flag-gated route 404s before any business logic runs, audit
       // included" shape every HTTP route in this codebase already keeps.
-      return { type: 'join-denied', reason: 'not-available' };
+      return { result: { type: 'join-denied', reason: 'not-available' }, superseded: [] };
     }
 
     const actor: ActorContext = {
@@ -203,7 +231,7 @@ export function createJoinMessageHandler(
       sourceIpHash: input.origin.sourceIpHash,
     };
 
-    const deny = async (reason: JoinDenialReason): Promise<JoinResult> => {
+    const deny = async (reason: JoinDenialReason): Promise<JoinOutcome> => {
       await deps.audit.write(
         auditEventFor(actor, {
           at: now.toISOString(),
@@ -212,7 +240,7 @@ export function createJoinMessageHandler(
           entityId: input.appointmentId,
         }),
       );
-      return { type: 'join-denied', reason };
+      return { result: { type: 'join-denied', reason }, superseded: [] };
     };
 
     const parsed = parseAppointmentId(input.appointmentId);
@@ -264,7 +292,7 @@ export function createJoinMessageHandler(
       return deny(miss);
     }
 
-    await deps.connections.recordCallJoin({
+    const superseded = await deps.connections.recordCallJoin({
       appointmentId: input.appointmentId,
       connectionId: input.connectionId,
       principalId: input.connection.principalId,
@@ -279,6 +307,6 @@ export function createJoinMessageHandler(
         entityId: input.appointmentId,
       }),
     );
-    return { type: 'joined' };
+    return { result: { type: 'joined' }, superseded };
   };
 }
