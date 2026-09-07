@@ -637,7 +637,7 @@ describe('the template is the schema', () => {
   it('is 400 when a value is the wrong type for its field', async () => {
     const { handler } = await build();
     const response = await write(handler, PRINCIPAL, {
-      prescription: { responses: { consentToRecordSessions: 'yes please' } },
+      private: { responses: { safetyNettingAdviceGiven: 'yes please' } },
     });
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_FIELD_TYPE' });
@@ -1507,16 +1507,26 @@ describe('a grid is validated against its columns, not just its field', () => {
     expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_BODY' });
   });
 
-  it('refuses a grid longer than the row cap', async () => {
-    // Not a clinical opinion about how many medications a patient may be
-    // on — a bound on the one thing in this API a caller can make
-    // arbitrarily long. A hundred rows is past every grid on the paper form.
+  it('refuses a single absurd array before it is walked at all', async () => {
+    // `MAX_ROWS` is a cheap bound on one request's body and not the real
+    // ceiling — see the record-size test below for that. It went from 100
+    // to 1000 when the owner asked for the grids to be expandable as we
+    // go, because a prescription log accumulated over a course of
+    // treatment can genuinely pass a hundred rows.
     const { handler } = await build();
     const response = await write(handler, PRINCIPAL, {
-      private: { responses: { medications: Array.from({ length: 101 }, () => ({ drug: 'x' })) } },
+      private: { responses: { medications: Array.from({ length: 1001 }, () => ({ drug: 'x' })) } },
     });
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_BODY' });
+  });
+
+  it('accepts a grid well past the old hundred-row cap', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: Array.from({ length: 400 }, () => ({ drug: 'x' })) } },
+    });
+    expect(response.statusCode).toBe(201);
   });
 
   it('still refuses the whole patch when only the grid is bad — a section write is atomic', async () => {
@@ -1548,5 +1558,71 @@ describe('a grid is validated against its columns, not just its field', () => {
       private: { responses: { medications: [{ drug: 'Gabapentin' }] } },
     });
     expect(response.statusCode).toBe(403);
+  });
+});
+
+// 2026-09-07: **a version is one DynamoDB item**, keyed `PAT#<id>` /
+// `ASSESS#<id>#v<n>`, and DynamoDB items stop at 400 KB. That was
+// unreachable while every answer was a scalar; `type: 'rows'` plus the
+// owner's "expandable as we go" made it something a clinician can reach by
+// doing what they were told they could do. Refused with a code the form can
+// explain, rather than left to surface as a 500 from the driver.
+describe('a version that would not fit one DynamoDB item', () => {
+  /** ~1 KB of prose per row, so a few hundred rows crosses the limit. The column has to be one the grid actually declares, or this is an `UNKNOWN_FIELD` test by accident. */
+  const fatRows = (count: number, column: string) =>
+    Array.from({ length: count }, () => ({ [column]: 'x'.repeat(1000) }));
+
+  it('is 400 with ASSESSMENT_TOO_LARGE, not a 500', async () => {
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: fatRows(400, 'physioRelevantEffects') } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({ error: 'ASSESSMENT_TOO_LARGE' });
+  });
+
+  it('leaves the previous version intact — a refused save loses only itself', async () => {
+    const { handler } = await build();
+    const first = await write(handler, PRINCIPAL, {
+      private: { responses: { clinicianImpression: 'Radicular presentation.' } },
+    });
+    expect(first.statusCode).toBe(201);
+    const tooBig = await write(handler, PRINCIPAL, {
+      private: { responses: { medications: fatRows(400, 'physioRelevantEffects') } },
+    });
+    expect(tooBig.statusCode).toBe(400);
+    const after = read(
+      await invoke(
+        handler,
+        fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: PRINCIPAL }),
+      ),
+    );
+    expect(after.items[0]?.private?.responses.clinicianImpression).toBe(
+      'Radicular presentation.',
+    );
+  });
+
+  it('counts the whole accumulated record, not just this patch', async () => {
+    // The patch is what a caller sends and it is never the problem. What
+    // overflows is the carry-forward that assembles the next version out of
+    // the previous one — which is why the check lives beside that merge.
+    const { handler } = await build();
+    for (const [index, response] of [
+      await write(handler, PRINCIPAL, {
+        private: { responses: { medications: fatRows(120, 'physioRelevantEffects') } },
+      }),
+      await write(handler, PRINCIPAL, {
+        private: { responses: { allergies: fatRows(120, 'reaction') } },
+      }),
+    ].entries()) {
+      expect(response.statusCode, `patch ${index + 1}`).toBe(201);
+    }
+    // Each patch above was comfortably under the limit on its own; the
+    // third tips the merged record over it.
+    const third = await write(handler, PRINCIPAL, {
+      private: { responses: { investigations: fatRows(120, 'findings') } },
+    });
+    expect(third.statusCode).toBe(400);
+    expect(JSON.parse(third.body)).toEqual({ error: 'ASSESSMENT_TOO_LARGE' });
   });
 });

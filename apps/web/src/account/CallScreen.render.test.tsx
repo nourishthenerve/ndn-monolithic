@@ -74,6 +74,7 @@ const ASSESSMENT_STRINGS: AssessmentFormStrings = {
   saveLabel: 'Save',
   savingLabel: 'Saving…',
   savedLabel: 'Saved.',
+  autosavedLabel: 'Saved automatically.',
   conflictLabel: 'Someone else saved first.',
   saveForbiddenLabel: 'You may not edit this section.',
   readOnlyLabel: 'Read only',

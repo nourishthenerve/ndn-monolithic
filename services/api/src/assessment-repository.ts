@@ -51,6 +51,7 @@ import {
 import type { ActorContext, AuditWriter } from './audit.js';
 import { ASSESSMENT_ENTITY_TYPE } from './authz-matrix.js';
 import type { Clock } from './clock.js';
+import { AppError } from './errors.js';
 import type { Unprojected } from './projection.js';
 import type { KeyValueStore } from './store.js';
 import { VersionedRepository } from './versioned-repository.js';
@@ -228,11 +229,55 @@ export class AssessmentRepository {
           }
         : {}),
     };
+    assertVersionFitsOneItem(next);
     return this.versioned.createVersion(
       compositeId(previous.patientId, previous.assessmentId),
       version,
       actor,
       next,
+    );
+  }
+}
+
+/**
+ * 2026-09-07: **a version is one DynamoDB item, and DynamoDB items stop at
+ * 400 KB.**
+ *
+ * That ceiling was unreachable while every answer was a scalar — 600-odd
+ * short strings do not come close. `type: 'rows'` made it reachable: the
+ * owner's assessment form has about thirty grids and the owner has asked
+ * for all of them to be "expandable as we go", so the record's size is now
+ * something a clinician can grow without limit by doing exactly what they
+ * were told they could do.
+ *
+ * Without this check the failure would be a `ValidationException` from
+ * DynamoDB surfacing as a 500 at an unpredictable point — a clinician
+ * losing a session's notes to an error that says nothing. With it, the save
+ * is refused with a code the form can explain, and every earlier version is
+ * still there.
+ *
+ * **Checked here rather than in the handler** because this is where the
+ * merged version exists. The handler sees a patch; the patch is small and
+ * is never the problem. What overflows is the accumulation, and the
+ * carry-forward that assembles it is right above this line.
+ *
+ * The bound is on the encoded body only. The real item also carries `pk`,
+ * `sk`, the entity type, the version number and the audit stamps, so the
+ * headroom between this figure and 400 KB is deliberate rather than
+ * pessimistic.
+ */
+const MAX_VERSION_BYTES = 320_000;
+
+function assertVersionFitsOneItem(next: unknown): void {
+  // Bytes, not string length: a record of clinical prose is not ASCII, and
+  // DynamoDB counts UTF-8.
+  const bytes = new TextEncoder().encode(JSON.stringify(next)).length;
+  if (bytes > MAX_VERSION_BYTES) {
+    // No content in the message — it would be the record itself, and
+    // `errors.ts` puts an `AppError` message into a log line.
+    throw new AppError(
+      'ASSESSMENT_TOO_LARGE',
+      `assessment version is ${bytes} bytes, over the ${MAX_VERSION_BYTES} limit`,
     );
   }
 }
