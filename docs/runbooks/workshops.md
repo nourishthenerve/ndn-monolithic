@@ -60,6 +60,28 @@ Announced September 3, 2026
 
 Each is labelled, because two unlabelled dates on one card are two chances to read the wrong one. The detail pages give each its own row in the same `<dl>`.
 
+### Three zones, not the reader's own
+
+Later the same day: *"on workshop i want to show when it's happening in Indian time, in UK time and in Middle East time."*
+
+A workshop's start now renders as three labelled rows — India, UK, Middle East — on the card and on both detail pages, replacing the single line in whatever zone the reader's browser happened to be in:
+
+```text
+When it is happening
+India        October 1, 2026 at 3:30 PM GMT+5:30
+UK           October 1, 2026 at 11:00 AM GMT+1
+Middle East  October 1, 2026 at 2:00 PM GMT+4
+Announced September 3, 2026
+```
+
+Three things about that are decisions rather than layout:
+
+- **It is a deliberate exception to `datetime.ts`'s rule 1** ("the reader's own zone, never the browser's"). That rule answers *when is my appointment*, where the reader is one of the two people who have to turn up. A workshop is announced to an audience in three countries at once — and to a practice member who has to quote the time to somebody else — so everybody sees the same three lines.
+- **Every row carries its own date.** A 9:00 PM UK workshop is half past one the next morning in India. Three times printed under one shared date would be wrong for a third of the audience on exactly the evenings a workshop is most likely to run.
+- **`Asia/Dubai` is "Middle East"** — Gulf Standard Time, GMT+4. That is a choice, and the first one to revisit if the practice's audience is really in Saudi Arabia or Egypt (`Asia/Riyadh`, GMT+3, one hour behind — one string in `WORKSHOP_TIME_ZONES`). The offset is printed on every row precisely so a reader outside the named zone is not left guessing which the label meant.
+
+The zone list lives in `apps/web/src/workshops/workshop-date.ts`; the formatting is `@ndn/i18n`'s `formatDateTimeInZone`, added the same day.
+
 ### One workshop-time renderer, `workshops/workshop-date.ts`
 
 Adding the date to the card would have made a third copy of the same `Intl.DateTimeFormat` options — `LiveWorkshop.tsx` and `workshops/[slug].astro` each built their own, kept in step by a comment asking the next person to keep them in step. All three now call `formatWorkshopDate`, which is `@ndn/i18n`'s `formatDateTime`.

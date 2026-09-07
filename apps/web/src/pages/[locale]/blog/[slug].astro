@@ -18,6 +18,7 @@ import { Heading } from '@ndn/ui';
 
 import type { BlogPost } from '../../../blog/content-client.js';
 import { fetchPublishedBlogPosts } from '../../../blog/content-client.js';
+import { readingMinutes } from '../../../blog/reading-time.js';
 import { buildHreflangLinks } from '../../../blog/seo.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { publicationDateOf } from '../../../publication-date.js';
@@ -62,6 +63,9 @@ const leadImage = post.imageKey ? mediaUrl(post.imageKey) : undefined;
 // `created_at` for posts written before that field existed — see
 // `apps/web/src/publication-date.ts`.
 const publishedIso = publicationDateOf(post);
+// Counted from the body this page renders, so the estimate and the article
+// cannot be out of step — see `blog/reading-time.ts`.
+const minutes = readingMinutes(translation.body);
 ---
 
 <BaseLayout
@@ -75,12 +79,17 @@ const publishedIso = publicationDateOf(post);
     <Heading level={1}>{translation.title}</Heading>
     {
       /* Directly under the headline, where a byline goes, and a real
-         `<time>` so the date is machine-readable as well as legible. */
-      publishedIso && (
+         `<time>` so the date is machine-readable as well as legible. The
+         reading estimate shares the line, exactly as it does on the card. */
+      (publishedIso || minutes !== undefined) && (
         <p class="ndn-card-meta">
-          <time datetime={publishedIso}>
-            {t('common.publishedOn', { date: formatDayMonthYear(publishedIso, locale) }, locale)}
-          </time>
+          {publishedIso && (
+            <time datetime={publishedIso}>
+              {t('common.publishedOn', { date: formatDayMonthYear(publishedIso, locale) }, locale)}
+            </time>
+          )}
+          {publishedIso && minutes !== undefined ? ' · ' : ''}
+          {minutes !== undefined && t('blog.readingTime', { minutes }, locale)}
         </p>
       )
     }

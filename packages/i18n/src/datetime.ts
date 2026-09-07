@@ -136,6 +136,35 @@ function format(
   return new Intl.DateTimeFormat(locale, options).format(instant);
 }
 
+/**
+ * The same sentence `formatDateTime` renders, but pinned to a **named
+ * zone** rather than the reader's own — "October 1, 2026 at 3:30 PM
+ * GMT+5:30".
+ *
+ * 2026-09-07, for a workshop announced to three regions at once. The owner:
+ * *"on workshop i want to show when it's happening in Indian time, in UK
+ * time and in Middle East time."*
+ *
+ * **This is the one deliberate exception to rule 1's "the reader's own
+ * zone".** That rule answers "when is my appointment", where the reader is
+ * one of two people who both have to turn up. A workshop is announced to an
+ * audience spread across three countries, and its page has to answer "when
+ * is it *for me*" for all of them at once — which a single line in the
+ * reader's own zone does only for the reader, and which the practice cannot
+ * quote in an email or a WhatsApp message to anybody else.
+ *
+ * Rule 3 still applies within each line: the zone is named, because
+ * "Middle East" is two offsets and a label alone would put a reader in
+ * Riyadh an hour out from one in Dubai.
+ */
+export function formatDateTimeInZone(
+  value: string | Date,
+  locale: Locale,
+  timeZone: string,
+): string {
+  return format(value, locale, { ...DATE_TIME_OPTIONS, timeZone });
+}
+
 /** "September 2026" — a calendar's own heading. */
 export function formatMonthYear(value: string | Date, locale: Locale): string {
   return format(value, locale, MONTH_YEAR_OPTIONS);

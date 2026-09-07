@@ -165,3 +165,22 @@ Each date renders inside a real `<time datetime="…">`, so a crawler reads the 
 ### Both client schemas parse it as optional — including `created_at`
 
 `content-client.ts` and `workshop-client.ts` mark both timestamps optional even though every record has `created_at`. A required field there fails `safeParse` for the **whole response** and empties the page, which is exactly how the testimonials listing broke on 2026-09-03 when its schema kept requiring an `id` the API had stopped sending. A missing date costs a line of text; a failed parse costs the page.
+
+---
+
+## Amendment, 2026-09-07 (second) — the reading estimate
+
+> *"based on the number of words, roughly show how long will it take to read the blog on blog card as well as on the blog page itself."*
+
+`apps/web/src/blog/reading-time.ts`: strip the markup (`richTextToPlainText`, the same function the cards already use to flatten a body), count whitespace-separated words, divide by **200 words a minute**, round.
+
+Four decisions in that sentence, and "roughly" is what settles all of them:
+
+- **200 wpm**, the low end of the usual 200–250 range, because it rounds the estimate *up*: a post that takes longer than advertised is a worse surprise than one that takes less.
+- **Round, not always up.** 250 words is closer to one minute than two, and claiming two is the same over-precision in the other direction.
+- **Never zero.** A one-line post is "1 min read"; the floor is what the label means — *this is short* — rather than a rounding artefact, and "0 min read" reads as a bug.
+- **No estimate at all** for a body with no words (an image-only post, or a body that never reached the page) rather than a fabricated minute. Same choice `publication-date.ts` makes about a missing date.
+
+It renders on the same line as the publication date — "Published September 3, 2026 · 4 min read" — on the cards and under the headline on both detail pages. Both facts are what a reader weighs before clicking, and two stacked lines of grey would crowd a card that is mostly excerpt.
+
+**Computed in the island, not handed to it.** A post published since the last deploy arrives from the API during the client-side reconciliation and was never seen by the build that would otherwise have sized it. `body` was already in that payload — the content API returns whole records — it simply was not declared on the card's own type until now.

@@ -24,7 +24,8 @@ import { publicationDateOf } from '../publication-date.js';
 import { richTextToPlainText } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
-import { formatWorkshopDate } from './workshop-date.js';
+import { workshopTimesFor } from './workshop-date.js';
+import type { WorkshopTimeZoneKey } from './workshop-date.js';
 
 export interface LiveWorkshop {
   readonly id: string;
@@ -50,15 +51,16 @@ export interface LiveWorkshopListStrings {
   /** 2026-09-07: `"Announced {date}"`, filled here for the same reason `posterAltTemplate` is. */
   readonly publishedOnTemplate: string;
   /**
-   * 2026-09-07: `"Happening {date}"` — the owner: *"For workshop cards show
-   * when the workshop is actually happening."*
+   * 2026-09-07: the heading over the three times — the owner: *"For workshop
+   * cards show when the workshop is actually happening."*
    *
-   * The card carries two dates and this is the one a reader is looking for.
-   * It goes first, and it is worded as an event rather than as a label so
-   * the two lines cannot be swapped in the reading: "Happening October 1,
-   * 2026 at 11:00 AM GMT+1" over "Announced September 3, 2026".
+   * The card carries two kinds of date and this is the one a reader is
+   * looking for, so it goes first and says what it is. The announcement
+   * date below is context for it.
    */
-  readonly happeningOnTemplate: string;
+  readonly happeningLabel: string;
+  /** One label per region, keyed as `workshop-date.ts` keys them. The times themselves are formatted there. */
+  readonly zoneLabels: Readonly<Record<WorkshopTimeZoneKey, string>>;
 }
 
 export interface LiveWorkshopListProps {
@@ -80,18 +82,6 @@ export interface LiveWorkshopListProps {
  */
 export function posterAltFor(template: string, title: string): string {
   return template.replace('{title}', title);
-}
-
-/** When the workshop happens, as the card says it. Always present — `dateTimeUtc` is required on the record, unlike the announcement date. */
-export function happeningLine(
-  workshop: LiveWorkshop,
-  template: string,
-  locale: Locale,
-): { readonly iso: string; readonly text: string } {
-  return {
-    iso: workshop.dateTimeUtc,
-    text: template.replace('{date}', formatWorkshopDate(workshop.dateTimeUtc, locale)),
-  };
 }
 
 /**
@@ -195,7 +185,7 @@ export function LiveWorkshopList({
         // See LiveWorkshop.tsx: guarded on the URL, not the key.
         const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : undefined;
         const announced = announcedLine(workshop, strings.publishedOnTemplate, locale);
-        const happening = happeningLine(workshop, strings.happeningOnTemplate, locale);
+        const times = workshopTimesFor(workshop.dateTimeUtc, locale);
         return (
         <Card key={workshop.id}>
           {posterSrc && (
@@ -210,10 +200,24 @@ export function LiveWorkshopList({
           {/* The workshop's own date first: it is what someone reading a
               workshop card is looking for, and the announcement date is
               context for it. Both are labelled, because two bare dates on
-              one card are two chances to read the wrong one. */}
-          <p className="ndn-card-meta">
-            <time dateTime={happening.iso}>{happening.text}</time>
-          </p>
+              one card are two chances to read the wrong one.
+
+              A `<dl>`, because region-to-time is exactly what a description
+              list is: three `<p>`s would leave a screen reader to infer the
+              pairing from the punctuation. One `<time>` per row, each with
+              the same instant — the text differs by zone, the moment does
+              not. */}
+          <p className="ndn-card-meta">{strings.happeningLabel}</p>
+          <dl className="ndn-card-times">
+            {times.map((time) => (
+              <div key={time.key}>
+                <dt>{strings.zoneLabels[time.key]}</dt>
+                <dd>
+                  <time dateTime={workshop.dateTimeUtc}>{time.text}</time>
+                </dd>
+              </div>
+            ))}
+          </dl>
           {announced && (
             <p className="ndn-card-meta">
               <time dateTime={announced.iso}>{announced.text}</time>

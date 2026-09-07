@@ -17,13 +17,14 @@ const STRINGS = {
   empty: 'No posts yet.',
   readMore: 'Read more',
   publishedOnTemplate: 'Published {date}',
+  readingTimeTemplate: '{minutes} min read',
 };
 
 function post(id: string, title = `${id} title`): LiveBlogPost {
   return {
     id,
     publishedAt: '2026-09-03T09:00:00.000Z',
-    translations: { en: { title, excerpt: `${id} excerpt` } },
+    translations: { en: { title, excerpt: `${id} excerpt`, body: `${id} body` } },
   };
 }
 
@@ -260,5 +261,82 @@ describe('the publication date', () => {
 
     expect(screen.getByText('dateless title')).toBeDefined();
     expect(screen.queryByText(/Published/)).toBeNull();
+  });
+});
+
+// 2026-09-07: the reading estimate. The owner: *"based on the number of
+// words, roughly show how long will it take to read the blog on blog card as
+// well as on the blog page itself."*
+describe('the reading estimate', () => {
+  const meta = (container: HTMLElement): string =>
+    container.querySelector('.ndn-card-meta')?.textContent ?? '';
+
+  function withBody(body: string | undefined): LiveBlogPost {
+    return {
+      id: 'sized',
+      publishedAt: '2026-09-03T09:00:00.000Z',
+      translations: { en: { title: 'sized title', excerpt: 'sized excerpt', body } },
+    };
+  }
+
+  it('shares the byline line with the publication date', () => {
+    // Both are what a reader weighs before clicking, and two stacked lines
+    // of grey would crowd a card that is mostly excerpt.
+    const { container } = render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[withBody(new Array(400).fill('word').join(' '))]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(meta(container)).toContain('Published');
+    expect(meta(container)).toContain('2 min read');
+  });
+
+  it('is counted from the post’s words, not its markup', () => {
+    const { container } = render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[withBody(`<p class="lead">${new Array(600).fill('word').join(' ')}</p>`)]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(meta(container)).toContain('3 min read');
+  });
+
+  it('leaves the date alone on a post with nothing to estimate from', () => {
+    const { container } = render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[withBody(undefined)]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(meta(container)).toContain('Published');
+    expect(meta(container)).not.toContain('min read');
+  });
+
+  it('appears on a post reconciled after the build, which the build never sized', () => {
+    // The whole reason the estimate is computed in the island rather than
+    // handed to it: a post published since the last deploy arrives from the
+    // API and has to be measured here.
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[]}
+        fetchPosts={() =>
+          Promise.resolve([withBody(new Array(1000).fill('word').join(' '))])
+        }
+      />,
+    );
+
+    return screen.findByText(/5 min read/);
   });
 });

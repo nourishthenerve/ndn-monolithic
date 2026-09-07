@@ -28,7 +28,7 @@ import { proseStylesCss } from '../../../rich-text/styles.js';
 import { siteName, siteUrl, workshopPosterUrl } from '../../../site-config.js';
 import type { Workshop } from '../../../workshops/workshop-client.js';
 import { fetchPublishedWorkshops } from '../../../workshops/workshop-client.js';
-import { formatWorkshopDate } from '../../../workshops/workshop-date.js';
+import { workshopTimesFor } from '../../../workshops/workshop-date.js';
 
 export async function getStaticPaths() {
   const workshops = await fetchPublishedWorkshops();
@@ -62,8 +62,19 @@ const hreflangLinks = buildHreflangLinks(populatedLocales, urlForLocale);
 
 // 2026-09-07: the shared renderer rather than a hand-written
 // `Intl.DateTimeFormat` here and a second one in `LiveWorkshop.tsx` — see
-// `workshops/workshop-date.ts`.
-const formattedDate = formatWorkshopDate(workshop.dateTimeUtc, locale);
+// `workshops/workshop-date.ts`. Three rows now, one per region the owner
+// named, each carrying its own date because a late-evening UK workshop is
+// the next morning in India.
+const workshopTimes = workshopTimesFor(workshop.dateTimeUtc, locale);
+// Three literal `t()` calls rather than one interpolated key: the catalogue
+// is only greppable if its keys appear in the source as they appear in
+// en.json, which is the same reason every island here takes a `strings`
+// object built by hand.
+const zoneLabels = {
+  india: t('workshops.time.india', undefined, locale),
+  uk: t('workshops.time.uk', undefined, locale),
+  middleEast: t('workshops.time.middleEast', undefined, locale),
+};
 const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : undefined;
 // 2026-09-07: when this was announced — not `dateTimeUtc`, and named
 // separately below so the two dates cannot be read as one another. See
@@ -108,7 +119,23 @@ const metaDescription = richTextToPlainText(detail.description);
     }
     <dl>
       <dt>{t('workshops.detail.dateLabel', undefined, locale)}</dt>
-      <dd>{formattedDate}</dd>
+      <dd>
+        <dl>
+          {
+            /* A `div` per row, matching `LiveWorkshop.tsx`'s own markup
+               exactly — the two renderings of this page must not differ,
+               and React needs the wrapper to hang a key on. */
+            workshopTimes.map((time) => (
+              <div>
+                <dt>{zoneLabels[time.key]}</dt>
+                <dd>
+                  <time datetime={workshop.dateTimeUtc}>{time.text}</time>
+                </dd>
+              </div>
+            ))
+          }
+        </dl>
+      </dd>
       {
         announcedIso && (
           <>

@@ -19,7 +19,8 @@ import { publicationDateOf } from '../publication-date.js';
 import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
-import { formatWorkshopDate } from './workshop-date.js';
+import { formatWorkshopDate, workshopTimesFor } from './workshop-date.js';
+import type { WorkshopTimeZoneKey } from './workshop-date.js';
 
 // 2026-09-07: `formatWorkshopDate` moved out of this file to
 // `workshop-date.ts`, now that the listing cards render the same instant
@@ -47,7 +48,9 @@ export interface LiveWorkshopStrings {
   readonly notFound: string;
   readonly error: string;
   readonly dateLabel: string;
-  /** 2026-09-07: the label on the announcement date, beside `dateLabel`'s own row. */
+  /** 2026-09-07: one label per region — the workshop's time is given in all three. */
+  readonly zoneLabels: Readonly<Record<WorkshopTimeZoneKey, string>>;
+  /** 2026-09-07: the label on the announcement date, beside the three time rows. */
   readonly announcedLabel: string;
   readonly posterAltTemplate: string;
 }
@@ -161,12 +164,25 @@ export function LiveWorkshop({
           <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
         ))
       )}
-      {/* Two rows, two labels. The workshop's own date and the date it was
-          announced are both dates about the same workshop, and the only
-          thing keeping them apart for a reader is that each is named. */}
+      {/* Every row is labelled. The three region times and the announcement
+          date are all dates about the same workshop, and the only thing
+          keeping them apart for a reader is that each is named. The region
+          rows nest their label under the "Date and time" one because they
+          are three readings of a single fact, not three facts. */}
       <dl>
         <dt>{strings.dateLabel}</dt>
-        <dd>{formatWorkshopDate(record.dateTimeUtc, locale)}</dd>
+        <dd>
+          <dl>
+            {workshopTimesFor(record.dateTimeUtc, locale).map((time) => (
+              <div key={time.key}>
+                <dt>{strings.zoneLabels[time.key]}</dt>
+                <dd>
+                  <time dateTime={record.dateTimeUtc}>{time.text}</time>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </dd>
         {announcedIso && (
           <>
             <dt>{strings.announcedLabel}</dt>
