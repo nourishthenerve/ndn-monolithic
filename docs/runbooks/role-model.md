@@ -176,14 +176,29 @@ On the **dashboard list** (`caseload-repository.ts`), one row per `IIC`-tagged p
 
 On the **assessment form** (`assessment.ts`), for one `IIC`-tagged patient:
 
-- the whole `general{}` section — its answers and its attachments
+- from `general{}` ("Patient Details"): the patient's names and their address. **Nothing else, and none of the section's attachments** — see the amendment of 2026-09-07 below, which narrowed this from "the whole section".
 - from `calendar{}`: the total number of appointments, and the next appointment with its length. **Nothing else** — not the clinician's scheduling notes, not the count of sessions completed, not how many bookings await the principal's approval.
 
 And nothing at all from `prescription{}` or `private{}`, no messages, no diagnosis, no care plan, no account status, no assigned clinician, no email, no phone.
 
 A visitor writes nothing anywhere, on any route, including their own `tag`. The only thing they may change is their own password, through the same page every other signed-in role uses.
 
-Three of those narrowings are not expressible as matrix cells and are enforced in code at one place each — the `IIC` tag filter, the dashboard's field projection, and `VISITOR_CALENDAR_FIELDS`. If the owner ever wants a visitor to see more, those three constants and the one matrix row are the whole surface to change.
+Four of those narrowings are not expressible as matrix cells and are enforced in code at one place each — the `IIC` tag filter, the dashboard's field projection, `VISITOR_CALENDAR_FIELDS` and `VISITOR_GENERAL_FIELDS`. If the owner ever wants a visitor to see more, those four constants and the one matrix row are the whole surface to change.
+
+## Amendment, 2026-09-07 — the `general{}` narrowing, and why a section growing is not a permission changing
+
+The list above originally said a visitor reads *the whole* `general{}` section. That was written when the section held six placeholder fields, and it was a defensible reading of the matrix cell.
+
+On 2026-09-07 the owner supplied the real intake form for that section and it went from six fields to thirty-three, among them a national ID / NHS number, a home address, two telephone numbers, an email address, a next of kin with their contact number, an insurer and policy number, and a claim reference. The sentence four paragraphs up — *"no email, no phone"* — would have become false on deploy, and it would have become false without anybody deciding that a partner organisation should have those things.
+
+**A field list growing is not a permission being granted.** The instruction was about a form; the audience for the form was not in it. So `VISITOR_GENERAL_FIELDS` (`services/api/src/assessment.ts`) holds a visitor to the same four facts their own dashboard row already shows them — family name, given names, preferred name, address — and the section's attachments are withheld entirely, because a file filed under Patient Details is now plausibly a scan of an ID document or an insurance certificate.
+
+It is enforced twice, because two different things would otherwise leak:
+
+- **the labels**, in `readableTemplate` — a visitor should not learn that this practice records a claim number, let alone be shown an empty box for one;
+- **the answers**, in the `items[]` projection — filtering only the labels would leave the national ID in the JSON body without a caption, which is not a narrowing at all.
+
+This is the same shape as `VISITOR_CALENDAR_FIELDS` and for the same reason: the dashboard list and the record page should tell one story about what a partner may see. If either of those constants is ever widened, this section and the list above are what have to be re-read.
 
 ## Amendment, 2026-09-01 (third) — a treating clinician has a dashboard
 

@@ -230,3 +230,40 @@ Read the four stated audiences against the four `Assessment —` rows in `docs/p
 ### Still outstanding
 
 The **fields** under each section are still the 2026-09-01 placeholders, and the ones under "Patient Prescription" in particular still read as the intake questions they were written as. The owner's standing promise (*"there will be all kinds of info that I will provided later on"*) is unchanged, and the arrays in `assessment-template.ts` are the whole of what has to change when it arrives.
+
+*(Superseded for one section by the amendment below: Patient Details is no longer a placeholder.)*
+
+## Amendment, 2026-09-07 (second) — the real Patient Details
+
+The owner supplied the intake form itself, as a screenshot of the paper original, for the first of the four sections. `general{}` went from six placeholder fields to thirty-three — the programme tag it already had, plus thirty-two transcribed from the paper form — and the promise the template's header has carried since 2026-09-01 — *"adding the real intake form later is editing the arrays below and nothing else"* — held: no handler, no repository and no page needed a line changed to render it. What did need changing is set out below, and none of it is the field list.
+
+The other three sections are untouched and still placeholders.
+
+### Two fields are computed, not typed
+
+The paper form prints an `Age: ___ yrs` box beside the date of birth and a `BMI: ___ kg/m²` box beside the height and weight. Both are boxes a person fills in on paper and neither may be a box a person fills in here: a typed age is wrong from the patient's next birthday onward, and a typed BMI is wrong the moment a weight is updated and it is not. Both are marked `derived`, which already meant "computed, never stored, and a write naming it is a 400" — the API's half needed no change at all.
+
+**`derived` now has two kinds, and only `AssessmentForm.tsx` knows the difference.** The calendar's figures are facts about `APPT#` rows the browser has never read, so the server computes them and sends them as `calendarSummary`. Age and BMI are arithmetic on answers in their own section, which the browser is already holding — *including the ones typed and not yet saved*, so a corrected weight moves the BMI beside it immediately. A server-computed value could not do that, which is the whole reason the split exists.
+
+This is the one place a field id is written down outside the template. `apps/web` deliberately does not depend on `@ndn/shared-types`, so the form restates the five ids its arithmetic names (`dateOfBirth`, `age`, `heightCm`, `weightKg`, `bmi`) and nothing makes the compiler compare the copies. `assessment-template.test.ts` guards the half that can be guarded: if an id moves or a derived field loses an input, it fails and names the constant block to move with it. A drifted id is a blank box, never a wrong number.
+
+### `fileNumber` is staff-only, like the tag
+
+`staffOnly` had one instance since 2026-09-01 (`tag`) and its reason was authorisation: the tag bounds a visitor's reach, so the subject of the record must not choose it. `fileNumber` — "Hospital / MRN / file no." — is the second, and the first whose reason is not authorisation. It is an identifier the practice assigns, exactly like `account_status`. A patient may write the section and not that field.
+
+### A visitor's Patient Details is four fields
+
+**This is the change to read if you read only one.** The matrix has granted a visitor `R` on `general{}` since 2026-09-01, and while the section held six placeholder fields, "the whole section" was a defensible reading of that cell. The owner's real form is not six placeholders. It carries a national ID / NHS number, a home address, two telephone numbers, an email, a next of kin and their contact number, an insurer and policy number, and a claim reference — and `docs/runbooks/role-model.md` states a visitor's complete reach in a list that ends *"no email, no phone"*. Shipping the form as-is would have made that sentence false on deploy.
+
+Nothing in the owner's instruction asked to widen a partner organisation's access; the instruction was about a form. **The section grew and the audience did not.** So `VISITOR_GENERAL_FIELDS` is the fields a visitor can already read off their own dashboard row — `familyName`, `givenNames`, `preferredName`, `address` — and nothing else, which keeps the two surfaces telling one story exactly as the calendar narrowing does.
+
+Two places enforce it, and they answer different questions:
+
+- `readableTemplate` filters the **labels**, so the form never renders a box for a value that will not arrive — a visitor should not learn that this practice records a claim number.
+- The `items[]` projection filters the **answers**. A filtered label list beside an unfiltered `items[]` would be the leak wearing the fix's clothes: the national ID would still be in the JSON, just without a caption.
+
+**The section's attachments go too.** A file filed under Patient Details is now plausibly a scan of an ID document or an insurance certificate; the old six-field section had nothing to attach that was worth withholding. If a visitor should see a patient's documents, that is a decision to take deliberately rather than one to inherit from a field list growing.
+
+### One thing the screenshot changed that is worth flagging
+
+The paper form's "Preferred contact" box offers **Phone / SMS / Email**. The placeholder it replaced offered Email / Phone / **WhatsApp**, and D-29 says WhatsApp is how the practice actually contacts patients. The screenshot is the instruction, so the options are the screenshot's three — flagged here rather than quietly re-added, because the owner is better placed than this runbook to say which is right.

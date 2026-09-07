@@ -725,3 +725,99 @@ describe('one component, several placements', () => {
     expect(await screen.findByText('Version: 2')).toBeDefined();
   });
 });
+
+// 2026-09-07 — the owner's Patient Details form puts an "Age: ___ yrs" box
+// beside the date of birth and a "BMI: ___ kg/m²" box beside the height and
+// weight. `AssessmentForm.test.ts` pins the arithmetic; this pins that the
+// component actually wires it up — that the two boxes are text showing a
+// computed number and not inputs someone can type a second answer into.
+describe('the general section’s derived pair', () => {
+  const DETAILS_SECTION = {
+    fieldSet: 'general',
+    title: 'Patient Details',
+    fields: [
+      { id: 'dateOfBirth', label: 'Date of birth', type: 'date' },
+      { id: 'age', label: 'Age (years)', type: 'number', derived: true },
+      { id: 'heightCm', label: 'Height (cm)', type: 'number' },
+      { id: 'weightKg', label: 'Weight (kg)', type: 'number' },
+      { id: 'bmi', label: 'BMI (kg/m²)', type: 'number', derived: true },
+    ],
+  };
+
+  const WRITABLE_GENERAL = [
+    { fieldSet: 'general', read: true, write: true },
+    { fieldSet: 'prescription', read: false, write: false },
+    { fieldSet: 'private', read: false, write: false },
+    { fieldSet: 'calendar', read: false, write: false },
+  ];
+
+  /**
+   * A date of birth that is exactly 40 years old on every day of the year:
+   * 1 January has always already come round, whatever today is. That keeps
+   * the assertion honest against the component's real clock without
+   * installing fake timers — which, once installed, leave
+   * `@testing-library`'s polling unable to advance and hang every test
+   * after this one.
+   */
+  function fortyYearsOld(): string {
+    return `${new Date().getUTCFullYear() - 40}-01-01`;
+  }
+
+  function renderDetails(dateOfBirth = '1990-05-14') {
+    return render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() =>
+          ok(
+            payloadFor({
+              template: [DETAILS_SECTION],
+              permissions: WRITABLE_GENERAL,
+              items: [
+                {
+                  version: 1,
+                  updated_at: '2026-09-01T09:00:00.000Z',
+                  general: {
+                    responses: { dateOfBirth, heightCm: 170, weightKg: 70 },
+                    attachments: [],
+                  },
+                },
+              ],
+            }),
+          )
+        }
+      />,
+    );
+  }
+
+  it('shows the age computed from the date of birth, as text', async () => {
+    renderDetails(fortyYearsOld());
+    await screen.findByText('Patient Details');
+    expect(screen.getByText('40')).toBeDefined();
+    // Never an input: a typed age is a second answer to a question the
+    // date of birth already answers, and the API refuses to store one.
+    expect(screen.queryByLabelText('Age (years)')).toBeNull();
+    // The answer it is computed from is still editable.
+    expect(screen.getByLabelText('Date of birth')).toBeDefined();
+  });
+
+  it('shows the BMI computed from the height and weight, as text', async () => {
+    renderDetails();
+    await screen.findByText('Patient Details');
+    // 70 / 1.7² = 24.2214…
+    expect(screen.getByText('24.2')).toBeDefined();
+    expect(screen.queryByLabelText('BMI (kg/m²)')).toBeNull();
+  });
+
+  it('moves the BMI as a new weight is typed, before anything is saved', async () => {
+    // The whole reason this arithmetic is the form's rather than the
+    // server's: the corrected weight exists only here until someone saves.
+    renderDetails();
+    await screen.findByText('Patient Details');
+    fireEvent.change(screen.getByLabelText('Weight (kg)'), { target: { value: '80' } });
+    await waitFor(() => {
+      expect(screen.getByText('27.7')).toBeDefined();
+    });
+  });
+});

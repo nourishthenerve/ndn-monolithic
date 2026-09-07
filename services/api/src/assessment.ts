@@ -68,6 +68,7 @@
 import type {
   Appointment,
   AssessmentFieldDef,
+  AssessmentSection,
   AssessmentSectionDef,
   AssessmentValue,
   FieldSet,
@@ -247,6 +248,53 @@ function visitorCalendarSummary(summary: CalendarSummary): Record<string, string
 }
 
 /**
+ * 2026-09-07: the fourth such narrowing, and the one the owner's real
+ * intake form made necessary.
+ *
+ * `general{}` held six placeholder fields when a visitor was given `R` on
+ * it, and "the whole general section" was a defensible reading of the
+ * matrix cell. The owner's actual Patient Details form has thirty-odd, and
+ * they include **national ID / NHS number, home address, both telephone
+ * numbers, email, next of kin and their contact number, insurer and policy
+ * number, and a claim reference.** A visitor is a partner organisation's
+ * read-only account; `docs/runbooks/role-model.md` states its complete
+ * reach in a list that ends "no email, no phone", and shipping the form
+ * without this would have made that sentence false the moment it deployed.
+ *
+ * Nothing in the owner's instruction asked to widen a partner's access —
+ * the instruction was about a form. The section grew; the audience for it
+ * did not.
+ *
+ * So a visitor's Patient Details is **the fields they can already see on
+ * their own dashboard row** (`caseload-repository.ts`: name and address)
+ * and nothing else. That keeps the two surfaces telling one story, which
+ * is the property that made the calendar narrowing worth having.
+ *
+ * **Attachments go too.** A file on this section is now plausibly a scan of
+ * an ID document or an insurance certificate — the old six-field section
+ * had nothing to attach that was worth withholding. If a visitor should see
+ * a patient's documents, that is a decision to take deliberately rather
+ * than one to inherit from a field list growing.
+ */
+const VISITOR_GENERAL_FIELDS: readonly string[] = [
+  'familyName',
+  'givenNames',
+  'preferredName',
+  'address',
+];
+
+/** A visitor's Patient Details, built by omission — the same shape as the calendar's. */
+function visitorGeneralSection(section: AssessmentSection): AssessmentSection {
+  const responses: Record<string, AssessmentValue> = {};
+  for (const [id, value] of Object.entries(section.responses)) {
+    if (VISITOR_GENERAL_FIELDS.includes(id)) {
+      responses[id] = value;
+    }
+  }
+  return { responses, attachments: [] };
+}
+
+/**
  * "Next" is the earliest **confirmed** appointment that has not yet
  * finished — a `pending-approval` slot is deliberately not one, because
  * until the principal has approved it there is nothing for the patient to
@@ -398,16 +446,30 @@ function readableTemplate(
       (section): section is AssessmentSectionDef =>
         section !== undefined && readable.has(section.fieldSet),
     )
-    .map((section) =>
-      isVisitor && section.fieldSet === 'calendar'
+    .map((section) => {
+      if (!isVisitor) {
+        return section;
+      }
+      // Both narrowings filter the *template*, not just the data, for the
+      // reason this function's own doc gives: a label for a field they are
+      // never sent reads as an empty record rather than as an absent
+      // permission. A visitor should not learn that this practice records a
+      // claim number, let alone see the box for one.
+      const allowed =
+        section.fieldSet === 'calendar'
+          ? VISITOR_CALENDAR_FIELDS
+          : section.fieldSet === 'general'
+            ? VISITOR_GENERAL_FIELDS
+            : undefined;
+      return allowed
         ? {
             ...section,
             fields: section.fields.filter((field: AssessmentFieldDef) =>
-              VISITOR_CALENDAR_FIELDS.includes(field.id),
+              allowed.includes(field.id),
             ),
           }
-        : section,
-    );
+        : section;
+    });
 }
 
 export function createAssessmentHandler(
@@ -537,7 +599,17 @@ export function createAssessmentHandler(
               continue;
             }
             if (readable.has(fieldSet) && section !== undefined) {
-              shape[fieldSet] = section;
+              // A visitor's Patient Details is the four fields they can
+              // already read off their own dashboard row — see
+              // `VISITOR_GENERAL_FIELDS`. Narrowed *here* as well as in
+              // `readableTemplate`, because those two answer different
+              // questions: the template says which boxes to label, this
+              // says which answers are actually sent. A filtered label
+              // list beside an unfiltered `items[]` is the whole leak
+              // wearing the fix's clothes — the national ID would still be
+              // in the JSON, just without a caption.
+              shape[fieldSet] =
+                isVisitor && fieldSet === 'general' ? visitorGeneralSection(section) : section;
             }
           }
           return projectFor(principal, shape, resourceFor('private'));

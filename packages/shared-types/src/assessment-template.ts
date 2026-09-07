@@ -10,16 +10,31 @@
 // form later is editing the arrays below and nothing else. No handler, no
 // repository and no page names a field id; they all iterate the template.
 //
-// **2026-09-07: the four sections were renamed, and the fields below are
-// still the placeholders.** The owner's rework named them "Patient
-// Details", "Patient Assessment Form", "Patient Prescription" and "Patient
-// Appointments", and set each one's audience (see
+// **2026-09-07: the four sections were renamed.** The owner's rework named
+// them "Patient Details", "Patient Assessment Form", "Patient Prescription"
+// and "Patient Appointments", and set each one's audience (see
 // docs/plan/04-data-model-rbac.md's four `Assessment —` rows, whose cells
 // did not have to change — the permissions asked for were already the ones
-// implemented). The *titles* and the section order here are therefore real;
-// the *fields* under them are not, and the ones under "Patient
-// Prescription" in particular still read as the intake questions they were
-// written as. They stay until the owner says what goes in each section,
+// implemented). The titles and the section order here are therefore real.
+//
+// **2026-09-07 (later the same day): "Patient Details" is real too.** The
+// owner supplied the intake form itself, as a screenshot of the paper
+// original, for the first section — so `general` below is now the programme
+// tag plus thirty-two fields transcribed from that form, rather than six
+// placeholders, and the promise this
+// header opened with held: adding them was editing one array, and no
+// handler, repository or page needed a line. Three things did have to move
+// with them, and all three are field-level rules described further down:
+// `fileNumber` is `staffOnly`, `age` and `bmi` are `derived`, and a
+// visitor's reach into this section had to be narrowed by hand
+// (`VISITOR_GENERAL_FIELDS` in services/api/src/assessment.ts) because a
+// section-level `R` granted over six placeholders is not a decision to
+// hand a partner organisation a patient's national ID. See
+// docs/runbooks/assessment-forms.md's second 2026-09-07 amendment.
+//
+// **The other three sections are still placeholders**, and the ones under
+// "Patient Prescription" in particular still read as the intake questions
+// they were written as. They stay until the owner says what goes in each,
 // which is the same standing promise this header opened with.
 //
 // It lives in shared-types rather than services/api because the API
@@ -48,6 +63,16 @@
 //     fails, and the appointment rows are the ones the approval workflow,
 //     the clinician calendar and the join-call window already read. A
 //     write that names a derived field is refused, not ignored.
+//
+// **2026-09-07: both rules gained a second instance, and `derived` gained a
+// second *kind*.** `fileNumber` is `staffOnly` alongside `tag`. `age` and
+// `bmi` are `derived` alongside the calendar figures — but computed from
+// other answers in their own section rather than from `APPT#` rows, so the
+// arithmetic is in the form (`AssessmentForm.tsx`) rather than in the API:
+// the client already holds every input, and a value recomputed on render is
+// a value that cannot be stale. The API's half is unchanged and generic —
+// `validateResponses` refuses a write naming any `derived` field in any
+// section, which it did before either of these existed.
 import type { FieldSet } from './principal.js';
 
 export type AssessmentFieldType =
@@ -67,7 +92,14 @@ export interface AssessmentFieldDef {
   readonly options?: readonly string[];
   /** Writable by every role the section allows *except* the patient — see this file's header. */
   readonly staffOnly?: boolean;
-  /** Computed server-side on every read; never stored, and a write naming it is a 400. */
+  /**
+   * Computed, never stored — and a write naming it is a 400, wherever it is
+   * computed. *Where* differs by field and is not expressed here: the
+   * calendar's figures come from the API on every read (it has the `APPT#`
+   * rows and the client does not), while `age` and `bmi` are worked out by
+   * the form from other answers in their own section (it has those, live,
+   * before they are saved). See this file's header.
+   */
   readonly derived?: boolean;
 }
 
@@ -96,16 +128,90 @@ export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
         options: ASSESSMENT_TAG_OPTIONS,
         staffOnly: true,
       },
+      // Identity.
+      { id: 'familyName', label: 'Family name', type: 'text' },
+      { id: 'givenNames', label: 'Given name(s)', type: 'text' },
       { id: 'preferredName', label: 'Preferred name', type: 'text' },
+      // The practice's own record number, so `staffOnly` for the same
+      // reason `tag` is: it is an operational identifier the practice
+      // assigns, not something the subject of the record types. The
+      // second field-level rule in the system, and the first that is not
+      // about authorisation — see this file's header.
+      { id: 'fileNumber', label: 'Hospital / MRN / file no.', type: 'text', staffOnly: true },
+      { id: 'nationalId', label: 'National ID / NHS no.', type: 'text' },
       { id: 'dateOfBirth', label: 'Date of birth', type: 'date' },
+      // Derived, not typed: the form has an "Age: ___ yrs" box, and a
+      // stored age is wrong from the patient's next birthday onward. The
+      // date of birth above is the fact; this is a view of it, recomputed
+      // on every render. See `ageFromDateOfBirth` in `AssessmentForm.tsx`.
+      { id: 'age', label: 'Age (years)', type: 'number', derived: true },
+      {
+        id: 'sexAtBirth',
+        label: 'Sex recorded at birth',
+        type: 'select',
+        options: ['Female', 'Male', 'Intersex', 'Prefer not to say'],
+      },
+      { id: 'genderIdentity', label: 'Gender identity', type: 'text' },
+      { id: 'pronouns', label: 'Pronouns', type: 'text' },
+      { id: 'heightCm', label: 'Height (cm)', type: 'number' },
+      { id: 'weightKg', label: 'Weight (kg)', type: 'number' },
+      // Derived for the same reason as `age`: two stored copies of one
+      // fact drift the moment a weight is updated and this is not.
+      { id: 'bmi', label: 'BMI (kg/m²)', type: 'number', derived: true },
+      {
+        id: 'dominantHand',
+        label: 'Dominant hand',
+        type: 'select',
+        options: ['Right', 'Left', 'Ambidextrous'],
+      },
+      // Contact. The paper form has one "Telephone (home / mobile)" box;
+      // two numbers in one string field is a search that cannot work and a
+      // number that cannot be dialled, so it is two fields here.
+      { id: 'address', label: 'Address', type: 'textarea' },
+      { id: 'telephoneHome', label: 'Telephone (home)', type: 'text' },
+      { id: 'telephoneMobile', label: 'Telephone (mobile)', type: 'text' },
+      { id: 'email', label: 'Email', type: 'text' },
       {
         id: 'preferredContact',
-        label: 'Preferred way to be contacted',
+        label: 'Preferred contact',
         type: 'select',
-        options: ['Email', 'Phone', 'WhatsApp'],
+        // The paper form's three boxes exactly. Note this drops WhatsApp,
+        // which the previous placeholder offered and which D-29 says the
+        // practice actually contacts patients on — flagged rather than
+        // quietly re-added, since the screenshot is the instruction.
+        options: ['Phone', 'SMS', 'Email'],
       },
-      { id: 'emergencyContactName', label: 'Emergency contact name', type: 'text' },
-      { id: 'emergencyContactPhone', label: 'Emergency contact phone', type: 'text' },
+      // Language and access needs.
+      { id: 'firstLanguage', label: 'First language', type: 'text' },
+      { id: 'interpreterRequired', label: 'Interpreter required', type: 'checkbox' },
+      { id: 'interpreterLanguage', label: 'Interpreter — language', type: 'text' },
+      { id: 'communicationNeeds', label: 'Communication needs', type: 'text' },
+      // Next of kin. Replaces the placeholder's emergency-contact pair;
+      // stored answers to those two ids survive on existing versions, which
+      // is the template-is-not-history rule `assessment.ts` states.
+      { id: 'nextOfKinName', label: 'Next of kin / carer', type: 'text' },
+      { id: 'nextOfKinRelationship', label: 'Relationship', type: 'text' },
+      { id: 'nextOfKinContact', label: 'Contact no.', type: 'text' },
+      // Other clinicians involved.
+      { id: 'gpPractice', label: 'GP / family physician & practice', type: 'text' },
+      { id: 'consultant', label: 'Consultant / specialist', type: 'text' },
+      // Funding and billing.
+      {
+        id: 'funding',
+        label: 'Funding',
+        type: 'select',
+        options: [
+          'Public',
+          'Private insurance',
+          'Self-pay',
+          "Workers' comp",
+          'MVA / third party',
+          'Other',
+        ],
+      },
+      { id: 'fundingOther', label: 'Funding — other', type: 'text' },
+      { id: 'insurerPolicyNo', label: 'Insurer / scheme & policy no.', type: 'text' },
+      { id: 'claimNumber', label: 'Claim / authorisation no.', type: 'text' },
     ],
   },
   {
@@ -169,10 +275,7 @@ export function templateSection(fieldSet: FieldSet): AssessmentSectionDef | unde
   return SECTIONS_BY_FIELD_SET.get(fieldSet);
 }
 
-export function templateField(
-  fieldSet: FieldSet,
-  fieldId: string,
-): AssessmentFieldDef | undefined {
+export function templateField(fieldSet: FieldSet, fieldId: string): AssessmentFieldDef | undefined {
   return templateSection(fieldSet)?.fields.find((field) => field.id === fieldId);
 }
 

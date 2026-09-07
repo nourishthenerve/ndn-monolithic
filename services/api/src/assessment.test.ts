@@ -593,6 +593,47 @@ describe('the template is the schema', () => {
     expect(JSON.parse(response.body)).toEqual({ error: 'DERIVED_FIELD_NOT_WRITABLE' });
   });
 
+  // 2026-09-07: `derived` stopped meaning "the calendar's figures" when the
+  // owner's real Patient Details form arrived carrying an "Age: ___ yrs"
+  // box and a "BMI: ___ kg/m²" box. Those two are computed in the *form*
+  // rather than here — their inputs are answers in their own section, which
+  // the client is already holding — but the refusal below is the same
+  // generic one, and it is what makes the client's arithmetic the only
+  // arithmetic. Without it a second answer to "how old is this patient"
+  // could be stored and would be wrong from the next birthday onward.
+  it.each(['age', 'bmi'])(
+    'is 400 for the general section\'s derived `%s` — the form computes it, nobody stores it',
+    async (fieldId) => {
+      const { handler } = await build();
+      const response = await write(handler, PRINCIPAL, {
+        general: { responses: { [fieldId]: 41 } },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(JSON.parse(response.body)).toEqual({ error: 'DERIVED_FIELD_NOT_WRITABLE' });
+    },
+  );
+
+  it('still accepts the answers those two are computed from', async () => {
+    // The other half of the rule: refusing `age` is only right because the
+    // date of birth it comes from is writable.
+    const { handler } = await build();
+    const response = await write(handler, PRINCIPAL, {
+      general: { responses: { dateOfBirth: '1990-05-14', heightCm: 170, weightKg: 70 } },
+    });
+    expect(response.statusCode).toBe(201);
+  });
+
+  it('is 400 for a patient writing the staff-only file number, as for the tag', async () => {
+    // `fileNumber` joined `tag` as `staffOnly` when the real form arrived:
+    // it is a number the practice assigns, not one the subject of the
+    // record types.
+    const { handler } = await build();
+    const response = await write(handler, OWNING_PATIENT, {
+      general: { responses: { fileNumber: 'MRN-0001' } },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
   it('is 400 when a value is the wrong type for its field', async () => {
     const { handler } = await build();
     const response = await write(handler, PRINCIPAL, {
@@ -1226,5 +1267,135 @@ describe('the visitor\'s calendar is two figures, and nothing else', () => {
       ),
     );
     expect(body.calendarSummary).toEqual({ totalAppointments: 1 });
+  });
+});
+
+// 2026-09-07. The `general{}` section held six placeholder fields when the
+// matrix gave a visitor `R` on it, and "the whole section" was a defensible
+// reading of that cell. The owner's real Patient Details form has thirty-odd
+// and they include a national ID, a home address, two phone numbers, an
+// email, a next of kin, an insurer and a claim reference —
+// `docs/runbooks/role-model.md` states a visitor's complete reach in a list
+// ending "no email, no phone", and shipping the form without narrowing here
+// would have made that sentence false on deploy. Nothing in the owner's
+// instruction asked to widen a partner's access; the instruction was about a
+// form. The section grew, the audience did not.
+describe("the visitor's Patient Details is their dashboard row, and nothing else", () => {
+  const SECRETS = {
+    nationalId: 'NHS-999-000-111',
+    telephoneMobile: '+44 7700 900123',
+    email: 'sam@example.test',
+    nextOfKinName: 'Alex Doe',
+    nextOfKinContact: '+44 7700 900456',
+    insurerPolicyNo: 'POLICY-4242',
+    claimNumber: 'CLAIM-8080',
+    fileNumber: 'MRN-0001',
+  };
+
+  async function visitorReadsAFilledInRecord() {
+    const built = await build({ tag: 'IIC' });
+    const wrote = await write(built.handler, PRINCIPAL, {
+      general: {
+        responses: {
+          familyName: 'Doe',
+          givenNames: 'Sam',
+          preferredName: 'Sam',
+          address: '1 Example Street',
+          ...SECRETS,
+        },
+        addAttachments: [
+          {
+            key: `assessments/pat-1/${DEFAULT_ASSESSMENT_ID}/general/uuid-id-scan.pdf`,
+            fileName: 'passport-scan.pdf',
+            contentType: 'application/pdf',
+          },
+        ],
+      },
+    });
+    expect(wrote.statusCode).toBe(201);
+    return built;
+  }
+
+  async function visitorBody() {
+    const { handler } = await visitorReadsAFilledInRecord();
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: VISITOR }),
+    );
+    expect(response.statusCode).toBe(200);
+    return response;
+  }
+
+  it('sends a visitor the four fields their caseload row already shows', async () => {
+    const response = await visitorBody();
+    expect(read(response).items[0]?.general?.responses).toEqual({
+      familyName: 'Doe',
+      givenNames: 'Sam',
+      preferredName: 'Sam',
+      address: '1 Example Street',
+    });
+  });
+
+  it.each(Object.entries(SECRETS))(
+    'never sends a visitor the patient\'s %s',
+    async (fieldId, value) => {
+      // Asserted against the raw body for the same reason the calendar's
+      // note is: a leak through the serialiser is what an object-shaped
+      // check cannot catch.
+      const response = await visitorBody();
+      expect(response.body).not.toContain(value);
+      expect(response.body).not.toContain(fieldId);
+    },
+  );
+
+  it('offers a visitor no label for a field they are never sent', async () => {
+    // A label for a value that never arrives reads as an empty record
+    // rather than as an absent permission — and a visitor should not learn
+    // that this practice records a claim number, let alone see the box.
+    const response = await visitorBody();
+    const general = read(response).template.find((section) => section.fieldSet === 'general') as
+      | { fields: { id: string }[] }
+      | undefined;
+    expect(general?.fields.map((field) => field.id).sort()).toEqual([
+      'address',
+      'familyName',
+      'givenNames',
+      'preferredName',
+    ]);
+  });
+
+  it("sends a visitor none of the section's attachments", async () => {
+    // A file filed under Patient Details is now plausibly a scan of an ID
+    // document or an insurance certificate. If a visitor should see a
+    // patient's documents that is a decision to take deliberately, not one
+    // to inherit from a field list growing.
+    const response = await visitorBody();
+    expect(read(response).items[0]?.general?.attachments).toEqual([]);
+    expect(response.body).not.toContain('passport-scan.pdf');
+  });
+
+  it('still sends everyone else the whole section', async () => {
+    const { handler } = await visitorReadsAFilledInRecord();
+    const body = read(
+      await invoke(
+        handler,
+        fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: PRINCIPAL }),
+      ),
+    );
+    expect(body.items[0]?.general?.responses).toMatchObject(SECRETS);
+    expect(body.items[0]?.general?.attachments).toHaveLength(1);
+  });
+
+  it('still sends the patient their own details in full', async () => {
+    // The narrowing is about a partner organisation's account, not about
+    // the subject of the record.
+    const { handler } = await visitorReadsAFilledInRecord();
+    const body = read(
+      await invoke(
+        handler,
+        fakeEvent({ routeKey: GET_ROUTE, pathParameters: PATH, principal: OWNING_PATIENT }),
+      ),
+    );
+    expect(body.items[0]?.general?.responses).toMatchObject(SECRETS);
   });
 });
