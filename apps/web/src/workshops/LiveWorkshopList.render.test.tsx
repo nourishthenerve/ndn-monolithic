@@ -18,7 +18,8 @@ const STRINGS = {
   viewDetails: 'View details',
   posterAltTemplate: 'Poster for {title}',
   publishedOnTemplate: 'Announced {date}',
-  happeningOnTemplate: 'Happening {date}',
+  happeningLabel: 'When it is happening',
+  zoneLabels: { india: 'India', uk: 'UK', middleEast: 'Middle East' },
 };
 
 function workshop(id: string): LiveWorkshop {
@@ -160,8 +161,8 @@ describe('the announcement date', () => {
 
     expect(screen.getByText('dateless title')).toBeDefined();
     expect(screen.queryByText(/^Announced/)).toBeNull();
-    // The workshop's own date is not optional and does not go with it.
-    expect(screen.getByText(/^Happening/)).toBeDefined();
+    // The workshop's own times are not optional and do not go with it.
+    expect(screen.getByText(STRINGS.happeningLabel)).toBeDefined();
   });
 });
 
@@ -170,7 +171,15 @@ describe('the announcement date', () => {
 // alone left the listing silent about the one fact someone reading it is
 // looking for.
 describe('the workshop’s own date', () => {
-  it('is on the card, ahead of the announcement date', () => {
+  /** The region rows of one card: label paired with the time it reads in that region. */
+  function timeRows(container: HTMLElement): [string, string][] {
+    return [...container.querySelectorAll('.ndn-card-times > div')].map((row) => [
+      row.querySelector('dt')?.textContent ?? '',
+      row.querySelector('dd')?.textContent ?? '',
+    ]);
+  }
+
+  it('is on the card, in all three regions, ahead of the announcement date', () => {
     const { container } = render(
       <LiveWorkshopList
         strings={STRINGS}
@@ -180,16 +189,32 @@ describe('the workshop’s own date', () => {
       />,
     );
 
-    const meta = [...container.querySelectorAll('.ndn-card-meta')].map(
-      (node) => node.textContent ?? '',
-    );
-    expect(meta).toHaveLength(2);
-    expect(meta[0]).toContain('Happening');
-    expect(meta[0]).toContain('October');
-    expect(meta[1]).toContain('Announced');
+    expect(timeRows(container).map(([label]) => label)).toEqual(['India', 'UK', 'Middle East']);
+    // 10:00 UTC: half past three in India, eleven in the UK, two in Dubai.
+    expect(timeRows(container)[0]?.[1]).toContain('3:30 PM');
+    expect(timeRows(container)[1]?.[1]).toContain('11:00 AM');
+    expect(timeRows(container)[2]?.[1]).toContain('2:00 PM');
+    expect(screen.getByText(/^Announced/)).toBeDefined();
   });
 
-  it('names the time zone, so an online workshop cannot be read an hour out', () => {
+  it('gives every row its own date, so a late workshop is not a day out in India', () => {
+    // 9:00 PM in the UK is half past one the next morning in India — the
+    // case a single shared date line would get wrong for a third of the
+    // audience.
+    const { container } = render(
+      <LiveWorkshopList
+        strings={STRINGS}
+        locale="en"
+        initialWorkshops={[{ ...workshop('a'), dateTimeUtc: '2026-10-01T20:00:00.000Z' }]}
+        fetchWorkshops={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(timeRows(container)[0]?.[1]).toContain('October 2, 2026');
+    expect(timeRows(container)[1]?.[1]).toContain('October 1, 2026');
+  });
+
+  it('names each zone’s offset, so a reader outside the three is not left guessing', () => {
     const { container } = render(
       <LiveWorkshopList
         strings={STRINGS}
@@ -199,14 +224,14 @@ describe('the workshop’s own date', () => {
       />,
     );
 
-    // The stored instant is UTC and every reader's browser renders it in
-    // their own zone — `@ndn/i18n`'s `formatDateTime` is what labels it.
-    expect(container.querySelector('.ndn-card-meta')?.textContent).toMatch(/(GMT|UTC)/);
+    // "Middle East" is two offsets in practice; the label alone would put a
+    // reader in Riyadh an hour out from one in Dubai.
+    expect(timeRows(container)[2]?.[1]).toMatch(/GMT\+4/);
   });
 
-  it('shows the workshop date even on a card with no announcement date', () => {
+  it('shows the workshop times even on a card with no announcement date', () => {
     // `dateTimeUtc` is required on the record; `publishedAt`/`created_at`
-    // are not, so the two lines fail independently.
+    // are not, so the two fail independently.
     const { container } = render(
       <LiveWorkshopList
         strings={STRINGS}
@@ -222,10 +247,7 @@ describe('the workshop’s own date', () => {
       />,
     );
 
-    const meta = [...container.querySelectorAll('.ndn-card-meta')].map(
-      (node) => node.textContent ?? '',
-    );
-    expect(meta).toHaveLength(1);
-    expect(meta[0]).toContain('Happening');
+    expect(timeRows(container)).toHaveLength(3);
+    expect(screen.queryByText(/^Announced/)).toBeNull();
   });
 });

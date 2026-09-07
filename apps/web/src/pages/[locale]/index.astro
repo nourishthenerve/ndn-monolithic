@@ -349,6 +349,7 @@ const homeStylesCss = `
               // at build time, and cannot format a date for a post
               // published since. Same arrangement as `posterAltTemplate`.
               publishedOnTemplate: t('common.publishedOn', { date: '{date}' }, locale),
+              readingTimeTemplate: t('blog.readingTime', { minutes: '{minutes}' }, locale),
             }}
           />
         </div>
@@ -382,7 +383,12 @@ const homeStylesCss = `
               viewDetails: t('workshops.index.viewDetails', undefined, locale),
               posterAltTemplate: t('workshops.index.posterAlt', { title: '{title}' }, locale),
               publishedOnTemplate: t('common.announcedOn', { date: '{date}' }, locale),
-              happeningOnTemplate: t('common.happeningOn', { date: '{date}' }, locale),
+              happeningLabel: t('workshops.index.happeningLabel', undefined, locale),
+              zoneLabels: {
+                india: t('workshops.time.india', undefined, locale),
+                uk: t('workshops.time.uk', undefined, locale),
+                middleEast: t('workshops.time.middleEast', undefined, locale),
+              },
             }}
           />
         </div>

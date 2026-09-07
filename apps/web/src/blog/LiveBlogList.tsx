@@ -50,13 +50,23 @@ import { takeAtMost } from '../list-limit.js';
 import { publicationDateOf } from '../publication-date.js';
 import { blogContentType, contentApiUrl } from '../site-config.js';
 
+import { readingMinutes } from './reading-time.js';
+
 export interface LiveBlogPost {
   readonly id: string;
   /** 2026-09-07: the byline date. See `publication-date.ts` for why there are two fields and why both are optional. */
   readonly publishedAt?: string;
   readonly created_at?: string;
   readonly translations: Readonly<
-    Record<string, { readonly title: string; readonly excerpt: string } | undefined>
+    Record<
+      string,
+      // 2026-09-07: `body` is what the reading estimate is counted from. It
+      // was always in this payload — the content API returns whole records
+      // and the page hands the island the same objects it parsed — it was
+      // simply not declared here, because until now nothing on a card
+      // needed it. Optional so a card still renders if it is ever absent.
+      { readonly title: string; readonly excerpt: string; readonly body?: string } | undefined
+    >
   >;
 }
 
@@ -70,6 +80,12 @@ export interface LiveBlogListStrings {
    * `LiveWorkshopList`'s `posterAltTemplate`.
    */
   readonly publishedOnTemplate: string;
+  /**
+   * 2026-09-07: `"{minutes} min read"`, with the placeholder still in it —
+   * the estimate is computed from the body, and a post reconciled in the
+   * browser was never seen by the build that ran `t()`.
+   */
+  readonly readingTimeTemplate: string;
 }
 
 export interface LiveBlogListProps {
@@ -137,15 +153,40 @@ export function publishedLine(
     : undefined;
 }
 
+/**
+ * The reading estimate for one post, or `undefined` when there is nothing
+ * to estimate from — an image-only post, or a body that did not reach the
+ * page. See `reading-time.ts`.
+ */
+export function readingTimeLine(
+  body: string | undefined,
+  template: string,
+): string | undefined {
+  const minutes = readingMinutes(body);
+  return minutes === undefined ? undefined : template.replace('{minutes}', String(minutes));
+}
+
 /** A post appears on a locale's listing only once it has a translation for it. */
 export function postsForLocale(
   posts: readonly LiveBlogPost[],
   locale: string,
-): readonly { readonly post: LiveBlogPost; readonly title: string; readonly excerpt: string }[] {
+): readonly {
+  readonly post: LiveBlogPost;
+  readonly title: string;
+  readonly excerpt: string;
+  readonly body?: string;
+}[] {
   return posts.flatMap((post) => {
     const translation = post.translations[locale];
     return translation
-      ? [{ post, title: translation.title, excerpt: translation.excerpt }]
+      ? [
+          {
+            post,
+            title: translation.title,
+            excerpt: translation.excerpt,
+            body: translation.body,
+          },
+        ]
       : [];
   });
 }
@@ -200,8 +241,9 @@ export function LiveBlogList({
 
   return (
     <>
-      {entries.map(({ post, title, excerpt }) => {
+      {entries.map(({ post, title, excerpt, body }) => {
         const published = publishedLine(post, strings.publishedOnTemplate, locale);
+        const reading = readingTimeLine(body, strings.readingTimeTemplate);
         return (
           <Card key={post.id}>
             <Heading level={headingLevel}>{title}</Heading>
@@ -210,9 +252,16 @@ export function LiveBlogList({
                 for a crawler, and the site's own formatter renders it in
                 the site's locale rather than the reader's browser one
                 (`@ndn/i18n`'s datetime.ts). */}
-            {published && (
+            {/* One line, two facts: when it went up and how long it takes.
+                They belong together — both are what a reader weighs before
+                clicking — and two stacked lines of grey would crowd a card
+                that is mostly excerpt. Separated by a middle dot, and each
+                still legible on its own if the other is missing. */}
+            {(published || reading) && (
               <p className="ndn-card-meta">
-                <time dateTime={published.iso}>{published.text}</time>
+                {published && <time dateTime={published.iso}>{published.text}</time>}
+                {published && reading ? ' · ' : ''}
+                {reading}
               </p>
             )}
             <p>{excerpt}</p>

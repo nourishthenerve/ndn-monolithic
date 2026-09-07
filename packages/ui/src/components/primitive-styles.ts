@@ -117,6 +117,37 @@ body {
   color: var(--ndn-color-text-muted);
 }
 
+/* 2026-09-07: a workshop's start time in each of the three regions it is
+   announced to (India, UK, Middle East). A description list, because
+   region-to-time is a description list — and a two-column grid so the
+   labels line up down the card instead of the times ragging.
+
+   The row wrapper is a div so React can key it; display:contents is what
+   keeps the grid seeing the dt/dd pairs rather than the wrappers. Same
+   trick, and same reason, as the astro-island rule the homepage documents.
+   (No backticks in this block: it is a JS template literal.) */
+.ndn-card-times {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+  row-gap: 0.125rem;
+  margin-block: 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--ndn-color-text-muted);
+}
+
+.ndn-card-times > div {
+  display: contents;
+}
+
+.ndn-card-times dt {
+  font-weight: 500;
+}
+
+.ndn-card-times dd {
+  margin: 0;
+}
+
 .ndn-heading {
   color: var(--ndn-color-text);
   font-weight: 700;

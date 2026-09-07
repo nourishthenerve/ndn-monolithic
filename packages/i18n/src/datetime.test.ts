@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatDate,
+  formatDateTimeInZone,
   formatDateRange,
   formatDateTime,
   formatDayMonthShort,
@@ -195,5 +196,43 @@ describe('the house date style', () => {
     // Rule 2, which is the one that carries meaning rather than taste:
     // "9/3" and "03/09" disagree about the month.
     expect(formatDayMonthYear(instant, 'en')).not.toMatch(/\d+\/\d+/);
+  });
+});
+
+// 2026-09-07: a workshop announced to three regions at once — the one place
+// the site renders a time in a named zone rather than the reader's own.
+describe('formatDateTimeInZone', () => {
+  const tenUtc = '2026-10-01T10:00:00.000Z';
+
+  it('renders the same instant as each region reads it', () => {
+    expect(formatDateTimeInZone(tenUtc, 'en', 'Asia/Kolkata')).toContain('3:30 PM');
+    expect(formatDateTimeInZone(tenUtc, 'en', 'Europe/London')).toContain('11:00 AM');
+    expect(formatDateTimeInZone(tenUtc, 'en', 'Asia/Dubai')).toContain('2:00 PM');
+  });
+
+  it('is the same wherever the machine rendering it happens to be', () => {
+    // The whole point of naming the zone: unlike `formatDateTime`, this
+    // does not move with the host, so a page built in CI and the same page
+    // reconciled in a reader's browser agree.
+    expect(formatDateTimeInZone(tenUtc, 'en', 'Europe/London')).toBe(
+      formatDateTimeInZone(new Date(tenUtc), 'en', 'Europe/London'),
+    );
+  });
+
+  it('carries each zone’s own date, not a shared one', () => {
+    // A 9:00 PM UK workshop is the next morning in India.
+    const lateUtc = '2026-10-01T20:00:00.000Z';
+
+    expect(formatDateTimeInZone(lateUtc, 'en', 'Asia/Kolkata')).toContain('October 2, 2026');
+    expect(formatDateTimeInZone(lateUtc, 'en', 'Europe/London')).toContain('October 1, 2026');
+  });
+
+  it('names the offset, because a region label is not a zone', () => {
+    // "Middle East" is GMT+4 in Dubai and GMT+3 in Riyadh.
+    expect(formatDateTimeInZone(tenUtc, 'en', 'Asia/Dubai')).toMatch(/GMT\+4/);
+  });
+
+  it('returns an unparseable value unchanged rather than "Invalid Date"', () => {
+    expect(formatDateTimeInZone('not-a-date', 'en', 'Europe/London')).toBe('not-a-date');
   });
 });

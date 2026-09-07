@@ -24,6 +24,8 @@ import { publicationDateOf } from '../publication-date.js';
 import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { blogContentType, contentApiUrl, mediaUrl } from '../site-config.js';
 
+import { readingMinutes } from './reading-time.js';
+
 interface Translation {
   readonly title: string;
   readonly body: string;
@@ -55,6 +57,8 @@ export interface LiveBlogPostStrings {
   readonly imageAlt: string;
   /** 2026-09-07: `"Published {date}"`, filled here — the build cannot format a date for a post it has never seen. */
   readonly publishedOnTemplate: string;
+  /** 2026-09-07: `"{minutes} min read"`, filled here for the same reason. */
+  readonly readingTimeTemplate: string;
 }
 
 export interface LiveBlogPostProps {
@@ -172,20 +176,30 @@ export function LiveBlogPost({
   // ways. `undefined` means "not markup, or not markup we can vouch for" and
   // takes the paragraph path this page has always used.
   const bodyHtml = renderableRichText(translation.body);
+  // Counted from the body this page is about to render, so the estimate and
+  // the article can never be out of step.
+  const minutes = readingMinutes(translation.body);
 
   return (
     <article>
       <Heading level={1}>{translation.title}</Heading>
       {/* The byline, before the lead image, so it reads as the article's
-          own date rather than a caption on the picture. */}
-      {publishedIso && (
+          own date rather than a caption on the picture. Date and reading
+          estimate on one line, exactly as the card pairs them. */}
+      {(publishedIso || minutes !== undefined) && (
         <p className="ndn-card-meta">
-          <time dateTime={publishedIso}>
-            {strings.publishedOnTemplate.replace(
-              '{date}',
-              formatDayMonthYear(publishedIso, locale),
-            )}
-          </time>
+          {publishedIso && (
+            <time dateTime={publishedIso}>
+              {strings.publishedOnTemplate.replace(
+                '{date}',
+                formatDayMonthYear(publishedIso, locale),
+              )}
+            </time>
+          )}
+          {publishedIso && minutes !== undefined ? ' · ' : ''}
+          {minutes !== undefined
+            ? strings.readingTimeTemplate.replace('{minutes}', String(minutes))
+            : ''}
         </p>
       )}
       {image && <img src={image} alt={strings.imageAlt} />}
