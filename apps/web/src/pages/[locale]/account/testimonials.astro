@@ -1,0 +1,100 @@
+---
+// 2026-09-07: choosing which published testimonials the site shows, and
+// where. The owner: *"Principal clinician will have option to cherry pick
+// these testimonials that goes on the websites landing page and those that
+// go inside read more testimonial page."*
+//
+// **Not an authoring page**, despite sitting beside `account/blog.astro` and
+// `account/workshops.astro` in the same principal-only menu. Those two write
+// the practice's own words; this one writes a list of ids. Nothing on this
+// page can create, edit, publish, unpublish or delete a testimonial —
+// `authz-matrix.ts`'s `Testimonial (own)` row still denies the principal
+// every cell of it, and the route behind this screen is governed by a
+// different row entirely (`Testimonial placement`).
+//
+// Principal-only in the matrix and here. Statically generated and **empty**,
+// the same discipline every account page states: what makes it private is
+// that its content is not in the HTML at all.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Heading } from '@ndn/ui';
+
+import { TestimonialCuration } from '../../../account/TestimonialCuration.js';
+import { RequireAuth } from '../../../auth/RequireAuth.js';
+import { SignInLink } from '../../../auth/SignInPanel.js';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../site-config.js';
+
+export function getStaticPaths() {
+  return supportedLocales.map((locale) => ({ params: { locale } }));
+}
+
+const { locale } = Astro.params as { locale: Locale };
+const heading = t('testimonialCuration.heading', undefined, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('testimonialCuration.description', undefined, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+
+  <RequireAuth
+    client:only="react"
+    loadingLabel={t('account.loading', undefined, locale)}
+    allowRoles={['principal-clinician']}
+  >
+    <Fragment slot="signedOut">
+      <p>
+        {t('account.signedOut', undefined, locale)}{' '}
+        <SignInLink label={t('account.signInClinician', undefined, locale)} pool="clinician" />
+      </p>
+    </Fragment>
+    <Fragment slot="forbidden">
+      <p>{t('testimonialCuration.forbidden', undefined, locale)}</p>
+    </Fragment>
+
+    {/* `client:only`, like every other island in the account shell: this
+        content is a signed-in principal's, and prerendering any of it would
+        put it in the HTML a crawler reads. */}
+    <TestimonialCuration
+      client:only="react"
+      locale={locale}
+      strings={{
+        heading: t('testimonialCuration.panelHeading', undefined, locale),
+        intro: t('testimonialCuration.intro', undefined, locale),
+        loading: t('testimonialCuration.loading', undefined, locale),
+        forbidden: t('testimonialCuration.forbidden', undefined, locale),
+        unavailable: t('testimonialCuration.unavailable', undefined, locale),
+        error: t('testimonialCuration.error', undefined, locale),
+        empty: t('testimonialCuration.empty', undefined, locale),
+        uncuratedNotice: t('testimonialCuration.uncuratedNotice', undefined, locale),
+        placementLegend: t('testimonialCuration.placementLegend', undefined, locale),
+        placementLanding: t('testimonialCuration.placement.landing', undefined, locale),
+        placementPage: t('testimonialCuration.placement.page', undefined, locale),
+        placementHidden: t('testimonialCuration.placement.hidden', undefined, locale),
+        // Templates rather than finished sentences: the values are only
+        // known once the island has loaded the list. Same shape
+        // `workshops.index.posterAlt` already uses.
+        featuredCountTemplate: t(
+          'testimonialCuration.featuredCount',
+          { count: '{count}', max: '{max}' },
+          locale,
+        ),
+        featuredFullHint: t('testimonialCuration.featuredFull', undefined, locale),
+        orderHeading: t('testimonialCuration.orderHeading', undefined, locale),
+        orderIntro: t('testimonialCuration.orderIntro', undefined, locale),
+        moveUp: t('testimonialCuration.moveUp', { name: '{name}' }, locale),
+        moveDown: t('testimonialCuration.moveDown', { name: '{name}' }, locale),
+        anonymous: t('testimonials.form.attributionDisplay.anonymous', undefined, locale),
+        publishedTemplate: t('testimonialCuration.published', { date: '{date}' }, locale),
+        save: t('testimonialCuration.save', undefined, locale),
+        saving: t('testimonialCuration.saving', undefined, locale),
+        saved: t('testimonialCuration.saved', undefined, locale),
+        saveFailed: t('testimonialCuration.saveFailed', undefined, locale),
+        unsaved: t('testimonialCuration.unsaved', undefined, locale),
+      }}
+    />
+  </RequireAuth>
+</BaseLayout>

@@ -46,6 +46,12 @@ export interface LiveTestimonial {
     readonly display: 'full' | 'firstNameOnly' | 'anonymous';
     readonly name?: string;
   };
+  /**
+   * 2026-09-07: this quote's position on the landing page, present only on
+   * the ones the principal put there. Absent means "testimonials page
+   * only", which is most of them.
+   */
+  readonly featuredRank?: number;
 }
 
 export interface LiveTestimonialListStrings {
@@ -61,17 +67,30 @@ export interface LiveTestimonialListProps {
   readonly initialTestimonials: readonly LiveTestimonial[];
   readonly fetchTestimonials?: () => Promise<readonly LiveTestimonial[] | undefined>;
   /**
-   * 2026-09-06: the homepage's three quotes. Applied after the
+   * 2026-09-06: a cap on how many quotes render. Applied after the
    * reconciliation, for the reason `LiveBlogList`'s own `limit` sets out.
    *
-   * Worth naming what this is *not*: the owner asked for the "top three"
-   * testimonials, and nothing on a testimonial ranks it — there is no
-   * rating, score or ordering field on the record (`testimonial-repository.ts`).
-   * So this takes the first three the API returns, which is the most recent
-   * three. Choosing them by hand would need a `featured` flag on the record
-   * itself, not a prop here.
+   * **No longer how the homepage chooses its quotes** (2026-09-07). It used
+   * to be: this prop took the first three the API returned, and the note
+   * here said choosing them by hand *"would need a `featured` flag on the
+   * record itself, not a prop here"*. That is what was built — see
+   * `featuredOnly` below — so the homepage now passes neither a limit nor a
+   * count, and the principal's selection decides both which and how many.
    */
   readonly limit?: number;
+  /**
+   * 2026-09-07: render only the quotes the principal put on the landing
+   * page, in the order they put them. The owner: *"I want the principal
+   * clinician to have option to cherry pick top rated testimonials on the
+   * landing page."*
+   *
+   * The two surfaces differ by this one prop and nothing else — same
+   * island, same fetch, same URL — so a quote cannot say one thing on the
+   * homepage and another in the archive. What "featured" means is decided
+   * server-side (`testimonial-read.ts`), including the case nobody has
+   * curated yet, which arrives here as the newest three carrying ranks.
+   */
+  readonly featuredOnly?: boolean;
 }
 
 /**
@@ -110,12 +129,29 @@ async function defaultFetchTestimonials(): Promise<readonly LiveTestimonial[] | 
   }
 }
 
+/**
+ * The landing page's own list: the ranked ones, in rank order.
+ *
+ * A stable sort would do here — the API already returns them in
+ * chronological order and every rank is distinct — but the comparison is on
+ * the rank itself, because the whole point of the field is that the
+ * principal's order is not the chronological one.
+ */
+export function featuredOf(
+  testimonials: readonly LiveTestimonial[],
+): readonly LiveTestimonial[] {
+  return testimonials
+    .filter((testimonial) => testimonial.featuredRank !== undefined)
+    .sort((a, b) => (a.featuredRank ?? 0) - (b.featuredRank ?? 0));
+}
+
 export function LiveTestimonialList({
   strings,
   locale,
   initialTestimonials,
   fetchTestimonials = defaultFetchTestimonials,
   limit,
+  featuredOnly = false,
 }: LiveTestimonialListProps): ReactNode {
   const [testimonials, setTestimonials] =
     useState<readonly LiveTestimonial[]>(initialTestimonials);
@@ -135,8 +171,10 @@ export function LiveTestimonialList({
     };
   }, [fetchTestimonials]);
 
+  const shown = featuredOnly ? featuredOf(testimonials) : testimonials;
+
   const withText = takeAtMost(
-    testimonials.flatMap((testimonial) => {
+    shown.flatMap((testimonial) => {
       const quote = quoteFor(testimonial, locale);
       return quote ? [{ testimonial, quote }] : [];
     }),

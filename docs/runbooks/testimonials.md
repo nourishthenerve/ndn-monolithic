@@ -76,3 +76,62 @@ Anonymous `pending_review` and `rejected` testimonials from the old form still e
 ### Withdrawal, which was not asked for
 
 `DELETE /testimonials/mine` transitions to `withdrawn` and keeps the text. It is a judgement call, recorded here as one: the request covers writing and updating, not removing. But publication rests on the author's consent, and consent that cannot be withdrawn is not consent — shipping "update only" would leave a patient's public words irrevocable. `'withdraw'` is its own `Action` and its own audit action rather than an `update`, because editing your words is authorship and retracting them is consent.
+
+---
+
+## Amendment, 2026-09-07 — the principal cherry-picks; the patient still owns the words
+
+> *"on webpage the testimonials are shown in some random manner I assume. I want the principal clinician to have option to cherry pick top rated testimonials on the landing page. However, when someone clicks Read more testimonials, there will be more cherry picked shown in chronological order with recent at the top. Principal clinician will have option to cherry pick these testimonials that goes on the websites landing page and those that go inside read more testimonial page."*
+
+### The random order was real
+
+`findPublished` returned testimonials in `listAllIds()` order — the GSI2 projection's order over SHA-256 ids. Stable, arbitrary, and meaningless. It now sorts by `created_at` descending, which is the "chronological order with recent at the top" half of the request and fixes the complaint on its own, curation or not. `created_at`, not `updated_at`: an edit is the same testimonial, and a typo correction should not jump a two-year-old quote to the top.
+
+### Curation is a separate row, a separate record and a separate Lambda
+
+`authz-matrix.ts`'s `Testimonial (own)` row is **unchanged** — every clinician column, the principal's included, is still `—`. The 2026-09-02 reasoning holds exactly as written: a practice that can write, edit or approve a patient's words is not collecting testimonials.
+
+What was added is a new row, `Testimonial placement` (`C R U` for `Principal`, `—` everywhere else), over a new record:
+
+| | |
+| --- | --- |
+| Record | `TESTIMONIAL_CURATION#site` / `META` — one for the whole site |
+| Shape | `{ featured: string[], listed: string[] }` — `featured` is **ordered** (the landing page), `listed` is not (the page is chronological) |
+| Routes | `GET` and `PUT /testimonials/curation`, principal-only, flag-gated on the same `testimonials.enabled` |
+| Lambda | `TestimonialCurationFunction` — its own role, whose `PutItem` is conditioned on `dynamodb:LeadingKeys = TESTIMONIAL_CURATION#site` |
+
+Three separations, and each is doing work rather than tidying:
+
+- **A separate record** means the principal's write never addresses a patient's row. A `placement` field on the testimonial would also have been lost by a patient editing their quote — `TestimonialStore.update` is a whole-item `PutCommand`.
+- **A separate Lambda** means the IAM policy says the same thing the matrix says. `TestimonialAuthoringFunction` may write `TESTIMONIAL#<id>` rows because a patient edits their own testimonial through it; the curation role cannot, so a bug in the curation handler still cannot rewrite anybody's words.
+- **A separate row** keeps `can()` honest: the question "may this principal edit a testimonial?" still answers no.
+
+### What the two pages render
+
+Both fetch the same `GET /testimonials` and both mount `LiveTestimonialList`. The payload gained one optional field — `featuredRank`, the quote's position on the landing page — and the homepage passes `featuredOnly`. That is the entire difference between the two surfaces, so they cannot disagree about what a testimonial says.
+
+`curatedTestimonials()` (in `testimonial-read.ts`) applies three rules in order:
+
+1. **Published is still the boundary.** Picks are intersected with `findPublished()`, so a testimonial withdrawn after being picked simply drops out and the principal never has to tidy up after a patient.
+2. **No curation record means no curation.** The site behaves exactly as it did before this shipped: every published testimonial, newest first, the newest three ranked for the homepage. This is why deploying it does not empty a live page.
+3. **A saved selection governs completely** — including an empty one, which hides every testimonial. A published testimonial in neither list appears nowhere public.
+
+Rule 3 is a change in default and is worth stating to anyone reading this later: **a patient can publish a testimonial that never appears on the site.** They still control publication and withdrawal; the practice controls placement. `accountTestimonial.intro`, `.consentNotice` and `.saved` were reworded the same day so the patient's own screen says so rather than promising a page it no longer guarantees.
+
+### Why the principal's screen sees testimonial ids
+
+The public read still projects `id` away, because it is `sha256(authorPatientId)` on an unauthenticated URL. `GET /testimonials/curation` returns it, because a principal-only screen has to address individual testimonials and the practice already knows who wrote each one (the record carries `authorPatientId`; the author is a patient in its own caseload). `attribution: 'anonymous'` is anonymity from the public reader, never from the clinic. Ids travel in bodies, and `logger.ts` logs route, status and duration — never a body.
+
+### The screen
+
+`/{locale}/account/testimonials`, principal-only, linked from the dashboard's practice-administration list. One radio group per testimonial (landing page + testimonials page / testimonials page only / not shown), then the landing-page picks again in order with move-up/move-down buttons — keyboard-operable, so no drag-and-drop to make accessible. The landing page is capped at `MAX_FEATURED_TESTIMONIALS` (6), enforced in the schema, in `curatedTestimonials`, and as a disabled radio so the limit is visible while choosing rather than announced on save.
+
+### Required manual step before this is usable in `ndn-prod`
+
+None. No new flag (`testimonials.enabled` governs it), no new secret, no console setting — the routes and the Lambda deploy with the stack.
+
+### What was deliberately not built
+
+- **No way for the principal to publish, unpublish, edit or delete a testimonial.** Not an omission — see above.
+- **No per-patient invitation or nudge to write one.** Not asked for.
+- **No second ordering for the testimonials page.** It is chronological, as specified; storing an order for `listed` would be storing something the read discards.

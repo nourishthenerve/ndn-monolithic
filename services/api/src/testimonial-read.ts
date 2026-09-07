@@ -24,7 +24,8 @@
 // became patient-authored, the id is a function of the author's patient
 // id. None of it was ever rendered. A page shows a quote and a name, so
 // that is now all the API says.
-import type { Testimonial, TestimonialAttribution } from '@ndn/shared-types';
+import type { Testimonial, TestimonialAttribution, TestimonialCuration } from '@ndn/shared-types';
+import { MAX_FEATURED_TESTIMONIALS } from '@ndn/shared-types';
 import type { APIGatewayProxyHandlerV2WithLambdaAuthorizer } from 'aws-lambda';
 
 import { systemClock, type Clock } from './clock.js';
@@ -48,6 +49,22 @@ export const PUBLIC_READ_ROUTE = 'GET /testimonials';
 export interface PublicTestimonial {
   readonly quote: Record<string, string>;
   readonly attribution: TestimonialAttribution;
+  /**
+   * Present only on the ones the principal put on the landing page, and
+   * equal to their position in that strip — `0` is the first quote a
+   * visitor sees.
+   *
+   * A rank rather than a `featured: true` flag because the owner asked to
+   * cherry-pick *"top rated"* testimonials, and "top" is an ordering. It
+   * is the only ordering information in this payload: the list itself is
+   * chronological, newest first, which is what the testimonials page
+   * renders.
+   *
+   * Publishing a position is not publishing anything private — it is a
+   * fact about the site's own layout, and a reader can see it by looking
+   * at the page.
+   */
+  readonly featuredRank?: number;
 }
 
 export function toPublicTestimonial(testimonial: Testimonial): PublicTestimonial {
@@ -61,6 +78,85 @@ export function toPublicTestimonial(testimonial: Testimonial): PublicTestimonial
         ? { display: 'anonymous' }
         : { display: testimonial.attribution.display, name: testimonial.attribution.name },
   };
+}
+
+/**
+ * How many testimonials the landing page shows when the principal has
+ * never curated. Three, because that is what the homepage showed before
+ * curation existed — the strip is unchanged until somebody changes it on
+ * purpose.
+ */
+export const DEFAULT_FEATURED_COUNT = 3;
+
+/**
+ * The public list, curated — the whole of what `GET /testimonials` returns
+ * and the one place the owner's two surfaces are decided:
+ *
+ *   * the **testimonials page** renders every item, in the order they come
+ *     out of here (newest first, `findPublished`'s own sort);
+ *   * the **landing page** renders the ones carrying a `featuredRank`, in
+ *     rank order.
+ *
+ * One list rather than two, because the two pages fetch the same URL and
+ * `LiveTestimonialList` reconciles both from it — two payloads would be
+ * two chances for the homepage and the archive to disagree about what a
+ * testimonial says.
+ *
+ * ## Three rules, in order
+ *
+ * 1. **Published is still the boundary.** `published` is what
+ *    `findPublished` returned, so a withdrawn testimonial cannot be shown
+ *    by a stale pick, and a pick naming a testimonial that no longer
+ *    exists is simply dropped. The principal never has to tidy up after a
+ *    patient who withdrew.
+ * 2. **No curation record means no curation.** Not "nothing is picked" —
+ *    see `readCuration`. The site behaves as it did before this feature:
+ *    everything published, newest first, the newest three on the homepage.
+ * 3. **A saved selection governs completely.** A published testimonial in
+ *    neither list appears nowhere public, including an empty selection
+ *    that hides all of them. That is the owner's instruction taken at its
+ *    word, and it is the one behaviour here a patient cannot see coming
+ *    from their own account page — `accountTestimonial.consentNotice` says
+ *    so in as many words.
+ */
+export function curatedTestimonials(
+  published: readonly Testimonial[],
+  curation: TestimonialCuration | undefined,
+): PublicTestimonial[] {
+  if (!curation) {
+    return published.map((testimonial, index) =>
+      index < DEFAULT_FEATURED_COUNT
+        ? { ...toPublicTestimonial(testimonial), featuredRank: index }
+        : toPublicTestimonial(testimonial),
+    );
+  }
+
+  const byId = new Map(published.map((testimonial) => [testimonial.id, testimonial]));
+
+  // Deduped and capped here as well as at the write boundary. The record
+  // is data, and data written by an older version of the writer — or by
+  // hand during an incident — must not be able to put twelve quotes on the
+  // homepage or the same one twice.
+  const featured: string[] = [];
+  for (const id of curation.featured) {
+    if (byId.has(id) && !featured.includes(id) && featured.length < MAX_FEATURED_TESTIMONIALS) {
+      featured.push(id);
+    }
+  }
+  const rankOf = new Map(featured.map((id, rank) => [id, rank]));
+  const shown = new Set([...featured, ...curation.listed.filter((id) => byId.has(id))]);
+
+  // Iterating `published` rather than the picks is what makes the page
+  // chronological: the picks carry the landing page's order, never the
+  // archive's.
+  return published
+    .filter((testimonial) => shown.has(testimonial.id))
+    .map((testimonial) => {
+      const rank = rankOf.get(testimonial.id);
+      return rank === undefined
+        ? toPublicTestimonial(testimonial)
+        : { ...toPublicTestimonial(testimonial), featuredRank: rank };
+    });
 }
 
 export interface TestimonialReadDeps {
@@ -101,7 +197,14 @@ export function createTestimonialReadHandler(
     // No flag and no principal, exactly as before: `findPublished` is the
     // boundary, and a withdrawn or legacy `pending_review` row is not
     // published, so neither reaches here.
-    const items = (await deps.repository.findPublished()).map(toPublicTestimonial);
-    return respond(200, { items });
+    //
+    // Two reads, not one, and they are independent: the picks cannot
+    // resurrect an unpublished testimonial, and a missing curation record
+    // cannot hide a published one.
+    const [published, curation] = await Promise.all([
+      deps.repository.findPublished(),
+      deps.repository.readCuration(),
+    ]);
+    return respond(200, { items: curatedTestimonials(published, curation) });
   };
 }

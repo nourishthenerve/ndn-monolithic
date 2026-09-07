@@ -137,12 +137,12 @@ describe('the default fetch', () => {
   });
 });
 
-// 2026-09-06: the homepage shows three quotes. The owner asked for the "top
-// three" — nothing on a testimonial ranks it (no rating, no ordering field),
-// so this is the first three the API returns, i.e. the most recent three.
-// Naming that here rather than letting the prop imply a ranking it has not
-// got.
-describe('the homepage strip', () => {
+// 2026-09-06: `limit` caps how many quotes render. It was how the homepage
+// picked its three until 2026-09-07, when the principal gained a hand-made
+// selection (`featuredOnly` below) and the homepage stopped passing a count
+// at all. The prop stays because it is the generic cap every one of these
+// islands has.
+describe('the quote limit', () => {
   function quote(text: string): LiveTestimonial {
     return { quote: { en: text }, attribution: { display: 'anonymous' } };
   }
@@ -187,5 +187,65 @@ describe('the homepage strip', () => {
       />,
     );
     expect(screen.getByText('four')).toBeDefined();
+  });
+});
+
+// 2026-09-07: the landing page's own selection. The owner: *"I want the
+// principal clinician to have option to cherry pick top rated testimonials
+// on the landing page. However, when someone clicks Read more testimonials,
+// there will be more cherry picked shown in chronological order with recent
+// at the top."*
+//
+// Both pages render this same component from the same payload; `featuredOnly`
+// is the entire difference between them.
+describe('the landing-page strip', () => {
+  function ranked(text: string, featuredRank?: number): LiveTestimonial {
+    return { quote: { en: text }, attribution: { display: 'anonymous' }, featuredRank };
+  }
+
+  // As the API returns them: chronological, newest first, with the
+  // principal's ranks scattered through.
+  const chronological = [ranked('newest'), ranked('mid', 1), ranked('oldest', 0)];
+
+  function renderStrip(featuredOnly: boolean) {
+    return render(
+      <LiveTestimonialList
+        strings={STRINGS}
+        locale="en"
+        initialTestimonials={chronological}
+        featuredOnly={featuredOnly}
+        fetchTestimonials={() => new Promise(() => {})}
+      />,
+    );
+  }
+
+  it('shows only the picked quotes, in the principal’s order', () => {
+    const { container } = renderStrip(true);
+
+    expect(
+      [...container.querySelectorAll('blockquote p')].map((node) => node.textContent),
+    ).toEqual(['oldest', 'mid']);
+  });
+
+  it('leaves the testimonials page chronological and complete', () => {
+    const { container } = renderStrip(false);
+
+    expect(
+      [...container.querySelectorAll('blockquote p')].map((node) => node.textContent),
+    ).toEqual(['newest', 'mid', 'oldest']);
+  });
+
+  it('shows the empty state when the principal has picked nothing', async () => {
+    render(
+      <LiveTestimonialList
+        strings={STRINGS}
+        locale="en"
+        initialTestimonials={[ranked('unpicked')]}
+        featuredOnly
+        fetchTestimonials={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(await screen.findByText(STRINGS.empty)).toBeTruthy();
   });
 });

@@ -107,6 +107,13 @@ const accountRouteSegments: readonly AccountRouteSegment[] = [
   // things, two pages, two links.
   { segment: 'blog', ownerRole: 'clinician' },
   { segment: 'workshops', ownerRole: 'clinician' },
+  // 2026-09-07: which published testimonials the site shows, and where.
+  // Principal-only in practice (`authz-matrix.ts`'s `Testimonial placement`
+  // row), the same "no finer role than 'clinician' in this enum" reasoning
+  // `patient-admin` and `clinician-admin` above already accept — and the
+  // same coverage gap this file's own header names, since the a11y suite's
+  // clinician fixture is a sub-clinician and will scan the forbidden state.
+  { segment: 'testimonials', ownerRole: 'clinician' },
   // `change-password` and `calendar` are **deleted, not merely unregistered**
   // (2026-09-06, the owner: *"remove those two pages entirely"*). Both were
   // pages whose whole content the dashboard had absorbed — the password form
