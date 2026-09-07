@@ -26,6 +26,32 @@
 // thing a person is offered and the thing that succeeds or fails are the
 // same thing. A single "save everything" button would send sections the
 // caller cannot write and be refused whole (`assessment.ts` is atomic).
+//
+// ## 2026-09-07 — one component, still; several placements on a page
+//
+// The owner's rework makes each section a *named area of the patient
+// record* — "Patient Details", "Patient Assessment Form", "Patient
+// Prescription", "Patient Appointments" — and two of those areas carry
+// non-assessment content as well (the identity form under Details, the
+// calendar under Appointments). So a page now mounts this component once
+// per area, passing `fieldSets` to say which of the record's sections
+// belong in *this* area, and `showTitles={false}` when the page has
+// already written the heading itself.
+//
+// `fieldSets` is a **placement filter, never a permission**. It can only
+// narrow what the server already chose to send: a page asking for
+// `['private']` on behalf of a patient renders nothing at all, because
+// `template` came back without that section. Nothing here decides who sees
+// what — that is still, entirely, the paragraph above.
+//
+// **Instances resync after any save**, via a `window` event rather than
+// shared React state: Astro mounts each `client:only` island as its own
+// React root, so there is no tree for a context to span. Without it, two
+// areas on one page hold two copies of `currentVersion`, the first save
+// bumps the record, and the second area's save is refused 409 by a
+// concurrency check meant for two *people* editing at once — a conflict
+// the person would have to resolve by re-reading a page they never left.
+// The listener is the whole fix: one save, every mounted section re-reads.
 import { Heading } from '@ndn/ui';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -40,6 +66,13 @@ import type { PanelHeadingLevel } from './heading-level.js';
 /** The form every patient's record is instantiated from. One template, one form per patient — `assessment-repository.ts`'s `DEFAULT_ASSESSMENT_ID`. */
 export const ASSESSMENT_ID = 'intake-v1';
 
+/**
+ * Dispatched on `window` after any section of the record is written, so the
+ * other placements of this form on the same page re-read rather than going
+ * on holding a version the server has moved past. See this file's header.
+ */
+export const ASSESSMENT_SAVED_EVENT = 'ndn:assessment-saved';
+
 // The response shapes, declared locally rather than imported from
 // `@ndn/shared-types` — the same choice `PatientRecordPanel.tsx` and every
 // other island here already makes, and `apps/web`'s dependency list is the
@@ -48,7 +81,7 @@ export const ASSESSMENT_ID = 'intake-v1';
 // send this caller*, which is a narrower thing than the stored record —
 // `general?`/`patient?`/`private?`/`calendar?` are optional here precisely
 // because a section the caller may not read is absent, not empty.
-export type AssessmentFieldSet = 'general' | 'patient' | 'private' | 'calendar';
+export type AssessmentFieldSet = 'general' | 'private' | 'prescription' | 'calendar';
 
 export type AssessmentValue = string | number | boolean;
 
@@ -137,6 +170,26 @@ export interface AssessmentFormProps {
   readonly strings: AssessmentFormStrings;
   /** 2026-09-06: the level each form section's heading renders at — 2 on its own page, 3 inside a dashboard section. See `heading-level.ts`. */
   readonly headingLevel?: PanelHeadingLevel;
+  /**
+   * Which of the record's sections belong in *this* placement. A filter over
+   * what the server sent, never a widening of it — see this file's header.
+   * Omitted means every section the caller may read, which is what a page
+   * that gives the form a screen of its own wants.
+   */
+  readonly fieldSets?: readonly AssessmentFieldSet[];
+  /**
+   * `false` when the page has already rendered this area's heading, which is
+   * the case wherever `fieldSets` names a single section: the owner's four
+   * area names live in the i18n catalogue with the rest of the page's copy,
+   * and repeating the template's own title under them reads as a stutter.
+   */
+  readonly showTitles?: boolean;
+  /**
+   * `false` on every placement but the first on a page. The "version N" line
+   * is a fact about the *record*, not about a section, so a page showing
+   * three areas of one record should say it once.
+   */
+  readonly showVersion?: boolean;
   /** Injectable for tests. Defaults to `?id=` on the URL, or `me` when the viewer is a patient. */
   readonly patientId?: string;
   readonly client?: SessionClient;
@@ -304,7 +357,9 @@ export function fieldValue(
     const summary = calendarSummary as Record<string, AssessmentValue> | undefined;
     return summary?.[field.id] ?? '';
   }
-  return sectionOf(latest, fieldSet).responses[field.id] ?? (field.type === 'checkbox' ? false : '');
+  return (
+    sectionOf(latest, fieldSet).responses[field.id] ?? (field.type === 'checkbox' ? false : '')
+  );
 }
 
 /**
@@ -331,6 +386,9 @@ export function responsesToSave(
 export function AssessmentForm({
   strings,
   headingLevel = 2,
+  fieldSets,
+  showTitles = true,
+  showVersion = true,
   patientId,
   client = defaultClient,
   fetchForm = defaultFetchForm,
@@ -348,7 +406,9 @@ export function AssessmentForm({
   const [drafts, setDrafts] = useState<Record<string, AssessmentValue>>({});
   const [saveStates, setSaveStates] = useState<Partial<Record<AssessmentFieldSet, SaveState>>>({});
   const [uploading, setUploading] = useState<Partial<Record<AssessmentFieldSet, boolean>>>({});
-  const [uploadFailed, setUploadFailed] = useState<Partial<Record<AssessmentFieldSet, boolean>>>({});
+  const [uploadFailed, setUploadFailed] = useState<Partial<Record<AssessmentFieldSet, boolean>>>(
+    {},
+  );
   const fileInputs = useRef<Partial<Record<AssessmentFieldSet, HTMLInputElement | null>>>({});
 
   const load = useCallback(async () => {
@@ -398,6 +458,23 @@ export function AssessmentForm({
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  /**
+   * Every other placement of this form on the page has just written a new
+   * version; re-read so this one's `currentVersion` is the record's, not
+   * the one it happened to load with. See this file's header on why the
+   * channel is a DOM event and not React state.
+   *
+   * The saver dispatches too and re-reads itself, which is harmless: `load`
+   * is idempotent and the second read returns what the first one did.
+   */
+  useEffect(() => {
+    const resync = () => {
+      void load();
+    };
+    window.addEventListener(ASSESSMENT_SAVED_EVENT, resync);
+    return () => window.removeEventListener(ASSESSMENT_SAVED_EVENT, resync);
   }, [load]);
 
   if (state === 'loading') {
@@ -467,6 +544,7 @@ export function AssessmentForm({
         setSaveStates((current) => ({ ...current, [section.fieldSet]: 'error' }));
         return;
       }
+      window.dispatchEvent(new Event(ASSESSMENT_SAVED_EVENT));
       await load();
       setSaveStates((current) => ({ ...current, [section.fieldSet]: 'saved' }));
     } catch {
@@ -529,6 +607,8 @@ export function AssessmentForm({
       if (input) {
         input.value = '';
       }
+      // Recording the attachment wrote a version, exactly as a save does.
+      window.dispatchEvent(new Event(ASSESSMENT_SAVED_EVENT));
       await load();
     } catch {
       fail();
@@ -541,7 +621,10 @@ export function AssessmentForm({
       return;
     }
     try {
-      const response = await requestDownloadUrl(accessToken, resolvedId, { section: fieldSet, key });
+      const response = await requestDownloadUrl(accessToken, resolvedId, {
+        section: fieldSet,
+        key,
+      });
       if (!response.ok) {
         return;
       }
@@ -636,7 +719,13 @@ export function AssessmentForm({
     }
 
     const inputType =
-      field.type === 'date' ? 'date' : field.type === 'datetime' ? 'datetime-local' : field.type === 'number' ? 'number' : 'text';
+      field.type === 'date'
+        ? 'date'
+        : field.type === 'datetime'
+          ? 'datetime-local'
+          : field.type === 'number'
+            ? 'number'
+            : 'text';
     return (
       <p key={field.id}>
         <label htmlFor={inputId}>{field.label}</label>
@@ -708,19 +797,41 @@ export function AssessmentForm({
     );
   };
 
+  // The placement filter. `template` already holds only what this caller
+  // may read, so this can narrow and never widen — see the header.
+  const shown = fieldSets
+    ? payload.template.filter((section) => fieldSets.includes(section.fieldSet))
+    : payload.template;
+
+  // A placement whose section the server did not send has nothing to say.
+  // Rendering the version line alone would be a stray "Version 3" under a
+  // heading with no content — which is what a patient would see under
+  // "Patient Assessment Form" if a page ever mounted that placement for
+  // them.
+  if (shown.length === 0) {
+    return null;
+  }
+
   return (
     <>
-      <p>
-        {strings.versionLabel} {payload.currentVersion}
-      </p>
-      {payload.template.map((section) => {
+      {showVersion && (
+        <p>
+          {strings.versionLabel} {payload.currentVersion}
+        </p>
+      )}
+      {shown.map((section) => {
         const writable = permissionFor(section.fieldSet)?.write === true;
         const saveState = saveStates[section.fieldSet] ?? 'idle';
         return (
-          <section key={section.fieldSet} aria-labelledby={`assessment-${section.fieldSet}-heading`}>
-            <Heading level={headingLevel} id={`assessment-${section.fieldSet}-heading`}>
-              {section.title}
-            </Heading>
+          <section
+            key={section.fieldSet}
+            aria-labelledby={showTitles ? `assessment-${section.fieldSet}-heading` : undefined}
+          >
+            {showTitles && (
+              <Heading level={headingLevel} id={`assessment-${section.fieldSet}-heading`}>
+                {section.title}
+              </Heading>
+            )}
             {!writable && <p>{strings.readOnlyLabel}</p>}
             {section.fieldSet === 'calendar' &&
               payload.calendarSummary?.nextAppointmentAt === undefined && (

@@ -288,8 +288,8 @@ describe('the four sections, and who may write each', () => {
     const permissions = await permissionsFor(handler, OWNING_PATIENT);
     expect(permissions).toEqual([
       { fieldSet: 'general', read: true, write: true },
-      { fieldSet: 'patient', read: true, write: false },
       { fieldSet: 'private', read: false, write: false },
+      { fieldSet: 'prescription', read: true, write: false },
       { fieldSet: 'calendar', read: true, write: false },
     ]);
   });
@@ -298,8 +298,8 @@ describe('the four sections, and who may write each', () => {
     const { handler } = await build();
     expect(await permissionsFor(handler, HELPDESK)).toEqual([
       { fieldSet: 'general', read: true, write: true },
-      { fieldSet: 'patient', read: true, write: true },
       { fieldSet: 'private', read: false, write: false },
+      { fieldSet: 'prescription', read: true, write: true },
       // Read-only, per "helpdesk/visitor/patient will only be able to read it".
       { fieldSet: 'calendar', read: true, write: false },
     ]);
@@ -312,8 +312,8 @@ describe('the four sections, and who may write each', () => {
     const { handler } = await build();
     expect(await permissionsFor(handler, principal)).toEqual([
       { fieldSet: 'general', read: true, write: true },
-      { fieldSet: 'patient', read: true, write: true },
       { fieldSet: 'private', read: true, write: true },
+      { fieldSet: 'prescription', read: true, write: true },
       { fieldSet: 'calendar', read: true, write: true },
     ]);
   });
@@ -334,7 +334,7 @@ describe('the four sections, and who may write each', () => {
   });
 
   it.each([
-    ['the patient section', 'patient'],
+    ['the prescription section', 'prescription'],
     ['the clinician section', 'private'],
     ['the calendar section', 'calendar'],
   ])('is 403 when the patient tries to write %s', async (_label, fieldSet) => {
@@ -436,7 +436,7 @@ describe('R-09: a patient reaches no clinician-section field, in any relationshi
     );
     expect(body.template.map((section) => section.fieldSet)).toEqual([
       'general',
-      'patient',
+      'prescription',
       'calendar',
     ]);
     expect(body.permissions.find((p) => p.fieldSet === 'private')).toEqual({
@@ -491,8 +491,8 @@ describe('the visitor — general info, IIC-tagged patients only', () => {
     );
     expect(body.permissions).toEqual([
       { fieldSet: 'general', read: true, write: false },
-      { fieldSet: 'patient', read: false, write: false },
       { fieldSet: 'private', read: false, write: false },
+      { fieldSet: 'prescription', read: false, write: false },
       { fieldSet: 'calendar', read: true, write: false },
     ]);
     expect(body.template.map((s) => s.fieldSet)).toEqual(['general', 'calendar']);
@@ -523,7 +523,7 @@ describe('the visitor — general info, IIC-tagged patients only', () => {
 
   it('writes nothing anywhere, even in their own programme', async () => {
     const { handler } = await build({ tag: 'IIC' });
-    for (const fieldSet of ['general', 'patient', 'private', 'calendar']) {
+    for (const fieldSet of ['general', 'private', 'prescription', 'calendar']) {
       const response = await invoke(
         handler,
         fakeEvent({
@@ -596,7 +596,7 @@ describe('the template is the schema', () => {
   it('is 400 when a value is the wrong type for its field', async () => {
     const { handler } = await build();
     const response = await write(handler, PRINCIPAL, {
-      patient: { responses: { consentToRecordSessions: 'yes please' } },
+      prescription: { responses: { consentToRecordSessions: 'yes please' } },
     });
     expect(response.statusCode).toBe(400);
     expect(JSON.parse(response.body)).toEqual({ error: 'INVALID_FIELD_TYPE' });

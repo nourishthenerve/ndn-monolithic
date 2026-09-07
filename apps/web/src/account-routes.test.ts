@@ -50,10 +50,22 @@ describe('account-routes', () => {
     expect([...expected].sort()).toEqual([...registered].sort());
   });
 
-  it('registers the patient calendar as the patient’s own page', () => {
-    const route = accountRoutes.find((entry) => entry.path.endsWith('/account/appointments'));
+  it('registers the patient’s assigned content as the patient’s own page', () => {
+    const route = accountRoutes.find((entry) => entry.path.endsWith('/account/content'));
     expect(route?.ownerRole).toBe('patient');
   });
+
+  // 2026-09-07: the three pages the owner's rework removed. Asserted by
+  // name rather than left to the on-disk cross-check above, which would go
+  // on passing if someone re-added the page *and* the registry entry
+  // together — the point here is that these three are gone, not that the
+  // two lists agree.
+  it.each(['patient', 'appointments', 'testimonial'])(
+    'has no route for the deleted /account/%s page',
+    (segment) => {
+      expect(accountRoutes.some((route) => route.path.endsWith(`/account/${segment}`))).toBe(false);
+    },
+  );
 
   it('every path is absolute, locale-prefixed, and unique', () => {
     const seen = new Set<string>();

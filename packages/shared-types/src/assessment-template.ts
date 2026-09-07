@@ -10,6 +10,18 @@
 // form later is editing the arrays below and nothing else. No handler, no
 // repository and no page names a field id; they all iterate the template.
 //
+// **2026-09-07: the four sections were renamed, and the fields below are
+// still the placeholders.** The owner's rework named them "Patient
+// Details", "Patient Assessment Form", "Patient Prescription" and "Patient
+// Appointments", and set each one's audience (see
+// docs/plan/04-data-model-rbac.md's four `Assessment —` rows, whose cells
+// did not have to change — the permissions asked for were already the ones
+// implemented). The *titles* and the section order here are therefore real;
+// the *fields* under them are not, and the ones under "Patient
+// Prescription" in particular still read as the intake questions they were
+// written as. They stay until the owner says what goes in each section,
+// which is the same standing promise this header opened with.
+//
 // It lives in shared-types rather than services/api because the API
 // instantiates and validates against it and the web form renders from it —
 // one declaration, so a field the API refuses can never be a field the
@@ -75,7 +87,7 @@ export const ASSESSMENT_TAG_OPTIONS = ['IIC', 'NDN'] as const;
 export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
   {
     fieldSet: 'general',
-    title: 'General info',
+    title: 'Patient Details',
     fields: [
       {
         id: ASSESSMENT_TAG_FIELD_ID,
@@ -97,8 +109,18 @@ export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
     ],
   },
   {
-    fieldSet: 'patient',
-    title: 'Specific to the patient',
+    fieldSet: 'private',
+    title: 'Patient Assessment Form',
+    fields: [
+      { id: 'clinicianImpression', label: 'Clinical impression', type: 'textarea' },
+      { id: 'workingDiagnosis', label: 'Working diagnosis', type: 'text' },
+      { id: 'treatmentPlan', label: 'Treatment plan', type: 'textarea' },
+      { id: 'riskFlags', label: 'Risk flags', type: 'text' },
+    ],
+  },
+  {
+    fieldSet: 'prescription',
+    title: 'Patient Prescription',
     fields: [
       { id: 'presentingConcerns', label: 'What brings you here', type: 'textarea' },
       { id: 'goals', label: 'What you would like to achieve', type: 'textarea' },
@@ -108,18 +130,8 @@ export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
     ],
   },
   {
-    fieldSet: 'private',
-    title: 'Specific to the clinician',
-    fields: [
-      { id: 'clinicianImpression', label: 'Clinical impression', type: 'textarea' },
-      { id: 'workingDiagnosis', label: 'Working diagnosis', type: 'text' },
-      { id: 'treatmentPlan', label: 'Treatment plan', type: 'textarea' },
-      { id: 'riskFlags', label: 'Risk flags', type: 'text' },
-    ],
-  },
-  {
     fieldSet: 'calendar',
-    title: 'Calendar',
+    title: 'Patient Appointments',
     fields: [
       { id: 'nextAppointmentAt', label: 'Next appointment', type: 'datetime', derived: true },
       {

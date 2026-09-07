@@ -63,7 +63,7 @@ const UPLOAD_ROUTE = 'POST /attachments/{id}/{assessmentId}/upload-url';
 const DOWNLOAD_ROUTE = 'POST /attachments/{id}/{assessmentId}/download-url';
 const UPLOAD_LOG_SAMPLE_RATE = 1;
 
-const SECTION_ENUM = ['general', 'patient', 'private', 'calendar'] as const;
+const SECTION_ENUM = ['general', 'private', 'prescription', 'calendar'] as const;
 
 const uploadBodySchema = z
   .object({

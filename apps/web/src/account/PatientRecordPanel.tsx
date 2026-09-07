@@ -20,6 +20,29 @@
 //
 // Appointments are read-only here even for the principal, who may create
 // them: scheduling belongs with a calendar, not with a details form.
+//
+// ## 2026-09-07 — the two halves are placed separately
+//
+// The owner's rework gives the patient record four named areas, and this
+// component's two halves belong to two different ones: who the patient is
+// goes under "Patient Details", the appointment table under "Patient
+// Appointments". `half` says which one a given mount renders, and the page
+// writes the heading — so `patient-record.astro` mounts this twice rather
+// than once, and each mount reads what it needs.
+//
+// **Two mounts means two reads of `/patients/{id}`, and that is the price
+// paid deliberately.** The alternative was one mount emitting both halves,
+// which cannot work: the areas are not adjacent on the page — the identity
+// half is followed by the Details assessment section, and the appointments
+// half by the booking form — and an Astro island renders one contiguous
+// subtree. Sharing the fetch across two islands is not available either;
+// each is its own React root, so no context spans them. Two `GET`s of one
+// item is the cheap end of the trade, and it is the same shape every other
+// island on these pages already has.
+//
+// `half: 'both'` is the default and keeps the old single-mount behaviour,
+// headings included, for any caller that wants the whole panel on a page
+// of its own.
 import { defaultLocale, formatDateTime } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { useCallback, useEffect, useState } from 'react';
@@ -98,9 +121,18 @@ export interface PatientRecordPanelStrings {
   readonly backToDashboard: string;
 }
 
+/**
+ * Which half of the panel a mount renders — see this file's header.
+ * `'both'` keeps the original single-mount rendering, its own `<h2>`s
+ * included.
+ */
+export type PatientRecordHalf = 'details' | 'appointments' | 'both';
+
 export interface PatientRecordPanelProps {
   readonly strings: PatientRecordPanelStrings;
   readonly dashboardHref: string;
+  /** Default `'both'`. When it is not `'both'`, the page owns the heading and this renders none. */
+  readonly half?: PatientRecordHalf;
   /**
    * 2026-09-03: for the appointment times in the table below — the one
    * thing on this page that is not a pre-resolved string. This screen and
@@ -196,6 +228,7 @@ function defaultFetchAppointments(accessToken: string, patientId: string): Promi
 export function PatientRecordPanel({
   strings,
   dashboardHref,
+  half = 'both',
   locale = defaultLocale,
   patientId,
   client = defaultClient,
@@ -262,6 +295,22 @@ export function PatientRecordPanel({
    */
   const [mayJoin, setMayJoin] = useState(true);
   /**
+   * 2026-09-07: whether to offer the identity form as a form at all.
+   *
+   * A third separate answer, for a third separate cell. `Patient profile`
+   * grants `update` to both clinician columns, `Helpdesk` and `Principal`,
+   * and a **visitor holds `R` alone** — and this page began admitting
+   * visitors on 2026-09-07 (see `patient-record.astro`'s own header on why
+   * that was a fix). Rendering them a name field and a save button whose
+   * every press returns 403 is exactly the mistake the approval buttons
+   * made before `mayDecide` existed.
+   *
+   * Same posture as the two above: starts `true`, narrows only on a *known*
+   * role that cannot write, so an unreadable token shows the form and lets
+   * the server answer.
+   */
+  const [mayEditDetails, setMayEditDetails] = useState(true);
+  /**
    * Ticks; the identity of what it is seeded from does not — see
    * `useNow.ts`, and the unbounded fetch loop that shape exists to
    * prevent. The join column has three phases and they change while the
@@ -276,6 +325,7 @@ export function PatientRecordPanel({
       if (!cancelled && role !== undefined) {
         setMayDecide(role === 'principal-clinician');
         setMayJoin(role === 'principal-clinician' || role === 'sub-clinician');
+        setMayEditDetails(role !== 'visitor');
       }
     });
     return () => {
@@ -467,116 +517,142 @@ export function PatientRecordPanel({
   }
 
   const isSaving = state === 'saving';
+  const showDetails = half === 'details' || half === 'both';
+  const showAppointments = half === 'appointments' || half === 'both';
+  /**
+   * Once per page, not once per mount. It belongs with the identity half
+   * because that is the one at the top of the record; a page mounting only
+   * the appointments half gets no link and is expected to provide its own.
+   */
+  const showBackLink = showDetails;
 
   return (
     <>
-      <p>
-        <a href={dashboardHref}>{strings.backToDashboard}</a>
-      </p>
+      {showBackLink && (
+        <p>
+          <a href={dashboardHref}>{strings.backToDashboard}</a>
+        </p>
+      )}
 
-      <section>
-        <h2>{strings.detailsHeading}</h2>
-        <dl>
-          {/* Read-only facts, above the form: the email is bound to the
+      {showDetails && (
+        <section>
+          {half === 'both' && <h2>{strings.detailsHeading}</h2>}
+          <dl>
+            {/* Read-only facts, above the form: the email is bound to the
               Cognito identity and cannot be edited here, and status and
               assignment are the principal's to change from the dashboard,
               not anyone's to type. */}
-          <dt>{strings.emailLabel}</dt>
-          <dd>{record.personal.email}</dd>
-          <dt>{strings.statusLabel}</dt>
-          <dd>{statusLabel(record.account_status)}</dd>
-          <dt>{strings.assignedClinicianLabel}</dt>
-          <dd>{record.assigned_clinician_id ?? strings.unassignedLabel}</dd>
-        </dl>
-        <form onSubmit={(event) => void handleSave(event)}>
-          <p>
-            <label htmlFor="record-full-name">{strings.fullNameLabel}</label>
-            <input
-              id="record-full-name"
-              type="text"
-              required
-              disabled={isSaving}
-              value={fullName}
-              onChange={(event) => {
-                setFullName(event.target.value);
-                setState((current) => (current === 'saved' ? 'ready' : current));
-              }}
-            />
-          </p>
-          <p>
-            <label htmlFor="record-phone">{strings.phoneLabel}</label>
-            <input
-              id="record-phone"
-              type="tel"
-              disabled={isSaving}
-              value={phone}
-              onChange={(event) => {
-                setPhone(event.target.value);
-                setState((current) => (current === 'saved' ? 'ready' : current));
-              }}
-            />
-          </p>
-          <p>
-            <label htmlFor="record-marketing">
-              <input
-                id="record-marketing"
-                type="checkbox"
-                disabled={isSaving}
-                checked={marketingOptIn}
-                onChange={(event) => {
-                  setMarketingOptIn(event.target.checked);
-                  setState((current) => (current === 'saved' ? 'ready' : current));
-                }}
-              />{' '}
-              {strings.marketingOptInLabel}
-            </label>
-          </p>
-          {state === 'error' && <p role="alert">{strings.errorLabel}</p>}
-          {state === 'saved' && <p role="status">{strings.savedMessage}</p>}
-          <button type="submit" disabled={isSaving || fullName.trim().length === 0}>
-            {isSaving ? strings.saving : strings.saveButton}
-          </button>
-        </form>
-      </section>
+            <dt>{strings.emailLabel}</dt>
+            <dd>{record.personal.email}</dd>
+            <dt>{strings.statusLabel}</dt>
+            <dd>{statusLabel(record.account_status)}</dd>
+            <dt>{strings.assignedClinicianLabel}</dt>
+            <dd>{record.assigned_clinician_id ?? strings.unassignedLabel}</dd>
+            {/* A reader who cannot write gets the same three fields as
+                facts rather than as an unusable form. Same list, same
+                labels, same order — only the controls are gone. */}
+            {!mayEditDetails && (
+              <>
+                <dt>{strings.fullNameLabel}</dt>
+                <dd>{record.personal.fullName}</dd>
+                <dt>{strings.phoneLabel}</dt>
+                <dd>{record.personal.phone ?? ''}</dd>
+              </>
+            )}
+          </dl>
+          {mayEditDetails && (
+            <form onSubmit={(event) => void handleSave(event)}>
+              <p>
+                <label htmlFor="record-full-name">{strings.fullNameLabel}</label>
+                <input
+                  id="record-full-name"
+                  type="text"
+                  required
+                  disabled={isSaving}
+                  value={fullName}
+                  onChange={(event) => {
+                    setFullName(event.target.value);
+                    setState((current) => (current === 'saved' ? 'ready' : current));
+                  }}
+                />
+              </p>
+              <p>
+                <label htmlFor="record-phone">{strings.phoneLabel}</label>
+                <input
+                  id="record-phone"
+                  type="tel"
+                  disabled={isSaving}
+                  value={phone}
+                  onChange={(event) => {
+                    setPhone(event.target.value);
+                    setState((current) => (current === 'saved' ? 'ready' : current));
+                  }}
+                />
+              </p>
+              <p>
+                <label htmlFor="record-marketing">
+                  <input
+                    id="record-marketing"
+                    type="checkbox"
+                    disabled={isSaving}
+                    checked={marketingOptIn}
+                    onChange={(event) => {
+                      setMarketingOptIn(event.target.checked);
+                      setState((current) => (current === 'saved' ? 'ready' : current));
+                    }}
+                  />{' '}
+                  {strings.marketingOptInLabel}
+                </label>
+              </p>
+              {state === 'error' && <p role="alert">{strings.errorLabel}</p>}
+              {state === 'saved' && <p role="status">{strings.savedMessage}</p>}
+              <button type="submit" disabled={isSaving || fullName.trim().length === 0}>
+                {isSaving ? strings.saving : strings.saveButton}
+              </button>
+            </form>
+          )}
+        </section>
+      )}
 
-      <section>
-        <h2>{strings.appointmentsHeading}</h2>
-        {appointmentsFailed && <p role="alert">{strings.appointmentsError}</p>}
-        {decideFailed && <p role="alert">{strings.decideFailedLabel}</p>}
-        {!appointmentsFailed && appointments && appointments.length === 0 && (
-          <p>{strings.appointmentsEmpty}</p>
-        )}
-        {!appointmentsFailed && appointments && appointments.length > 0 && (
-          <table>
-            <caption>{strings.appointmentsHeading}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{strings.whenColumnLabel}</th>
-                <th scope="col">{strings.durationColumnLabel}</th>
-                <th scope="col">{strings.appointmentStatusColumnLabel}</th>
-                <th scope="col">{strings.decisionColumnLabel}</th>
-                <th scope="col">{strings.joinCallLabel}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {appointments.map((appointment) => (
-                <tr key={appointment.scheduledAt}>
-                  {/* The stored value is UTC ISO-8601; `<time>` carries it
+      {showAppointments && (
+        <section>
+          {half === 'both' && <h2>{strings.appointmentsHeading}</h2>}
+          {appointmentsFailed && <p role="alert">{strings.appointmentsError}</p>}
+          {decideFailed && <p role="alert">{strings.decideFailedLabel}</p>}
+          {!appointmentsFailed && appointments && appointments.length === 0 && (
+            <p>{strings.appointmentsEmpty}</p>
+          )}
+          {!appointmentsFailed && appointments && appointments.length > 0 && (
+            <table>
+              <caption>{strings.appointmentsHeading}</caption>
+              <thead>
+                <tr>
+                  <th scope="col">{strings.whenColumnLabel}</th>
+                  <th scope="col">{strings.durationColumnLabel}</th>
+                  <th scope="col">{strings.appointmentStatusColumnLabel}</th>
+                  <th scope="col">{strings.decisionColumnLabel}</th>
+                  <th scope="col">{strings.joinCallLabel}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {appointments.map((appointment) => (
+                  <tr key={appointment.scheduledAt}>
+                    {/* The stored value is UTC ISO-8601; `<time>` carries it
                       machine-readably while the text renders in the site's
                       own locale, in whatever timezone the reader is
                       actually in. `formatDateTime`, never
                       `toLocaleString()` — see
                       `packages/i18n/src/datetime.ts`. */}
-                  <td>
-                    <time dateTime={appointment.scheduledAt}>
-                      {formatDateTime(appointment.scheduledAt, locale)}
-                    </time>
-                  </td>
-                  <td>
-                    {appointment.durationMinutes} {strings.minutesSuffix}
-                  </td>
-                  <td>{appointment.appointment_status}</td>
-                  {/* 2026-09-02: the approval queue, on the page where the
+                    <td>
+                      <time dateTime={appointment.scheduledAt}>
+                        {formatDateTime(appointment.scheduledAt, locale)}
+                      </time>
+                    </td>
+                    <td>
+                      {appointment.durationMinutes} {strings.minutesSuffix}
+                    </td>
+                    <td>{appointment.appointment_status}</td>
+                    {/* 2026-09-02: the approval queue, on the page where the
                       booking was made and the page the dashboard clicks
                       through to — which is what the owner meant by "visible
                       to patient dashboard to be approved". Every booking now
@@ -588,27 +664,27 @@ export function PatientRecordPanel({
                       Principal-only and the API refuses everyone else, so a
                       clinician looking at their own pending request gets a
                       legible refusal instead of a row with no explanation. */}
-                  <td>
-                    {mayDecide && appointment.appointment_status === 'pending-approval' ? (
-                      <>
-                        <button
-                          type="button"
-                          disabled={deciding === appointment.scheduledAt}
-                          onClick={() => void decide(appointment.scheduledAt, 'approve')}
-                        >
-                          {strings.approveButton}
-                        </button>{' '}
-                        <button
-                          type="button"
-                          disabled={deciding === appointment.scheduledAt}
-                          onClick={() => void decide(appointment.scheduledAt, 'decline')}
-                        >
-                          {strings.declineButton}
-                        </button>
-                      </>
-                    ) : null}
-                  </td>
-                  {/* 2026-09-03: the join column, and the reason this
+                    <td>
+                      {mayDecide && appointment.appointment_status === 'pending-approval' ? (
+                        <>
+                          <button
+                            type="button"
+                            disabled={deciding === appointment.scheduledAt}
+                            onClick={() => void decide(appointment.scheduledAt, 'approve')}
+                          >
+                            {strings.approveButton}
+                          </button>{' '}
+                          <button
+                            type="button"
+                            disabled={deciding === appointment.scheduledAt}
+                            onClick={() => void decide(appointment.scheduledAt, 'decline')}
+                          >
+                            {strings.declineButton}
+                          </button>
+                        </>
+                      ) : null}
+                    </td>
+                    {/* 2026-09-03: the join column, and the reason this
                       table has one at all. The clinician who reported
                       that no join button appeared was on this page — the
                       only screen in the app that lists a *named* patient's
@@ -623,22 +699,23 @@ export function PatientRecordPanel({
                       `scheduled` row — a pending booking has nothing to
                       join and `ws-join.ts` would refuse it, and a
                       cancelled or already-marked one is not happening. */}
-                  <td>
-                    {mayJoin && appointment.appointment_status === 'scheduled' ? (
-                      <JoinCallCell
-                        appointment={{ ...appointment, patientId: id }}
-                        locale={locale}
-                        now={currentTime}
-                        joinCallLabel={strings.joinCallLabel}
-                      />
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+                    <td>
+                      {mayJoin && appointment.appointment_status === 'scheduled' ? (
+                        <JoinCallCell
+                          appointment={{ ...appointment, patientId: id }}
+                          locale={locale}
+                          now={currentTime}
+                          joinCallLabel={strings.joinCallLabel}
+                        />
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
     </>
   );
 }

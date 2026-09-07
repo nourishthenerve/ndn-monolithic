@@ -56,6 +56,33 @@
 // What is left in the staff shell is genuinely a list of *other* places —
 // the caseload, patient administration, clinician administration, authoring
 // — none of which is a panel this page could reasonably absorb.
+//
+// ## 2026-09-07: the patient half is renamed to the record's own four areas
+//
+// The owner: *"for patient it will be Patient Details, Patient Assessment
+// Form, Patient Prescription, Patient Appointments, Patient Account and
+// Patient Testimonial."*
+//
+// Four of those six are the areas of the patient record itself, and they
+// are the same four `patient-record.astro` now shows staff — so a patient
+// and their clinician are looking at areas with the same names, which they
+// were not before ("Personal details" here, "Details" there, one unnamed
+// run of form sections under both). The remaining two are this page's own
+// and stay exactly as they were, renamed: "Account" is the password form,
+// "Testimonial" the testimonial panel.
+//
+// **"Patient Assessment Form" is not among the five a patient sees**, and
+// that is the owner's own rule from the same message: *"Patient Assessment
+// will only be visible to clinician and principal clinician."* It is
+// `private{}`, denied to a patient in every cell since 2026-09-01. No
+// placement for it is mounted here — a heading over a section the server
+// answers with nothing would announce the existence of notes written about
+// them, which is the one thing R-09 is careful never to do.
+//
+// **Section order is the owner's**, and it moves the calendar down from the
+// top of the page for the first time since 2026-09-06. Details first, then
+// Prescription, then Appointments; the calendar is inside the last of those
+// rather than above all of them.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link } from '@ndn/ui';
@@ -87,6 +114,103 @@ const heading = t('account.heading', undefined, locale);
  * flat run of `<h2>`s. See `account/heading-level.ts`.
  */
 const PANEL_HEADING_LEVEL = 3;
+
+/**
+ * The calendar is mounted twice on this page and exactly one of the two
+ * ever renders — the role gates around them are disjoint. Staff get it at
+ * the top of the dashboard, where 2026-09-06 put it; a patient gets it
+ * inside their "Patient Appointments" section, where 2026-09-07's ordering
+ * puts it. One string bag, so the two placements cannot drift into
+ * describing the same control differently.
+ */
+const calendarStrings = {
+  heading: t('accountCalendar.heading', undefined, locale),
+  loadingLabel: t('accountCalendar.loading', undefined, locale),
+  forbiddenLabel: t('accountCalendar.forbidden', undefined, locale),
+  errorLabel: t('accountCalendar.error', undefined, locale),
+  previousWeeksLabel: t('accountCalendar.previousWeeks', undefined, locale),
+  nextWeeksLabel: t('accountCalendar.nextWeeks', undefined, locale),
+  todayLabel: t('accountCalendar.today', undefined, locale),
+  gridCaption: t('accountCalendar.gridCaption', undefined, locale),
+  todayMarker: t('accountCalendar.todayMarker', undefined, locale),
+  noAppointmentsOnDay: t('accountCalendar.noAppointmentsOnDay', undefined, locale),
+  emptyWindow: t('accountCalendar.emptyWindow', undefined, locale),
+  durationLabel: t('accountCalendar.duration', undefined, locale),
+  minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
+  statusLabel: t('accountCalendar.status', undefined, locale),
+  patientLabel: t('accountCalendar.patient', undefined, locale),
+  clinicianLabel: t('accountCalendar.clinician', undefined, locale),
+  joinCallLabel: t('calendar.joinCall', undefined, locale),
+  // The four decisions inherited from the deleted `account/calendar`
+  // page, reusing its own catalogue entries rather than new copy.
+  approveLabel: t('clinicianCalendar.approve', undefined, locale),
+  declineLabel: t('clinicianCalendar.decline', undefined, locale),
+  completeLabel: t('clinicianCalendar.complete', undefined, locale),
+  noShowLabel: t('clinicianCalendar.noShow', undefined, locale),
+  decidingLabel: t('clinicianCalendar.deciding', undefined, locale),
+  decideFailedLabel: t('clinicianCalendar.decideFailed', undefined, locale),
+  statusLabels: {
+    // Keyed by the API's own `appointment_status` values
+    // (`packages/shared-types/src/appointment.ts`), so an
+    // unrecognised one falls through to the raw value rather than
+    // rendering blank.
+    scheduled: t('accountCalendar.status.scheduled', undefined, locale),
+    'pending-approval': t('accountCalendar.status.pendingApproval', undefined, locale),
+    completed: t('accountCalendar.status.completed', undefined, locale),
+    cancelled: t('accountCalendar.status.cancelled', undefined, locale),
+    'no-show': t('accountCalendar.status.noShow', undefined, locale),
+  },
+};
+
+/**
+ * Three placements of the assessment form on a patient's dashboard, one per
+ * area of the record they may read. Built once for the same reason the
+ * calendar's is — and note there is no fourth: `private{}` has no placement
+ * here at all. See this page's header.
+ */
+const assessmentStrings = {
+  heading: t('assessment.heading', undefined, locale),
+  loadingLabel: t('assessment.loading', undefined, locale),
+  forbiddenLabel: t('assessment.forbidden', undefined, locale),
+  notFoundLabel: t('assessment.notFound', undefined, locale),
+  errorLabel: t('assessment.error', undefined, locale),
+  missingIdLabel: t('assessment.missingId', undefined, locale),
+  saveLabel: t('assessment.save', undefined, locale),
+  savingLabel: t('assessment.saving', undefined, locale),
+  savedLabel: t('assessment.saved', undefined, locale),
+  conflictLabel: t('assessment.conflict', undefined, locale),
+  saveForbiddenLabel: t('assessment.saveForbidden', undefined, locale),
+  readOnlyLabel: t('assessment.readOnly', undefined, locale),
+  attachmentsHeading: t('assessment.attachmentsHeading', undefined, locale),
+  attachmentsEmpty: t('assessment.attachmentsEmpty', undefined, locale),
+  addFileLabel: t('assessment.addFile', undefined, locale),
+  uploadingLabel: t('assessment.uploading', undefined, locale),
+  uploadFailedLabel: t('assessment.uploadFailed', undefined, locale),
+  downloadLabel: t('assessment.download', undefined, locale),
+  noNextAppointmentLabel: t('assessment.noNextAppointment', undefined, locale),
+  versionLabel: t('assessment.version', undefined, locale),
+};
+
+/** The password form's copy — the same panel serves the patient's "Patient Account" section and the staff "Account" one. */
+const changePasswordStrings = {
+  heading: t('changePassword.heading', undefined, locale),
+  intro: t('changePassword.intro', undefined, locale),
+  currentPasswordLabel: t('changePassword.currentPasswordLabel', undefined, locale),
+  newPasswordLabel: t('changePassword.newPasswordLabel', undefined, locale),
+  confirmPasswordLabel: t('changePassword.confirmPasswordLabel', undefined, locale),
+  submitButton: t('changePassword.submitButton', undefined, locale),
+  submitting: t('changePassword.submitting', undefined, locale),
+  successMessage: t('changePassword.successMessage', undefined, locale),
+  mismatchError: t('changePassword.mismatchError', undefined, locale),
+  forbidden: t('changePassword.forbidden', undefined, locale),
+  incorrectCurrentPasswordError: t(
+    'changePassword.incorrectCurrentPasswordError',
+    undefined,
+    locale,
+  ),
+  policyViolationError: t('changePassword.policyViolationError', undefined, locale),
+  error: t('changePassword.error', undefined, locale),
+};
 ---
 
 <BaseLayout
@@ -106,7 +230,7 @@ const PANEL_HEADING_LEVEL = 3;
       </p>
     </Fragment>
 
-    {/* ## 1. My calendar
+    {/* ## Staff: the calendar, at the top of the dashboard.
         2026-09-06: *"At the very top I want to show calender … where the
         patient/clinician/principal clinician can scroll left and right to
         see all past and upcoming appointments. There is no concept of
@@ -122,6 +246,12 @@ const PANEL_HEADING_LEVEL = 3;
         outside now, which is the half of the original instruction nobody
         has questioned.
 
+        **2026-09-07: this placement is staff-only, and a patient's own
+        calendar moved down** into their "Patient Appointments" section — the
+        owner's new ordering puts Details and Prescription above it. Two
+        placements of one component, and the role gates are disjoint, so
+        exactly one of them ever renders in a session.
+
         The component refuses a visitor as well (`calendarSourcesFor`), so it
         is safe wherever it is mounted — but the gate here means a visitor
         session never downloads the island at all. No `forbidden` slot: a
@@ -129,50 +259,9 @@ const PANEL_HEADING_LEVEL = 3;
         of its absence. The section heading is the component's own. */}
     <RequireAuth
       client:only="react"
-      allowRoles={['patient', 'principal-clinician', 'sub-clinician', 'helpdesk']}
+      allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk']}
     >
-      <AppointmentCalendar
-        client:only="react"
-        locale={locale}
-        strings={{
-          heading: t('accountCalendar.heading', undefined, locale),
-          loadingLabel: t('accountCalendar.loading', undefined, locale),
-          forbiddenLabel: t('accountCalendar.forbidden', undefined, locale),
-          errorLabel: t('accountCalendar.error', undefined, locale),
-          previousWeeksLabel: t('accountCalendar.previousWeeks', undefined, locale),
-          nextWeeksLabel: t('accountCalendar.nextWeeks', undefined, locale),
-          todayLabel: t('accountCalendar.today', undefined, locale),
-          gridCaption: t('accountCalendar.gridCaption', undefined, locale),
-          todayMarker: t('accountCalendar.todayMarker', undefined, locale),
-          noAppointmentsOnDay: t('accountCalendar.noAppointmentsOnDay', undefined, locale),
-          emptyWindow: t('accountCalendar.emptyWindow', undefined, locale),
-          durationLabel: t('accountCalendar.duration', undefined, locale),
-          minutesSuffix: t('patientRecord.minutesSuffix', undefined, locale),
-          statusLabel: t('accountCalendar.status', undefined, locale),
-          patientLabel: t('accountCalendar.patient', undefined, locale),
-          clinicianLabel: t('accountCalendar.clinician', undefined, locale),
-          joinCallLabel: t('calendar.joinCall', undefined, locale),
-          // The four decisions inherited from the deleted `account/calendar`
-          // page, reusing its own catalogue entries rather than new copy.
-          approveLabel: t('clinicianCalendar.approve', undefined, locale),
-          declineLabel: t('clinicianCalendar.decline', undefined, locale),
-          completeLabel: t('clinicianCalendar.complete', undefined, locale),
-          noShowLabel: t('clinicianCalendar.noShow', undefined, locale),
-          decidingLabel: t('clinicianCalendar.deciding', undefined, locale),
-          decideFailedLabel: t('clinicianCalendar.decideFailed', undefined, locale),
-          statusLabels: {
-            // Keyed by the API's own `appointment_status` values
-            // (`packages/shared-types/src/appointment.ts`), so an
-            // unrecognised one falls through to the raw value rather than
-            // rendering blank.
-            scheduled: t('accountCalendar.status.scheduled', undefined, locale),
-            'pending-approval': t('accountCalendar.status.pendingApproval', undefined, locale),
-            completed: t('accountCalendar.status.completed', undefined, locale),
-            cancelled: t('accountCalendar.status.cancelled', undefined, locale),
-            'no-show': t('accountCalendar.status.noShow', undefined, locale),
-          },
-        }}
-      />
+      <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
     </RequireAuth>
 
     {/* ## 1a. Patient dashboard — the caseload table itself, not a link to it.
@@ -255,27 +344,24 @@ const PANEL_HEADING_LEVEL = 3;
       </section>
     </RequireAuth>
 
-    {/* ## 2. Personal details — `account/patient`'s content, less three
-        panels the owner has since cut.
-
-        *"remove the next appointment panel too, its redundant"* —
-        `NextAppointmentPanel` showed one appointment, the next one, directly
-        beneath a calendar that draws all of them and a day panel that
-        details them. It was the third rendering of the same data on one
-        screen.
-
-        *"remove care plan and diagnosis plan as I dont know when I define
-        these sections"* — both `ClinicalRecordTimeline` panels are gone.
-        They are not deleted, only unmounted here: `account/patient` still
-        renders them, the API and its history are untouched, and putting
-        them back is a matter of restoring these props once the clinic knows
-        what belongs in them.
-
-        What remains is the profile form and the assessment form. */}
+    {/* The patient's five sections, in the owner's own order. Everything
+        from here to the staff Account block is gated to `patient`, and the
+        staff blocks above and below are gated to the other roles, so no
+        session ever renders both. */}
     <RequireAuth client:only="react" allowRoles={['patient']}>
-      <section aria-labelledby="personal-details-heading">
-        <Heading level={2} id="personal-details-heading">
-          {t('account.personalDetailsHeading', undefined, locale)}
+      {/* ## 1. Patient Details — the identity form, then the record's own
+          `general{}` section. The same area name `patient-record.astro`
+          gives staff, and the same two stores behind it.
+
+          Three panels the owner cut on 2026-09-06 are still gone:
+          `NextAppointmentPanel` (*"remove the next appointment panel too,
+          its redundant"*) and both `ClinicalRecordTimeline`s (*"remove care
+          plan and diagnosis plan as I dont know when I define these
+          sections"*). They are unmounted, not deleted — the API and its
+          history are untouched. */}
+      <section aria-labelledby="patient-details-heading">
+        <Heading level={2} id="patient-details-heading">
+          {t('account.section.patientDetails', undefined, locale)}
         </Heading>
         <PatientProfile
           client:only="react"
@@ -293,103 +379,113 @@ const PANEL_HEADING_LEVEL = 3;
           }}
         />
         {/* Resolves to the signed-in patient's own form (`me`), so no `?id=`
-            is involved — they see general info (theirs to edit), the patient
-            section and the calendar (both read-only), never the
-            clinician's. */}
+            is involved. `general{}` is the one section they may edit — and
+            the `tag` field inside it is `staffOnly`, which the form greys
+            out rather than offering an input the save would refuse. */}
         <AssessmentForm
           client:only="react"
+          fieldSets={['general']}
+          showTitles={false}
           headingLevel={PANEL_HEADING_LEVEL}
-          strings={{
-            heading: t('assessment.heading', undefined, locale),
-            loadingLabel: t('assessment.loading', undefined, locale),
-            forbiddenLabel: t('assessment.forbidden', undefined, locale),
-            notFoundLabel: t('assessment.notFound', undefined, locale),
-            errorLabel: t('assessment.error', undefined, locale),
-            missingIdLabel: t('assessment.missingId', undefined, locale),
-            saveLabel: t('assessment.save', undefined, locale),
-            savingLabel: t('assessment.saving', undefined, locale),
-            savedLabel: t('assessment.saved', undefined, locale),
-            conflictLabel: t('assessment.conflict', undefined, locale),
-            saveForbiddenLabel: t('assessment.saveForbidden', undefined, locale),
-            readOnlyLabel: t('assessment.readOnly', undefined, locale),
-            attachmentsHeading: t('assessment.attachmentsHeading', undefined, locale),
-            attachmentsEmpty: t('assessment.attachmentsEmpty', undefined, locale),
-            addFileLabel: t('assessment.addFile', undefined, locale),
-            uploadingLabel: t('assessment.uploading', undefined, locale),
-            uploadFailedLabel: t('assessment.uploadFailed', undefined, locale),
-            downloadLabel: t('assessment.download', undefined, locale),
-            noNextAppointmentLabel: t('assessment.noNextAppointment', undefined, locale),
-            versionLabel: t('assessment.version', undefined, locale),
-          }}
+          strings={assessmentStrings}
         />
       </section>
 
-      {/* ## 3. Testimonial — `account/testimonial` inlined. The panel
-          renders its own `<h2>` ("Your testimonial"), so it is already this
-          section's heading and needs no wrapper. */}
-      <TestimonialPanel
-        client:only="react"
-        locale={locale}
-        strings={{
-          heading: t('accountTestimonial.panelHeading', undefined, locale),
-          intro: t('accountTestimonial.intro', undefined, locale),
-          loading: t('accountTestimonial.loading', undefined, locale),
-          forbidden: t('accountTestimonial.forbidden', undefined, locale),
-          unavailable: t('accountTestimonial.unavailable', undefined, locale),
-          error: t('accountTestimonial.error', undefined, locale),
-          quoteLabel: t('testimonials.form.quoteLabel', undefined, locale),
-          displayLabel: t('testimonials.form.attributionDisplayLabel', undefined, locale),
-          displayFull: t('testimonials.form.attributionDisplay.full', undefined, locale),
-          displayFirstNameOnly: t(
-            'testimonials.form.attributionDisplay.firstNameOnly',
-            undefined,
-            locale,
-          ),
-          displayAnonymous: t('testimonials.form.attributionDisplay.anonymous', undefined, locale),
-          nameLabel: t('testimonials.form.attributionNameLabel', undefined, locale),
-          nameRequired: t('accountTestimonial.nameRequired', undefined, locale),
-          consentNotice: t('accountTestimonial.consentNotice', undefined, locale),
-          publishButton: t('accountTestimonial.publish', undefined, locale),
-          updateButton: t('accountTestimonial.update', undefined, locale),
-          saving: t('accountTestimonial.saving', undefined, locale),
-          savedMessage: t('accountTestimonial.saved', undefined, locale),
-          withdrawButton: t('accountTestimonial.withdraw', undefined, locale),
-          withdrawnMessage: t('accountTestimonial.withdrawn', undefined, locale),
-          withdrawnNotice: t('accountTestimonial.withdrawnNotice', undefined, locale),
-          saveFailed: t('accountTestimonial.saveFailed', undefined, locale),
-        }}
-      />
+      {/* ## 2. Patient Prescription — read-only for a patient
+          (`prescription{}` grants them `R` and not `U`), which the form says
+          in as many words rather than by offering disabled inputs. */}
+      <section aria-labelledby="patient-prescription-heading">
+        <Heading level={2} id="patient-prescription-heading">
+          {t('account.section.patientPrescription', undefined, locale)}
+        </Heading>
+        <AssessmentForm
+          client:only="react"
+          fieldSets={['prescription']}
+          showTitles={false}
+          showVersion={false}
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={assessmentStrings}
+        />
+      </section>
 
-      {/* ## 4. Account — the password form from `account/change-password`.
-          Only the password form: that page also carries `OwnDetailsPanel`,
-          which the API serves to *staff* (`GET /clinicians/me`) and refuses
-          a patient, so inlining it here would render a permanent
-          "you do not have access" panel on a patient's own dashboard. */}
-      <section aria-labelledby="account-section-heading">
-        <Heading level={2} id="account-section-heading">
-          {t('account.accountSectionHeading', undefined, locale)}
+      {/* ## 3. Patient Appointments — the calendar the owner asked to keep
+          (*"Inside 'My Calender' we already have a nice looking calender"*),
+          now inside the area that names it, with the record's own
+          `calendar{}` figures below it. Both are read-only for a patient. */}
+      <section aria-labelledby="patient-appointments-heading">
+        <Heading level={2} id="patient-appointments-heading">
+          {t('account.section.patientAppointments', undefined, locale)}
+        </Heading>
+        <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
+        <AssessmentForm
+          client:only="react"
+          fieldSets={['calendar']}
+          showTitles={false}
+          showVersion={false}
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={assessmentStrings}
+        />
+      </section>
+
+      {/* ## 4. Patient Account — the password form from
+          `account/change-password`. Only the password form: that page also
+          carries `OwnDetailsPanel`, which the API serves to *staff* (`GET
+          /clinicians/me`) and refuses a patient, so inlining it here would
+          render a permanent "you do not have access" panel on a patient's
+          own dashboard. */}
+      <section aria-labelledby="patient-account-heading">
+        <Heading level={2} id="patient-account-heading">
+          {t('account.section.patientAccount', undefined, locale)}
         </Heading>
         <ChangePasswordPanel
           client:only="react"
           headingLevel={PANEL_HEADING_LEVEL}
+          strings={changePasswordStrings}
+        />
+      </section>
+
+      {/* ## 5. Patient Testimonial — `account/testimonial` inlined. The
+          panel renders its own heading ("Your testimonial"), so it sits one
+          level down inside this section like every other panel here. */}
+      <section aria-labelledby="patient-testimonial-heading">
+        <Heading level={2} id="patient-testimonial-heading">
+          {t('account.section.patientTestimonial', undefined, locale)}
+        </Heading>
+        <TestimonialPanel
+          client:only="react"
+          locale={locale}
+          headingLevel={PANEL_HEADING_LEVEL}
           strings={{
-            heading: t('changePassword.heading', undefined, locale),
-            intro: t('changePassword.intro', undefined, locale),
-            currentPasswordLabel: t('changePassword.currentPasswordLabel', undefined, locale),
-            newPasswordLabel: t('changePassword.newPasswordLabel', undefined, locale),
-            confirmPasswordLabel: t('changePassword.confirmPasswordLabel', undefined, locale),
-            submitButton: t('changePassword.submitButton', undefined, locale),
-            submitting: t('changePassword.submitting', undefined, locale),
-            successMessage: t('changePassword.successMessage', undefined, locale),
-            mismatchError: t('changePassword.mismatchError', undefined, locale),
-            forbidden: t('changePassword.forbidden', undefined, locale),
-            incorrectCurrentPasswordError: t(
-              'changePassword.incorrectCurrentPasswordError',
+            heading: t('accountTestimonial.panelHeading', undefined, locale),
+            intro: t('accountTestimonial.intro', undefined, locale),
+            loading: t('accountTestimonial.loading', undefined, locale),
+            forbidden: t('accountTestimonial.forbidden', undefined, locale),
+            unavailable: t('accountTestimonial.unavailable', undefined, locale),
+            error: t('accountTestimonial.error', undefined, locale),
+            quoteLabel: t('testimonials.form.quoteLabel', undefined, locale),
+            displayLabel: t('testimonials.form.attributionDisplayLabel', undefined, locale),
+            displayFull: t('testimonials.form.attributionDisplay.full', undefined, locale),
+            displayFirstNameOnly: t(
+              'testimonials.form.attributionDisplay.firstNameOnly',
               undefined,
               locale,
             ),
-            policyViolationError: t('changePassword.policyViolationError', undefined, locale),
-            error: t('changePassword.error', undefined, locale),
+            displayAnonymous: t(
+              'testimonials.form.attributionDisplay.anonymous',
+              undefined,
+              locale,
+            ),
+            nameLabel: t('testimonials.form.attributionNameLabel', undefined, locale),
+            nameRequired: t('accountTestimonial.nameRequired', undefined, locale),
+            consentNotice: t('accountTestimonial.consentNotice', undefined, locale),
+            publishButton: t('accountTestimonial.publish', undefined, locale),
+            updateButton: t('accountTestimonial.update', undefined, locale),
+            saving: t('accountTestimonial.saving', undefined, locale),
+            savedMessage: t('accountTestimonial.saved', undefined, locale),
+            withdrawButton: t('accountTestimonial.withdraw', undefined, locale),
+            withdrawnMessage: t('accountTestimonial.withdrawn', undefined, locale),
+            withdrawnNotice: t('accountTestimonial.withdrawnNotice', undefined, locale),
+            saveFailed: t('accountTestimonial.saveFailed', undefined, locale),
           }}
         />
       </section>
@@ -435,25 +531,7 @@ const PANEL_HEADING_LEVEL = 3;
         <ChangePasswordPanel
           client:only="react"
           headingLevel={PANEL_HEADING_LEVEL}
-          strings={{
-            heading: t('changePassword.heading', undefined, locale),
-            intro: t('changePassword.intro', undefined, locale),
-            currentPasswordLabel: t('changePassword.currentPasswordLabel', undefined, locale),
-            newPasswordLabel: t('changePassword.newPasswordLabel', undefined, locale),
-            confirmPasswordLabel: t('changePassword.confirmPasswordLabel', undefined, locale),
-            submitButton: t('changePassword.submitButton', undefined, locale),
-            submitting: t('changePassword.submitting', undefined, locale),
-            successMessage: t('changePassword.successMessage', undefined, locale),
-            mismatchError: t('changePassword.mismatchError', undefined, locale),
-            forbidden: t('changePassword.forbidden', undefined, locale),
-            incorrectCurrentPasswordError: t(
-              'changePassword.incorrectCurrentPasswordError',
-              undefined,
-              locale,
-            ),
-            policyViolationError: t('changePassword.policyViolationError', undefined, locale),
-            error: t('changePassword.error', undefined, locale),
-          }}
+          strings={changePasswordStrings}
         />
       </section>
     </RequireAuth>

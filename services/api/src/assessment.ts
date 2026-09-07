@@ -148,8 +148,8 @@ const patchBodySchema = z
     sections: z
       .object({
         general: sectionPatchSchema.optional(),
-        patient: sectionPatchSchema.optional(),
         private: sectionPatchSchema.optional(),
+        prescription: sectionPatchSchema.optional(),
         calendar: sectionPatchSchema.optional(),
       })
       .strict()

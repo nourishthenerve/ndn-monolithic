@@ -178,7 +178,7 @@ export class AssessmentRepository {
         responses: seed.tag ? { [ASSESSMENT_TAG_FIELD_ID]: seed.tag } : {},
         attachments: [],
       },
-      patient: emptyAssessmentSection(),
+      prescription: emptyAssessmentSection(),
       calendar: emptyAssessmentSection(),
     });
   }
@@ -212,7 +212,7 @@ export class AssessmentRepository {
       patientId: previous.patientId,
       assessmentId: previous.assessmentId,
       general: patchSection(previous.general, patch.general ?? {}, stamp),
-      patient: patchSection(previous.patient, patch.patient ?? {}, stamp),
+      prescription: patchSection(previous.prescription, patch.prescription ?? {}, stamp),
       calendar: patchSection(previous.calendar, patch.calendar ?? {}, stamp),
       // The one section that may be absent, and it stays absent unless it
       // already existed or this patch is the one creating it. Writing an

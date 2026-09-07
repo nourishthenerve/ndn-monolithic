@@ -36,8 +36,19 @@
 // which is also what keeps clinical notes out of a log line and out of an
 // error message. Those three functions are the reason a leak is a caught
 // bug rather than a discovered one; the section's *label* is the
-// template's business (assessment-template.ts), and the label there does
-// say "Specific to the clinician".
+// template's business (assessment-template.ts).
+//
+// ## 2026-09-07 — the four sections got the owner's own names
+//
+// "Patient Details", "Patient Assessment Form", "Patient Prescription",
+// "Patient Appointments". Three of the four are a retitle in
+// assessment-template.ts and nothing more; the fourth moved a property
+// name, `patient` → `prescription`, because this file's own rule is that a
+// section property is named exactly as `FieldSet` names it and "patient"
+// had stopped naming anything ("Patient Details" and "Patient
+// Appointments" are no less the patient's). `private` did **not** move,
+// for the reason immediately above — it is now titled "Patient Assessment
+// Form" and stored under the attribute R-09's runtime boundary keys off.
 import type { FieldSet } from './principal.js';
 import type { BaseRecord } from './types.js';
 
@@ -85,25 +96,32 @@ export interface Assessment extends BaseRecord {
   readonly patientId: string;
   /** Which named form this is a sitting of, e.g. `"intake-v1"` — distinct from `version`, which names *this* sitting among that form's own history. */
   readonly assessmentId: string;
-  /** Section 1. Readable by every role with a relationship to the patient; writable by the patient themselves, helpdesk and both clinician roles. */
+  /** Section 1, "Patient Details". Readable by every role with a relationship to the patient (and by a visitor, IIC-tagged only); writable by the patient themselves, helpdesk and both clinician roles. */
   readonly general: AssessmentSection;
-  /** Section 2, "specific to the patient". The patient reads it and does not write it; helpdesk and both clinician roles write it. */
-  readonly patient: AssessmentSection;
-  /** Section 4, the calendar. Every role reads it; only a clinician writes it. Its appointment figures are derived on read and never stored — see `DERIVED_CALENDAR_FIELDS`. */
+  /** Section 3, "Patient Prescription". The patient reads it and does not write it; helpdesk and both clinician roles write it. Was `patient` until 2026-09-07 — see principal.ts's `FieldSet`. */
+  readonly prescription: AssessmentSection;
+  /** Section 4, "Patient Appointments". Every role reads it; only a clinician writes it. Its appointment figures are derived on read and never stored — see `DERIVED_CALENDAR_FIELDS`. */
   readonly calendar: AssessmentSection;
   /**
-   * Section 3, "specific to the clinician". Present only on a version a
-   * clinician actually put something in — absent, not empty, otherwise
-   * (R-09). Named `private` for the reason this file's header gives.
+   * Section 2, "Patient Assessment Form" — the clinician-only one. Present
+   * only on a version a clinician actually put something in — absent, not
+   * empty, otherwise (R-09). Named `private` for the reason this file's
+   * header gives.
    */
   readonly private?: AssessmentSection;
 }
 
-/** The four section properties of an `Assessment`, in the order the form presents them. Every one is a `FieldSet` member and vice versa — asserted in `index.test.ts`. */
+/**
+ * The four section properties of an `Assessment`, in the order the form
+ * presents them — the owner's own order, 2026-09-07: Patient Details,
+ * Patient Assessment Form, Patient Prescription, Patient Appointments.
+ * Every one is a `FieldSet` member and vice versa — asserted in
+ * `index.test.ts`.
+ */
 export const ASSESSMENT_SECTION_ORDER: readonly FieldSet[] = [
   'general',
-  'patient',
   'private',
+  'prescription',
   'calendar',
 ];
 

@@ -694,7 +694,7 @@ describe('POST /patients — the assessment form', () => {
 
     const form = await assessments.getVersion(created.item.id, DEFAULT_ASSESSMENT_ID, 1);
     expect(form?.general.responses.tag).toBe('IIC');
-    expect(form?.patient).toEqual({ responses: {}, attachments: [] });
+    expect(form?.prescription).toEqual({ responses: {}, attachments: [] });
     // R-09: no clinician section until a clinician writes one.
     expect(form?.private).toBeUndefined();
   });

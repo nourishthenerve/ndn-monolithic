@@ -8,7 +8,7 @@
 | Clinician | `CLI#<id>` / `PROFILE` | `role: principal\|sub`, `active` |
 | Assignment request | `PAT#<id>` / `ASSIGNREQ#<ts>` | `pending\|approved\|declined` |
 | Diagnosis / Care plan | `PAT#<id>` / `DIAG#<v>`, `PLAN#<v>` | **Versioned, append-only** |
-| Assessment form | `PAT#<id>` / `ASSESS#<id>#v<n>` | Four sections as four separate attributes — `general{}`, `patient{}`, `private{}`, `calendar{}` |
+| Assessment form | `PAT#<id>` / `ASSESS#<id>#v<n>` | Four sections as four separate attributes — `general{}`, `private{}`, `prescription{}`, `calendar{}` |
 | Appointment | `PAT#<id>` / `APPT#<iso-utc>` | GSI1 = clinician calendar; `pending-approval` until the principal approves |
 | Patient notification | `PAT#<id>` / `NOTIF#<ts>#<id>` | In-app dashboard feed — a kind and a time, never prose |
 | Content item | `CONTENT#<id>` / `META` | Blog/audio/video/text/image, per-language |
@@ -29,8 +29,8 @@ GSIs: **GSI1** clinician→patients & calendar · **GSI2** keyword→content (FR
 | Patient assignment | — | — | — | — | — | — | C R U |
 | Diagnosis / care plan | **R** | — | C R U | — | **—** | **—** | C R U |
 | Assessment — `general{}` | **R U** | — | C R U | — | **C R U** | **R (IIC-tagged only)** | C R U |
-| Assessment — `patient{}` | R | — | C R U | — | **C R U** | **—** | C R U |
 | **Assessment — `private{}`** | **—** | **—** | C R U | **—** | **—** | **—** | C R U |
+| Assessment — `prescription{}` | R | — | C R U | — | **C R U** | **—** | C R U |
 | Assessment — `calendar{}` | R | — | C R U | — | **R** | **R (IIC-tagged, two figures only)** | C R U |
 | Appointments | R J | — | C R U J | — | **R** | **R (count only)** | C R U J |
 | **Appointment approval** | — | — | — | — | — | — | **U** |
@@ -113,7 +113,7 @@ Cell by cell, and each one is the owner's sentence rather than an inference:
 
 * **`general{}` — `Patient (own)`: `R U`.** The first write permission a patient has ever held on a clinical entity in this table, and it is exactly the one asked for: "the patient will be able to edit his general info only". Helpdesk gets `C R U` ("the helpdesk can only edit … as well as general section"), both clinician columns get `C R U` ("the clinician/principal clinican can edit all the sections").
 * **`general{}` — `Visitor`: `R`, IIC-tagged only.** *"it will only be able to see the general info contant of only those patients that have been tagged IIC."* This is the second place a visitor's reach is narrowed by *data* rather than by a cell, and it is narrowed the same way the first one is: `can()` answers "may a visitor read a general section at all", and the handler skips every patient whose `tag` is not `IIC`. The tag check is in `assessment.ts` as well as `caseload-repository.ts` because they are two different reads — a visitor who could only be stopped at the list would still reach a record by guessing an id.
-* **`patient{}` — `Patient (own)`: `R`, not `R U`.** "Specific to the patient" is written *about* the patient by staff, and the owner's edit permission for a patient is general info "only". They read it, because a section named for them that they cannot see would be a strange thing to hold, and nothing in the request withholds it.
+* **`prescription{}` (then `patient{}`) — `Patient (own)`: `R`, not `R U`.** "Specific to the patient" is written *about* the patient by staff, and the owner's edit permission for a patient is general info "only". They read it, because a section named for them that they cannot see would be a strange thing to hold, and nothing in the request withholds it.
 * **`private{}` — unchanged, in every cell.** Both clinician columns write it, everybody else is denied outright, including read. R-09's own register entry ("a patient reaches no private assessment field, in any relationship") is asserted against this row exactly as it was.
 * **`calendar{}` — `R` for patient, helpdesk and visitor; `C R U` for both clinician columns.** *"It will be edited by the clinician/principal clinician and helpdesk/visitor/patient will only be able to read it."* Read literally, and the visitor's read is IIC-gated by the same handler check as `general{}`'s — **and narrowed further to two figures**, see below.
 
@@ -169,3 +169,17 @@ The two are kept apart in the data as well as in the table. The picks live in **
 **One consequence to state plainly, because it is a change in default.** Once the principal saves a selection, a published testimonial that is in neither list appears nowhere public. Before this row existed every published testimonial was on the testimonials page. A patient still controls whether their words are published at all and can withdraw them at any time; what they no longer control is whether the practice puts them on the site. Until the first selection is saved the site behaves exactly as it did — every published testimonial, newest first — so shipping this does not silently empty the page.
 
 **The principal reads testimonial ids to do this, and that is not a privacy regression.** An id is `sha256(authorPatientId)`, and the public read still projects it away. The curation endpoints are principal-only, and the practice already knows who wrote each testimonial — the record carries `authorPatientId`, and the author is a patient in its own caseload. `attribution: 'anonymous'` is anonymity *from the public reader*, never from the clinic. Ids stay out of logs here as everywhere else: they travel in request bodies, which are not logged.
+
+## 2026-09-07 — the four sections get the owner's own names, and a page structure to match
+
+The owner, specifying the patient record as a whole: *"I want the following sections for a patient - 'Patient Details', 'Patient Assessment Form', 'Patient Prescription', and 'Patient Appointments'. Patient Details will be visible to the patient, clinician (for respective patient), principal clinician, help desk and visitor (if they have been tagged to that tag), Patient Assessment will only be visible to clinician and principal clinician, Patient Prescription will be visible to only patient, clinician, principal clinician and help desk, and Patient Appointments (which is currently in calender format) will be visible to patient, clinician, principal clinician, help desk and visitor."*
+
+**Not one cell of the matrix changed, and that is the finding worth recording.** Read the four audiences above against the four `Assessment —` rows and they match exactly, column for column, including the two the owner did not mention (`Patient (other)` and an unassigned sub-clinician, denied throughout) and the IIC narrowing on both visitor cells. The 2026-09-01 transcription had already drawn these boundaries from the same person's earlier sentences; what was missing was never a permission, it was a **name and a place**. So this amendment is a rename and a page restructure, and the RBAC table below it is untouched apart from one row label.
+
+**`patient{}` became `prescription{}`.** The old member name answered "whose section is this?", which stopped distinguishing anything once the other three were also named for the patient. `FieldSet`, the `Assessment` property and the matrix row move together, because this file's own 2026-09-01 note is that they are one string and not three.
+
+**`private{}` still does not move.** It is titled "Patient Assessment Form" now, and its attribute is still `private` for exactly the reason given above: `projection.ts` is R-09's runtime boundary and it keys off that literal name. The title is the template's business; the attribute is the boundary's.
+
+**Section order is the owner's order** — Details, Assessment Form, Prescription, Appointments — and it is declared once, in `ASSESSMENT_SECTION_ORDER`, which is what the API's template response iterates. A page does not choose the order of sections it renders; it chooses *which* it renders.
+
+**One page-level consequence, stated because it is a behaviour change and not a rename.** `patient-record.astro` previously refused a visitor outright, while the matrix has granted a visitor `R` on `general{}` and `calendar{}` (IIC-tagged) since 2026-09-01 and the dashboard's own caseload table has linked visitors to that page for just as long. A visitor who clicked a patient reached a "you do not have access" page for a record the matrix says they may read. The page now admits them, and the server decides — as it always did — that what comes back is Patient Details and Patient Appointments and nothing else.
