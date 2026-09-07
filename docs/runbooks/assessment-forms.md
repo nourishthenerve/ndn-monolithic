@@ -241,7 +241,7 @@ The other three sections are untouched and still placeholders.
 
 ### Two fields are computed, not typed
 
-The paper form prints an "Age: ___ yrs" box beside the date of birth and a "BMI: ___ kg/m²" box beside the height and weight. Both are boxes a person fills in on paper and neither may be a box a person fills in here: a typed age is wrong from the patient's next birthday onward, and a typed BMI is wrong the moment a weight is updated and it is not. Both are marked `derived`, which already meant "computed, never stored, and a write naming it is a 400" — the API's half needed no change at all.
+The paper form prints an `Age: ___ yrs` box beside the date of birth and a `BMI: ___ kg/m²` box beside the height and weight. Both are boxes a person fills in on paper and neither may be a box a person fills in here: a typed age is wrong from the patient's next birthday onward, and a typed BMI is wrong the moment a weight is updated and it is not. Both are marked `derived`, which already meant "computed, never stored, and a write naming it is a 400" — the API's half needed no change at all.
 
 **`derived` now has two kinds, and only `AssessmentForm.tsx` knows the difference.** The calendar's figures are facts about `APPT#` rows the browser has never read, so the server computes them and sends them as `calendarSummary`. Age and BMI are arithmetic on answers in their own section, which the browser is already holding — *including the ones typed and not yet saved*, so a corrected weight moves the BMI beside it immediately. A server-computed value could not do that, which is the whole reason the split exists.
 
