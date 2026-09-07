@@ -12,7 +12,7 @@
 // was unpublished before the last build, simply has no static path here —
 // apps/web/src/pages/404.astro is what a visitor sees instead of a raw
 // CloudFront/S3 403.
-import { supportedLocales, t } from '@ndn/i18n';
+import { formatDayMonthYear, supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
@@ -20,6 +20,7 @@ import type { BlogPost } from '../../../blog/content-client.js';
 import { fetchPublishedBlogPosts } from '../../../blog/content-client.js';
 import { buildHreflangLinks } from '../../../blog/seo.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
+import { publicationDateOf } from '../../../publication-date.js';
 import { renderableRichText, toPlainParagraphs } from '../../../rich-text/render.js';
 import { proseStylesCss } from '../../../rich-text/styles.js';
 import { mediaUrl, siteName, siteUrl } from '../../../site-config.js';
@@ -57,6 +58,10 @@ const hreflangLinks = buildHreflangLinks(populatedLocales, urlForLocale);
 const bodyHtml = renderableRichText(translation.body);
 const bodyParagraphs = bodyHtml ? [] : toPlainParagraphs(translation.body);
 const leadImage = post.imageKey ? mediaUrl(post.imageKey) : undefined;
+// 2026-09-07: the byline date. `publishedAt` where the record has one,
+// `created_at` for posts written before that field existed — see
+// `apps/web/src/publication-date.ts`.
+const publishedIso = publicationDateOf(post);
 ---
 
 <BaseLayout
@@ -68,6 +73,17 @@ const leadImage = post.imageKey ? mediaUrl(post.imageKey) : undefined;
 >
   <article>
     <Heading level={1}>{translation.title}</Heading>
+    {
+      /* Directly under the headline, where a byline goes, and a real
+         `<time>` so the date is machine-readable as well as legible. */
+      publishedIso && (
+        <p class="ndn-card-meta">
+          <time datetime={publishedIso}>
+            {t('common.publishedOn', { date: formatDayMonthYear(publishedIso, locale) }, locale)}
+          </time>
+        </p>
+      )
+    }
     {
       /* 2026-09-02: the lead image, at build time. `mediaUrl` answers
          undefined for a key outside the public `media/` prefix, so a post

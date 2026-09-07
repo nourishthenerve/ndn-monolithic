@@ -9,16 +9,22 @@
 //
 // Like its blog counterpart it is `noIndex` and is never the link for a
 // workshop that has a prerendered page of its own.
+import { formatDayMonthYear } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { publicationDateOf } from '../publication-date.js';
 import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
 export interface LiveWorkshopRecord {
   readonly id: string;
   readonly dateTimeUtc: string;
+  /** 2026-09-07: when it was announced — a different fact from `dateTimeUtc`, and a different row in the list below. */
+  readonly publishedAt?: string;
+  readonly created_at?: string;
   readonly posterKey?: string;
   readonly details: Readonly<
     Record<string, { readonly title: string; readonly description: string } | undefined>
@@ -32,12 +38,14 @@ export interface LiveWorkshopStrings {
   readonly notFound: string;
   readonly error: string;
   readonly dateLabel: string;
+  /** 2026-09-07: the label on the announcement date, beside `dateLabel`'s own row. */
+  readonly announcedLabel: string;
   readonly posterAltTemplate: string;
 }
 
 export interface LiveWorkshopProps {
   readonly strings: LiveWorkshopStrings;
-  readonly locale: string;
+  readonly locale: Locale;
   /** Injectable for tests; defaults to `?slug=` on the current URL. */
   readonly slug?: string;
   readonly fetchWorkshops?: () => Promise<readonly LiveWorkshopRecord[] | undefined>;
@@ -49,7 +57,7 @@ export interface LiveWorkshopProps {
  * rendered from its prerendered page after the next deploy must not show
  * its time two different ways.
  */
-export function formatWorkshopDate(dateTimeUtc: string, locale: string): string {
+export function formatWorkshopDate(dateTimeUtc: string, locale: Locale): string {
   return new Intl.DateTimeFormat(locale, { dateStyle: 'long', timeStyle: 'short' }).format(
     new Date(dateTimeUtc),
   );
@@ -136,6 +144,7 @@ export function LiveWorkshop({
   // nothing instead of a link to it.
   const posterSrc = record.posterKey ? workshopPosterUrl(record.posterKey) : undefined;
   const descriptionHtml = renderableRichText(detail.description);
+  const announcedIso = publicationDateOf(record);
 
   return (
     <article>
@@ -155,9 +164,20 @@ export function LiveWorkshop({
           <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
         ))
       )}
+      {/* Two rows, two labels. The workshop's own date and the date it was
+          announced are both dates about the same workshop, and the only
+          thing keeping them apart for a reader is that each is named. */}
       <dl>
         <dt>{strings.dateLabel}</dt>
         <dd>{formatWorkshopDate(record.dateTimeUtc, locale)}</dd>
+        {announcedIso && (
+          <>
+            <dt>{strings.announcedLabel}</dt>
+            <dd>
+              <time dateTime={announcedIso}>{formatDayMonthYear(announcedIso, locale)}</time>
+            </dd>
+          </>
+        )}
       </dl>
     </article>
   );

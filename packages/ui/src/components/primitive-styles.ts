@@ -105,6 +105,18 @@ body {
   background-color: #ffffff;
 }
 
+/* 2026-09-07: the publication date on a blog card, a workshop card and an
+   article's own byline. Smaller and quieter than the text it sits above,
+   because it is context for the thing being read rather than part of it —
+   and the palette's own muted text token rather than a lighter grey
+   invented here, so it keeps the contrast ratio that token guarantees.
+   (No backticks in this block: it is a JS template literal.) */
+.ndn-card-meta {
+  margin-block: 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--ndn-color-text-muted);
+}
+
 .ndn-heading {
   color: var(--ndn-color-text);
   font-weight: 700;

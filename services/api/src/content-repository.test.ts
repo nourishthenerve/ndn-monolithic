@@ -192,6 +192,75 @@ describe('ContentRepository.publish/unpublish', () => {
   });
 });
 
+// 2026-09-07: the byline date. The owner: *"for blog post and workshops also
+// show the date of publication on the thumbnail box."* — which needs a date
+// that means publication, and neither of the two timestamps a record already
+// had does.
+describe('ContentRepository — publishedAt', () => {
+  const publishedClock: Clock = { now: () => new Date('2026-03-05T10:00:00.000Z') };
+
+  function repositoryAt(clock: Clock) {
+    const store = new InMemoryContentStore();
+    const repository = new ContentRepository(store, new InMemoryAuditLog(), clock);
+    return { repository, store };
+  }
+
+  it('stamps a post created already published — which is what the authoring form does', async () => {
+    const { repository } = buildRepository();
+
+    const created = await repository.create(ACTOR, buildInput({ status: 'published' }));
+
+    expect(created.publishedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('leaves a draft undated until it goes live', async () => {
+    // The whole reason the field exists: `created_at` would date the
+    // article to the day someone started writing it.
+    const { repository } = buildRepository();
+
+    const draft = await repository.create(ACTOR, buildInput({ status: 'draft' }));
+
+    expect(draft.publishedAt).toBeUndefined();
+  });
+
+  it('stamps the moment a draft is published, not the moment it was written', async () => {
+    const { store } = repositoryAt(fixedClock);
+    const written = new ContentRepository(store, new InMemoryAuditLog(), fixedClock);
+    await written.create(ACTOR, buildInput({ status: 'draft' }));
+
+    const later = new ContentRepository(store, new InMemoryAuditLog(), publishedClock);
+    const published = await later.publish(ACTOR, 'content-1');
+
+    expect(published.created_at).toBe('2026-01-01T00:00:00.000Z');
+    expect(published.publishedAt).toBe('2026-03-05T10:00:00.000Z');
+  });
+
+  it('keeps the first publication date across an unpublish and a republish', async () => {
+    // An article taken down for a correction and put back is the same
+    // article; re-dating it would make the site claim it is new.
+    const { store } = repositoryAt(fixedClock);
+    const first = new ContentRepository(store, new InMemoryAuditLog(), fixedClock);
+    await first.create(ACTOR, buildInput({ status: 'published' }));
+    await first.unpublish(ACTOR, 'content-1');
+
+    const later = new ContentRepository(store, new InMemoryAuditLog(), publishedClock);
+    const republished = await later.publish(ACTOR, 'content-1');
+
+    expect(republished.publishedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('survives an ordinary edit', async () => {
+    const { repository } = buildRepository();
+    await repository.create(ACTOR, buildInput({ status: 'published' }));
+
+    const edited = await repository.update(ACTOR, 'content-1', {
+      translations: { en: { title: 'Fixed typo', body: 'Body', excerpt: 'Excerpt' } },
+    });
+
+    expect(edited.publishedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+});
+
 describe('ContentRepository.findById', () => {
   it('returns unpublished and draft content by id — never deleted, never hidden from a direct lookup', async () => {
     const { repository } = buildRepository();

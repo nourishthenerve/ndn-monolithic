@@ -14,6 +14,7 @@ import {
   formatDateRange,
   formatDateTime,
   formatDayMonthShort,
+  formatDayMonthYear,
   formatDayOfMonth,
   formatMonthYear,
   formatTimeOfDay,
@@ -154,5 +155,22 @@ describe('formatDayMonthShort', () => {
     const label = formatDayMonthShort(new Date(2026, 8, 1), 'en');
     expect(label).toContain('1');
     expect(label).toMatch(/Sep/);
+  });
+});
+
+// 2026-09-07: the byline date on a blog post and a workshop announcement.
+describe('formatDayMonthYear', () => {
+  it('spells the month and drops the weekday', () => {
+    const label = formatDayMonthYear('2026-09-03T09:00:00.000Z', 'en');
+
+    expect(label).toContain('September');
+    expect(label).toContain('2026');
+    // The distinction from `formatDate`: a byline is not a diary entry, and
+    // "Thursday" above a headline reads as the date of an event.
+    expect(label).not.toMatch(/Thursday/);
+  });
+
+  it('returns an unparseable value unchanged rather than "Invalid Date"', () => {
+    expect(formatDayMonthYear('not-a-date', 'en')).toBe('not-a-date');
   });
 });

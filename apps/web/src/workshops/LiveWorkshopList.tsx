@@ -13,17 +13,27 @@
 // parameterised on the card's whole contents, which is most of the
 // component — the duplication here is the two `useEffect`s and nothing
 // else.
+import { formatDayMonthYear } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
 import { Card, Heading, Link } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { takeAtMost } from '../list-limit.js';
+import { publicationDateOf } from '../publication-date.js';
 import { richTextToPlainText } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
 export interface LiveWorkshop {
   readonly id: string;
   readonly dateTimeUtc: string;
+  /**
+   * 2026-09-07: when the workshop was **announced**, which is not
+   * `dateTimeUtc` above and is labelled so on the card. See
+   * `publication-date.ts`.
+   */
+  readonly publishedAt?: string;
+  readonly created_at?: string;
   readonly posterKey?: string;
   readonly details: Readonly<
     Record<string, { readonly title: string; readonly description: string } | undefined>
@@ -35,11 +45,13 @@ export interface LiveWorkshopListStrings {
   readonly viewDetails: string;
   /** Rendered with the workshop's own title substituted — see `posterAltFor`. */
   readonly posterAltTemplate: string;
+  /** 2026-09-07: `"Announced {date}"`, filled here for the same reason `posterAltTemplate` is. */
+  readonly publishedOnTemplate: string;
 }
 
 export interface LiveWorkshopListProps {
   readonly strings: LiveWorkshopListStrings;
-  readonly locale: string;
+  readonly locale: Locale;
   readonly initialWorkshops: readonly LiveWorkshop[];
   readonly fetchWorkshops?: () => Promise<readonly LiveWorkshop[] | undefined>;
   /** 2026-09-06: the homepage's "next three" strip. See `LiveBlogList`'s own `limit` for why this is applied after the reconciliation, not to the seed. */
@@ -56,6 +68,25 @@ export interface LiveWorkshopListProps {
  */
 export function posterAltFor(template: string, title: string): string {
   return template.replace('{title}', title);
+}
+
+/**
+ * The "announced on" line, or `undefined` when the record carries no
+ * timestamp — see `publicationDateOf`.
+ *
+ * **Announced, not "published", and not the workshop's own date.** A card
+ * that showed one bare date would be read as the date of the workshop, and
+ * this one is not; the label is what keeps the two apart.
+ */
+export function announcedLine(
+  workshop: LiveWorkshop,
+  template: string,
+  locale: Locale,
+): { readonly iso: string; readonly text: string } | undefined {
+  const iso = publicationDateOf(workshop);
+  return iso
+    ? { iso, text: template.replace('{date}', formatDayMonthYear(iso, locale)) }
+    : undefined;
 }
 
 export function prerenderedIds(initial: readonly LiveWorkshop[]): ReadonlySet<string> {
@@ -139,6 +170,7 @@ export function LiveWorkshopList({
       {entries.map(({ workshop, title, description }) => {
         // See LiveWorkshop.tsx: guarded on the URL, not the key.
         const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : undefined;
+        const announced = announcedLine(workshop, strings.publishedOnTemplate, locale);
         return (
         <Card key={workshop.id}>
           {posterSrc && (
@@ -150,6 +182,11 @@ export function LiveWorkshopList({
             />
           )}
           <Heading level={headingLevel}>{title}</Heading>
+          {announced && (
+            <p className="ndn-card-meta">
+              <time dateTime={announced.iso}>{announced.text}</time>
+            </p>
+          )}
           <p>{description}</p>
           <Link href={hrefFor(locale, workshop.id, prerendered)}>{strings.viewDetails}</Link>
         </Card>

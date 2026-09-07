@@ -25,6 +25,16 @@ const blogPostSchema = z.object({
   // schema stays tolerant of its absence because every post written
   // before today has none — a stricter shape here would empty the blog.
   imageKey: z.string().optional(),
+  // 2026-09-07: the two timestamps behind the "Published …" line every card
+  // and article now carries (`apps/web/src/publication-date.ts`). **Both
+  // optional**, including `created_at`, which every record in fact has: a
+  // required field here fails `safeParse` for the whole response and empties
+  // the blog, which is precisely how the testimonials listing broke on
+  // 2026-09-03 when its schema kept requiring an `id` the API had stopped
+  // sending. A missing date costs a line of text; a failed parse costs the
+  // page.
+  publishedAt: z.string().optional(),
+  created_at: z.string().optional(),
   translations: z.record(z.string(), translationSchema),
 });
 

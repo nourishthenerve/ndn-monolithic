@@ -25,6 +25,13 @@ const workshopSchema = z.object({
   id: z.string(),
   dateTimeUtc: z.string(),
   posterKey: z.string().optional(),
+  // 2026-09-07: when the workshop was announced — distinct from
+  // `dateTimeUtc`, which is when it happens, and labelled distinctly
+  // wherever both appear. Both optional for the reason
+  // `content-client.ts`'s own note gives: a required timestamp here would
+  // fail the parse for the whole response and empty the listing.
+  publishedAt: z.string().optional(),
+  created_at: z.string().optional(),
   details: z.record(z.string(), workshopDetailSchema),
 });
 

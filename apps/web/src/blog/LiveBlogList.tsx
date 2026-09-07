@@ -40,15 +40,21 @@
 // sending *every* post through the query-string page — would trade the
 // site's real article URLs for uniformity, which is a bad trade on the one
 // surface that exists to be found.
+import { formatDayMonthYear } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
 import { Card, Heading, Link } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { takeAtMost } from '../list-limit.js';
+import { publicationDateOf } from '../publication-date.js';
 import { blogContentType, contentApiUrl } from '../site-config.js';
 
 export interface LiveBlogPost {
   readonly id: string;
+  /** 2026-09-07: the byline date. See `publication-date.ts` for why there are two fields and why both are optional. */
+  readonly publishedAt?: string;
+  readonly created_at?: string;
   readonly translations: Readonly<
     Record<string, { readonly title: string; readonly excerpt: string } | undefined>
   >;
@@ -57,11 +63,18 @@ export interface LiveBlogPost {
 export interface LiveBlogListStrings {
   readonly empty: string;
   readonly readMore: string;
+  /**
+   * 2026-09-07: `"Published {date}"`, with the placeholder still in it —
+   * `t()` runs at build time in the surrounding page and cannot format a
+   * date for a post the build has never seen. Same arrangement as
+   * `LiveWorkshopList`'s `posterAltTemplate`.
+   */
+  readonly publishedOnTemplate: string;
 }
 
 export interface LiveBlogListProps {
   readonly strings: LiveBlogListStrings;
-  readonly locale: string;
+  readonly locale: Locale;
   /** The build-time list, rendered into the HTML and used as the seed. */
   readonly initialPosts: readonly LiveBlogPost[];
   readonly fetchPosts?: () => Promise<readonly LiveBlogPost[] | undefined>;
@@ -106,6 +119,22 @@ export function hrefFor(
   return prerendered.has(postId)
     ? `/${locale}/blog/${postId}`
     : `/${locale}/blog/post?slug=${encodeURIComponent(postId)}`;
+}
+
+/**
+ * The byline line for one post, or `undefined` when the record carries no
+ * timestamp at all — see `publicationDateOf`. Returned as both the text and
+ * the machine-readable instant so the card can render a real `<time>`.
+ */
+export function publishedLine(
+  post: LiveBlogPost,
+  template: string,
+  locale: Locale,
+): { readonly iso: string; readonly text: string } | undefined {
+  const iso = publicationDateOf(post);
+  return iso
+    ? { iso, text: template.replace('{date}', formatDayMonthYear(iso, locale)) }
+    : undefined;
 }
 
 /** A post appears on a locale's listing only once it has a translation for it. */
@@ -171,13 +200,26 @@ export function LiveBlogList({
 
   return (
     <>
-      {entries.map(({ post, title, excerpt }) => (
-        <Card key={post.id}>
-          <Heading level={headingLevel}>{title}</Heading>
-          <p>{excerpt}</p>
-          <Link href={hrefFor(locale, post.id, prerendered)}>{strings.readMore}</Link>
-        </Card>
-      ))}
+      {entries.map(({ post, title, excerpt }) => {
+        const published = publishedLine(post, strings.publishedOnTemplate, locale);
+        return (
+          <Card key={post.id}>
+            <Heading level={headingLevel}>{title}</Heading>
+            {/* Directly under the title, where a byline goes, and a real
+                `<time>` rather than a `<p>`: the date is machine-readable
+                for a crawler, and the site's own formatter renders it in
+                the site's locale rather than the reader's browser one
+                (`@ndn/i18n`'s datetime.ts). */}
+            {published && (
+              <p className="ndn-card-meta">
+                <time dateTime={published.iso}>{published.text}</time>
+              </p>
+            )}
+            <p>{excerpt}</p>
+            <Link href={hrefFor(locale, post.id, prerendered)}>{strings.readMore}</Link>
+          </Card>
+        );
+      })}
     </>
   );
 }

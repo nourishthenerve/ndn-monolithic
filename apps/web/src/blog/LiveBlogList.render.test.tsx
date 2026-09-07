@@ -13,10 +13,18 @@ import type { LiveBlogPost } from './LiveBlogList.js';
 
 afterEach(cleanup);
 
-const STRINGS = { empty: 'No posts yet.', readMore: 'Read more' };
+const STRINGS = {
+  empty: 'No posts yet.',
+  readMore: 'Read more',
+  publishedOnTemplate: 'Published {date}',
+};
 
 function post(id: string, title = `${id} title`): LiveBlogPost {
-  return { id, translations: { en: { title, excerpt: `${id} excerpt` } } };
+  return {
+    id,
+    publishedAt: '2026-09-03T09:00:00.000Z',
+    translations: { en: { title, excerpt: `${id} excerpt` } },
+  };
 }
 
 describe('the build-time list is the seed, not a placeholder', () => {
@@ -172,5 +180,85 @@ describe('the homepage strip', () => {
       />,
     );
     expect(screen.getByRole('heading', { name: 'a title', level: 3 })).toBeDefined();
+  });
+});
+
+// 2026-09-07: the byline. The owner: *"for blog post and workshops also show
+// the date of publication on the thumbnail box at websites landing page as
+// well as when someone clicks read more."*
+describe('the publication date', () => {
+  // Asserted by parts rather than as one string: the exact ordering is
+  // `Intl`'s, and `en` renders "September 3, 2026" where `en-GB` would
+  // render "3 September 2026". What this test is for is that the site's own
+  // formatter ran at all — the month spelled, never a numeric `9/3` that
+  // means two different dates on two different machines.
+  const metaText = (container: HTMLElement): string =>
+    container.querySelector('.ndn-card-meta')?.textContent ?? '';
+
+  it('renders under the title, formatted by the site’s own date formatter', () => {
+    const { container } = render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[post('built')]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(metaText(container)).toContain('Published');
+    expect(metaText(container)).toContain('September');
+    expect(metaText(container)).toContain('2026');
+  });
+
+  it('is a real <time>, so a crawler reads the instant and not only the words', () => {
+    const { container } = render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[post('built')]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(container.querySelector('time')?.getAttribute('datetime')).toBe(
+      '2026-09-03T09:00:00.000Z',
+    );
+  });
+
+  it('falls back to created_at for a post written before publishedAt existed', () => {
+    // Every post live today is this shape. The fallback is the normal
+    // path, not an edge case.
+    const { container } = render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[
+          {
+            id: 'legacy',
+            created_at: '2026-07-04T09:00:00.000Z',
+            translations: { en: { title: 'legacy title', excerpt: 'legacy excerpt' } },
+          },
+        ]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(metaText(container)).toContain('July');
+  });
+
+  it('renders the card with no date rather than a broken one when the record has neither', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[
+          { id: 'dateless', translations: { en: { title: 'dateless title', excerpt: 'x' } } },
+        ]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+
+    expect(screen.getByText('dateless title')).toBeDefined();
+    expect(screen.queryByText(/Published/)).toBeNull();
   });
 });
