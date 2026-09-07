@@ -220,8 +220,8 @@ Read the four stated audiences against the four `Assessment —` rows in `docs/p
 
 ### Two behaviour changes worth knowing about
 
-* **`patient-record.astro` admits visitors now.** It refused them while the matrix had granted a visitor `R` on `general{}` and `calendar{}` (IIC-tagged) since 2026-09-01, and the dashboard's caseload table had linked visitors straight at it for just as long — so a visitor clicking a patient got "you do not have access" for a record they were allowed to read. The server was always the decision; the page was refusing ahead of it.
-* **`PatientRecordPanel` renders the identity fields read-only for a visitor** (`mayEditDetails`). `Patient profile` gives them `R` and not `U`, and a name field whose every save returns 403 is the mistake the approval buttons made before `mayDecide` existed.
+- **`patient-record.astro` admits visitors now.** It refused them while the matrix had granted a visitor `R` on `general{}` and `calendar{}` (IIC-tagged) since 2026-09-01, and the dashboard's caseload table had linked visitors straight at it for just as long — so a visitor clicking a patient got "you do not have access" for a record they were allowed to read. The server was always the decision; the page was refusing ahead of it.
+- **`PatientRecordPanel` renders the identity fields read-only for a visitor** (`mayEditDetails`). `Patient profile` gives them `R` and not `U`, and a name field whose every save returns 403 is the mistake the approval buttons made before `mayDecide` existed.
 
 ### Pages deleted
 
