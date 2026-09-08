@@ -47,6 +47,23 @@ describe('Button', () => {
     expect(getByRole('button')).toHaveClass('ndn-button--secondary');
   });
 
+  // 2026-09-08: the row-sized pill. `md` deliberately adds no class of its
+  // own — `.ndn-button` already carries that size, so an `--md` class would
+  // be a selector with an empty rule behind it.
+  it('adds a size class only for the small variant, and keeps it past the tap-target floor', () => {
+    const { getByRole, rerender } = render(<Button>Save</Button>);
+    expect(getByRole('button').className).not.toContain('ndn-button--md');
+    expect(getByRole('button')).not.toHaveClass('ndn-button--sm');
+
+    rerender(<Button size="sm">Assign</Button>);
+    const small = getByRole('button');
+    expect(small).toHaveClass('ndn-button--sm');
+    expect(small).toHaveClass(interactiveClassName);
+    expect(Number.parseFloat(getComputedStyle(small).minHeight)).toBeGreaterThanOrEqual(
+      minInteractiveTargetPx,
+    );
+  });
+
   it('forwards disabled state and extra className without dropping the built-in classes', () => {
     const { getByRole } = render(
       <Button disabled className="extra">

@@ -117,6 +117,29 @@ describe('appointmentCalendarStylesCss', () => {
     expect(appointmentCalendarStylesCss).toContain('.ndn-cal-live .ndn-cal-live-join');
   });
 
+  // 2026-09-08: the mark that appears while a newer window is being fetched
+  // and the month underneath is deliberately left standing.
+  it('gives the refresh mark a row of its own beside the range, and keeps it quiet', () => {
+    expect(appointmentCalendarStylesCss).toContain('.ndn-cal-range');
+    expect(appointmentCalendarStylesCss).toContain('.ndn-cal-refreshing');
+    // Muted, not brand: this appears for a few hundred milliseconds on every
+    // arrow press, and something loud at that frequency is worse than the
+    // flicker it replaced.
+    expect(appointmentCalendarStylesCss).toMatch(
+      /\.ndn-cal-refreshing \{[^}]*color: var\(--ndn-color-text-muted\)/,
+    );
+  });
+
+  it('does not fade the stale grid, which is how muted text drops below 4.5:1', () => {
+    // `aria-busy` and the mark above are what say a newer window is coming.
+    // An opacity on the grid would take the past-day rule's muted token with
+    // it — this stylesheet's own note on why past days are muted rather than
+    // faded.
+    expect(appointmentCalendarStylesCss).not.toMatch(
+      /\.ndn-cal-scroll\[aria-busy[^}]*opacity/,
+    );
+  });
+
   it('carries no backtick, which would end the template literal it lives in', () => {
     expect(appointmentCalendarStylesCss).not.toContain('`');
   });

@@ -100,6 +100,7 @@ import { appointmentCalendarStylesCss } from '../../../account/calendar-styles.j
 import { caseloadStylesCss } from '../../../account/caseload-styles.js';
 import { CaseloadView } from '../../../account/CaseloadView.js';
 import { ChangePasswordPanel } from '../../../account/ChangePasswordPanel.js';
+import { accountDashboardStylesCss } from '../../../account/dashboard-styles.js';
 import { OwnDetailsPanel } from '../../../account/OwnDetailsPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
 import { TestimonialPanel } from '../../../account/TestimonialPanel.js';
@@ -135,6 +136,13 @@ const calendarStrings = {
   loadingLabel: t('accountCalendar.loading', undefined, locale),
   forbiddenLabel: t('accountCalendar.forbidden', undefined, locale),
   errorLabel: t('accountCalendar.error', undefined, locale),
+  // 2026-09-08: the two the stale-while-revalidate pass added. See the
+  // component's header — a window move keeps the month it is leaving on
+  // screen, so it needs a word for "a newer one is coming" and a word for
+  // "it did not arrive" that are not the whole-view loading and error
+  // strings above.
+  refreshingLabel: t('accountCalendar.refreshing', undefined, locale),
+  refreshFailedLabel: t('accountCalendar.refreshFailed', undefined, locale),
   previousWeeksLabel: t('accountCalendar.previousWeeks', undefined, locale),
   nextWeeksLabel: t('accountCalendar.nextWeeks', undefined, locale),
   todayLabel: t('accountCalendar.today', undefined, locale),
@@ -563,7 +571,12 @@ const changePasswordStrings = {
       </section>
     </RequireAuth>
     <RequireAuth client:only="react" allowRoles={['principal-clinician', 'helpdesk']}>
-      <nav aria-label={t('account.patientAdminLink', undefined, locale)}>
+      {/* 2026-09-08: *"the buttons on the dashboard are all look quite
+          basic."* Still links — each one navigates, so it has to behave like
+          a link on a middle-click and on hover — but drawn as the controls
+          the owner has called them since they were built. See
+          `dashboard-styles.ts`. */}
+      <nav class="ndn-account-nav" aria-label={t('account.patientAdminLink', undefined, locale)}>
         <ul>
           <li>
             <Link href={`/${locale}/account/patient-admin`}>
@@ -583,7 +596,10 @@ const changePasswordStrings = {
         held both made each of them longer. There are two links and two pages
         now; the page itself is deleted rather than kept as a third way in. */}
     <RequireAuth client:only="react" allowRoles={['principal-clinician']}>
-      <nav aria-label={t('account.principalToolsHeading', undefined, locale)}>
+      <nav
+        class="ndn-account-nav"
+        aria-label={t('account.principalToolsHeading', undefined, locale)}
+      >
         <ul>
           <li>
             <Link href={`/${locale}/account/clinician-admin`}>
@@ -622,3 +638,4 @@ const changePasswordStrings = {
     client JavaScript — see `account/calendar-styles.ts`. */}
 <style set:html={appointmentCalendarStylesCss} />
 <style set:html={caseloadStylesCss} />
+<style set:html={accountDashboardStylesCss} />

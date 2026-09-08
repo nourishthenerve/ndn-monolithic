@@ -85,6 +85,34 @@
 // trying the patient route and then the clinician one, letting the server
 // answer — the same direction `token-claims.ts` documents at length: hide on
 // a positive answer, never on a shrug.
+//
+// ## 2026-09-08: moving the window no longer empties it
+//
+// The owner: *"when I change month in my calender the calender disappears
+// for a second before coming back again (keep the old month as is while the
+// nice month is being fetched)."*
+//
+// It did, and only for a clinician: their endpoint takes a range, so every
+// press of an arrow refetched — and `load` opened by setting the whole view
+// back to `loading`, which is the branch that returns a single line of text
+// in place of the grid. The toolbar the reader had just pressed vanished
+// along with it, so the second press had nothing to aim at.
+//
+// The fix is the ordinary one for a view that is re-reading data it already
+// has: keep showing what is on screen and mark it stale, rather than
+// throwing it away and starting from nothing. `load` now only falls back to
+// `loading` when there is nothing to fall back *to* — the first fetch of the
+// session — and every later one leaves the last good `items` in place while
+// `refreshing` drives `aria-busy` and a small ring beside the range label.
+// The grid under it is the **outgoing** month for those few hundred
+// milliseconds, which is exactly what was asked for.
+//
+// A refresh that fails is treated the same way: a clinician who has scrolled
+// to a month the API cannot answer keeps the month they were reading and
+// gets one line saying the newer one did not load. Blanking a calendar
+// somebody is using in order to report a transient 500 loses more than it
+// tells them. The **first** load still fails to `error` as before — there is
+// nothing behind it to keep.
 import {
   formatDate,
   formatDateTime,
@@ -97,8 +125,8 @@ import {
   t,
 } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Heading, Link, visuallyHiddenClassName } from '@ndn/ui';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Heading, Link, Spinner, visuallyHiddenClassName } from '@ndn/ui';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
@@ -120,6 +148,7 @@ import {
 } from './calendar-grid.js';
 import { joinPhase } from './join-window.js';
 import { callHref, JoinCallCell } from './JoinCallCell.js';
+import { PanelPlaceholder } from './PanelPlaceholder.js';
 import { useNow } from './useNow.js';
 
 /** The fields both endpoints return that this view reads. */
@@ -313,6 +342,17 @@ export interface AppointmentCalendarStrings {
   readonly loadingLabel: string;
   readonly forbiddenLabel: string;
   readonly errorLabel: string;
+  /**
+   * 2026-09-08: shown beside a small ring while a *later* fetch is in
+   * flight — a clinician moving the window, or any role re-reading after a
+   * decision. Distinct from `loadingLabel`, which stands in place of the
+   * whole calendar and is only ever seen once per session: this one sits
+   * next to a calendar that is still on screen, so it says the view is
+   * being updated rather than that it is being loaded.
+   */
+  readonly refreshingLabel: string;
+  /** The same fetch, failed, with a good month still drawn underneath — so it reports the miss rather than replacing the calendar with `errorLabel`. */
+  readonly refreshFailedLabel: string;
   readonly previousWeeksLabel: string;
   readonly nextWeeksLabel: string;
   readonly todayLabel: string;
@@ -469,6 +509,28 @@ export function AppointmentCalendar({
   // and `calendar-grid.ts`'s header carries the full reasoning.
   const [windowStart, setWindowStart] = useState<Date>(() => windowStartFor(now()));
   const [state, setState] = useState<ViewState>({ status: 'loading' });
+  /**
+   * 2026-09-08: a fetch is in flight *over a calendar that is already
+   * drawn* — the state the owner asked for when they said the calendar
+   * should not disappear between months. Separate from `state`, because it
+   * is not a fourth thing the view can be: `state` stays `ready` with the
+   * outgoing month's rows in it for the whole of this, and only `aria-busy`
+   * and a small ring beside the range say a newer answer is coming.
+   */
+  const [refreshing, setRefreshing] = useState(false);
+  /** That fetch, failed. Reported in a line under the toolbar rather than by replacing the month the reader still has open — see this file's header. */
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  /**
+   * Whether a good answer has ever been drawn.
+   *
+   * A ref rather than derived from `state` inside `load`, and that is not a
+   * style choice: `load` is a `useCallback` whose identity is the dependency
+   * of the effect that calls it, so reading `state` there would rebuild it
+   * on every state change and refetch in a loop. This directory has been
+   * bitten by exactly that shape once already — see `useNow.ts` on the
+   * inline `() => new Date()` that caused an unbounded fetch loop.
+   */
+  const hasLoadedOnce = useRef(false);
   const [sources, setSources] = useState<readonly CalendarSource[] | undefined>(undefined);
   /** `null` is "the reader has chosen nothing yet", so the default can still apply. */
   const [chosenDay, setChosenDay] = useState<string | null>(null);
@@ -551,9 +613,23 @@ export function AppointmentCalendar({
       setState((current) => (current.status === 'loading' ? { status: 'hidden' } : current));
       return;
     }
-    setState({ status: 'loading' });
+    // The whole of the "keep the old month while the new one is fetched"
+    // change is this line and the three that answer it below: fall back to
+    // the loading placeholder only when there is nothing already drawn to
+    // keep. Every later fetch — a window move, a re-read after a decision —
+    // leaves `state` exactly as it is and raises `refreshing` instead.
+    if (!hasLoadedOnce.current) {
+      setState({ status: 'loading' });
+    }
+    setRefreshing(true);
+    setRefreshFailed(false);
     const accessToken = await client.authorization();
     if (!accessToken) {
+      // Not a stale-data case: no token means no session, and a calendar
+      // of somebody's appointments is not something to leave on screen
+      // once that is true.
+      hasLoadedOnce.current = false;
+      setRefreshing(false);
       setState({ status: 'forbidden' });
       return;
     }
@@ -579,6 +655,8 @@ export function AppointmentCalendar({
           items?: readonly CalendarAppointment[];
         };
         const items = payload.items ?? [];
+        hasLoadedOnce.current = true;
+        setRefreshing(false);
         setState({
           status: 'ready',
           items: source === 'patient' ? visibleForPatient(items) : items,
@@ -587,6 +665,14 @@ export function AppointmentCalendar({
       } catch {
         outcome = 'error';
       }
+    }
+    setRefreshing(false);
+    if (hasLoadedOnce.current) {
+      // A month already on screen is worth more than the reason the next
+      // one did not arrive. The reader keeps what they were reading and is
+      // told the update failed; pressing the arrow again retries.
+      setRefreshFailed(true);
+      return;
     }
     setState({ status: outcome });
   }, [client, sources, from, to, fetchPatientAppointments, fetchClinicianCalendar]);
@@ -651,11 +737,10 @@ export function AppointmentCalendar({
     return null;
   }
   if (state.status === 'loading') {
-    return (
-      <p role="status" aria-live="polite">
-        {strings.loadingLabel}
-      </p>
-    );
+    // Only ever the *first* fetch of the session now — see `load`. The
+    // skeleton is a five-by-seven grid because that is what lands on top of
+    // it, so the page below does not jump when the real one arrives.
+    return <PanelPlaceholder label={strings.loadingLabel} shape="calendar" />;
   }
   if (state.status === 'forbidden') {
     return <p role="alert">{strings.forbiddenLabel}</p>;
@@ -803,11 +888,40 @@ export function AppointmentCalendar({
           press elsewhere on the toolbar and the reader who pressed it is not
           looking here. Present from the first render, so it announces
           changes only. */}
-      <p className="ndn-cal-month" aria-live="polite">
-        {formatDateRange(firstDayOnGrid ?? currentTime, lastDayOnGrid ?? currentTime, locale)}
-      </p>
+      {/* 2026-09-08: the range, and — while a newer one is on its way — a
+          ring and a word beside it.
 
-      <div className="ndn-cal-scroll">
+          Outside the live region rather than inside it. The `<p>` announces
+          its own text whenever the window moves, and inserting a second
+          phrase into the same region would have every arrow press read out
+          as "September 2026 Updating…"; `aria-busy` on the grid below is
+          what tells assistive tech the same thing without a second
+          announcement. */}
+      <div className="ndn-cal-range">
+        <p className="ndn-cal-month" aria-live="polite">
+          {formatDateRange(firstDayOnGrid ?? currentTime, lastDayOnGrid ?? currentTime, locale)}
+        </p>
+        {refreshing && (
+          <span className="ndn-cal-refreshing">
+            <Spinner size="sm" />
+            {strings.refreshingLabel}
+          </span>
+        )}
+      </div>
+
+      {/* The one thing a failed *refresh* says. `role="alert"`, not
+          `status`: something went wrong, and unlike the loading region this
+          one is not what `account-a11y.setup.ts` counts down to zero. The
+          month underneath it is still the last good one. */}
+      {refreshFailed && <p role="alert">{strings.refreshFailedLabel}</p>}
+
+      {/* `aria-busy` while the next window is in flight — the grid below is
+          genuinely the outgoing month for those few hundred milliseconds,
+          and this is how that is said to anything that is not looking at
+          the ring above. No dimming to go with it: opacity over a muted
+          token is how this stylesheet's own comment says text quietly drops
+          below 4.5:1. */}
+      <div className="ndn-cal-scroll" aria-busy={refreshing}>
         <table className="ndn-cal-grid">
           <caption className={visuallyHiddenClassName}>{strings.gridCaption}</caption>
           <thead>

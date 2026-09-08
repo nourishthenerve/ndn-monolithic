@@ -10,12 +10,15 @@
 // Only `personal{}` is editable here — `fullName`, `phone`,
 // `marketingOptIn` — never `email` (bound to the signed-in identity) and
 // never `clinical{}` (a clinician's own patch, not built into this page).
+import { Button } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
+
+import { PanelPlaceholder } from './PanelPlaceholder.js';
 
 export interface PatientProfileData {
   readonly personal: {
@@ -166,11 +169,11 @@ export function PatientProfile({
   };
 
   if (state.status === 'loading') {
-    return (
-      <p role="status" aria-live="polite">
-        {strings.loadingLabel}
-      </p>
-    );
+    // 2026-09-08: a form-shaped skeleton rather than one line of text. This
+    // panel sits inside "Patient Details" on a dashboard where four other
+    // areas are fetching at the same time, and a page of one-line waits was
+    // what made signing in feel stalled — see `PanelPlaceholder`.
+    return <PanelPlaceholder label={strings.loadingLabel} shape="form" />;
   }
   if (state.status === 'forbidden') {
     return <p role="alert">{strings.forbiddenLabel}</p>;
@@ -188,13 +191,31 @@ export function PatientProfile({
           {strings.savedLabel}
         </p>
       )}
-      <p>
-        <label htmlFor="patient-email">{strings.emailLabel}</label>
-        <input id="patient-email" type="email" value={state.profile.personal.email} disabled readOnly />
-      </p>
-      <p>
-        <label htmlFor="patient-full-name">{strings.fullNameLabel}</label>
+      {/* 2026-09-08: the three classes below are packages/ui's own — the
+          ones its `Input` primitive already emits — rather than new ones
+          invented here. This panel writes its fields by hand because two of
+          them are `disabled readOnly` and one is a checkbox, which that
+          primitive does not model; borrowing its classes is what keeps a
+          hand-written field looking like every other field on the site. */}
+      <p className="ndn-input-wrapper">
+        <label className="ndn-input-label" htmlFor="patient-email">
+          {strings.emailLabel}
+        </label>
         <input
+          className="ndn-input"
+          id="patient-email"
+          type="email"
+          value={state.profile.personal.email}
+          disabled
+          readOnly
+        />
+      </p>
+      <p className="ndn-input-wrapper">
+        <label className="ndn-input-label" htmlFor="patient-full-name">
+          {strings.fullNameLabel}
+        </label>
+        <input
+          className="ndn-input"
           id="patient-full-name"
           type="text"
           value={fullName}
@@ -203,9 +224,12 @@ export function PatientProfile({
           disabled={isSaving}
         />
       </p>
-      <p>
-        <label htmlFor="patient-phone">{strings.phoneLabel}</label>
+      <p className="ndn-input-wrapper">
+        <label className="ndn-input-label" htmlFor="patient-phone">
+          {strings.phoneLabel}
+        </label>
         <input
+          className="ndn-input"
           id="patient-phone"
           type="tel"
           value={phone}
@@ -214,7 +238,7 @@ export function PatientProfile({
         />
       </p>
       <p>
-        <label htmlFor="patient-marketing-opt-in">
+        <label className="ndn-checkbox" htmlFor="patient-marketing-opt-in">
           <input
             id="patient-marketing-opt-in"
             type="checkbox"
@@ -225,9 +249,11 @@ export function PatientProfile({
           {strings.marketingOptInLabel}
         </label>
       </p>
-      <button type="submit" disabled={isSaving}>
-        {isSaving ? strings.savingLabel : strings.saveLabel}
-      </button>
+      <p className="ndn-panel-actions">
+        <Button type="submit" disabled={isSaving}>
+          {isSaving ? strings.savingLabel : strings.saveLabel}
+        </Button>
+      </p>
     </form>
   );
 }

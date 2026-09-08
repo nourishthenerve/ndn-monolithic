@@ -7,7 +7,7 @@
 // boundary, not this component. A patient who reaches this page sees the
 // identical form and an identical 403 on submit; nothing about D-29's
 // "no self-service for patients" is enforced client-side.
-import { Heading } from '@ndn/ui';
+import { Button, Heading } from '@ndn/ui';
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -130,9 +130,12 @@ export function ChangePasswordPanel({
       <Heading level={headingLevel}>{strings.heading}</Heading>
       <p>{strings.intro}</p>
       <form onSubmit={(event) => void handleSubmit(event)}>
-        <p>
-          <label htmlFor="change-password-current">{strings.currentPasswordLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="change-password-current">
+            {strings.currentPasswordLabel}
+          </label>
           <input
+            className="ndn-input"
             id="change-password-current"
             type="password"
             autoComplete="current-password"
@@ -142,9 +145,12 @@ export function ChangePasswordPanel({
             onChange={(event) => setFields((f) => ({ ...f, currentPassword: event.target.value }))}
           />
         </p>
-        <p>
-          <label htmlFor="change-password-new">{strings.newPasswordLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="change-password-new">
+            {strings.newPasswordLabel}
+          </label>
           <input
+            className="ndn-input"
             id="change-password-new"
             type="password"
             autoComplete="new-password"
@@ -154,9 +160,12 @@ export function ChangePasswordPanel({
             onChange={(event) => setFields((f) => ({ ...f, newPassword: event.target.value }))}
           />
         </p>
-        <p>
-          <label htmlFor="change-password-confirm">{strings.confirmPasswordLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="change-password-confirm">
+            {strings.confirmPasswordLabel}
+          </label>
           <input
+            className="ndn-input"
             id="change-password-confirm"
             type="password"
             autoComplete="new-password"
@@ -172,9 +181,11 @@ export function ChangePasswordPanel({
         {status === 'policyViolation' && <p role="alert">{strings.policyViolationError}</p>}
         {status === 'error' && <p role="alert">{strings.error}</p>}
         {status === 'success' && <p role="status">{strings.successMessage}</p>}
-        <button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? strings.submitting : strings.submitButton}
-        </button>
+        <p className="ndn-panel-actions">
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting ? strings.submitting : strings.submitButton}
+          </Button>
+        </p>
       </form>
     </section>
   );

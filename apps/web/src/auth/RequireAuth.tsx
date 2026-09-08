@@ -11,6 +11,7 @@
 // opacity — a protected fragment that is in the DOM and merely invisible
 // is a protected fragment anyone can read with a devtools panel or a
 // screen reader that ignores the styling.
+import { Loading } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -91,11 +92,15 @@ export function RequireAuth({
     // told the page is working, which is the same information a sighted
     // user gets from the text. No label, no region — an empty live region
     // announces nothing and is worse than none.
-    return loadingLabel ? (
-      <p role="status" aria-live="polite">
-        {loadingLabel}
-      </p>
-    ) : null;
+    //
+    // 2026-09-08: the same region, now with a turning ring beside the
+    // sentence. Resolving a session means a token exchange before a single
+    // island can decide whether to render, and on the account dashboard
+    // that is the *first* of two waits — so a page that only said "Loading
+    // your account…" in static text was the point at which the owner
+    // reported the dashboard feeling stalled rather than busy. `Loading`
+    // keeps the role, the politeness and the sentence exactly as they were.
+    return loadingLabel ? <Loading label={loadingLabel} /> : null;
   }
 
   if (state.status !== 'signed-in') {
