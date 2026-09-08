@@ -301,14 +301,22 @@ export const RICH_TEXT_GROUPS: readonly RichTextGroup[] = [
 /**
  * The highlight colour `hiliteColor` is given.
  *
- * A pale brand tint rather than the browser default of bright yellow, and
+ * A pale accent tint rather than the browser default of bright yellow, and
  * fixed rather than chosen — see the `highlight` control's own note. What the
  * command emits varies by engine (`<span style="background-color:…">` or a
  * `<font>`); `sanitize.ts` unwraps both, which is why the published page
  * takes its highlight styling from `<mark>` and this value only ever affects
  * what the author sees while typing.
+ *
+ * A literal hex, and the one colour in apps/web that still is one:
+ * `document.execCommand('hiliteColor', false, …)` is handed a colour value by
+ * the browser's own editing engine and has no way to resolve a custom
+ * property. It must equal `--ndn-color-accent-soft`, which is what
+ * `rich-text/styles.ts` paints `<mark>` with — otherwise a highlight changes
+ * colour the moment the post is published. This file's test asserts the two
+ * agree rather than trusting whoever edits the palette next.
  */
-export const HIGHLIGHT_COLOR = '#cdeee5';
+export const HIGHLIGHT_COLOR = '#e9e2f4';
 
 /**
  * The markup the table control inserts.

@@ -24,6 +24,19 @@
 // change. The archives it still registers are reached from the landing
 // page's own "read all articles" / "see all workshops" links, and the legal
 // pages from the footer.
+//
+// **2026-09-07: the brand link is the mark plus the wordmark.** It was the
+// site name set in bold Inter, which is a page title rather than a brand.
+// `public/logo-mark.png` is the owner's own artwork (a brain that is also a
+// leaf, held in a hand) with its studio background knocked out to
+// transparency, so it sits on the header, the paper ground and a tinted band
+// alike.
+//
+// The `<img>` carries `alt=""` deliberately. It is decorative *here*: the
+// wordmark beside it is real text inside the same link, so a described image
+// would make a screen reader announce the practice's name twice for one
+// control. `width`/`height` are set so the header does not reflow when it
+// loads.
 import { t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 
@@ -43,8 +56,8 @@ const { locale } = Astro.props;
 // `AstroRawText`, which it can't distinguish from real page copy.
 const navStylesCss = `
 .ndn-nav-header {
-  border-block-end: 1px solid rgba(0, 0, 0, 0.08);
-  background-color: #ffffff;
+  border-block-end: 1px solid var(--ndn-color-border);
+  background-color: var(--ndn-color-surface-raised);
 }
 
 .ndn-nav-header nav {
@@ -55,15 +68,40 @@ const navStylesCss = `
   gap: 1rem;
   max-width: 68rem;
   margin-inline: auto;
-  padding-block: 1rem;
+  padding-block: 0.875rem;
   padding-inline: 1.25rem;
 }
 
 .ndn-nav-brand {
-  font-weight: 700;
-  font-size: 1.125rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
   text-decoration: none;
   color: var(--ndn-color-text);
+}
+
+.ndn-nav-mark {
+  display: block;
+  width: auto;
+  height: 2.5rem;
+}
+
+/* The wordmark, in the display serif at a size that lets its high-contrast
+   strokes actually show. Cormorant runs small for its point size, hence the
+   step up from the surrounding UI rather than the step down a bold sans
+   would want. */
+.ndn-nav-wordmark {
+  font-family: var(--ndn-font-family-display);
+  font-weight: var(--ndn-font-weight-display);
+  font-size: 1.5rem;
+  line-height: 1.1;
+  letter-spacing: 0.005em;
+}
+
+.ndn-nav-brand:focus-visible {
+  outline: 2px solid var(--ndn-color-focus-ring);
+  outline-offset: 4px;
+  border-radius: 0.25rem;
 }
 
 .ndn-nav-list {
@@ -75,12 +113,41 @@ const navStylesCss = `
   margin: 0;
   padding: 0;
 }
+
+/* The header's own controls read as one quiet pill each, whichever of the
+   two the session island renders — an underlined link and a filled green
+   button side by side is what a header looks like when nobody has decided.
+   Both selectors are (0,2,0), so they beat packages/ui's own .ndn-link and
+   .ndn-button--primary without needing !important or a variant prop this
+   island has no way to pass. */
+.ndn-nav-list .ndn-link,
+.ndn-nav-list .ndn-button {
+  padding-block: 0.4375rem;
+  padding-inline: 1rem;
+  border: 1px solid var(--ndn-color-border-strong);
+  border-radius: 999px;
+  background-color: transparent;
+  color: var(--ndn-color-brand);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.ndn-nav-list .ndn-link:hover,
+.ndn-nav-list .ndn-button:hover:not(:disabled) {
+  background-color: var(--ndn-color-brand-wash);
+  border-color: var(--ndn-color-brand);
+  color: var(--ndn-color-brand-strong);
+}
 `;
 ---
 
 <header class="ndn-nav-header">
   <nav aria-label={t('nav.primaryLabel', undefined, locale)}>
-    <a class="ndn-nav-brand" href={`/${locale}`}>{siteName}</a>
+    <a class="ndn-nav-brand" href={`/${locale}`}>
+      <img class="ndn-nav-mark" src="/logo-mark.png" alt="" width="34" height="40" />
+      <span class="ndn-nav-wordmark">{siteName}</span>
+    </a>
     {/* The island renders its own `<ul>` rather than `<li>`s into one
         written here, and that is a correctness fix rather than a layout
         choice: Astro wraps a `client:only` island in an `<astro-island>`

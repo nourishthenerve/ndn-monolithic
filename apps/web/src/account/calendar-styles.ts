@@ -47,9 +47,9 @@ export const appointmentCalendarStylesCss = `
   min-height: 2.75rem;
   min-width: 2.75rem;
   padding-inline: 0.75rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 0.5rem;
-  background-color: #ffffff;
+  border: 1px solid var(--ndn-color-border-strong);
+  border-radius: 999px;
+  background-color: var(--ndn-color-surface-raised);
   color: var(--ndn-color-text);
   font: inherit;
   cursor: pointer;
@@ -59,6 +59,8 @@ export const appointmentCalendarStylesCss = `
 .ndn-cal-step:hover,
 .ndn-cal-today:hover {
   border-color: var(--ndn-color-brand);
+  background-color: var(--ndn-color-brand-wash);
+  color: var(--ndn-color-brand-strong);
 }
 
 /* Restated rather than inherited from .ndn-interactive: these are plain
@@ -93,7 +95,7 @@ export const appointmentCalendarStylesCss = `
   /* Tinted rather than filled: the join control inside it is the thing that
      should read as the strongest element on the calendar, and a solid brand
      panel behind a solid brand button flattens both. */
-  background-color: rgba(10, 110, 90, 0.08);
+  background-color: var(--ndn-color-brand-wash);
   font-weight: 500;
 }
 
@@ -112,10 +114,10 @@ export const appointmentCalendarStylesCss = `
   align-items: center;
   min-height: 2.75rem;
   padding-inline: 1.25rem;
-  border-radius: 0.5rem;
+  border-radius: 999px;
   background-color: var(--ndn-color-brand);
-  color: #ffffff;
-  font-weight: 600;
+  color: var(--ndn-color-surface-raised);
+  font-weight: 500;
   text-decoration: none;
 }
 
@@ -153,12 +155,12 @@ export const appointmentCalendarStylesCss = `
 
 .ndn-cal-cell {
   padding: 0;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--ndn-color-border);
   vertical-align: top;
 }
 
 .ndn-cal-cell--selected {
-  background-color: rgba(10, 110, 90, 0.08);
+  background-color: var(--ndn-color-brand-wash);
 }
 
 /* 2026-09-07: box-sizing, and the bug it fixes.
@@ -201,7 +203,7 @@ export const appointmentCalendarStylesCss = `
 /* The only thing distinguishing a pressable square from an empty one is that
    it has something in it. A hover state says so before the press. */
 .ndn-cal-day--busy:hover {
-  background-color: rgba(10, 110, 90, 0.06);
+  background-color: var(--ndn-color-brand-wash);
 }
 
 /* A rolling window has no "days from the next month" to grey out — every
@@ -235,28 +237,28 @@ export const appointmentCalendarStylesCss = `
   line-height: 1.4;
   white-space: nowrap;
   text-overflow: ellipsis;
-  background-color: rgba(10, 110, 90, 0.12);
-  color: #06483b;
+  background-color: var(--ndn-color-brand-soft);
+  color: var(--ndn-color-brand-strong);
 }
 
 .ndn-cal-chip--pending-approval {
-  background-color: rgba(146, 94, 0, 0.14);
-  color: #5c3b00;
+  background-color: var(--ndn-color-warning-soft);
+  color: var(--ndn-color-warning);
 }
 
 .ndn-cal-chip--completed {
-  background-color: rgba(0, 0, 0, 0.07);
-  color: #3f4650;
+  background-color: var(--ndn-color-neutral-soft);
+  color: var(--ndn-color-text-muted);
 }
 
 .ndn-cal-chip--no-show {
-  background-color: rgba(179, 38, 30, 0.12);
-  color: #8a1d17;
+  background-color: var(--ndn-color-error-soft);
+  color: var(--ndn-color-error);
 }
 
 .ndn-cal-chip--cancelled {
-  background-color: rgba(0, 0, 0, 0.07);
-  color: #3f4650;
+  background-color: var(--ndn-color-neutral-soft);
+  color: var(--ndn-color-text-muted);
   text-decoration: line-through;
 }
 
@@ -265,11 +267,13 @@ export const appointmentCalendarStylesCss = `
    passes through, so it has to win over whichever status rule already
    applied to the same chip. Filled rather than tinted, matching the banner's
    own button, so the square and the call-to-action read as the same fact.
-   6.19:1 on white text, well past the 4.5:1 this size of text needs. */
+   The raised-surface colour on solid brand is one of the pairs
+   packages/ui's color.test.ts checks by name (solidFillLabelContrast), so
+   the ratio this used to state in a comment is now asserted. */
 .ndn-cal-chip--live {
   background-color: var(--ndn-color-brand);
-  color: #ffffff;
-  font-weight: 600;
+  color: var(--ndn-color-surface-raised);
+  font-weight: 500;
 }
 
 /* The narrow-screen stand-in for the time chips — see the component. One dot
@@ -285,20 +289,20 @@ export const appointmentCalendarStylesCss = `
   width: 0.4375rem;
   height: 0.4375rem;
   border-radius: 50%;
-  background-color: #0a6e5a;
+  background-color: var(--ndn-color-brand);
 }
 
 .ndn-cal-dot--pending-approval {
-  background-color: #925e00;
+  background-color: var(--ndn-color-warning);
 }
 
 .ndn-cal-dot--completed,
 .ndn-cal-dot--cancelled {
-  background-color: #6b7280;
+  background-color: var(--ndn-color-text-muted);
 }
 
 .ndn-cal-dot--no-show {
-  background-color: #b3261e;
+  background-color: var(--ndn-color-error);
 }
 
 /* The narrow-screen half of the live mark, and last for the same reason.
@@ -308,7 +312,7 @@ export const appointmentCalendarStylesCss = `
    literal.) */
 .ndn-cal-dot--live {
   background-color: var(--ndn-color-brand);
-  box-shadow: 0 0 0 2px rgba(10, 110, 90, 0.3);
+  box-shadow: 0 0 0 2px var(--ndn-color-brand-soft);
 }
 
 /* A seventh of a phone is about 38px of usable cell, where "9:30 AM"
@@ -349,9 +353,9 @@ export const appointmentCalendarStylesCss = `
 .ndn-cal-day-list > li {
   padding-block: 0.75rem;
   padding-inline: 1rem;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 0.5rem;
-  background-color: #ffffff;
+  border: 1px solid var(--ndn-color-border);
+  border-radius: 0.75rem;
+  background-color: var(--ndn-color-surface-raised);
 }
 
 .ndn-cal-when {
@@ -388,9 +392,9 @@ export const appointmentCalendarStylesCss = `
   min-height: 2.25rem;
   padding-block: 0.375rem;
   padding-inline: 0.75rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 0.375rem;
-  background-color: #ffffff;
+  border: 1px solid var(--ndn-color-border-strong);
+  border-radius: 999px;
+  background-color: var(--ndn-color-surface-raised);
   color: var(--ndn-color-text);
   font: inherit;
   font-size: 0.875rem;
@@ -400,6 +404,8 @@ export const appointmentCalendarStylesCss = `
 
 .ndn-cal-action:hover:not(:disabled) {
   border-color: var(--ndn-color-brand);
+  background-color: var(--ndn-color-brand-wash);
+  color: var(--ndn-color-brand-strong);
 }
 
 .ndn-cal-action:disabled {

@@ -6,10 +6,12 @@
 // invites: a duplicate id (two buttons sharing a roving-tabindex position), a
 // control with no label (an unnamed button on a toolbar of glyphs), or a
 // command whose output `rich-text/policy.ts` would then throw away.
+import { colorSchemeCssVariables } from '@ndn/ui';
 import { describe, expect, it } from 'vitest';
 
 import { ALLOWED_TAGS } from '../rich-text/policy.js';
 import { isSafeRichText } from '../rich-text/render.js';
+import { proseStylesCss } from '../rich-text/styles.js';
 
 import { HIGHLIGHT_COLOR, RICH_TEXT_CONTROLS, RICH_TEXT_GROUPS, TABLE_HTML } from './rich-text-controls.js';
 
@@ -99,5 +101,15 @@ describe('what the insert controls produce', () => {
       ['foreColor', 'backColor'].includes(control.command ?? ''),
     );
     expect(colourControls).toEqual([]);
+  });
+
+  // The one literal colour left in apps/web, because execCommand cannot be
+  // handed a custom property (see HIGHLIGHT_COLOR's own note). If the palette
+  // moves and this does not, an author's highlight changes colour between the
+  // editor and the published post — silently, and only for text already
+  // written.
+  it('matches the accent tint <mark> is published with', () => {
+    expect(HIGHLIGHT_COLOR).toBe(colorSchemeCssVariables('light')['--ndn-color-accent-soft']);
+    expect(proseStylesCss).toContain('background-color: var(--ndn-color-accent-soft)');
   });
 });

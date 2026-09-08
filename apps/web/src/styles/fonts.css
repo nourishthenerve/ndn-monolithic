@@ -1,5 +1,5 @@
 /* TASK 1.2.3: self-hosted Inter (Latin subset, OFL-1.1 — see
- * ../assets/fonts/LICENSE.txt), replacing the legacy site's http://
+ * ../assets/fonts/LICENSE-inter.txt), replacing the legacy site's http://
  * Google Fonts dependency. No external font `<link>`/`@import` anywhere —
  * this file is imported by BaseLayout.astro, and Vite resolves each
  * `url()` below against ../assets/fonts, copying the referenced .woff2
@@ -7,7 +7,23 @@
  * match packages/ui's tokens/type.ts fontWeight tokens (regular/medium/
  * bold) exactly — a fourth weight would need a fourth @font-face, not a
  * change to this comment's claim of "the weights actually used".
+ *
+ * 2026-09-07: Cormorant Garamond joins it as the display family (OFL-1.1 —
+ * see ../assets/fonts/LICENSE-cormorant-garamond.txt), at 600 and nothing
+ * else. It is a headline face here: every heading on the site, the wordmark
+ * beside the logo, and the landing page's pull quotes. `font-display: swap`
+ * on both, and `type.ts`'s fallback stack is picked so the swap does not move
+ * layout much — but a serif heading arriving late is a far smaller problem
+ * than body copy would be, which is the other half of why prose stays Inter.
  */
+
+@font-face {
+  font-family: 'Cormorant Garamond';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../assets/fonts/cormorant-garamond-latin-600-normal.woff2') format('woff2');
+}
 
 @font-face {
   font-family: 'Inter';

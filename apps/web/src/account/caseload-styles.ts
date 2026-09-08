@@ -48,9 +48,9 @@ export const caseloadStylesCss = `
 
 .ndn-caseload-scroll {
   overflow-x: auto;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 0.5rem;
-  background-color: #ffffff;
+  border: 1px solid var(--ndn-color-border-strong);
+  border-radius: 0.75rem;
+  background-color: var(--ndn-color-surface-raised);
 }
 
 .ndn-caseload-table {
@@ -66,9 +66,11 @@ export const caseloadStylesCss = `
 .ndn-caseload-caption {
   padding-block: 0.875rem;
   padding-inline: 1rem;
-  font-weight: 700;
+  font-family: var(--ndn-font-family-display);
+  font-weight: var(--ndn-font-weight-display);
+  font-size: 1.25rem;
   text-align: start;
-  border-block-end: 1px solid rgba(0, 0, 0, 0.1);
+  border-block-end: 1px solid var(--ndn-color-border);
 }
 
 .ndn-caseload-table th {
@@ -80,19 +82,19 @@ export const caseloadStylesCss = `
   text-transform: uppercase;
   text-align: start;
   color: var(--ndn-color-text-muted);
-  background-color: #f6f8f8;
-  border-block-end: 1px solid rgba(0, 0, 0, 0.1);
+  background-color: var(--ndn-color-surface-muted);
+  border-block-end: 1px solid var(--ndn-color-border);
 }
 
 .ndn-caseload-table td {
   padding-block: 0.75rem;
   padding-inline: 1rem;
   vertical-align: middle;
-  border-block-start: 1px solid rgba(0, 0, 0, 0.07);
+  border-block-start: 1px solid var(--ndn-color-border);
 }
 
 .ndn-caseload-table tbody tr:hover {
-  background-color: rgba(10, 110, 90, 0.04);
+  background-color: var(--ndn-color-brand-wash);
 }
 
 .ndn-caseload-name {
@@ -110,7 +112,10 @@ export const caseloadStylesCss = `
 /* The column a clinician scans first, so status reads as a shape and a
    colour before it reads as a word. Every pair below is a dark foreground on
    a light tint of the same hue — the same construction the calendar chips
-   use, and well clear of 4.5:1. */
+   use. Since 2026-09-07 both halves of each pair are tokens, and
+   packages/ui's color.test.ts walks tintForegroundPairs to prove every one
+   of them still clears 4.5:1; before that the ratios were hand-checked once
+   and then trusted. */
 .ndn-caseload-status {
   display: inline-block;
   padding-block: 0.125rem;
@@ -119,24 +124,24 @@ export const caseloadStylesCss = `
   font-size: 0.8125rem;
   font-weight: 500;
   white-space: nowrap;
-  background-color: rgba(0, 0, 0, 0.07);
-  color: #3f4650;
+  background-color: var(--ndn-color-neutral-soft);
+  color: var(--ndn-color-text-muted);
 }
 
 .ndn-caseload-status--approved {
-  background-color: rgba(10, 110, 90, 0.12);
-  color: #06483b;
+  background-color: var(--ndn-color-brand-soft);
+  color: var(--ndn-color-brand-strong);
 }
 
 .ndn-caseload-status--pending {
-  background-color: rgba(146, 94, 0, 0.14);
-  color: #5c3b00;
+  background-color: var(--ndn-color-warning-soft);
+  color: var(--ndn-color-warning);
 }
 
 .ndn-caseload-status--declined,
 .ndn-caseload-status--suspended {
-  background-color: rgba(179, 38, 30, 0.12);
-  color: #8a1d17;
+  background-color: var(--ndn-color-error-soft);
+  color: var(--ndn-color-error);
 }
 
 .ndn-caseload-select {
@@ -145,8 +150,8 @@ export const caseloadStylesCss = `
   padding-block: 0.25rem;
   padding-inline: 0.5rem;
   border: 1px solid var(--ndn-color-text-muted);
-  border-radius: 0.375rem;
-  background-color: #ffffff;
+  border-radius: 0.5rem;
+  background-color: var(--ndn-color-surface-raised);
   color: var(--ndn-color-text);
   font: inherit;
   font-size: 0.875rem;
@@ -156,9 +161,9 @@ export const caseloadStylesCss = `
   min-height: 2.25rem;
   padding-block: 0.375rem;
   padding-inline: 0.75rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 0.375rem;
-  background-color: #ffffff;
+  border: 1px solid var(--ndn-color-border-strong);
+  border-radius: 999px;
+  background-color: var(--ndn-color-surface-raised);
   color: var(--ndn-color-text);
   font: inherit;
   font-size: 0.875rem;
@@ -169,6 +174,8 @@ export const caseloadStylesCss = `
 
 .ndn-caseload-button:hover:not(:disabled) {
   border-color: var(--ndn-color-brand);
+  background-color: var(--ndn-color-brand-wash);
+  color: var(--ndn-color-brand-strong);
 }
 
 .ndn-caseload-button:disabled {

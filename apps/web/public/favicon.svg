@@ -1,4 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#0a6e5a"/>
-  <text x="16" y="23" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#ffffff" text-anchor="middle">N</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Nourish the Nerve">
+  <rect width="32" height="32" rx="7" fill="#4e6136"/>
+  <circle cx="16" cy="9.8" r="6.4" fill="#c3b4e8"/>
+  <path d="M16 28.5V11" stroke="#f8f6f1" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M14.8 21.2c-5 .5-7.5-2.2-7.7-6.4 4.4-.7 7.5 1.7 7.7 6.4z" fill="#f8f6f1"/>
+  <path d="M17.2 26c5 .5 7.5-2.2 7.7-6.4-4.4-.7-7.5 1.7-7.7 6.4z" fill="#f8f6f1"/>
 </svg>

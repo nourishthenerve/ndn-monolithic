@@ -25,6 +25,17 @@
  * every heading on every page that happens to include this file.
  */
 export const proseStylesCss = `
+/* 2026-09-07: a measure. An article used to set as wide as the page column
+   gave it — 68rem, which is around 150 characters a line at body size, and
+   roughly twice what anyone can read without losing their place returning to
+   the left margin. The cap is on the container rather than on p, so a list, a
+   quote and a table all sit inside the same column as the paragraphs they
+   belong with; anything genuinely wider than the measure (a wide table) still
+   scrolls in its own box, which it already did. */
+.ndn-prose {
+  max-width: 68ch;
+}
+
 .ndn-prose > *:first-child {
   margin-block-start: 0;
 }
@@ -39,22 +50,36 @@ export const proseStylesCss = `
 }
 
 /* Two levels down from the page title, which is the document's own h1 — the
-   editor demotes a pasted h1 to h2 for exactly this reason. */
+   editor demotes a pasted h1 to h2 for exactly this reason.
+
+   2026-09-07: these carry the display serif too. An article's own headings
+   are the one place where prose written by a clinician meets the site's
+   typography, and a sans h2 under a serif h1 read as two documents. Only the
+   headings — the body of a post stays Inter, because that is what a reader
+   works through paragraph after paragraph. */
+.ndn-prose h2,
+.ndn-prose h3,
+.ndn-prose h4 {
+  font-family: var(--ndn-font-family-display);
+  font-weight: var(--ndn-font-weight-display);
+  color: var(--ndn-color-text);
+}
+
 .ndn-prose h2 {
-  margin-block: 2rem 0.75rem;
-  font-size: 1.5rem;
-  line-height: 1.3;
+  margin-block: 2.25rem 0.75rem;
+  font-size: 1.75rem;
+  line-height: 1.2;
 }
 
 .ndn-prose h3 {
   margin-block: 1.75rem 0.5rem;
-  font-size: 1.25rem;
-  line-height: 1.35;
+  font-size: 1.375rem;
+  line-height: 1.25;
 }
 
 .ndn-prose h4 {
   margin-block: 1.5rem 0.5rem;
-  font-size: 1.0625rem;
+  font-size: 1.125rem;
 }
 
 .ndn-prose ul,
@@ -78,8 +103,8 @@ export const proseStylesCss = `
 .ndn-prose blockquote {
   margin-block: 0 1.25rem;
   margin-inline: 0;
-  padding-inline-start: 1rem;
-  border-inline-start: 3px solid var(--ndn-color-brand);
+  padding-inline-start: 1.125rem;
+  border-inline-start: 2px solid var(--ndn-color-accent);
   color: var(--ndn-color-text-muted);
   font-style: italic;
 }
@@ -88,7 +113,7 @@ export const proseStylesCss = `
   margin-block: 0 1.25rem;
   padding: 0.875rem 1rem;
   border-radius: 0.5rem;
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: var(--ndn-color-neutral-soft);
   /* A code block is the one place in an article where a line must not be
      re-flowed, so it scrolls in its own box rather than widening the page. */
   overflow-x: auto;
@@ -101,7 +126,7 @@ export const proseStylesCss = `
 .ndn-prose code {
   padding-inline: 0.25rem;
   border-radius: 0.25rem;
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: var(--ndn-color-neutral-soft);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.9375em;
 }
@@ -112,26 +137,34 @@ export const proseStylesCss = `
   font-size: inherit;
 }
 
-/* The one highlight the toolbar offers. A pale brand tint with the body text
-   colour left alone, so the pair is the same 4.5:1 the rest of the page is
-   held to whatever an author highlights. */
+/* The one highlight the toolbar offers. A pale accent tint with the body
+   text colour left alone, so the pair is the same 4.5:1 the rest of the page
+   is held to whatever an author highlights.
+
+   account/rich-text-controls.ts's HIGHLIGHT_COLOR is this same colour as a
+   literal hex, because document.execCommand('hiliteColor', ...) is handed a
+   colour and cannot resolve a custom property. That file's own test asserts
+   the two agree rather than leaving it to whoever edits one of them next.
+   (No backtick in this block: the file is one template literal.) */
 .ndn-prose mark {
   padding-inline: 0.125rem;
   border-radius: 0.125rem;
-  background-color: #cdeee5;
+  background-color: var(--ndn-color-accent-soft);
   color: var(--ndn-color-text);
 }
 
 .ndn-prose hr {
   margin-block: 2rem;
   border: 0;
-  border-top: 1px solid rgba(0, 0, 0, 0.12);
+  border-top: 1px solid var(--ndn-color-border-strong);
 }
 
 .ndn-prose a {
   color: var(--ndn-color-brand);
   text-decoration: underline;
-  text-underline-offset: 0.15em;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: var(--ndn-color-border-strong);
 }
 
 .ndn-prose img {
@@ -165,13 +198,13 @@ export const proseStylesCss = `
 .ndn-prose th,
 .ndn-prose td {
   padding: 0.5rem 0.75rem;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--ndn-color-border-strong);
   text-align: start;
   vertical-align: top;
 }
 
 .ndn-prose th {
-  background-color: rgba(0, 0, 0, 0.04);
+  background-color: var(--ndn-color-surface-muted);
   font-weight: 600;
 }
 `;
@@ -192,10 +225,10 @@ export const richTextEditorStylesCss = `
   flex-wrap: wrap;
   gap: 0.25rem 0.75rem;
   padding: 0.5rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--ndn-color-border-strong);
   border-radius: 0.5rem 0.5rem 0 0;
   border-block-end: 0;
-  background-color: #f7f8f8;
+  background-color: var(--ndn-color-surface-muted);
 }
 
 .ndn-rte-group {
@@ -209,7 +242,7 @@ export const richTextEditorStylesCss = `
    own: nothing should be announced between two buttons. */
 .ndn-rte-group + .ndn-rte-group {
   padding-inline-start: 0.75rem;
-  border-inline-start: 1px solid rgba(0, 0, 0, 0.12);
+  border-inline-start: 1px solid var(--ndn-color-border-strong);
 }
 
 .ndn-rte-button {
@@ -232,8 +265,8 @@ export const richTextEditorStylesCss = `
 }
 
 .ndn-rte-button:hover:not(:disabled) {
-  border-color: rgba(0, 0, 0, 0.16);
-  background-color: #ffffff;
+  border-color: var(--ndn-color-border-strong);
+  background-color: var(--ndn-color-surface-raised);
 }
 
 .ndn-rte-button:focus-visible {
@@ -246,8 +279,8 @@ export const richTextEditorStylesCss = `
 .ndn-rte-button[aria-pressed='true'],
 .ndn-rte-button[aria-pressed='true']:hover {
   border-color: var(--ndn-color-brand);
-  background-color: rgba(10, 110, 90, 0.12);
-  color: #06483b;
+  background-color: var(--ndn-color-brand-soft);
+  color: var(--ndn-color-brand-strong);
 }
 
 .ndn-rte-button:disabled {
@@ -268,9 +301,9 @@ export const richTextEditorStylesCss = `
 .ndn-rte-preview {
   min-height: 18rem;
   padding: 1rem 1.125rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--ndn-color-border-strong);
   border-radius: 0 0 0.5rem 0.5rem;
-  background-color: #ffffff;
+  background-color: var(--ndn-color-surface-raised);
   /* An author is writing an article, not filling in a field: the surface
      should read at the size the published page reads at. */
   font-size: 1rem;
@@ -283,15 +316,15 @@ export const richTextEditorStylesCss = `
 }
 
 .ndn-rte-preview {
-  background-color: #fbfbfa;
+  background-color: var(--ndn-color-surface);
 }
 
 .ndn-rte-preview-notice {
   margin-block: 0;
   padding: 0.5rem 0.75rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--ndn-color-border-strong);
   border-block-end: 0;
-  background-color: rgba(10, 110, 90, 0.08);
+  background-color: var(--ndn-color-brand-wash);
   font-size: 0.875rem;
 }
 
@@ -301,9 +334,9 @@ export const richTextEditorStylesCss = `
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--ndn-color-border-strong);
   border-block-end: 0;
-  background-color: #ffffff;
+  background-color: var(--ndn-color-surface-raised);
 }
 
 .ndn-rte-panel--stacked {
@@ -330,16 +363,16 @@ export const richTextEditorStylesCss = `
   min-height: 2.5rem;
   padding-inline: 0.625rem;
   border: 1px solid var(--ndn-color-text-muted);
-  border-radius: 0.375rem;
+  border-radius: 0.5rem;
   font: inherit;
 }
 
 .ndn-rte-panel-action {
   min-height: 2.5rem;
   padding-inline: 0.875rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 0.375rem;
-  background-color: #ffffff;
+  border: 1px solid var(--ndn-color-border-strong);
+  border-radius: 999px;
+  background-color: var(--ndn-color-surface-raised);
   color: var(--ndn-color-text);
   font: inherit;
   cursor: pointer;
