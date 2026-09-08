@@ -44,12 +44,30 @@ packages:
 #     converges on one copy; @smithy/types has no runtime code (interfaces
 #     only), so this is safe to force regardless of which package asked
 #     for the newer one.
+#   2026-09-08: three advisories published after PR #204 merged, so CI
+#     went red on main and on every open branch at once without a line of
+#     this repo's own code changing. Two of the three are transitive under
+#     Astro and one is under the Core Web Vitals and load-test tooling —
+#     none of them has an upstream release that carries the fix yet, which
+#     is what an override is for.
+#     js-yaml is pinned twice because two incompatible majors are
+#     installed and each has its own advisory: 3.x (GHSA-2883-xcg3-v3hh,
+#     high) via @lhci/cli and artillery, 4.x (same advisory, separate
+#     range) via @astrojs/internal-helpers. A single unscoped `js-yaml`
+#     override would force one major on both and break whichever parent
+#     did not ask for it, so each range is pinned to its own patch —
+#     3.15.2 and 4.3.2, the versions the advisory itself names.
+#     svgo <4.1.0 (GHSA-w27v-7q3p-w38r, high) via astro's own asset
+#     pipeline. astro 7.3.1 is current and still resolves 4.0.2.
 overrides:
   nanoid: '^3.3.18'
   tmp: '^0.2.7'
   '@puppeteer/browsers': '^3.2.1'
   uuid: '^11.1.1'
   '@smithy/types': '4.17.0'
+  'js-yaml@3': '^3.15.2'
+  'js-yaml@4': '^4.3.2'
+  svgo: '^4.1.0'
 allowBuilds:
   esbuild: true
   # TASK 5.1.1: all three reached only through artillery's own optional
