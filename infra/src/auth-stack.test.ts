@@ -468,7 +468,12 @@ describe('AuthStack — managed login branding (found missing live, 2026-08-27)'
       ClientId: unknown;
       UseCognitoProvidedValues?: boolean;
       Settings?: unknown;
-      Assets?: ReadonlyArray<{ Category: string; ColorMode: string; Extension: string }>;
+      Assets?: ReadonlyArray<{
+        Category: string;
+        ColorMode: string;
+        Extension: string;
+        Bytes: string;
+      }>;
     };
   }
 
@@ -502,6 +507,50 @@ describe('AuthStack — managed login branding (found missing live, 2026-08-27)'
       expect(categories.sort()).toEqual(
         ['FAVICON_ICO:DARK', 'FAVICON_ICO:LIGHT', 'FAVICON_SVG:DARK', 'FAVICON_SVG:LIGHT'].sort(),
       );
+    }
+  });
+
+  // Found live, 2026-09-08, on the production deploy of the olive-and-lavender
+  // theme. The redrawn `apps/web/public/favicon.svg` carried `role="img"` and
+  // `aria-label` on its root element — harmless in a browser, and rejected
+  // outright by Cognito:
+  //
+  //   Invalid assets provided. Validation errors: [{category: FAVICON_SVG,
+  //   extension: SVG, colorMode: LIGHT, errorMessage: "element
+  //   [svg#role|aria-label] is not allowed."}, ...]
+  //
+  // `NdnAuthStack` is stack 3 of 4, so its rollback took the whole deploy
+  // down with it and `NdnWebStack` — the site itself — never shipped. A
+  // favicon is referenced through `<link rel="icon">` and never rendered
+  // inline, so the ARIA it carried did nothing for anyone even before it
+  // broke the deploy.
+  //
+  // Asserted against the bytes the template actually carries, not against the
+  // file on disk, so it covers whatever `auth-stack.ts` ends up sending.
+  it('sends an SVG whose root element carries only attributes Cognito accepts', () => {
+    // Cognito publishes no allow-list, so this is the conservative reading of
+    // the one error it gave: presentation and geometry, nothing semantic.
+    const permittedRootAttributes = new Set(['xmlns', 'xmlns:xlink', 'viewBox', 'width', 'height', 'fill']);
+
+    for (const branding of brandings()) {
+      const svgAssets = (branding.Properties.Assets ?? []).filter(
+        (asset) => asset.Category === 'FAVICON_SVG',
+      );
+      expect(svgAssets.length).toBeGreaterThan(0);
+
+      for (const asset of svgAssets) {
+        const svg = Buffer.from(asset.Bytes, 'base64').toString('utf-8');
+        const rootTag = /<svg\b([^>]*)>/.exec(svg)?.[1];
+        expect(rootTag, 'the asset should contain an <svg> root element').toBeDefined();
+
+        const attributeNames = [...(rootTag ?? '').matchAll(/([\w:-]+)\s*=/g)].map(
+          (match) => match[1],
+        );
+        expect(attributeNames.length).toBeGreaterThan(0);
+        for (const name of attributeNames) {
+          expect(permittedRootAttributes, `<svg ${name}=…> is rejected by Cognito`).toContain(name);
+        }
+      }
     }
   });
 });
