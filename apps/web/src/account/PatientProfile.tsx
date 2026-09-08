@@ -197,58 +197,64 @@ export function PatientProfile({
           them are `disabled readOnly` and one is a checkbox, which that
           primitive does not model; borrowing its classes is what keeps a
           hand-written field looking like every other field on the site. */}
-      <p className="ndn-input-wrapper">
-        <label className="ndn-input-label" htmlFor="patient-email">
-          {strings.emailLabel}
-        </label>
-        <input
-          className="ndn-input"
-          id="patient-email"
-          type="email"
-          value={state.profile.personal.email}
-          disabled
-          readOnly
-        />
-      </p>
-      <p className="ndn-input-wrapper">
-        <label className="ndn-input-label" htmlFor="patient-full-name">
-          {strings.fullNameLabel}
-        </label>
-        <input
-          className="ndn-input"
-          id="patient-full-name"
-          type="text"
-          value={fullName}
-          onChange={(event) => setFullName(event.target.value)}
-          required
-          disabled={isSaving}
-        />
-      </p>
-      <p className="ndn-input-wrapper">
-        <label className="ndn-input-label" htmlFor="patient-phone">
-          {strings.phoneLabel}
-        </label>
-        <input
-          className="ndn-input"
-          id="patient-phone"
-          type="tel"
-          value={phone}
-          onChange={(event) => setPhone(event.target.value)}
-          disabled={isSaving}
-        />
-      </p>
-      <p>
-        <label className="ndn-checkbox" htmlFor="patient-marketing-opt-in">
+      {/* 2026-09-08: the four fields sit in the record's own field grid, so
+          the patient's copy of "Patient Details" is laid out the same way
+          the staff copy on `patient-record` is — two or more across rather
+          than one per line down a 68rem column. See `record-styles.ts`. */}
+      <div className="ndn-record-fields">
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="patient-email">
+            {strings.emailLabel}
+          </label>
           <input
-            id="patient-marketing-opt-in"
-            type="checkbox"
-            checked={marketingOptIn}
-            onChange={(event) => setMarketingOptIn(event.target.checked)}
+            className="ndn-input"
+            id="patient-email"
+            type="email"
+            value={state.profile.personal.email}
+            disabled
+            readOnly
+          />
+        </p>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="patient-full-name">
+            {strings.fullNameLabel}
+          </label>
+          <input
+            className="ndn-input"
+            id="patient-full-name"
+            type="text"
+            value={fullName}
+            onChange={(event) => setFullName(event.target.value)}
+            required
             disabled={isSaving}
           />
-          {strings.marketingOptInLabel}
-        </label>
-      </p>
+        </p>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="patient-phone">
+            {strings.phoneLabel}
+          </label>
+          <input
+            className="ndn-input"
+            id="patient-phone"
+            type="tel"
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            disabled={isSaving}
+          />
+        </p>
+        <p className="ndn-record-field ndn-record-field--checkbox">
+          <label className="ndn-checkbox" htmlFor="patient-marketing-opt-in">
+            <input
+              id="patient-marketing-opt-in"
+              type="checkbox"
+              checked={marketingOptIn}
+              onChange={(event) => setMarketingOptIn(event.target.checked)}
+              disabled={isSaving}
+            />
+            {strings.marketingOptInLabel}
+          </label>
+        </p>
+      </div>
       <p className="ndn-panel-actions">
         <Button type="submit" disabled={isSaving}>
           {isSaving ? strings.savingLabel : strings.saveLabel}

@@ -20,12 +20,15 @@
 // the server answers 403 and this says so. That is the same posture every
 // island in this directory takes: the boundary is `can()`, and a form that
 // guessed would only ever guess differently from it.
+import { Button, Heading } from '@ndn/ui';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 
 import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
+
+import type { PanelHeadingLevel } from './heading-level.js';
 
 type BookingState = 'idle' | 'busy' | 'booked' | 'conflict' | 'forbidden' | 'failed';
 
@@ -45,6 +48,13 @@ export interface AppointmentBookingStrings {
 
 export interface AppointmentBookingProps {
   readonly strings: AppointmentBookingStrings;
+  /**
+   * 2026-09-08: the level this panel's own title renders at — the same seam
+   * every other panel in this directory grew on 2026-09-06. It was a
+   * hard-coded `<h2>`, which on the record page sits *inside* the `<h2>`
+   * area heading it belongs to and so read as a sibling of it.
+   */
+  readonly headingLevel?: PanelHeadingLevel;
   /**
    * Injectable for tests; defaults to the `?id=` on the current URL — the
    * same one `PatientRecordPanel` and `AssessmentForm` resolve on this
@@ -102,6 +112,7 @@ function patientIdFromLocation(): string {
 
 export function AppointmentBooking({
   strings,
+  headingLevel = 2,
   patientId,
   onBooked,
   client = defaultClient,
@@ -161,60 +172,80 @@ export function AppointmentBooking({
   }
 
   return (
-    <section aria-labelledby="appointment-booking-heading">
-      <h2 id="appointment-booking-heading">{strings.heading}</h2>
+    <section className="ndn-record-section" aria-labelledby="appointment-booking-heading">
+      <Heading
+        className="ndn-record-subheading"
+        level={headingLevel}
+        id="appointment-booking-heading"
+      >
+        {strings.heading}
+      </Heading>
       <form
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
         }}
       >
-        <p>
-          <label htmlFor="appointment-when">{strings.whenLabel}</label>
-          <input
-            id="appointment-when"
-            type="datetime-local"
-            required
-            value={when}
-            disabled={busy}
-            onChange={(event) => {
-              setWhen(event.target.value);
-              setState('idle');
-            }}
-          />
+        {/* Label above control, two across — the same field grid the
+            assessment form and the details panel are laid out in. See
+            `record-styles.ts`. */}
+        <div className="ndn-record-fields">
+          <p className="ndn-input-wrapper">
+            <label className="ndn-input-label" htmlFor="appointment-when">
+              {strings.whenLabel}
+            </label>
+            <input
+              className="ndn-input"
+              id="appointment-when"
+              type="datetime-local"
+              required
+              value={when}
+              disabled={busy}
+              onChange={(event) => {
+                setWhen(event.target.value);
+                setState('idle');
+              }}
+            />
+          </p>
+          <p className="ndn-input-wrapper">
+            <label className="ndn-input-label" htmlFor="appointment-duration">
+              {strings.durationLabel}
+            </label>
+            <input
+              className="ndn-input"
+              id="appointment-duration"
+              type="number"
+              min={5}
+              step={5}
+              required
+              value={durationMinutes}
+              disabled={busy}
+              onChange={(event) => {
+                setDurationMinutes(Number(event.target.value));
+                setState('idle');
+              }}
+            />
+          </p>
+        </div>
+        <p className="ndn-panel-actions">
+          <Button type="submit" disabled={busy || when === ''}>
+            {busy ? strings.busyLabel : strings.submitLabel}
+          </Button>
+          {/* A sub-clinician's booking lands `pending-approval`, so saying
+              only "booked" would overstate it. The principal's own booking
+              is confirmed immediately, and for them the notice is merely
+              redundant rather than wrong — which is a better trade than
+              guessing the reader's role to decide whether to show it. */}
+          {state === 'booked' && (
+            <>
+              <span role="status">{strings.successLabel}</span>{' '}
+              <span>{strings.pendingNoticeLabel}</span>
+            </>
+          )}
+          {state === 'conflict' && <span role="alert">{strings.conflictLabel}</span>}
+          {state === 'forbidden' && <span role="alert">{strings.forbiddenLabel}</span>}
+          {state === 'failed' && <span role="alert">{strings.failedLabel}</span>}
         </p>
-        <p>
-          <label htmlFor="appointment-duration">{strings.durationLabel}</label>
-          <input
-            id="appointment-duration"
-            type="number"
-            min={5}
-            step={5}
-            required
-            value={durationMinutes}
-            disabled={busy}
-            onChange={(event) => {
-              setDurationMinutes(Number(event.target.value));
-              setState('idle');
-            }}
-          />
-        </p>
-        <button type="submit" disabled={busy || when === ''}>
-          {busy ? strings.busyLabel : strings.submitLabel}
-        </button>
-        {/* A sub-clinician's booking lands `pending-approval`, so saying
-            only "booked" would overstate it. The principal's own booking
-            is confirmed immediately, and for them the notice is merely
-            redundant rather than wrong — which is a better trade than
-            guessing the reader's role to decide whether to show it. */}
-        {state === 'booked' && (
-          <>
-            <span role="status">{strings.successLabel}</span> <span>{strings.pendingNoticeLabel}</span>
-          </>
-        )}
-        {state === 'conflict' && <span role="alert">{strings.conflictLabel}</span>}
-        {state === 'forbidden' && <span role="alert">{strings.forbiddenLabel}</span>}
-        {state === 'failed' && <span role="alert">{strings.failedLabel}</span>}
       </form>
     </section>
   );

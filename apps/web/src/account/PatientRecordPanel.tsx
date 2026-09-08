@@ -45,6 +45,7 @@
 // of its own.
 import { defaultLocale, formatDateTime } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
+import { Button } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -529,15 +530,21 @@ export function PatientRecordPanel({
   return (
     <>
       {showBackLink && (
-        <p>
-          <a href={dashboardHref}>{strings.backToDashboard}</a>
+        <p className="ndn-record-backlink">
+          <a className="ndn-link" href={dashboardHref}>
+            {strings.backToDashboard}
+          </a>
         </p>
       )}
 
       {showDetails && (
-        <section>
+        <section className="ndn-record-section">
           {half === 'both' && <h2>{strings.detailsHeading}</h2>}
-          <dl>
+          {/* 2026-09-08: ruled label/answer rows rather than the browser's
+              own indented `<dl>`. See `record-styles.ts` — the whole record
+              reads as a document now, and this is the half of it that is
+              already settled. */}
+          <dl className="ndn-record-facts">
             {/* Read-only facts, above the form: the email is bound to the
               Cognito identity and cannot be edited here, and status and
               assignment are the principal's to change from the dashboard,
@@ -562,97 +569,116 @@ export function PatientRecordPanel({
           </dl>
           {mayEditDetails && (
             <form onSubmit={(event) => void handleSave(event)}>
-              <p>
-                <label htmlFor="record-full-name">{strings.fullNameLabel}</label>
-                <input
-                  id="record-full-name"
-                  type="text"
-                  required
-                  disabled={isSaving}
-                  value={fullName}
-                  onChange={(event) => {
-                    setFullName(event.target.value);
-                    setState((current) => (current === 'saved' ? 'ready' : current));
-                  }}
-                />
-              </p>
-              <p>
-                <label htmlFor="record-phone">{strings.phoneLabel}</label>
-                <input
-                  id="record-phone"
-                  type="tel"
-                  disabled={isSaving}
-                  value={phone}
-                  onChange={(event) => {
-                    setPhone(event.target.value);
-                    setState((current) => (current === 'saved' ? 'ready' : current));
-                  }}
-                />
-              </p>
-              <p>
-                <label htmlFor="record-marketing">
+              {/* The same three `packages/ui` classes `PatientProfile` uses
+                  for its hand-written fields, and the same grid the
+                  assessment form's own fields sit in. */}
+              <div className="ndn-record-fields">
+                <p className="ndn-input-wrapper">
+                  <label className="ndn-input-label" htmlFor="record-full-name">
+                    {strings.fullNameLabel}
+                  </label>
                   <input
-                    id="record-marketing"
-                    type="checkbox"
+                    className="ndn-input"
+                    id="record-full-name"
+                    type="text"
+                    required
                     disabled={isSaving}
-                    checked={marketingOptIn}
+                    value={fullName}
                     onChange={(event) => {
-                      setMarketingOptIn(event.target.checked);
+                      setFullName(event.target.value);
                       setState((current) => (current === 'saved' ? 'ready' : current));
                     }}
-                  />{' '}
-                  {strings.marketingOptInLabel}
-                </label>
+                  />
+                </p>
+                <p className="ndn-input-wrapper">
+                  <label className="ndn-input-label" htmlFor="record-phone">
+                    {strings.phoneLabel}
+                  </label>
+                  <input
+                    className="ndn-input"
+                    id="record-phone"
+                    type="tel"
+                    disabled={isSaving}
+                    value={phone}
+                    onChange={(event) => {
+                      setPhone(event.target.value);
+                      setState((current) => (current === 'saved' ? 'ready' : current));
+                    }}
+                  />
+                </p>
+                <p className="ndn-record-field ndn-record-field--checkbox">
+                  <label className="ndn-checkbox" htmlFor="record-marketing">
+                    <input
+                      id="record-marketing"
+                      type="checkbox"
+                      disabled={isSaving}
+                      checked={marketingOptIn}
+                      onChange={(event) => {
+                        setMarketingOptIn(event.target.checked);
+                        setState((current) => (current === 'saved' ? 'ready' : current));
+                      }}
+                    />{' '}
+                    {strings.marketingOptInLabel}
+                  </label>
+                </p>
+              </div>
+              {/* 2026-09-08: the `Button` pill, not a bare `<button>` — the
+                  same swap every other panel on these pages took, so one
+                  screen does not hold two different-looking save controls.
+                  The status message joins it on `.ndn-panel-actions`, which
+                  is the shape the primitive stylesheet already models. */}
+              <p className="ndn-panel-actions">
+                <Button type="submit" disabled={isSaving || fullName.trim().length === 0}>
+                  {isSaving ? strings.saving : strings.saveButton}
+                </Button>
+                {state === 'error' && <span role="alert">{strings.errorLabel}</span>}
+                {state === 'saved' && <span role="status">{strings.savedMessage}</span>}
               </p>
-              {state === 'error' && <p role="alert">{strings.errorLabel}</p>}
-              {state === 'saved' && <p role="status">{strings.savedMessage}</p>}
-              <button type="submit" disabled={isSaving || fullName.trim().length === 0}>
-                {isSaving ? strings.saving : strings.saveButton}
-              </button>
             </form>
           )}
         </section>
       )}
 
       {showAppointments && (
-        <section>
+        <section className="ndn-record-section">
           {half === 'both' && <h2>{strings.appointmentsHeading}</h2>}
           {appointmentsFailed && <p role="alert">{strings.appointmentsError}</p>}
           {decideFailed && <p role="alert">{strings.decideFailedLabel}</p>}
           {!appointmentsFailed && appointments && appointments.length === 0 && (
-            <p>{strings.appointmentsEmpty}</p>
+            <p className="ndn-record-note">{strings.appointmentsEmpty}</p>
           )}
           {!appointmentsFailed && appointments && appointments.length > 0 && (
-            <table>
-              <caption>{strings.appointmentsHeading}</caption>
-              <thead>
-                <tr>
-                  <th scope="col">{strings.whenColumnLabel}</th>
-                  <th scope="col">{strings.durationColumnLabel}</th>
-                  <th scope="col">{strings.appointmentStatusColumnLabel}</th>
-                  <th scope="col">{strings.decisionColumnLabel}</th>
-                  <th scope="col">{strings.joinCallLabel}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {appointments.map((appointment) => (
-                  <tr key={appointment.scheduledAt}>
-                    {/* The stored value is UTC ISO-8601; `<time>` carries it
+            <div className="ndn-record-scroll">
+              <table className="ndn-record-table">
+                <caption>{strings.appointmentsHeading}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{strings.whenColumnLabel}</th>
+                    <th scope="col">{strings.durationColumnLabel}</th>
+                    <th scope="col">{strings.appointmentStatusColumnLabel}</th>
+                    <th scope="col">{strings.decisionColumnLabel}</th>
+                    <th scope="col">{strings.joinCallLabel}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {appointments.map((appointment) => (
+                    <tr key={appointment.scheduledAt}>
+                      {/* The stored value is UTC ISO-8601; `<time>` carries it
                       machine-readably while the text renders in the site's
                       own locale, in whatever timezone the reader is
                       actually in. `formatDateTime`, never
                       `toLocaleString()` — see
                       `packages/i18n/src/datetime.ts`. */}
-                    <td>
-                      <time dateTime={appointment.scheduledAt}>
-                        {formatDateTime(appointment.scheduledAt, locale)}
-                      </time>
-                    </td>
-                    <td>
-                      {appointment.durationMinutes} {strings.minutesSuffix}
-                    </td>
-                    <td>{appointment.appointment_status}</td>
-                    {/* 2026-09-02: the approval queue, on the page where the
+                      <td>
+                        <time dateTime={appointment.scheduledAt}>
+                          {formatDateTime(appointment.scheduledAt, locale)}
+                        </time>
+                      </td>
+                      <td>
+                        {appointment.durationMinutes} {strings.minutesSuffix}
+                      </td>
+                      <td>{appointment.appointment_status}</td>
+                      {/* 2026-09-02: the approval queue, on the page where the
                       booking was made and the page the dashboard clicks
                       through to — which is what the owner meant by "visible
                       to patient dashboard to be approved". Every booking now
@@ -664,27 +690,28 @@ export function PatientRecordPanel({
                       Principal-only and the API refuses everyone else, so a
                       clinician looking at their own pending request gets a
                       legible refusal instead of a row with no explanation. */}
-                    <td>
-                      {mayDecide && appointment.appointment_status === 'pending-approval' ? (
-                        <>
-                          <button
-                            type="button"
-                            disabled={deciding === appointment.scheduledAt}
-                            onClick={() => void decide(appointment.scheduledAt, 'approve')}
-                          >
-                            {strings.approveButton}
-                          </button>{' '}
-                          <button
-                            type="button"
-                            disabled={deciding === appointment.scheduledAt}
-                            onClick={() => void decide(appointment.scheduledAt, 'decline')}
-                          >
-                            {strings.declineButton}
-                          </button>
-                        </>
-                      ) : null}
-                    </td>
-                    {/* 2026-09-03: the join column, and the reason this
+                      <td>
+                        {mayDecide && appointment.appointment_status === 'pending-approval' ? (
+                          <span className="ndn-record-cell-actions">
+                            <Button
+                              size="sm"
+                              disabled={deciding === appointment.scheduledAt}
+                              onClick={() => void decide(appointment.scheduledAt, 'approve')}
+                            >
+                              {strings.approveButton}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              disabled={deciding === appointment.scheduledAt}
+                              onClick={() => void decide(appointment.scheduledAt, 'decline')}
+                            >
+                              {strings.declineButton}
+                            </Button>
+                          </span>
+                        ) : null}
+                      </td>
+                      {/* 2026-09-03: the join column, and the reason this
                       table has one at all. The clinician who reported
                       that no join button appeared was on this page — the
                       only screen in the app that lists a *named* patient's
@@ -699,20 +726,21 @@ export function PatientRecordPanel({
                       `scheduled` row — a pending booking has nothing to
                       join and `ws-join.ts` would refuse it, and a
                       cancelled or already-marked one is not happening. */}
-                    <td>
-                      {mayJoin && appointment.appointment_status === 'scheduled' ? (
-                        <JoinCallCell
-                          appointment={{ ...appointment, patientId: id }}
-                          locale={locale}
-                          now={currentTime}
-                          joinCallLabel={strings.joinCallLabel}
-                        />
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <td>
+                        {mayJoin && appointment.appointment_status === 'scheduled' ? (
+                          <JoinCallCell
+                            appointment={{ ...appointment, patientId: id }}
+                            locale={locale}
+                            now={currentTime}
+                            joinCallLabel={strings.joinCallLabel}
+                          />
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
       )}

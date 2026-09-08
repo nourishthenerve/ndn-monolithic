@@ -47,6 +47,7 @@ import { Heading } from '@ndn/ui';
 import { AppointmentBooking } from '../../../account/AppointmentBooking.js';
 import { AssessmentForm } from '../../../account/AssessmentForm.js';
 import { PatientRecordPanel } from '../../../account/PatientRecordPanel.js';
+import { patientRecordStylesCss } from '../../../account/record-styles.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
@@ -134,7 +135,7 @@ const assessmentStrings = {
         deleted — its table is a section of the dashboard now, so "back to
         dashboard" points at the dashboard, where the table it means
         actually is. It renders once, with this half. */}
-    <section aria-labelledby="patient-details-heading">
+    <section class="ndn-record-area" aria-labelledby="patient-details-heading">
       <Heading level={2} id="patient-details-heading">
         {t('account.section.patientDetails', undefined, locale)}
       </Heading>
@@ -202,7 +203,7 @@ const assessmentStrings = {
         at all for a helpdesk or visitor session, so the heading is gated
         alongside it rather than left standing over an empty area. */}
     <RequireAuth client:only="react" allowRoles={['principal-clinician', 'sub-clinician']}>
-      <section aria-labelledby="patient-assessment-heading">
+      <section class="ndn-record-area" aria-labelledby="patient-assessment-heading">
         <Heading level={2} id="patient-assessment-heading">
           {t('account.section.patientAssessment', undefined, locale)}
         </Heading>
@@ -226,7 +227,7 @@ const assessmentStrings = {
       client:only="react"
       allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk']}
     >
-      <section aria-labelledby="patient-prescription-heading">
+      <section class="ndn-record-area" aria-labelledby="patient-prescription-heading">
         <Heading level={2} id="patient-prescription-heading">
           {t('account.section.patientPrescription', undefined, locale)}
         </Heading>
@@ -249,7 +250,7 @@ const assessmentStrings = {
         the reason `AppointmentBooking.tsx` gives: a booking is *about a
         patient*, and this is the page where one has been chosen. It reads
         the same `?id=` every island above resolves. */}
-    <section aria-labelledby="patient-appointments-heading">
+    <section class="ndn-record-area" aria-labelledby="patient-appointments-heading">
       <Heading level={2} id="patient-appointments-heading">
         {t('account.section.patientAppointments', undefined, locale)}
       </Heading>
@@ -304,6 +305,7 @@ const assessmentStrings = {
       >
         <AppointmentBooking
           client:only="react"
+          headingLevel={PANEL_HEADING_LEVEL}
           strings={{
             heading: t('appointmentBooking.heading', undefined, locale),
             whenLabel: t('appointmentBooking.when', undefined, locale),
@@ -329,3 +331,9 @@ const assessmentStrings = {
     </section>
   </RequireAuth>
 </BaseLayout>
+
+{/* The record's own stylesheet — the four areas above drawn as a document
+    rather than as a run of unstyled elements. One `<style set:html>`, the
+    same way every other page here injects its stylesheet; this site's CSP
+    admits no other kind. */}
+<style set:html={patientRecordStylesCss} />

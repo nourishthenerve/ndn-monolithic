@@ -284,7 +284,7 @@ describe('what each role is shown', () => {
 });
 
 describe('attachments', () => {
-  it('lists a section\'s files with a way to open each', async () => {
+  it("lists a section's files with a way to open each", async () => {
     render(
       <AssessmentForm
         strings={STRINGS}
@@ -400,9 +400,7 @@ describe('attachments', () => {
 
 describe('states that are not a form', () => {
   it('asks staff to choose a patient when no id is on the URL', async () => {
-    render(
-      <AssessmentForm strings={STRINGS} patientId="" client={client(UNKNOWN_POOL_TOKEN)} />,
-    );
+    render(<AssessmentForm strings={STRINGS} patientId="" client={client(UNKNOWN_POOL_TOKEN)} />);
     expect(await screen.findByText(STRINGS.missingIdLabel)).toBeDefined();
   });
 
@@ -854,7 +852,12 @@ describe('groups and grids', () => {
     fieldSet: 'private',
     title: 'Patient Assessment Form',
     fields: [
-      { id: 'clinicianImpression', label: 'Clinical impression', type: 'textarea', group: '35. Clinical impression' },
+      {
+        id: 'clinicianImpression',
+        label: 'Clinical impression',
+        type: 'textarea',
+        group: '35. Clinical impression',
+      },
       MEDICATIONS,
     ],
   };
@@ -900,6 +903,45 @@ describe('groups and grids', () => {
     // and a flat run of controls under one title is not a form.
     expect(await screen.findByRole('heading', { name: '35. Clinical impression' })).toBeDefined();
     expect(screen.getByRole('heading', { name: '7. Medication review' })).toBeDefined();
+  });
+
+  // 2026-09-08: a group heading nests under the section title when there
+  // *is* one, and takes the section's own level when the page wrote the
+  // title itself. Both pages that mount this component pass
+  // `showTitles={false}`, so the second case is the one they actually
+  // render — and getting it wrong put an <h4> directly under the page's
+  // <h2>, which axe reports as a skipped heading level. Asserted at the
+  // level rather than by name because the level is the whole point.
+  it('nests a group heading under the section title', async () => {
+    renderAssessment();
+    expect(
+      await screen.findByRole('heading', { name: '35. Clinical impression', level: 3 }),
+    ).toBeDefined();
+  });
+
+  it('takes the section level for a group heading when the page wrote the title', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        headingLevel={3}
+        showTitles={false}
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() =>
+          ok(
+            payloadFor({
+              template: [ASSESSMENT_SECTION],
+              permissions: PERMISSIONS(true),
+              items: [],
+            }),
+          )
+        }
+      />,
+    );
+    expect(
+      await screen.findByRole('heading', { name: '35. Clinical impression', level: 3 }),
+    ).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'Patient Assessment Form' })).toBeNull();
   });
 
   it('renders a grid as a table with a column per declared column', async () => {
@@ -1090,12 +1132,8 @@ describe('save controls', () => {
     // DOM order, which is what decides whether the top one is reachable
     // without scrolling: heading, save, fields, save.
     const firstField = screen.getByLabelText('Preferred name');
-    expect(buttons[0]!.compareDocumentPosition(firstField)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-    expect(buttons[1]!.compareDocumentPosition(firstField)).toBe(
-      Node.DOCUMENT_POSITION_PRECEDING,
-    );
+    expect(buttons[0]!.compareDocumentPosition(firstField)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(buttons[1]!.compareDocumentPosition(firstField)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
   });
 
   it('saves from the top control, not only the bottom one', async () => {

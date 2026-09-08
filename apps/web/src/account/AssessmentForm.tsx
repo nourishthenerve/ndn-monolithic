@@ -98,14 +98,7 @@ export type AssessmentRow = Readonly<Record<string, AssessmentRowValue>>;
 export type AssessmentValue = AssessmentRowValue | readonly AssessmentRow[];
 
 export type AssessmentFieldType =
-  | 'text'
-  | 'textarea'
-  | 'select'
-  | 'date'
-  | 'datetime'
-  | 'number'
-  | 'checkbox'
-  | 'rows';
+  'text' | 'textarea' | 'select' | 'date' | 'datetime' | 'number' | 'checkbox' | 'rows';
 
 /** One column of a grid. Cannot itself be a grid, so a table never nests. */
 export interface AssessmentColumnDef {
@@ -595,6 +588,19 @@ export function AssessmentForm({
   uploadFile = defaultUploadFile,
   openUrl = (url) => window.open(url, '_blank', 'noopener'),
 }: AssessmentFormProps): ReactNode {
+  /**
+   * The level a heading *inside* a section takes — a group's title, or the
+   * attachments block's.
+   *
+   * 2026-09-08: it now follows whether a section title was actually
+   * emitted, rather than always nesting one deeper. With
+   * `showTitles={false}` the page wrote the area's own `<h2>` and this
+   * component writes nothing between that and these, so nesting put an
+   * `<h4>` straight under an `<h2>` — a skipped level, which is what axe's
+   * `heading-order` reports. The fix is to nest under a heading that
+   * exists.
+   */
+  const innerHeadingLevel = showTitles ? nestedHeadingLevel(headingLevel) : headingLevel;
   const [state, setState] = useState<ViewState>('loading');
   const [payload, setPayload] = useState<FormPayload | undefined>();
   const [isPatientViewer, setIsPatientViewer] = useState(false);
@@ -626,51 +632,54 @@ export function AssessmentForm({
    * to discard. That was already true of the manual button; auto-save
    * would have made it happen to somebody every half minute.
    */
-  const load = useCallback(async (options: { readonly silent?: boolean } = {}) => {
-    if (options.silent !== true) {
-      setState('loading');
-    }
-    const accessToken = await client.authorization();
-    if (!accessToken) {
-      setState('forbidden');
-      return;
-    }
-    // The viewer's role decides one thing only: whether the `staffOnly`
-    // tag field is editable. `undefined` — a token this bundle cannot read
-    // — is not "patient"; it falls through to leaving the field editable
-    // and letting the server refuse, the same "hide on a positive answer,
-    // never on a shrug" rule token-claims.ts states.
-    const role = viewerRoleFromAccessToken(accessToken);
-    setIsPatientViewer(role === 'patient');
-    const id = patientId ?? (role === 'patient' ? 'me' : patientIdFromLocation());
-    setResolvedId(id);
-    if (!id) {
-      setState('ready');
-      return;
-    }
-    try {
-      const response = await fetchForm(accessToken, id);
-      if (response.status === 401 || response.status === 403) {
+  const load = useCallback(
+    async (options: { readonly silent?: boolean } = {}) => {
+      if (options.silent !== true) {
+        setState('loading');
+      }
+      const accessToken = await client.authorization();
+      if (!accessToken) {
         setState('forbidden');
         return;
       }
-      if (response.status === 404) {
-        setState('notFound');
+      // The viewer's role decides one thing only: whether the `staffOnly`
+      // tag field is editable. `undefined` — a token this bundle cannot read
+      // — is not "patient"; it falls through to leaving the field editable
+      // and letting the server refuse, the same "hide on a positive answer,
+      // never on a shrug" rule token-claims.ts states.
+      const role = viewerRoleFromAccessToken(accessToken);
+      setIsPatientViewer(role === 'patient');
+      const id = patientId ?? (role === 'patient' ? 'me' : patientIdFromLocation());
+      setResolvedId(id);
+      if (!id) {
+        setState('ready');
         return;
       }
-      if (!response.ok) {
+      try {
+        const response = await fetchForm(accessToken, id);
+        if (response.status === 401 || response.status === 403) {
+          setState('forbidden');
+          return;
+        }
+        if (response.status === 404) {
+          setState('notFound');
+          return;
+        }
+        if (!response.ok) {
+          setState('error');
+          return;
+        }
+        setPayload((await response.json()) as FormPayload);
+        if (options.silent !== true) {
+          setDrafts({});
+        }
+        setState('ready');
+      } catch {
         setState('error');
-        return;
       }
-      setPayload((await response.json()) as FormPayload);
-      if (options.silent !== true) {
-        setDrafts({});
-      }
-      setState('ready');
-    } catch {
-      setState('error');
-    }
-  }, [client, fetchForm, patientId]);
+    },
+    [client, fetchForm, patientId],
+  );
 
   useEffect(() => {
     void load();
@@ -803,14 +812,14 @@ export function AssessmentForm({
     if (state !== 'ready' || !payload || !resolvedId || autosaving.current) {
       return;
     }
-    const candidates = (fieldSets
-      ? payload.template.filter((section) => fieldSets.includes(section.fieldSet))
-      : payload.template
+    const candidates = (
+      fieldSets
+        ? payload.template.filter((section) => fieldSets.includes(section.fieldSet))
+        : payload.template
     ).filter(
       (section) =>
         payload.permissions.find((permission) => permission.fieldSet === section.fieldSet)
-          ?.write === true &&
-        Object.keys(responsesToSave(section, drafts)).length > 0,
+          ?.write === true && Object.keys(responsesToSave(section, drafts)).length > 0,
     );
     if (candidates.length === 0) {
       return;
@@ -871,7 +880,6 @@ export function AssessmentForm({
 
   const isEditable = (section: AssessmentSectionDef, field: AssessmentFieldDef): boolean =>
     isFieldEditable(field, permissionFor(section.fieldSet), isPatientViewer);
-
 
   /**
    * Three steps, and the middle one does not go through this API at all:
@@ -1017,7 +1025,11 @@ export function AssessmentForm({
 
     if (column.type === 'select') {
       return (
-        <select aria-label={label} value={String(cell ?? '')} onChange={(e) => write(e.target.value)}>
+        <select
+          aria-label={label}
+          value={String(cell ?? '')}
+          onChange={(e) => write(e.target.value)}
+        >
           <option value="">—</option>
           {(column.options ?? []).map((option) => (
             <option key={option} value={option}>
@@ -1037,7 +1049,8 @@ export function AssessmentForm({
         />
       );
     }
-    const inputType = column.type === 'date' ? 'date' : column.type === 'number' ? 'number' : 'text';
+    const inputType =
+      column.type === 'date' ? 'date' : column.type === 'number' ? 'number' : 'text';
     return (
       <input
         type={inputType}
@@ -1066,13 +1079,18 @@ export function AssessmentForm({
       setDraft(section.fieldSet, field.id, next);
 
     return (
-      <div key={field.id}>
-        <p id={labelId}>{field.label}</p>
+      // A grid is never one of the two-or-three columns the surrounding
+      // field grid lays out; it takes the whole row (`--wide`), the same
+      // as a textarea does.
+      <div className="ndn-record-field ndn-record-field--wide" key={field.id}>
+        <p className="ndn-record-table-label" id={labelId}>
+          {field.label}
+        </p>
         {/* Some grids run to seven columns. A table that cannot scroll
             inside its own box makes the whole page scroll sideways, which
             on a phone means the save button is off-screen. */}
-        <div style={{ overflowX: 'auto' }}>
-          <table aria-labelledby={labelId}>
+        <div className="ndn-record-scroll">
+          <table className="ndn-record-table" aria-labelledby={labelId}>
             <thead>
               <tr>
                 {columns.map((column) => (
@@ -1116,7 +1134,7 @@ export function AssessmentForm({
             </tbody>
           </table>
         </div>
-        <p>
+        <p className="ndn-record-row-actions">
           <Button
             size="sm"
             variant="secondary"
@@ -1139,13 +1157,15 @@ export function AssessmentForm({
     const rows = rowsOf(valueOf(section, field));
     const columns = field.columns ?? [];
     return (
-      <div key={field.id}>
-        <p id={labelId}>{field.label}</p>
+      <div className="ndn-record-field ndn-record-field--wide" key={field.id}>
+        <p className="ndn-record-table-label" id={labelId}>
+          {field.label}
+        </p>
         {rows.length === 0 ? (
           <p>{'\u2014'}</p>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table aria-labelledby={labelId}>
+          <div className="ndn-record-scroll">
+            <table className="ndn-record-table" aria-labelledby={labelId}>
               <thead>
                 <tr>
                   {columns.map((column) => (
@@ -1187,11 +1207,21 @@ export function AssessmentForm({
       return renderRows(section, field);
     }
 
+    // Every editable field below borrows `packages/ui`'s own three classes
+    // — `.ndn-input-wrapper` (label above control, not beside it),
+    // `.ndn-input-label`, `.ndn-input` — rather than inventing its own, the
+    // same way `PatientProfile` writes its hand-built fields. Before this
+    // the label and its box shared a line and the box was the browser's
+    // default, which is what the owner meant by the form "lying one after
+    // the other in a row".
     if (field.type === 'select') {
       return (
-        <p key={field.id}>
-          <label htmlFor={inputId}>{field.label}</label>
+        <p className="ndn-input-wrapper" key={field.id}>
+          <label className="ndn-input-label" htmlFor={inputId}>
+            {field.label}
+          </label>
           <select
+            className="ndn-input"
             id={inputId}
             value={String(value)}
             onChange={(event) => setDraft(section.fieldSet, field.id, event.target.value)}
@@ -1209,8 +1239,11 @@ export function AssessmentForm({
 
     if (field.type === 'checkbox') {
       return (
-        <p key={field.id}>
-          <label htmlFor={inputId}>
+        // A tick box labels itself from the inside, so it cannot use
+        // `.ndn-input-wrapper`'s label-above-control stack — `.ndn-checkbox`
+        // is the primitive stylesheet's shape for exactly this.
+        <p className="ndn-record-field ndn-record-field--checkbox" key={field.id}>
+          <label className="ndn-checkbox" htmlFor={inputId}>
             <input
               id={inputId}
               type="checkbox"
@@ -1225,10 +1258,16 @@ export function AssessmentForm({
 
     if (field.type === 'textarea') {
       return (
-        <p key={field.id}>
-          <label htmlFor={inputId}>{field.label}</label>
+        // Prose takes the whole row of the field grid. A four-line box in a
+        // 15rem column is a box nobody can write in.
+        <p className="ndn-input-wrapper ndn-record-field--wide" key={field.id}>
+          <label className="ndn-input-label" htmlFor={inputId}>
+            {field.label}
+          </label>
           <textarea
+            className="ndn-input"
             id={inputId}
+            rows={4}
             value={String(value)}
             onChange={(event) => setDraft(section.fieldSet, field.id, event.target.value)}
           />
@@ -1245,9 +1284,12 @@ export function AssessmentForm({
             ? 'number'
             : 'text';
     return (
-      <p key={field.id}>
-        <label htmlFor={inputId}>{field.label}</label>
+      <p className="ndn-input-wrapper" key={field.id}>
+        <label className="ndn-input-label" htmlFor={inputId}>
+          {field.label}
+        </label>
         <input
+          className="ndn-input"
           id={inputId}
           type={inputType}
           value={String(value)}
@@ -1267,12 +1309,18 @@ export function AssessmentForm({
     const attachments = sectionOf(latest, section.fieldSet).attachments;
     const writable = permissionFor(section.fieldSet)?.write === true;
     return (
-      <>
-        <h3>{strings.attachmentsHeading}</h3>
+      // 2026-09-08: a real `Heading` at the level below this section's own,
+      // rather than the fixed `<h3>` this block used to hard-code — which
+      // on a page whose sections are already `<h3>` announced the files as
+      // a sibling of the section rather than as part of it.
+      <div className="ndn-record-attachments">
+        <Heading className="ndn-record-subheading" level={innerHeadingLevel}>
+          {strings.attachmentsHeading}
+        </Heading>
         {attachments.length === 0 ? (
           <p>{strings.attachmentsEmpty}</p>
         ) : (
-          <ul>
+          <ul className="ndn-record-attachment-list">
             {attachments.map((attachment) => (
               <li key={attachment.key}>
                 {attachment.fileName}{' '}
@@ -1288,8 +1336,10 @@ export function AssessmentForm({
           </ul>
         )}
         {writable && (
-          <p>
-            <label htmlFor={`assessment-file-${section.fieldSet}`}>{strings.addFileLabel}</label>
+          <p className="ndn-input-wrapper">
+            <label className="ndn-input-label" htmlFor={`assessment-file-${section.fieldSet}`}>
+              {strings.addFileLabel}
+            </label>
             <input
               id={`assessment-file-${section.fieldSet}`}
               type="file"
@@ -1312,7 +1362,7 @@ export function AssessmentForm({
             )}
           </p>
         )}
-      </>
+      </div>
     );
   };
 
@@ -1347,7 +1397,10 @@ export function AssessmentForm({
       return null;
     }
     return (
-      <p className="ndn-panel-actions" key={`${section.fieldSet}-save-${position}`}>
+      <p
+        className={`ndn-panel-actions ndn-record-actions--${position}`}
+        key={`${section.fieldSet}-save-${position}`}
+      >
         <Button disabled={saveState === 'saving'} onClick={() => void handleSave(section)}>
           {saveState === 'saving' ? strings.savingLabel : strings.saveLabel}
         </Button>
@@ -1378,7 +1431,7 @@ export function AssessmentForm({
   return (
     <>
       {showVersion && (
-        <p>
+        <p className="ndn-record-version">
           {strings.versionLabel} {payload.currentVersion}
         </p>
       )}
@@ -1387,6 +1440,7 @@ export function AssessmentForm({
         const saveState = saveStates[section.fieldSet] ?? 'idle';
         return (
           <section
+            className="ndn-record-section"
             key={section.fieldSet}
             aria-labelledby={showTitles ? `assessment-${section.fieldSet}-heading` : undefined}
           >
@@ -1395,10 +1449,10 @@ export function AssessmentForm({
                 {section.title}
               </Heading>
             )}
-            {!writable && <p>{strings.readOnlyLabel}</p>}
+            {!writable && <p className="ndn-record-note">{strings.readOnlyLabel}</p>}
             {section.fieldSet === 'calendar' &&
               payload.calendarSummary?.nextAppointmentAt === undefined && (
-                <p>{strings.noNextAppointmentLabel}</p>
+                <p className="ndn-record-note">{strings.noNextAppointmentLabel}</p>
               )}
             {saveControls(section, saveState, 'top')}
             {/* Grouped first, then split.
@@ -1430,13 +1484,26 @@ export function AssessmentForm({
               return (
                 <Fragment key={`${section.fieldSet}-${index}`}>
                   {group !== '' && (
-                    <Heading level={nestedHeadingLevel(headingLevel)}>{group}</Heading>
+                    <Heading className="ndn-record-group" level={innerHeadingLevel}>
+                      {group}
+                    </Heading>
                   )}
                   {readOnlyScalars.length > 0 && (
-                    <dl>{readOnlyScalars.map((field) => renderReadOnly(section, field))}</dl>
+                    <dl className="ndn-record-facts">
+                      {readOnlyScalars.map((field) => renderReadOnly(section, field))}
+                    </dl>
                   )}
                   {readOnlyGrids.map((field) => renderReadOnlyRows(section, field))}
-                  {editable.map((field) => renderField(section, field))}
+                  {/* Two to four fields across rather than one per line down
+                      a 68rem column — see `record-styles.ts`. The wrapper is
+                      emitted only when there is something to put in it, so a
+                      run that is entirely read-only does not leave an empty
+                      grid behind. */}
+                  {editable.length > 0 && (
+                    <div className="ndn-record-fields">
+                      {editable.map((field) => renderField(section, field))}
+                    </div>
+                  )}
                 </Fragment>
               );
             })}

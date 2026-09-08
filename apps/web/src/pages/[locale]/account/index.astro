@@ -103,6 +103,7 @@ import { ChangePasswordPanel } from '../../../account/ChangePasswordPanel.js';
 import { accountDashboardStylesCss } from '../../../account/dashboard-styles.js';
 import { OwnDetailsPanel } from '../../../account/OwnDetailsPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
+import { patientRecordStylesCss } from '../../../account/record-styles.js';
 import { TestimonialPanel } from '../../../account/TestimonialPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
@@ -388,7 +389,7 @@ const changePasswordStrings = {
           A second placement of `AppointmentCalendar`; the staff one above is
           gated to the three staff roles and this to `patient`, so exactly
           one of the two ever renders. */}
-      <section aria-labelledby="patient-appointments-heading">
+      <section class="ndn-record-area" aria-labelledby="patient-appointments-heading">
         <Heading level={2} id="patient-appointments-heading">
           {t('account.section.patientAppointments', undefined, locale)}
         </Heading>
@@ -413,7 +414,7 @@ const changePasswordStrings = {
           plan and diagnosis plan as I dont know when I define these
           sections"*). They are unmounted, not deleted — the API and its
           history are untouched. */}
-      <section aria-labelledby="patient-details-heading">
+      <section class="ndn-record-area" aria-labelledby="patient-details-heading">
         <Heading level={2} id="patient-details-heading">
           {t('account.section.patientDetails', undefined, locale)}
         </Heading>
@@ -448,7 +449,7 @@ const changePasswordStrings = {
       {/* ## 3. Patient Prescription — read-only for a patient
           (`prescription{}` grants them `R` and not `U`), which the form says
           in as many words rather than by offering disabled inputs. */}
-      <section aria-labelledby="patient-prescription-heading">
+      <section class="ndn-record-area" aria-labelledby="patient-prescription-heading">
         <Heading level={2} id="patient-prescription-heading">
           {t('account.section.patientPrescription', undefined, locale)}
         </Heading>
@@ -468,7 +469,7 @@ const changePasswordStrings = {
           /clinicians/me`) and refuses a patient, so inlining it here would
           render a permanent "you do not have access" panel on a patient's
           own dashboard. */}
-      <section aria-labelledby="patient-account-heading">
+      <section class="ndn-record-area" aria-labelledby="patient-account-heading">
         <Heading level={2} id="patient-account-heading">
           {t('account.section.patientAccount', undefined, locale)}
         </Heading>
@@ -482,7 +483,7 @@ const changePasswordStrings = {
       {/* ## 5. Patient Testimonial — `account/testimonial` inlined. The
           panel renders its own heading ("Your testimonial"), so it sits one
           level down inside this section like every other panel here. */}
-      <section aria-labelledby="patient-testimonial-heading">
+      <section class="ndn-record-area" aria-labelledby="patient-testimonial-heading">
         <Heading level={2} id="patient-testimonial-heading">
           {t('account.section.patientTestimonial', undefined, locale)}
         </Heading>
@@ -639,3 +640,8 @@ const changePasswordStrings = {
 <style set:html={appointmentCalendarStylesCss} />
 <style set:html={caseloadStylesCss} />
 <style set:html={accountDashboardStylesCss} />
+{/* The patient's own five sections are the same record `patient-record`
+    shows staff, so they are drawn from the same stylesheet — a patient and
+    a clinician looking at one record should not be looking at two different
+    documents. */}
+<style set:html={patientRecordStylesCss} />

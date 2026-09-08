@@ -328,11 +328,18 @@ body {
   color: var(--ndn-color-text);
 }
 
+/* 2026-09-08: this class is worn by <select> and <textarea> as well as
+   <input> now — the assessment form's fields are every one of the three,
+   and they had to look like each other. Hence font-family: inherit,
+   which none of those three elements does on its own: a form of them was
+   rendering in the UA's own Arial next to Inter labels, which is most of
+   what made the record page read as unstyled. */
 .ndn-input {
   padding-block: 0.625rem;
   padding-inline: 0.875rem;
   border: 1px solid var(--ndn-color-text-muted);
   border-radius: 0.5rem;
+  font-family: inherit;
   font-size: 1rem;
   color: var(--ndn-color-text);
   background-color: var(--ndn-color-surface-raised);
