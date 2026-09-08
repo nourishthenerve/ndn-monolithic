@@ -62,6 +62,8 @@ const STRINGS = {
   loadingLabel: 'Loading your calendar…',
   forbiddenLabel: 'No calendar for you.',
   errorLabel: 'Calendar failed.',
+  refreshingLabel: 'Updating…',
+  refreshFailedLabel: 'That period could not be loaded.',
   previousWeeksLabel: 'Previous two weeks',
   nextWeeksLabel: 'Next two weeks',
   todayLabel: 'Today',
@@ -490,6 +492,140 @@ describe('a clinician', () => {
     expect(screen.getAllByText(/Waiting for approval/).length).toBeGreaterThan(0);
     // Nothing to join until it is confirmed — `ws-join.ts` would refuse it.
     expect(screen.queryByRole('link', { name: 'Join call' })).toBeNull();
+  });
+});
+
+// 2026-09-08: *"when I change month in my calender the calender disappears
+// for a second before coming back again (keep the old month as is while the
+// nice month is being fetched)."*
+//
+// Only a clinician's calendar refetches on a window move (their endpoint
+// takes a range), so this is where the flicker was and where it is pinned.
+// Every assertion below is about what is on screen *while* the second
+// request is still open — a `Promise` this suite holds and resolves by hand,
+// because the whole behaviour lives in that gap.
+describe('moving the window keeps the month that is already drawn', () => {
+  /** A fetch whose second call never settles until this suite says so. */
+  function deferredSecondCall(first: readonly CalendarAppointment[]) {
+    let release!: (value: Response) => void;
+    let reject!: (reason?: unknown) => void;
+    const pending = new Promise<Response>((resolve, rejectFn) => {
+      release = resolve;
+      reject = rejectFn;
+    });
+    // Typed rather than a bare `vi.fn()`: the prop is a specific signature,
+    // and an untyped mock held in a variable (as opposed to written inline
+    // on the JSX attribute, where TS infers it contextually) does not
+    // satisfy it.
+    const fetchClinician = vi
+      .fn<(from: string, to: string, accessToken: string) => Promise<Response>>()
+      .mockResolvedValueOnce(jsonResponse(first))
+      .mockReturnValueOnce(pending);
+    return { fetchClinician, release, reject };
+  }
+
+  function renderClinician(fetchClinician: ReturnType<typeof deferredSecondCall>['fetchClinician']) {
+    return render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('sub-clinician')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={fetchClinician}
+      />,
+    );
+  }
+
+  it('leaves the grid, the toolbar and the day panel in place while the next window is in flight', async () => {
+    const { fetchClinician, release } = deferredSecondCall([
+      appointment(local(2026, 8, 15, 9, 0)),
+    ]);
+    const { container } = renderClinician(fetchClinician);
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+
+    (await screen.findByRole('button', { name: 'Previous two weeks' })).click();
+    await waitFor(() => expect(fetchClinician).toHaveBeenCalledTimes(2));
+
+    // The three things that used to disappear. The loading placeholder is
+    // the one thing that must *not* be here: it replaces the whole view.
+    expect(screen.queryByText('Loading your calendar…')).toBeNull();
+    expect(container.querySelector('.ndn-cal-grid')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Previous two weeks' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: /September 15, 2026/ })).toBeDefined();
+
+    // And it says a newer one is coming, in words and in aria-busy.
+    expect(screen.getByText('Updating…')).toBeDefined();
+    expect(container.querySelector('.ndn-cal-scroll')?.getAttribute('aria-busy')).toBe('true');
+
+    release(jsonResponse([appointment(local(2026, 8, 3, 9, 0))]));
+    await screen.findByText(EARLIER_WINDOW);
+    await waitFor(() => expect(screen.queryByText('Updating…')).toBeNull());
+    expect(container.querySelector('.ndn-cal-scroll')?.getAttribute('aria-busy')).toBe('false');
+  });
+
+  it('keeps the last good window when the next one fails, and says the update did not land', async () => {
+    const { fetchClinician, release } = deferredSecondCall([
+      appointment(local(2026, 8, 15, 9, 0)),
+    ]);
+    const { container } = renderClinician(fetchClinician);
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+
+    (await screen.findByRole('button', { name: 'Previous two weeks' })).click();
+    await waitFor(() => expect(fetchClinician).toHaveBeenCalledTimes(2));
+    release(jsonResponse([], 500));
+
+    expect(await screen.findByText('That period could not be loaded.')).toBeDefined();
+    // Not the whole-view error: blanking a calendar somebody is reading in
+    // order to report a transient 500 loses more than it tells them.
+    expect(screen.queryByText('Calendar failed.')).toBeNull();
+    expect(container.querySelector('.ndn-cal-grid')).not.toBeNull();
+    expect(screen.getByRole('heading', { name: /September 15, 2026/ })).toBeDefined();
+  });
+
+  it('still fails to the whole-view error when the very first fetch fails — there is nothing to keep', async () => {
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('sub-clinician')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={vi.fn().mockResolvedValue(jsonResponse([], 500))}
+      />,
+    );
+    expect(await screen.findByText('Calendar failed.')).toBeDefined();
+    expect(screen.queryByText('That period could not be loaded.')).toBeNull();
+  });
+
+  // The first wait of the session is the one that still replaces the view,
+  // and it does it with a grid-shaped skeleton rather than a line of text —
+  // so the real calendar lands where the placeholder stood.
+  it('shows a calendar-shaped placeholder for the first load only', async () => {
+    const { fetchClinician, release } = deferredSecondCall([
+      appointment(local(2026, 8, 15, 9, 0)),
+    ]);
+    const { container } = render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('sub-clinician')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={fetchClinician}
+      />,
+    );
+    expect(await screen.findByText('Loading your calendar…')).toBeDefined();
+    expect(container.querySelector('.ndn-skeleton-grid')).not.toBeNull();
+
+    await screen.findByRole('heading', { name: /September 15, 2026/ });
+    expect(container.querySelector('.ndn-skeleton-grid')).toBeNull();
+
+    (await screen.findByRole('button', { name: 'Previous two weeks' })).click();
+    await waitFor(() => expect(fetchClinician).toHaveBeenCalledTimes(2));
+    expect(container.querySelector('.ndn-skeleton-grid')).toBeNull();
+    release(jsonResponse([]));
+    await screen.findByText(EARLIER_WINDOW);
   });
 });
 

@@ -105,6 +105,197 @@ body {
   cursor: not-allowed;
 }
 
+/* 2026-09-08: the smaller pill. Sized against WCAG 2.2 SC 2.5.8 the same way
+   the calendar's and the caseload's own row controls already are — 2.25rem is
+   comfortably past the 24px floor — so a table cell can hold one without the
+   row growing to fit it. */
+.ndn-button--sm {
+  min-height: 2.25rem;
+  padding-block: 0.375rem;
+  padding-inline: 0.875rem;
+  font-size: 0.875rem;
+}
+
+/* A press that moves under the pointer. Cheap, and it is the difference
+   between a control that feels connected to what happens next and one that
+   feels like a picture of a control — which is the whole complaint that
+   started this pass. Not a transition: the answer has to be immediate. */
+.ndn-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* ## 2026-09-08: waiting states
+ *
+ * The account dashboard resolves a session, then every panel on it fetches
+ * its own data — so signing in gave a column of headings with the word
+ * "Loading…" under each, and then a run of layout jumps as the answers
+ * landed one at a time. These three classes are what stands in the meantime:
+ * a ring that says the wait is progressing, and skeleton shapes in the
+ * outline of what is coming so the page holds still while it arrives.
+ *
+ * Both animations carry literal durations rather than the motion custom
+ * properties, because 120-320ms is a transition scale and neither of these
+ * is a transition — a ring that completes a turn every 120ms is a smear.
+ * tokens/motion.ts still reaches them: its reduce block sets
+ * animation-duration and iteration-count on every element with !important,
+ * precisely so a component that does not use the custom properties is
+ * covered anyway. The sheen is additionally switched off by hand below,
+ * so a stopped skeleton settles as a flat tint rather than at whatever
+ * gradient position a 0.01ms run happened to end on.
+ *
+ * (No backticks in this block: it is a JS template literal.) */
+.ndn-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ndn-loading-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--ndn-color-text-muted);
+  font-size: 0.9375rem;
+}
+
+.ndn-spinner {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: 1.125rem;
+  height: 1.125rem;
+  /* The heavier hairline for the track, not the brand tint: at 18px across
+     and 2px thick a soft-on-paper ring is very close to invisible, which
+     was the first thing a rendered check of this showed. */
+  border: 2px solid var(--ndn-color-border-strong);
+  /* One quadrant in the full brand colour is what makes the rotation
+     readable; a ring of one colour turning looks like a ring standing
+     still. */
+  border-block-start-color: var(--ndn-color-brand);
+  border-radius: 50%;
+  animation: ndn-spin 700ms linear infinite;
+}
+
+.ndn-spinner--sm {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.ndn-spinner--lg {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-width: 3px;
+}
+
+.ndn-skeleton {
+  display: block;
+  border-radius: 0.375rem;
+  background-color: var(--ndn-color-neutral-soft);
+  /* A narrow highlight travelling across a shape that stays tinted — not a
+     tint travelling across a shape that is mostly white. The flat runs
+     either side of the 50% stop are what keep it narrow: a three-stop
+     gradient at this background-size put a highlight wider than the element
+     itself over every skeleton, so the whole placeholder read as blank
+     paper rather than as a shape holding a space. */
+  background-image: linear-gradient(
+    90deg,
+    var(--ndn-color-neutral-soft) 0%,
+    var(--ndn-color-neutral-soft) 42%,
+    var(--ndn-color-surface-raised) 50%,
+    var(--ndn-color-neutral-soft) 58%,
+    var(--ndn-color-neutral-soft) 100%
+  );
+  background-size: 220% 100%;
+  animation: ndn-skeleton-sheen 1600ms ease-in-out infinite;
+}
+
+.ndn-skeleton--line {
+  height: 0.75rem;
+}
+
+.ndn-skeleton--heading {
+  height: 1.25rem;
+  border-radius: 0.5rem;
+}
+
+.ndn-skeleton--block {
+  height: 3rem;
+  border-radius: 0.5rem;
+}
+
+.ndn-skeleton--pill {
+  height: 2.5rem;
+  border-radius: 999px;
+}
+
+/* A stack of skeleton lines, and the horizontal rows the panels build from
+   them. Here rather than in a page stylesheet because every consumer of
+   Skeleton wants the same two arrangements. */
+.ndn-skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ndn-skeleton-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* A skeleton is an empty element, so block layout in a flex row would give
+   it no width at all. A floor rather than a grow factor, so a caller that
+   passes an explicit width still gets the width it asked for. */
+.ndn-skeleton-row > .ndn-skeleton {
+  flex: 0 1 auto;
+  min-width: 4rem;
+}
+
+/* A label above its control — the shape of every field on the account
+   forms, and the reason a form placeholder does not read as a stack of
+   unrelated bars. */
+.ndn-skeleton-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* Seven columns, because the one grid on this site is a week. Held here
+   with the other skeleton arrangements rather than in the calendar's own
+   stylesheet: the placeholder has to be drawable before the calendar
+   island has loaded at all. */
+.ndn-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.25rem;
+}
+
+@keyframes ndn-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes ndn-skeleton-sheen {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The global block already collapses the animation to nothing; without
+     this the shape would freeze at whichever slice of the gradient a 0.01ms
+     run left under it. A flat tint is the honest still frame. */
+  .ndn-skeleton {
+    background-image: none;
+  }
+}
+
 .ndn-link {
   display: inline-flex;
   align-items: center;
@@ -159,6 +350,33 @@ body {
 .ndn-input-error {
   font-size: 0.875rem;
   color: var(--ndn-color-error);
+}
+
+/* 2026-09-08: a panel's own action and whatever it last said about saving,
+   on one line. Every account form ended in a paragraph holding exactly that
+   pair, with a single space between a pill and a sentence. Global rather
+   than in a page stylesheet because those panels are mounted from four
+   different pages, and a shape that only lined up on one of them would be
+   worse than the space. */
+.ndn-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-block: 1.25rem 0;
+}
+
+/* 2026-09-08: a checkbox and its own label, which the Input primitive does
+   not model — the label wraps the control rather than sitting above it, so
+   it cannot use .ndn-input-wrapper. Here rather than in an account
+   stylesheet because the shape is the same wherever a tick box appears. */
+.ndn-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ndn-color-text);
 }
 
 .ndn-card {

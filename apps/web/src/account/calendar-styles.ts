@@ -125,10 +125,32 @@ export const appointmentCalendarStylesCss = `
   text-decoration: underline;
 }
 
+/* 2026-09-08: the range and the refresh mark share a line. The mark only
+   exists while a newer window is being fetched, so the row has to hold its
+   height with nothing in it — which it does, because the range line is the
+   taller of the two. */
+.ndn-cal-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
 .ndn-cal-month {
   margin-block: 0.75rem 0.75rem;
   font-size: 1.125rem;
   font-weight: 500;
+}
+
+/* Quiet on purpose. This appears for a few hundred milliseconds every time
+   an arrow is pressed, and something that announced itself loudly that often
+   would be worse than the flicker it replaced. */
+.ndn-cal-refreshing {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--ndn-color-text-muted);
+  font-size: 0.875rem;
 }
 
 /* The grid never needs to scroll at 390px — seven 20rem/7 columns hold a

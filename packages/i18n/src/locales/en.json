@@ -570,6 +570,8 @@
   "accountCalendar.loading": "Loading your calendar…",
   "accountCalendar.forbidden": "You do not have access to a calendar.",
   "accountCalendar.error": "Your calendar could not be loaded. Please try again.",
+  "accountCalendar.refreshing": "Updating…",
+  "accountCalendar.refreshFailed": "That period could not be loaded. You are still seeing the previous one — please try again.",
   "accountCalendar.previousWeeks": "Previous two weeks",
   "accountCalendar.nextWeeks": "Next two weeks",
   "accountCalendar.today": "Today",

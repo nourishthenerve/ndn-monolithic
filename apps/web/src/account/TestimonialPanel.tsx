@@ -17,7 +17,7 @@
 // on the public page. A withdrawn testimonial keeps its text, so the form
 // still shows the patient their own words; what changes is that saving is
 // labelled as publishing again rather than updating.
-import { Heading } from '@ndn/ui';
+import { Button, Heading } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -26,6 +26,7 @@ import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
 import type { PanelHeadingLevel } from './heading-level.js';
+import { PanelPlaceholder } from './PanelPlaceholder.js';
 
 type Display = 'full' | 'firstNameOnly' | 'anonymous';
 
@@ -235,11 +236,7 @@ export function TestimonialPanel({
   };
 
   if (state === 'loading') {
-    return (
-      <p role="status" aria-live="polite">
-        {strings.loading}
-      </p>
-    );
+    return <PanelPlaceholder label={strings.loading} shape="form" />;
   }
   if (state === 'forbidden') {
     return <p role="alert">{strings.forbidden}</p>;
@@ -265,9 +262,12 @@ export function TestimonialPanel({
       {status === 'withdrawn' && <p role="status">{strings.withdrawnNotice}</p>}
 
       <form onSubmit={(event) => void handleSubmit(event)}>
-        <p>
-          <label htmlFor="testimonial-quote">{strings.quoteLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="testimonial-quote">
+            {strings.quoteLabel}
+          </label>
           <textarea
+            className="ndn-input"
             id="testimonial-quote"
             required
             rows={8}
@@ -277,9 +277,12 @@ export function TestimonialPanel({
             onChange={(event) => setQuote(event.target.value)}
           />
         </p>
-        <p>
-          <label htmlFor="testimonial-display">{strings.displayLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="testimonial-display">
+            {strings.displayLabel}
+          </label>
           <select
+            className="ndn-input"
             id="testimonial-display"
             disabled={busy}
             value={display}
@@ -294,9 +297,12 @@ export function TestimonialPanel({
             type, and a greyed-out box still reads as a question being
             asked. */}
         {display !== 'anonymous' && (
-          <p>
-            <label htmlFor="testimonial-name">{strings.nameLabel}</label>
+          <p className="ndn-input-wrapper">
+            <label className="ndn-input-label" htmlFor="testimonial-name">
+              {strings.nameLabel}
+            </label>
             <input
+              className="ndn-input"
               id="testimonial-name"
               type="text"
               maxLength={200}
@@ -313,18 +319,23 @@ export function TestimonialPanel({
         {saveState === 'saved' && <p role="status">{strings.savedMessage}</p>}
         {saveState === 'withdrawn' && <p role="status">{strings.withdrawnMessage}</p>}
 
-        <button type="submit" disabled={busy}>
-          {busy ? strings.saving : isPublished ? strings.updateButton : strings.publishButton}
-        </button>
+        <p className="ndn-panel-actions">
+          <Button type="submit" disabled={busy}>
+            {busy ? strings.saving : isPublished ? strings.updateButton : strings.publishButton}
+          </Button>
+        </p>
       </form>
 
       {/* Only offered for something actually on the public page. Withdrawing
           what is already withdrawn is not a state anyone needs. */}
       {isPublished && (
-        <p>
-          <button type="button" disabled={busy} onClick={() => void handleWithdraw()}>
+        <p className="ndn-panel-actions">
+          {/* Secondary, not primary: publishing is what this panel is for,
+              and two filled pills would leave a patient choosing between two
+              equally-weighted actions on their own words. */}
+          <Button variant="secondary" disabled={busy} onClick={() => void handleWithdraw()}>
             {strings.withdrawButton}
-          </button>
+          </Button>
         </p>
       )}
     </section>

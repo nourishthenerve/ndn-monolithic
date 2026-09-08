@@ -48,6 +48,8 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
+import { PanelPlaceholder } from './PanelPlaceholder.js';
+
 export type PatientAccountStatus = 'pending' | 'approved' | 'declined' | 'suspended';
 
 export interface CaseloadEntry {
@@ -477,11 +479,11 @@ export function CaseloadView({
   };
 
   if (state.status === 'loading') {
-    return (
-      <p role="status" aria-live="polite">
-        {strings.loadingLabel}
-      </p>
-    );
+    // 2026-09-08: the table's own outline while it is being fetched. This is
+    // the panel directly under the calendar on a clinician's dashboard, and
+    // the two of them arriving as two separate jumps was half of what the
+    // owner reported as the page taking a while — see `PanelPlaceholder`.
+    return <PanelPlaceholder label={strings.loadingLabel} shape="table" />;
   }
   if (state.status === 'forbidden') {
     return <p role="alert">{strings.forbiddenLabel}</p>;

@@ -16,7 +16,7 @@
 // `displayName` is a field on the `CLI#` record and a patient has none —
 // their equivalent is `/account/patient`, which edits the fields a
 // patient actually has.
-import { Heading } from '@ndn/ui';
+import { Button, Heading } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -25,6 +25,7 @@ import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
 import type { PanelHeadingLevel } from './heading-level.js';
+import { PanelPlaceholder } from './PanelPlaceholder.js';
 
 type PanelState = 'loading' | 'ready' | 'saving' | 'saved' | 'forbidden' | 'error';
 
@@ -141,9 +142,7 @@ export function OwnDetailsPanel({
     return (
       <section>
         <Heading level={headingLevel}>{strings.heading}</Heading>
-        <p role="status" aria-live="polite">
-          {strings.loading}
-        </p>
+        <PanelPlaceholder label={strings.loading} shape="form" />
       </section>
     );
   }
@@ -163,9 +162,12 @@ export function OwnDetailsPanel({
       <Heading level={headingLevel}>{strings.heading}</Heading>
       <p>{strings.intro}</p>
       <form onSubmit={(event) => void handleSubmit(event)}>
-        <p>
-          <label htmlFor="own-display-name">{strings.displayNameLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="own-display-name">
+            {strings.displayNameLabel}
+          </label>
           <input
+            className="ndn-input"
             id="own-display-name"
             type="text"
             required
@@ -181,9 +183,11 @@ export function OwnDetailsPanel({
         </p>
         {state === 'error' && <p role="alert">{strings.error}</p>}
         {state === 'saved' && <p role="status">{strings.savedMessage}</p>}
-        <button type="submit" disabled={isSaving || displayName.trim().length === 0}>
-          {isSaving ? strings.saving : strings.saveButton}
-        </button>
+        <p className="ndn-panel-actions">
+          <Button type="submit" disabled={isSaving || displayName.trim().length === 0}>
+            {isSaving ? strings.saving : strings.saveButton}
+          </Button>
+        </p>
       </form>
     </section>
   );

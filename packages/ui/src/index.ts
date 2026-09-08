@@ -11,5 +11,8 @@ export * from './components/CookieBanner.js';
 export * from './components/Heading.js';
 export * from './components/Input.js';
 export * from './components/Link.js';
+export * from './components/Loading.js';
+export * from './components/Skeleton.js';
 export * from './components/SkipLink.js';
+export * from './components/Spinner.js';
 export * from './components/VisuallyHidden.js';

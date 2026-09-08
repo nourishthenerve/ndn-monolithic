@@ -52,7 +52,7 @@
 // concurrency check meant for two *people* editing at once — a conflict
 // the person would have to resolve by re-reading a page they never left.
 // The listener is the whole fix: one save, every mounted section re-reads.
-import { Heading } from '@ndn/ui';
+import { Button, Heading } from '@ndn/ui';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -63,6 +63,7 @@ import { contentApiUrl } from '../site-config.js';
 
 import type { PanelHeadingLevel } from './heading-level.js';
 import { nestedHeadingLevel } from './heading-level.js';
+import { PanelPlaceholder } from './PanelPlaceholder.js';
 
 /** The form every patient's record is instantiated from. One template, one form per patient — `assessment-repository.ts`'s `DEFAULT_ASSESSMENT_ID`. */
 export const ASSESSMENT_ID = 'intake-v1';
@@ -846,11 +847,7 @@ export function AssessmentForm({
   }, []);
 
   if (state === 'loading') {
-    return (
-      <p role="status" aria-live="polite">
-        {strings.loadingLabel}
-      </p>
-    );
+    return <PanelPlaceholder label={strings.loadingLabel} shape="form" />;
   }
   if (!resolvedId) {
     return <p role="alert">{strings.missingIdLabel}</p>;
@@ -1099,15 +1096,20 @@ export function AssessmentForm({
                     <td key={column.id}>{renderCell(section, field, column, index, rows)}</td>
                   ))}
                   <td>
-                    <button
-                      type="button"
+                    {/* 2026-09-08: `sm`, like every control that sits
+                        inside a row of content rather than being the thing
+                        the section is for. The save button below stays full
+                        size and primary — that is the one action here. */}
+                    <Button
+                      size="sm"
+                      variant="secondary"
                       aria-label={strings.removeRowAriaTemplate
                         .replace('{row}', String(index + 1))
                         .replace('{field}', field.label)}
                       onClick={() => writeRows(rows.filter((_, i) => i !== index))}
                     >
                       {strings.removeRowLabel}
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}
@@ -1115,13 +1117,14 @@ export function AssessmentForm({
           </table>
         </div>
         <p>
-          <button
-            type="button"
+          <Button
+            size="sm"
+            variant="secondary"
             aria-label={strings.addRowAriaTemplate.replace('{field}', field.label)}
             onClick={() => writeRows([...rows, {}])}
           >
             {strings.addRowLabel}
-          </button>
+          </Button>
         </p>
       </div>
     );
@@ -1273,12 +1276,13 @@ export function AssessmentForm({
             {attachments.map((attachment) => (
               <li key={attachment.key}>
                 {attachment.fileName}{' '}
-                <button
-                  type="button"
+                <Button
+                  size="sm"
+                  variant="secondary"
                   onClick={() => void handleDownload(section.fieldSet, attachment.key)}
                 >
                   {strings.downloadLabel}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -1343,14 +1347,10 @@ export function AssessmentForm({
       return null;
     }
     return (
-      <p key={`${section.fieldSet}-save-${position}`}>
-        <button
-          type="button"
-          disabled={saveState === 'saving'}
-          onClick={() => void handleSave(section)}
-        >
+      <p className="ndn-panel-actions" key={`${section.fieldSet}-save-${position}`}>
+        <Button disabled={saveState === 'saving'} onClick={() => void handleSave(section)}>
           {saveState === 'saving' ? strings.savingLabel : strings.saveLabel}
-        </button>
+        </Button>
         {saveState === 'saved' && <span role="status">{strings.savedLabel}</span>}
         {saveState === 'autosaved' && <span role="status">{strings.autosavedLabel}</span>}
         {saveState === 'conflict' && <span role="alert">{strings.conflictLabel}</span>}
