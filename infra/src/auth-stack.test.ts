@@ -499,15 +499,171 @@ describe('AuthStack — managed login branding (found missing live, 2026-08-27)'
     }
   });
 
-  it('carries a favicon for both light and dark mode, ICO and SVG', () => {
+  // Amendment, 2026-09-09: `FORM_LOGO` joins the favicons — the brand mark
+  // at the top of the sign-in card, the same `logo-mark.png` `Nav.astro`
+  // renders. Cognito wants a LIGHT and a DARK entry for every category, so
+  // the list is exact rather than a `toContain`: a logo supplied for one
+  // colour mode only is the mistake this shape catches.
+  it('carries a favicon and the form logo, each in both colour modes', () => {
     for (const branding of brandings()) {
       const categories = (branding.Properties.Assets ?? []).map(
         (asset) => `${asset.Category}:${asset.ColorMode}`,
       );
       expect(categories.sort()).toEqual(
-        ['FAVICON_ICO:DARK', 'FAVICON_ICO:LIGHT', 'FAVICON_SVG:DARK', 'FAVICON_SVG:LIGHT'].sort(),
+        [
+          'FAVICON_ICO:DARK',
+          'FAVICON_ICO:LIGHT',
+          'FAVICON_SVG:DARK',
+          'FAVICON_SVG:LIGHT',
+          'FORM_LOGO:DARK',
+          'FORM_LOGO:LIGHT',
+        ].sort(),
       );
     }
+  });
+
+  // A logo asset that is never rendered is the failure mode this pairs with:
+  // `assets` accepted a custom entry silently for the whole of the
+  // `useCognitoProvidedValues` era (see above), and `form.logo.enabled`
+  // defaulting to `false` in Cognito's captured document is the settings-side
+  // version of the same silence.
+  it('turns the form logo on in settings, not merely uploads one', () => {
+    for (const branding of brandings()) {
+      const settings = branding.Properties.Settings as {
+        components: { form: { logo: { enabled: boolean; formInclusion: string } } };
+      };
+      expect(settings.components.form.logo.enabled).toBe(true);
+      expect(settings.components.form.logo.formInclusion).toBe('IN');
+    }
+  });
+
+  // Found by the owner, 2026-09-09: the sign-in page was still Cloudscape
+  // blue on Cloudscape white, because the settings document was Cognito's own
+  // defaults replayed verbatim (`auth-stack.ts`'s 2026-08-30 amendment). The
+  // custom domain made the URL read as ours; nothing made the page do so.
+  //
+  // Every colour in the document is now a token from
+  // `packages/ui/src/tokens/color.ts`. That file cannot be imported here —
+  // `@ndn/ui`'s only export is its React barrel, and a CDK app run under
+  // `tsx` should not be pulling React in to read six hex strings — so the
+  // palette is restated below and this test is a *guard*, not a derivation:
+  // it fails on any colour that is not one of these, which is what catches
+  // both a hex invented by hand and a Cloudscape value pasted back in from a
+  // fresh `describe-managed-login-branding-by-client` capture.
+  describe('the palette is the site\'s own, not the AWS console\'s', () => {
+    // tokens/color.ts, light then dark, plus the two neutrals that file does
+    // not name (`ffffff` is `surfaceRaised` on light and the only foreground
+    // the brand olive is worn with; `141711` is `surface` on dark).
+    const ndnPalette = new Set(
+      [
+        // surfaces
+        'f8f6f1',
+        'ffffff',
+        'edf0e6',
+        'f1ecf7',
+        '141711',
+        '1c2018',
+        '232922',
+        '232032',
+        // foregrounds
+        '232821',
+        '56604d',
+        '4e6136',
+        '3a4a26',
+        '65558f',
+        '3f3487',
+        'a62a20',
+        '7a5209',
+        'eef1e9',
+        'b4bdaa',
+        'a7c383',
+        'c6dda6',
+        'c3b4e8',
+        'a99cf0',
+        'ff9d92',
+        'e8ba6b',
+        // tints
+        'e3e9d7',
+        'f2f5ea',
+        'e9e2f4',
+        'f4e8cf',
+        'f7e0dd',
+        'e8e9e3',
+        'e5e3d9',
+        'd0d2c3',
+        '2b3720',
+        '1e2419',
+        '2a2440',
+        '3a2e15',
+        '3b1f1c',
+        '2a2d27',
+        '2c3128',
+        '3c4237',
+      ].map((hex) => `${hex}ff`),
+    );
+
+    /** Every string in the settings document that is an 8-digit RRGGBBAA colour, with the key path that holds it. */
+    function colorEntries(): { path: string; value: string }[] {
+      const found: { path: string; value: string }[] = [];
+      const walk = (node: unknown, path: string): void => {
+        if (typeof node === 'string') {
+          if (/^[0-9a-fA-F]{8}$/.test(node)) found.push({ path, value: node.toLowerCase() });
+          return;
+        }
+        if (Array.isArray(node)) {
+          node.forEach((item, index) => walk(item, `${path}[${index}]`));
+          return;
+        }
+        if (node !== null && typeof node === 'object') {
+          for (const [key, value] of Object.entries(node)) walk(value, `${path}.${key}`);
+        }
+      };
+      walk(brandings()[0]?.Properties.Settings, 'settings');
+      return found;
+    }
+
+    it('finds colours to check at all, so a restructured document cannot pass vacuously', () => {
+      expect(colorEntries().length).toBeGreaterThan(40);
+    });
+
+    it('draws every colour from tokens/color.ts', () => {
+      const foreign = colorEntries().filter((entry) => !ndnPalette.has(entry.value));
+      expect(foreign, 'colours not in packages/ui/src/tokens/color.ts').toEqual([]);
+    });
+
+    // The specific pixels the owner was looking at, named rather than left to
+    // the set membership above — a document that swapped primary and
+    // secondary would still pass a palette check.
+    it('paints the primary button in the brand olive the site uses', () => {
+      const settings = brandings()[0]?.Properties.Settings as {
+        components: {
+          primaryButton: { lightMode: { defaults: { backgroundColor: string } } };
+          pageBackground: { lightMode: { color: string } };
+        };
+      };
+      expect(settings.components.primaryButton.lightMode.defaults.backgroundColor).toBe('4e6136ff');
+      expect(settings.components.pageBackground.lightMode.color).toBe('f8f6f1ff');
+    });
+
+    // AWS's own illustration beside the credential fields. No repaint makes
+    // it ours, and it is most of what the page reads as at a glance.
+    it('drops the stock AWS graphics rather than recolouring around them', () => {
+      const settings = brandings()[0]?.Properties.Settings as {
+        categories: { form: { displayGraphics: boolean } };
+        components: { pageBackground: { image: { enabled: boolean } } };
+      };
+      expect(settings.categories.form.displayGraphics).toBe(false);
+      expect(settings.components.pageBackground.image.enabled).toBe(false);
+    });
+
+    // Both pools read the same document, so a patient and a clinician cannot
+    // end up signing in to two differently-themed clinics.
+    it('gives both pools the identical document', () => {
+      const [patient, clinician] = brandings();
+      expect(JSON.stringify(patient?.Properties.Settings)).toBe(
+        JSON.stringify(clinician?.Properties.Settings),
+      );
+    });
   });
 
   // Found live, 2026-09-08, on the production deploy of the olive-and-lavender

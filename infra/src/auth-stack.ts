@@ -110,17 +110,69 @@ const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 // are the same files `apps/web/public` serves for the site itself, read
 // from there rather than duplicated, the same cross-package `moduleDir`
 // reach `web-stack.ts`'s own Lambda `entry` paths already use.
+//
+// ## Amendment, 2026-09-09 — the site's own palette, not Cloudscape's
+//
+// The captured document above was *Cognito's* defaults, which are the AWS
+// console's: `0972d3` primary blue, `000716` headings, `0f1b2aff` in dark
+// mode. Replaying them verbatim was right when the only goal was adding a
+// favicon without moving anything else, and it is exactly why the owner's
+// report stands — a patient leaves a warm-paper, olive-and-lavender site,
+// lands on `patient-login.nourishthenerve.com`, and is looking at an AWS
+// console form. The custom domain from 2026-08-30 fixed the URL and could
+// not touch the page.
+//
+// Every colour in that document is now a token from
+// `packages/ui/src/tokens/color.ts` — the same hexes `BaseLayout.astro`
+// writes into `:root`. Buttons take the brand olive and the pill radius
+// `.ndn-button` uses; the form card takes `.ndn-card`'s white ground,
+// hairline and 14px radius; inputs take `.ndn-input`'s muted-text border
+// and 8px radius; the page takes the warm paper the site's `body` paints.
+// `auth-stack.test.ts` asserts every colour in the file is drawn from that
+// palette, so a hex invented here — or a Cloudscape value pasted back from
+// a fresh capture — fails rather than ships.
+//
+// Two settings that are removals rather than recolours, and carry most of
+// the "this is not our page" feeling on their own: `displayGraphics` is
+// now `false` (AWS's own illustration beside the credential fields, which
+// no repaint makes ours), and `pageBackground.image.enabled` likewise, so
+// the paper colour is what shows. `pageHeader`/`pageFooter` stay disabled
+// as they already were — the form floats on paper, which is the shape the
+// site's own quiet pages have.
+//
+// **What is not reachable.** Managed login exposes colour, radius, spacing
+// density, form position, logos and favicons — and no typography at all.
+// There is no font key in the captured merged document because Cognito has
+// none to give, so the page renders in its own sans stack rather than
+// Inter, and no heading on it can be Cormorant Garamond. That is the
+// residue: the page reads as ours, not as a pixel match, and closing the
+// gap would mean the bespoke challenge state machine
+// `docs/runbooks/web-authentication.md` already declined for a much better
+// reason than fonts.
+//
+// The logo is `logo-mark.png` — the owner's own artwork, the same file
+// `Nav.astro` renders at the top of every page, read from `apps/web/public`
+// rather than duplicated. PNG rather than the `favicon.svg` mark because
+// the nav's mark is what a visitor has just been looking at, and because
+// Cognito's SVG validator is narrow enough to have taken a whole deploy
+// down once already (see the root-attribute test in `auth-stack.test.ts`).
+// One `colorMode` entry each for `LIGHT` and `DARK`: the artwork is a
+// transparent-ground mark that reads on both, and Cognito requires the
+// pair regardless.
 const managedLoginBrandingSettings: unknown = JSON.parse(
   readFileSync(`${moduleDir}managed-login-branding-settings.json`, 'utf-8'),
 );
 const managedLoginBrandingAssets = (() => {
   const svg = readFileSync(`${moduleDir}../../apps/web/public/favicon.svg`).toString('base64');
   const ico = readFileSync(`${moduleDir}../../apps/web/public/favicon.ico`).toString('base64');
+  const logo = readFileSync(`${moduleDir}../../apps/web/public/logo-mark.png`).toString('base64');
   return [
     { category: 'FAVICON_SVG', colorMode: 'LIGHT', extension: 'SVG', bytes: svg },
     { category: 'FAVICON_SVG', colorMode: 'DARK', extension: 'SVG', bytes: svg },
     { category: 'FAVICON_ICO', colorMode: 'LIGHT', extension: 'ICO', bytes: ico },
     { category: 'FAVICON_ICO', colorMode: 'DARK', extension: 'ICO', bytes: ico },
+    { category: 'FORM_LOGO', colorMode: 'LIGHT', extension: 'PNG', bytes: logo },
+    { category: 'FORM_LOGO', colorMode: 'DARK', extension: 'PNG', bytes: logo },
   ];
 })();
 
@@ -468,8 +520,12 @@ export class AuthStack extends Stack {
     //
     // `settings`/`assets`, not `useCognitoProvidedValues: true` any more
     // — this amendment's own header above explains why the favicon
-    // needed the switch. `managedLoginBrandingSettings` is Cognito's own
-    // captured defaults, so this is otherwise a no-visual-change deploy.
+    // needed the switch. `managedLoginBrandingSettings` was Cognito's own
+    // captured defaults until 2026-09-09; it now carries the site's
+    // palette, so a deploy that changes it *does* move pixels — on both
+    // pools at once, because both read the same document. That is
+    // deliberate: a patient and a clinician should be signing in to
+    // visibly the same clinic.
     new CfnManagedLoginBranding(this, 'PatientManagedLoginBranding', {
       userPoolId: this.patientUserPool.userPoolId,
       clientId: this.patientUserPoolClient.userPoolClientId,

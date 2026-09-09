@@ -189,3 +189,53 @@ A new static check (`components/list-structure.test.ts`) scans built `dist/` for
 The rule now bans what actually has to hold — no auth code **writes** a cookie, and none of the three secret cookie names appears in anything script can run — plus a new assertion that the only cookie auth code names is the hint. `localStorage`/`sessionStorage` stay banned site-wide, unchanged.
 
 Worth being explicit that this was a guardrail *narrowed while making a change that it blocked*. The test that justifies it is on the server: `auth-routes.test.ts` asserts every cookie carries `HttpOnly` **except** the one that exists to be read, and that the readable one carries `1` and nothing else.
+
+## Amendment, 2026-09-09 — the sign-in page was still an AWS console page
+
+The owner, on `patient-login.nourishthenerve.com/login`: *"its style is from AWS."* Correct, and it had been since the first deploy.
+
+### Why the custom domain did not fix this
+
+The 2026-08-30 amendment above moved both pools behind `patient-login.` / `clinician-login.nourishthenerve.com` precisely so the sign-in URL would read as the clinic's. It did exactly that and nothing more — the **page** on that domain was still Cognito's managed login rendered in Cloudscape, AWS's own design system: `#0972d3` primary blue, `#000716` headings, white ground, an AWS illustration beside the credential fields. A patient left a warm-paper, olive-and-lavender site and arrived at the AWS console with the clinic's hostname on it.
+
+The mechanism that kept it that way is `infra/src/managed-login-branding-settings.json`. That file is Cognito's own defaults, captured live and replayed verbatim (see the 2026-08-30 amendment in `infra/src/auth-stack.ts` for why it had to be captured rather than hand-written). Replaying the defaults was the right move when the only goal was adding a favicon without moving anything else. It also meant that every pixel except the favicon was, by construction, AWS's.
+
+### What changed
+
+Every colour in that document is now a token from `packages/ui/src/tokens/color.ts` — the same hexes `BaseLayout.astro` writes into `:root`, so the sign-in page and the site cannot disagree about what the brand olive is:
+
+| On the page | Taken from |
+|---|---|
+| Page ground | `surface` — the warm paper `body` paints, not white |
+| The sign-in card | `.ndn-card` — white, a `border` hairline, 14px radius |
+| Sign-in button | `.ndn-button--primary` — brand olive, white label, pill radius |
+| Secondary / IdP buttons | `.ndn-button--secondary` — brand text, `borderStrong` edge, `brandWash` hover |
+| Text fields | `.ndn-input` — `textMuted` border, 8px radius, white ground |
+| Focus ring | `focusRing` — the same violet every focusable thing on the site wears |
+| Links, errors, status chips | `brand` / `error` + `errorSoft` / the `*Soft` tints |
+
+Two of the changes are removals rather than recolours, and they carry more of the effect than any single colour: `categories.form.displayGraphics` and `components.pageBackground.image` are both off. The first is AWS's stock illustration next to the credential fields — no repaint makes that one ours — and the second lets the paper colour be what shows.
+
+`components.form.logo` is on, carrying `apps/web/public/logo-mark.png`: the owner's own mark, the same file the site nav renders, read from `apps/web/public` rather than copied into `infra/`.
+
+Both pools read the identical document. A patient and a clinician sign in to visibly the same clinic, and a test asserts it rather than leaving it to whoever edits next.
+
+### What managed login cannot do, stated so it is not rediscovered
+
+**Typography is not reachable.** Managed login exposes colour, border radius, spacing density, form position, logos and favicons. It exposes no font. There is no font key in the captured merged document because Cognito has none to give — so the sign-in page renders in its own sans stack, not Inter, and no heading on it can be Cormorant Garamond. The page reads as the clinic's; it is not a pixel match, and it cannot be made one.
+
+Nor is layout, copy, or anything structural. The only route to those is the bespoke challenge state machine against `InitiateAuth`/`RespondToAuthChallenge` that "Where the one-time code is entered" above declined — for a far better reason than fonts, and the reasoning is unchanged by this.
+
+The a11y caveat in that section is likewise unchanged: the credential field is still on Cognito's origin and still outside this repository's axe and keyboard suites. What this amendment adds is that every colour pair it now renders was contrast-checked before it shipped, by the same `contrastRatio` the token suite uses — the worst pair on the page is body text on the card at 6.6:1, against a 4.5:1 bar.
+
+### Deploying it, and the one thing to be careful about
+
+Branding is a property of the `AWS::Cognito::ManagedLoginBranding` resources in `NdnAuthStack`, so it ships with an ordinary deploy of that stack and needs no flag — `auth.webSignIn.enabled` governs this site's `/auth/*` routes, not whether Cognito's page exists.
+
+Deploy `NdnAuthStack` **on its own** before the full `--all`, though. Cognito validates `settings` and `assets` server-side and rejects what it dislikes with a `CREATE_FAILED`/`UPDATE_FAILED` on this resource; this stack is 3 of 4, and 2026-09-08's SVG rejection (`auth-stack.test.ts`'s root-attribute test) demonstrated that its rollback takes `NdnWebStack` — the site — down with it.
+
+```bash
+pnpm --filter @ndn/infra exec cdk deploy NdnAuthStack --require-approval never
+```
+
+Rollback is `git revert` plus the same command: the previous document is Cognito's defaults, and re-applying it restores them exactly.
