@@ -27,7 +27,7 @@
 // `Content item` column). A 403 is still an ordinary outcome — the server is
 // the boundary, this component only avoids offering what it would refuse.
 import type { Locale } from '@ndn/i18n';
-import { Heading } from '@ndn/ui';
+import { Button, Heading } from '@ndn/ui';
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -152,15 +152,23 @@ export function BlogComposer({
   const previewKeywords = parseKeywords(blog.keywords);
 
   return (
-    <section aria-labelledby="blog-composer-heading">
+    // 2026-09-09: a sheet, the same one the patient record is drawn on
+    // (`account/record-styles.ts`). The owner asked for the composer to look
+    // like a real editing page rather than a run of unstyled inputs, and the
+    // site already had an answer to "what does a document-shaped form look
+    // like here" — reusing it is what keeps the two from being two designs.
+    <section className="ndn-authoring-sheet" aria-labelledby="blog-composer-heading">
       <Heading level={2} id="blog-composer-heading">
         {strings.heading}
       </Heading>
-      <p>{strings.intro}</p>
+      <p className="ndn-authoring-intro">{strings.intro}</p>
       <form onSubmit={(event) => void submit(event)}>
-        <p>
-          <label htmlFor="blog-title">{strings.titleLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="blog-title">
+            {strings.titleLabel}
+          </label>
           <input
+            className="ndn-input"
             id="blog-title"
             type="text"
             required
@@ -179,11 +187,18 @@ export function BlogComposer({
             }}
           />
         </p>
-        {slugError && <p role="alert">{strings.slugError}</p>}
+        {slugError && (
+          <p className="ndn-authoring-alert" role="alert">
+            {strings.slugError}
+          </p>
+        )}
 
-        <p>
-          <label htmlFor="blog-excerpt">{strings.excerptLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="blog-excerpt">
+            {strings.excerptLabel}
+          </label>
           <input
+            className="ndn-input"
             id="blog-excerpt"
             type="text"
             required
@@ -197,7 +212,9 @@ export function BlogComposer({
             `<meta name="description">` and the card on the index page, both
             of which take a string. Formatting it would only produce tags for
             a search engine to print. */}
-        <p id="blog-excerpt-hint">{strings.excerptHint}</p>
+        <p className="ndn-authoring-hint" id="blog-excerpt-hint">
+          {strings.excerptHint}
+        </p>
 
         {/* The article itself. */}
         <RichTextEditor
@@ -215,11 +232,18 @@ export function BlogComposer({
           requestUploadUrl={requestImageUrl}
           putFile={putFile}
         />
-        {bodyError && <p role="alert">{strings.bodyRequired}</p>}
+        {bodyError && (
+          <p className="ndn-authoring-alert" role="alert">
+            {strings.bodyRequired}
+          </p>
+        )}
 
-        <p>
-          <label htmlFor="blog-keywords">{strings.keywordsLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="blog-keywords">
+            {strings.keywordsLabel}
+          </label>
           <input
+            className="ndn-input"
             id="blog-keywords"
             type="text"
             disabled={busy}
@@ -228,12 +252,14 @@ export function BlogComposer({
             onChange={(event) => setBlog((fields) => ({ ...fields, keywords: event.target.value }))}
           />
         </p>
-        <p id="blog-keywords-hint">{strings.keywordsHint}</p>
+        <p className="ndn-authoring-hint" id="blog-keywords-hint">
+          {strings.keywordsHint}
+        </p>
         {/* What will actually be stored, shown back before it is: a keyword
             is a search partition, so a stray comma or a duplicate is worth
             seeing before it becomes one. */}
         {previewKeywords.length > 0 && (
-          <ul>
+          <ul className="ndn-authoring-keywords">
             {previewKeywords.map((keyword) => (
               <li key={keyword}>{keyword}</li>
             ))}
@@ -255,8 +281,8 @@ export function BlogComposer({
           putFile={putFile}
         />
 
-        <p>
-          <label htmlFor="blog-publish">
+        <p className="ndn-authoring-publish">
+          <label className="ndn-checkbox" htmlFor="blog-publish">
             <input
               id="blog-publish"
               type="checkbox"
@@ -270,12 +296,19 @@ export function BlogComposer({
             {strings.publishNowLabel}
           </label>
         </p>
-        <p id="blog-publish-hint">{strings.publishNowHint}</p>
+        <p className="ndn-authoring-hint" id="blog-publish-hint">
+          {strings.publishNowHint}
+        </p>
 
         <AuthoringMessages status={status} strings={strings} />
-        <button type="submit" disabled={busy}>
-          {busy ? strings.submitting : strings.submitButton}
-        </button>
+        {/* The one action this whole page is for, so it is the full-size
+            primary pill rather than the `sm` the panels inside the editor
+            use. */}
+        <p className="ndn-panel-actions">
+          <Button type="submit" disabled={busy}>
+            {busy ? strings.submitting : strings.submitButton}
+          </Button>
+        </p>
       </form>
     </section>
   );

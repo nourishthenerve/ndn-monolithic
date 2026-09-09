@@ -32,8 +32,20 @@ export const proseStylesCss = `
    quote and a table all sit inside the same column as the paragraphs they
    belong with; anything genuinely wider than the measure (a wide table) still
    scrolls in its own box, which it already did. */
+/* 2026-09-09: through a custom property, because this class is worn by two
+   different kinds of thing. On a published page .ndn-prose is the article,
+   and capping it is the whole point. In the composer it is also the writing
+   surface - a form control, sitting directly under a toolbar that spans the
+   full column - and capping that is what the owner reported: the text box
+   not having the same width as the formatting bar above it. Measured in
+   Chromium before the fix: toolbar 1088px, surface 724px.
+
+   So the editor sets --ndn-prose-measure to none on the box and puts the
+   real measure back on the content inside its preview, where it belongs.
+   Nothing on a reader-facing page passes the property, so every published
+   article keeps exactly the measure it had. */
 .ndn-prose {
-  max-width: 68ch;
+  max-width: var(--ndn-prose-measure, 68ch);
 }
 
 .ndn-prose > *:first-child {
@@ -137,7 +149,20 @@ export const proseStylesCss = `
   font-size: inherit;
 }
 
-/* The one highlight the toolbar offers. A pale accent tint with the body
+/* 2026-09-09: colour, which reaches the page as an inline style on a
+   <span> - the one element in this policy that carries no meaning of its
+   own. The rule exists to say that explicitly and to stop the element
+   inheriting anything surprising: the declaration the author chose is the
+   only thing that should decide how these words look, and it is already on
+   the element. styles.test.ts requires a rule per allowed element for
+   exactly this reason - an element with no rule is one nobody thought
+   about. */
+.ndn-prose span {
+  font: inherit;
+  color: inherit;
+}
+
+/* The default highlight the toolbar offers. A pale accent tint with the body
    text colour left alone, so the pair is the same 4.5:1 the rest of the page
    is held to whatever an author highlights.
 
@@ -299,6 +324,16 @@ export const richTextEditorStylesCss = `
 
 .ndn-rte-surface,
 .ndn-rte-preview {
+  /* 2026-09-09: the box fills the column, exactly as the toolbar above it
+     does. .ndn-prose caps itself at a 68ch measure, which is right for an
+     article and wrong for a control: it made the writing surface 724px
+     under a 1088px toolbar, which is what the owner reported. The measure
+     is not lost, only moved - see .ndn-rte-preview-body, which puts it back
+     on the content of the preview, where a measure is a truthful statement
+     about the published page rather than a narrow box to type in. */
+  --ndn-prose-measure: none;
+  box-sizing: border-box;
+  width: 100%;
   min-height: 18rem;
   padding: 1rem 1.125rem;
   border: 1px solid var(--ndn-color-border-strong);
@@ -317,6 +352,13 @@ export const richTextEditorStylesCss = `
 
 .ndn-rte-preview {
   background-color: var(--ndn-color-surface);
+}
+
+/* The preview's *content*, which is a published article and so keeps the
+   published measure. The box around it stays the width of the toolbar, so
+   switching to preview does not make the editor change shape. */
+.ndn-rte-preview-body {
+  max-width: 68ch;
 }
 
 .ndn-rte-preview-notice {
@@ -388,6 +430,42 @@ export const richTextEditorStylesCss = `
 }
 
 .ndn-rte-panel-action:focus-visible {
+  outline: 2px solid var(--ndn-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* A grid of colours rather than a native colour input. Sized so a swatch is
+   a comfortable target on its own (WCAG 2.2 SC 2.5.8 asks 24px; these are
+   32px) and so the whole palette is visible without scrolling - the point of
+   a closed palette is that an author can see every choice at once. */
+.ndn-rte-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.ndn-rte-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--ndn-color-border-strong);
+  border-radius: 0.375rem;
+  background-color: var(--ndn-color-surface-raised);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ndn-rte-swatch:hover {
+  border-color: var(--ndn-color-brand);
+  transform: translateY(-1px);
+}
+
+.ndn-rte-swatch:focus-visible {
   outline: 2px solid var(--ndn-color-focus-ring);
   outline-offset: 2px;
 }

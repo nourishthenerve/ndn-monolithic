@@ -50,6 +50,7 @@
 // still arrives as props.
 import { t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
+import { Button } from '@ndn/ui';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
 
@@ -69,12 +70,15 @@ import {
   uploadImage,
 } from './media-upload.js';
 import {
-  HIGHLIGHT_COLOR,
+  COLOR_SWATCH_GLYPH,
+  HIGHLIGHT_SWATCHES,
+  REMOVE_HIGHLIGHT_VALUE,
   RICH_TEXT_CONTROLS,
   RICH_TEXT_GROUPS,
   TABLE_HTML,
+  TEXT_COLOR_SWATCHES,
 } from './rich-text-controls.js';
-import type { RichTextControl, RichTextGroup } from './rich-text-controls.js';
+import type { ColorSwatch, RichTextControl, RichTextGroup } from './rich-text-controls.js';
 
 export interface RichTextEditorStrings {
   readonly label: string;
@@ -92,6 +96,10 @@ export interface RichTextEditorStrings {
   readonly imageTooLarge: string;
   readonly imageWrongType: string;
   readonly cancel: string;
+  /** The colour panels: the question each asks, and the one action on them that is not a swatch. */
+  readonly colorTextLabel: string;
+  readonly colorHighlightLabel: string;
+  readonly colorRemoveHighlight: string;
   readonly previewNotice: string;
 }
 
@@ -147,7 +155,7 @@ function currentBlockTag(): string {
   return block?.tagName.toLowerCase() ?? '';
 }
 
-type Panel = 'none' | 'link' | 'image';
+type Panel = 'none' | 'link' | 'image' | 'textColor' | 'highlight';
 type ImageState = 'idle' | 'uploading' | 'ready' | 'failed' | 'too-large' | 'wrong-type';
 
 export function RichTextEditor({
@@ -184,6 +192,8 @@ export function RichTextEditor({
    * in the surface is gone by the time "Insert" is pressed.
    */
   const savedRange = useRef<Range | null>(null);
+  /** The editor's outermost element, so `onBlur` can tell "focus left the editor" from "focus moved into its own panel". */
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   const surfaceId = useId();
   const labelId = useId();
@@ -202,7 +212,8 @@ export function RichTextEditor({
   const [focusedControl, setFocusedControl] = useState(0);
 
   const sanitize = useCallback(
-    (html: string): string => (parseHtml ? sanitizeRichText(html, parseHtml) : sanitizeRichText(html)),
+    (html: string): string =>
+      parseHtml ? sanitizeRichText(html, parseHtml) : sanitizeRichText(html),
     [parseHtml],
   );
 
@@ -262,15 +273,35 @@ export function RichTextEditor({
     };
   }, [rememberSelection]);
 
-  /** Put the caret back where it was before the panel stole focus, then act on it. */
+  /**
+   * Put the caret back where it was before the panel stole focus, then act on
+   * it.
+   *
+   * 2026-09-09: a remembered range can go stale — its boundary nodes are
+   * replaced whenever the surface is rewritten. Restoring a detached range
+   * does not throw; it silently applies the command at the *start* of the
+   * surface, which is how a second inserted image ended up above the first
+   * paragraph. So the range is checked against the live tree and, when it no
+   * longer belongs to it, the caret goes to the end of the content instead.
+   * Appending is the honest fallback: an author who has lost their place
+   * expects the new thing at the bottom, not silently at the top.
+   */
   const withSelection = useCallback((act: () => void) => {
     const surface = surfaceRef.current;
     surface?.focus();
     const range = savedRange.current;
-    if (range && typeof window !== 'undefined') {
+    if (surface && typeof window !== 'undefined') {
       const selection = window.getSelection();
+      const usable = range !== null && surface.contains(range.commonAncestorContainer);
       selection?.removeAllRanges();
-      selection?.addRange(range);
+      if (usable && range) {
+        selection?.addRange(range);
+      } else {
+        const end = surface.ownerDocument.createRange();
+        end.selectNodeContents(surface);
+        end.collapse(false);
+        selection?.addRange(end);
+      }
     }
     act();
   }, []);
@@ -282,11 +313,13 @@ export function RichTextEditor({
     }
     withSelection(() => {
       // `styleWithCSS` decides whether an engine emits `<b>` or
-      // `<span style="font-weight:bold">`. Off for everything structural, so
-      // the output is semantic and survives `sanitize.ts` untouched; on only
-      // for the highlight, which has no element of its own to produce.
-      exec('styleWithCSS', control.id === 'highlight' ? 'true' : 'false');
-      exec(command, control.id === 'highlight' ? HIGHLIGHT_COLOR : control.value);
+      // `<span style="font-weight:bold">`. Off for every control that reaches
+      // here, because all of them are structural and their output should be
+      // semantic enough to survive `sanitize.ts` untouched. Colour is the one
+      // case that needs it on, and colour no longer comes through here — it
+      // has its own `applyColor`, which sets the flag itself.
+      exec('styleWithCSS', 'false');
+      exec(command, control.value);
     });
     emit();
     rememberSelection();
@@ -373,7 +406,34 @@ export function RichTextEditor({
     setPanel('none');
   };
 
+  /**
+   * Paint the selection, from a swatch rather than from a value anyone typed.
+   *
+   * `styleWithCSS` is on because colour has no element of its own to produce
+   * — the engine emits a `<span style="color: ...">`, which `policy.ts` now
+   * admits for exactly these values. Engines that emit a `<font color>`
+   * instead are normalised by `sanitize.ts` on the next keystroke, the same
+   * way the highlight already was.
+   */
+  const applyColor = (command: 'foreColor' | 'hiliteColor', value: string) => {
+    withSelection(() => {
+      exec('styleWithCSS', 'true');
+      exec(command, value);
+    });
+    emit();
+    rememberSelection();
+    setPanel('none');
+  };
+
   const act = (control: RichTextControl) => {
+    if (control.action === 'textColor') {
+      setPanel((current) => (current === 'textColor' ? 'none' : 'textColor'));
+      return;
+    }
+    if (control.action === 'highlight') {
+      setPanel((current) => (current === 'highlight' ? 'none' : 'highlight'));
+      return;
+    }
     if (control.action === 'preview') {
       setPreview((current) => !current);
       return;
@@ -443,9 +503,17 @@ export function RichTextEditor({
     if (control.action === 'image') {
       return panel === 'image';
     }
+    if (control.action === 'textColor') {
+      return panel === 'textColor';
+    }
+    if (control.action === 'highlight') {
+      return panel === 'highlight';
+    }
     return undefined;
   };
 
+  const colorPanelLabel =
+    panel === 'highlight' ? strings.colorHighlightLabel : strings.colorTextLabel;
   const previewHtml = renderableRichText(value);
   const words = richTextToPlainText(value).split(/\s+/).filter(Boolean).length;
 
@@ -453,7 +521,7 @@ export function RichTextEditor({
     RICH_TEXT_CONTROLS.filter((control) => control.group === group);
 
   return (
-    <div className="ndn-rte">
+    <div className="ndn-rte" ref={rootRef}>
       <p className="ndn-rte-label" id={labelId}>
         {strings.label}
       </p>
@@ -529,20 +597,90 @@ export function RichTextEditor({
               setLinkInvalid(false);
             }}
           />
-          <button type="button" className="ndn-rte-panel-action" onClick={applyLink}>
+          <Button size="sm" onMouseDown={(event) => event.preventDefault()} onClick={applyLink}>
             {strings.linkApply}
-          </button>
-          <button
-            type="button"
-            className="ndn-rte-panel-action"
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => {
               setPanel('none');
               setLinkInvalid(false);
             }}
           >
             {strings.cancel}
-          </button>
+          </Button>
           {linkInvalid && <p role="alert">{strings.linkInvalid}</p>}
+        </div>
+      )}
+
+      {(panel === 'textColor' || panel === 'highlight') && (
+        // One panel, two palettes. A grid of swatches rather than an
+        // `<input type="color">`: the native control is the free colour well
+        // `policy.ts` refuses to accept values from, and it cannot be
+        // constrained to a palette.
+        <div
+          className="ndn-rte-panel ndn-rte-panel--stacked"
+          role="group"
+          aria-label={colorPanelLabel}
+        >
+          <p className="ndn-rte-panel-hint">{colorPanelLabel}</p>
+          <div className="ndn-rte-swatches">
+            {(panel === 'textColor' ? TEXT_COLOR_SWATCHES : HIGHLIGHT_SWATCHES).map(
+              (swatch: ColorSwatch) => {
+                const label = t(swatch.labelKey, undefined, locale);
+                return (
+                  <button
+                    key={swatch.id}
+                    type="button"
+                    className="ndn-rte-swatch"
+                    // The name is the colour's name, never its hex — see
+                    // `ColorSwatch`. `title` and `aria-label` agree, the same
+                    // rule the toolbar buttons follow.
+                    title={label}
+                    aria-label={label}
+                    // The swatch *is* the preview, so the one inline style in
+                    // this component is the thing being chosen. It never
+                    // reaches the document: `applyColor` hands the hex to the
+                    // editing engine, and what lands in the post is whatever
+                    // that engine emits, re-checked by `sanitize.ts`.
+                    style={
+                      panel === 'textColor'
+                        ? { color: swatch.hex }
+                        : { backgroundColor: swatch.hex }
+                    }
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() =>
+                      applyColor(panel === 'textColor' ? 'foreColor' : 'hiliteColor', swatch.hex)
+                    }
+                  >
+                    <span aria-hidden="true">{COLOR_SWATCH_GLYPH}</span>
+                  </button>
+                );
+              },
+            )}
+          </div>
+          <p className="ndn-rte-panel-row">
+            {panel === 'highlight' && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applyColor('hiliteColor', REMOVE_HIGHLIGHT_VALUE)}
+              >
+                {strings.colorRemoveHighlight}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="secondary"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setPanel('none')}
+            >
+              {strings.cancel}
+            </Button>
+          </p>
         </div>
       )}
 
@@ -585,21 +723,22 @@ export function RichTextEditor({
           {imageState === 'too-large' && <p role="alert">{strings.imageTooLarge}</p>}
           {imageState === 'wrong-type' && <p role="alert">{strings.imageWrongType}</p>}
           <p className="ndn-rte-panel-row">
-            <button
-              type="button"
-              className="ndn-rte-panel-action"
+            <Button
+              size="sm"
+              onMouseDown={(event) => event.preventDefault()}
               disabled={imageState !== 'ready'}
               onClick={insertImage}
             >
               {strings.imageInsert}
-            </button>
-            <button
-              type="button"
-              className="ndn-rte-panel-action"
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => setPanel('none')}
             >
               {strings.cancel}
-            </button>
+            </Button>
           </p>
         </div>
       )}
@@ -612,10 +751,17 @@ export function RichTextEditor({
               passes a published page makes, so what an author sees here is
               what a reader gets rather than a more permissive rendering of
               it. */}
-          <div
-            className="ndn-prose ndn-rte-preview"
-            dangerouslySetInnerHTML={{ __html: previewHtml ?? '' }}
-          />
+          {/* Two elements, not one: the box is the width of the toolbar so
+              the editor does not change shape when preview is toggled, and
+              the article inside it keeps the 68ch measure a published page
+              actually has. One element would have to be both, which is the
+              bug this pass is fixing. */}
+          <div className="ndn-rte-preview">
+            <div
+              className="ndn-prose ndn-rte-preview-body"
+              dangerouslySetInnerHTML={{ __html: previewHtml ?? '' }}
+            />
+          </div>
         </>
       ) : (
         <div
@@ -632,16 +778,38 @@ export function RichTextEditor({
           // to lose, so the surface is rewritten to exactly what the form
           // holds. Anything the browser invented while typing disappears
           // here, visibly, rather than at save time.
-          onBlur={() => {
+          // 2026-09-09: **not when focus moved into the editor's own
+          // panels.** This rewrite replaces every node in the surface, which
+          // detaches `savedRange` — and `savedRange` is precisely what the
+          // link and image panels exist to restore. Clicking the image
+          // button, choosing a file and pressing Insert therefore inserted
+          // at the top of the document rather than at the caret, every time
+          // after the first.
+          //
+          // Reproduced in Chromium before the fix: with the caret at the end
+          // of the third paragraph, a second image landed before the first
+          // paragraph. That is the whole of the owner's *"there is no way to
+          // insert multiple media files at different sections in the text"*
+          // — the control existed and the position was thrown away.
+          //
+          // `relatedTarget` is where focus went. Inside `.ndn-rte` means the
+          // author is still in this editor and their selection must survive;
+          // anywhere else is a real blur and reconciles as it always did.
+          // Nothing unsafe is deferred by waiting: `emit` sanitises on every
+          // input, so `value` is already clean either way.
+          onBlur={(event) => {
             const surface = surfaceRef.current;
-            if (surface) {
-              const clean = sanitize(surface.innerHTML);
-              if (clean !== surface.innerHTML) {
-                surface.innerHTML = clean;
-              }
-              emitted.current = clean;
-              onChange(clean);
+            if (!surface) {
+              return;
             }
+            const movedWithinEditor =
+              event.relatedTarget instanceof Node && rootRef.current?.contains(event.relatedTarget);
+            const clean = sanitize(surface.innerHTML);
+            if (!movedWithinEditor && clean !== surface.innerHTML) {
+              surface.innerHTML = clean;
+            }
+            emitted.current = clean;
+            onChange(clean);
           }}
           onPaste={onPaste}
           onKeyUp={rememberSelection}

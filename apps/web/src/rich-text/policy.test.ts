@@ -9,14 +9,17 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ALLOWED_ATTRIBUTES,
   ALLOWED_TAGS,
   DROPPED_WITH_CONTENT,
   EXTERNAL_LINK_REL,
+  HIGHLIGHT_COLORS,
   isAllowedAttribute,
   isAllowedStyle,
   isExternalHref,
   isSafeHref,
   isSafeImageSrc,
+  TEXT_COLORS,
 } from './policy.js';
 
 describe('isSafeHref', () => {
@@ -146,9 +149,54 @@ describe('the two lists', () => {
   });
 
   it('allows no element that can position itself or run anything', () => {
-    for (const tag of ['div', 'span', 'script', 'style', 'iframe', 'object', 'button']) {
+    for (const tag of ['div', 'script', 'style', 'iframe', 'object', 'button']) {
       expect(ALLOWED_TAGS.has(tag), `"${tag}" must not be renderable from a post`).toBe(false);
     }
+  });
+
+  // 2026-09-09: `<span>` left that list when the colour palette arrived, so
+  // the guarantee it was standing for has to be asserted directly rather
+  // than by the element's absence. A span may exist; it may carry `style`
+  // and nothing else; and `style` may say only what the palette says.
+  it('lets a span carry a palette colour and nothing else', () => {
+    expect(ALLOWED_TAGS.has('span')).toBe(true);
+    expect(ALLOWED_ATTRIBUTES.span).toEqual(['style']);
+
+    for (const hex of Object.values(TEXT_COLORS)) {
+      expect(isAllowedAttribute('span', 'style', `color: ${hex}`)).toBe(true);
+    }
+    for (const hex of Object.values(HIGHLIGHT_COLORS)) {
+      expect(isAllowedAttribute('span', 'style', `background-color: ${hex}`)).toBe(true);
+    }
+
+    // The declarations a span must never carry, one per class of harm: a
+    // colour outside the palette (contrast), and four ways to lay something
+    // out or reach off-site.
+    for (const style of [
+      'color:#ff0000',
+      'position:fixed',
+      'display:block',
+      'width:100vw',
+      'background-image:url(https://evil.example/x.png)',
+      'color:#232821;position:fixed',
+    ]) {
+      expect(isAllowedAttribute('span', 'style', style), `"${style}" must not pass`).toBe(false);
+    }
+  });
+
+  // Browsers hand back every colour as `rgb()` regardless of what was set,
+  // so an allowlist that only knew hex would match nothing it had just
+  // allowed — the palette would silently strip itself on the next keystroke.
+  it('reads a browser-serialised rgb() colour as the hex it equals', () => {
+    expect(isAllowedAttribute('span', 'style', 'color: rgb(35, 40, 33)')).toBe(true);
+    expect(isAllowedAttribute('span', 'style', 'background-color: rgb(233, 226, 244)')).toBe(true);
+    // Not in the palette, and not made allowed by the notation.
+    expect(isAllowedAttribute('span', 'style', 'color: rgb(255, 0, 0)')).toBe(false);
+    // Alpha is refused outright: a translucent ink's contrast depends on
+    // whatever is behind it, which is the thing the palette pins down.
+    expect(isAllowedAttribute('span', 'style', 'color: rgba(35, 40, 33, 0.2)')).toBe(false);
+    // Out-of-range channels must not wrap into a palette entry.
+    expect(isAllowedAttribute('span', 'style', 'color: rgb(291, 296, 289)')).toBe(false);
   });
 });
 

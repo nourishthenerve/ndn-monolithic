@@ -168,6 +168,29 @@ function sanitizeInto(source: Element, target: Element, doc: Document): void {
         clean.setAttribute(name, attribute.value);
       }
     }
+
+    // 2026-09-09: a `<span>` exists in this policy only to carry a colour
+    // (see `policy.ts`), so one that kept no attribute is not a span at all
+    // — it is a wrapper, and the default for a wrapper here has always been
+    // to keep the words and drop the tag.
+    //
+    // This is load-bearing rather than tidy. A paste from Word carries
+    // several hundred `<span>`s with a stylesheet's worth of `style` on
+    // each; every one of those declarations fails `isAllowedStyle`, so
+    // without this line the attribute would be stripped and the *element*
+    // kept, and a pasted page would arrive as hundreds of nested empty
+    // spans that grow on every re-sanitise. `sanitize.test.ts` has asserted
+    // exactly this unwrapping since before spans were allowed, which is why
+    // adding them to the allowlist made that test fail rather than pass.
+    //
+    // It is also how "Remove highlight" works: the button hands the engine
+    // `transparent`, the declaration fails the policy, the attribute goes,
+    // and this line then removes the element it lived in.
+    if (rewritten === 'span' && clean.attributes.length === 0) {
+      sanitizeInto(element, target, doc);
+      continue;
+    }
+
     if (!VOID_TAGS.has(rewritten)) {
       sanitizeInto(element, clean, doc);
     }
