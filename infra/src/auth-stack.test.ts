@@ -666,6 +666,60 @@ describe('AuthStack — managed login branding (found missing live, 2026-08-27)'
     });
   });
 
+  // Found live, 2026-09-09, deploying the themed sign-in page. The first cut
+  // pointed `FORM_LOGO` straight at `apps/web/public/logo-mark.png` — the
+  // site's own mark, on the reasoning that not duplicating brand artwork was
+  // worth more than a derived file. Cognito refused the whole stack:
+  //
+  //   Invalid assets provided. Validation errors: [{category: FORM_LOGO,
+  //   extension: PNG, colorMode: LIGHT, errorMessage: "Invalid file
+  //   dimension. Assets of SubType LOGO must have a width:height ratio
+  //   between 1:1 and 4:1. Detected width: 480.0; height: 570.0"}, …]
+  //
+  // The mark is portrait and always will be, so `managed-login-form-logo.png`
+  // is it on a 420x400 transparent canvas (`auth-stack.ts` carries the
+  // regeneration command). This reads the dimensions out of the PNG header in
+  // the bytes the template actually carries — the same "assert what is sent,
+  // not what is on disk" shape as the SVG check below — so redrawing the
+  // artwork and forgetting to re-pad fails here instead of at 9pm against
+  // CloudFormation.
+  it('sends a logo whose aspect ratio is inside the 1:1-to-4:1 window Cognito enforces', () => {
+    // IHDR is the first chunk of every PNG: 8-byte signature, 4-byte length,
+    // 4-byte type, then width and height as big-endian uint32s.
+    function pngDimensions(bytes: Buffer): { width: number; height: number } {
+      expect(bytes.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+      expect(bytes.subarray(12, 16).toString('ascii')).toBe('IHDR');
+      return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+    }
+
+    for (const branding of brandings()) {
+      const logos = (branding.Properties.Assets ?? []).filter(
+        (asset) => asset.Category === 'FORM_LOGO',
+      );
+      expect(logos.length).toBeGreaterThan(0);
+
+      for (const logo of logos) {
+        expect(logo.Extension).toBe('PNG');
+        const { width, height } = pngDimensions(Buffer.from(logo.Bytes, 'base64'));
+        const ratio = width / height;
+        expect(ratio, `${width}x${height} is outside Cognito's 1:1-to-4:1 window`).toBeGreaterThanOrEqual(1);
+        expect(ratio, `${width}x${height} is outside Cognito's 1:1-to-4:1 window`).toBeLessThanOrEqual(4);
+      }
+    }
+  });
+
+  // The branding resources are ~99% of this stack's synthesized bytes, and
+  // the logo lands in the template four times (two pools, two colour modes).
+  // CloudFormation's ceiling for an S3-uploaded template is 1 MB; the source
+  // artwork alone would have spent 445 kB of it. Nothing else here grows, so
+  // this is the number to watch.
+  it('keeps the branding assets small enough that the template has room left', () => {
+    const assetBytes = brandings()
+      .flatMap((branding) => branding.Properties.Assets ?? [])
+      .reduce((total, asset) => total + asset.Bytes.length, 0);
+    expect(assetBytes).toBeLessThan(200_000);
+  });
+
   // Found live, 2026-09-08, on the production deploy of the olive-and-lavender
   // theme. The redrawn `apps/web/public/favicon.svg` carried `role="img"` and
   // `aria-label` on its root element — harmless in a browser, and rejected

@@ -150,22 +150,53 @@ const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 // `docs/runbooks/web-authentication.md` already declined for a much better
 // reason than fonts.
 //
-// The logo is `logo-mark.png` — the owner's own artwork, the same file
-// `Nav.astro` renders at the top of every page, read from `apps/web/public`
-// rather than duplicated. PNG rather than the `favicon.svg` mark because
+// The logo is the owner's own artwork — the same mark `Nav.astro` renders
+// at the top of every page. PNG rather than the `favicon.svg` glyph because
 // the nav's mark is what a visitor has just been looking at, and because
 // Cognito's SVG validator is narrow enough to have taken a whole deploy
 // down once already (see the root-attribute test in `auth-stack.test.ts`).
-// One `colorMode` entry each for `LIGHT` and `DARK`: the artwork is a
+// One `colorMode` entry each for `LIGHT` and `DARK`: it is a
 // transparent-ground mark that reads on both, and Cognito requires the
 // pair regardless.
+//
+// **`managed-login-form-logo.png`, not `apps/web/public/logo-mark.png`.**
+// Reading the site's own file directly was the first attempt and Cognito
+// refused the deploy outright (2026-09-09):
+//
+//   Invalid assets provided. Validation errors: [{category: FORM_LOGO,
+//   extension: PNG, colorMode: LIGHT, errorMessage: "Invalid file
+//   dimension. Assets of SubType LOGO must have a width:height ratio
+//   between 1:1 and 4:1. Detected width: 480.0; height: 570.0"}, …]
+//
+// The mark is portrait (0.84:1) and no setting here changes that, so the
+// asset is the mark on a 420×400 transparent canvas — 1.05:1, just inside
+// the window rather than exactly on its edge. Regenerating it from the
+// source artwork, when that artwork changes:
+//
+//   python3 - <<'PY'
+//   from PIL import Image
+//   src = Image.open('apps/web/public/logo-mark.png').convert('RGBA')
+//   h = 400
+//   mark = src.resize((int(src.width * h / src.height), h), Image.LANCZOS)
+//   canvas = Image.new('RGBA', (420, h), (0, 0, 0, 0))
+//   canvas.paste(mark, ((420 - mark.width) // 2, 0), mark)
+//   canvas.quantize(colors=256, method=Image.FASTOCTREE).save(
+//       'infra/src/managed-login-form-logo.png', optimize=True)
+//   PY
+//
+// The 256-colour quantise in that last line is not incidental. Both pools
+// carry the asset twice (`LIGHT` and `DARK`), so it lands in the template
+// four times over, and the branding resources are already ~99% of
+// `NdnAuthStack`'s synthesized bytes against CloudFormation's 1 MB ceiling
+// — the source PNG's 83 kB would have been 445 kB of base64 on its own.
+// At 21 kB it is 86 kB, and the gradient survives the quantise intact.
 const managedLoginBrandingSettings: unknown = JSON.parse(
   readFileSync(`${moduleDir}managed-login-branding-settings.json`, 'utf-8'),
 );
 const managedLoginBrandingAssets = (() => {
   const svg = readFileSync(`${moduleDir}../../apps/web/public/favicon.svg`).toString('base64');
   const ico = readFileSync(`${moduleDir}../../apps/web/public/favicon.ico`).toString('base64');
-  const logo = readFileSync(`${moduleDir}../../apps/web/public/logo-mark.png`).toString('base64');
+  const logo = readFileSync(`${moduleDir}managed-login-form-logo.png`).toString('base64');
   return [
     { category: 'FAVICON_SVG', colorMode: 'LIGHT', extension: 'SVG', bytes: svg },
     { category: 'FAVICON_SVG', colorMode: 'DARK', extension: 'SVG', bytes: svg },
