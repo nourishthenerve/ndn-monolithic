@@ -1,0 +1,310 @@
+---
+// 2026-09-09: the two ways to reach the clinic, as one block reused
+// everywhere the site offers to be contacted.
+//
+// **What this replaces.** `LegalPage.astro` ended in a `<Button>Contact
+// us</Button>` with no `href`, no `onClick` and no form around it — a
+// `<button type="button">` that did precisely nothing, on all five legal
+// pages. It was authored in TASK 1.2.2 pointing at the contact form of the
+// day; D-32 (2026-08-30) deleted that form and its route, and the CTA was
+// left behind pointing at nothing. The owner, 2026-09-09: *"in webapp there
+// are a lot of Contact Us button which is not working."*
+//
+// Rather than repoint it at `/contact`, the details themselves are now
+// rendered inline. Someone who has just read a privacy notice and wants to
+// ask about it should not have to make a second navigation to find out how,
+// and with the form gone there is nothing `/contact` does that this block
+// does not already say.
+//
+// **Why a copy control and not just a `mailto:`.** `mailto:` hands the
+// address to whatever the OS believes the mail client is, which on a phone
+// using webmail is frequently nothing at all — and a fair share of this
+// site's visitors are passing the address to somebody else (a GP, a
+// relative) rather than writing to it themselves. Each row is therefore a
+// value you can read, a link that acts on it, and a control that puts it on
+// the clipboard.
+//
+// **Zero JS by default still holds (ADR-0017).** This is not a `client:*`
+// island: it is markup plus one plain `<script>`, which Astro hoists and
+// bundles into a same-origin file (`assetsInlineLimit: 0`, astro.config.mjs)
+// — the same shape BaseLayout's cookie-consent wiring uses, for the same
+// reason: an island's inline bootstrap is blocked outright by the
+// CloudFront CSP's `script-src`. The block stays fully usable with that
+// script dead, because both values are real text inside real links; only
+// the copy buttons, which stay `hidden` until the script un-hides them,
+// would be absent.
+import { t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { Link } from '@ndn/ui';
+
+import {
+  contactEmail,
+  contactEmailUrl,
+  whatsappBusinessNumber,
+  whatsappChatUrl,
+} from '../site-config.js';
+
+interface Props {
+  readonly locale: Locale;
+  /** Extra class on the wrapper, so a page with its own band styling (the landing page) can size this block to it. */
+  readonly className?: string;
+}
+
+const { locale, className } = Astro.props;
+
+const rows = [
+  {
+    key: 'email',
+    label: t('contact.emailLabel', undefined, locale),
+    value: contactEmail,
+    href: contactEmailUrl(contactEmail),
+    external: false,
+    copyLabel: t('contact.copyEmail', undefined, locale),
+  },
+  {
+    key: 'whatsapp',
+    label: t('contact.whatsappNumberLabel', undefined, locale),
+    value: whatsappBusinessNumber,
+    href: whatsappChatUrl(whatsappBusinessNumber),
+    external: true,
+    copyLabel: t('contact.copyNumber', undefined, locale),
+  },
+] as const;
+
+const wrapperClass = ['ndn-contact-details', className].filter(Boolean).join(' ');
+
+const contactDetailsCss = `
+/* Capped rather than full-bleed. A legal page's measure is ~40rem and the
+   landing band's is 68rem; a field stretched across either puts the copy
+   control an inch or more from the value it copies, which reads as two
+   unrelated things on one line. */
+.ndn-contact-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  max-width: 30rem;
+  margin-block: 1.25rem 0;
+}
+
+.ndn-contact-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+}
+
+/* Deliberately the same size, weight and colour as .ndn-input-label
+   (packages/ui's primitive-styles.ts). These rows are not form fields, but
+   they read as a labelled value in exactly the way one does, and a second
+   near-identical label style is the drift that stops a design system being
+   one. */
+.ndn-contact-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--ndn-color-text);
+}
+
+/* The bordered box the value sits in, with the copy control attached to its
+   trailing edge — one control, rather than a field and a button that happen
+   to be adjacent. Logical properties throughout (D-04's RTL-safe
+   primitives): in an RTL locale the button follows the text to the other
+   side without a second rule. */
+.ndn-contact-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-block: 0.375rem;
+  padding-inline: 0.875rem;
+  border: 1px solid var(--ndn-color-border-strong);
+  border-radius: 0.75rem;
+  background-color: var(--ndn-color-surface-raised);
+}
+
+.ndn-contact-field:focus-within {
+  border-color: var(--ndn-color-brand);
+}
+
+/* The value takes the free space so the copy button stays pinned to the
+   trailing edge at any width, and wraps rather than overflowing on a narrow
+   phone — an email address is one long unbreakable token to a line-breaking
+   algorithm that has not been told otherwise. */
+/* min-width: min-content is what keeps the address on one line, and it is
+   the whole reason overflow-wrap is break-word rather than anywhere:
+   anywhere makes an element's min-content width a single character, so a
+   flex item wearing it will shrink to nothing and the address breaks
+   mid-token (contact@nourishthenerve / .com — which is what it did at
+   390px, the width most of this site's visitors are on). break-word leaves
+   min-content as the longest unbreakable run, so the value refuses to go
+   narrower than the address itself and the copy button wraps below it
+   instead — but only on the row and at the width where it actually has to,
+   which a fixed flex-basis could not express. */
+.ndn-contact-value {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  min-width: min-content;
+  overflow-wrap: break-word;
+  font-size: 1rem;
+}
+
+/* auto start-margin so the control sits at the trailing edge whether it
+   shares the line with the value or has wrapped below it. */
+.ndn-contact-copy {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+}
+
+/* .ndn-button sets display: inline-flex, and an author rule beats the UA
+   stylesheet's own [hidden] { display: none } whatever their specificity —
+   so without this the button below would render *despite* its hidden
+   attribute, on exactly the pages where its script never ran. */
+.ndn-contact-copy[hidden] {
+  display: none;
+}
+
+/* Below the field, not inside it, and holding its own height while empty.
+   Inside, the message grew the box on click and shoved the next row down
+   under the pointer — on a touch screen that is a control moving out from
+   under the finger that just pressed it. The reserved line costs a little
+   air and nothing moves. */
+.ndn-contact-status {
+  min-height: 1.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--ndn-color-text-muted);
+}
+`;
+---
+
+{/*
+  The two feedback strings ride on the wrapper rather than being written
+  into the script: the script is bundled once for the whole site and has no
+  access to `t()` or to `locale`, so any copy inside it would be English
+  hard-coded past the i18n catalogue (D-04) the moment a second language
+  ships.
+*/}
+<div
+  class={wrapperClass}
+  data-contact-details
+  data-copied-label={t('contact.copied', undefined, locale)}
+  data-copy-failed-label={t('contact.copyFailed', undefined, locale)}
+>
+  {
+    rows.map((row) => (
+      <div class="ndn-contact-detail">
+        <span class="ndn-contact-label">{row.label}</span>
+        <div class="ndn-contact-field">
+          <Link href={row.href} external={row.external} className="ndn-contact-value">
+            {row.value}
+          </Link>
+          {/*
+            `hidden` until the script below runs. A copy button that cannot
+            copy is worse than no copy button: it looks like a control and
+            silently is not one. Everything a visitor actually needs — the
+            address, the number, and a link that acts on each — sits above
+            it and never depends on this.
+          */}
+          <button
+            type="button"
+            hidden
+            class="ndn-button ndn-button--secondary ndn-button--sm ndn-interactive ndn-contact-copy"
+            data-contact-copy={row.value}
+            aria-label={row.copyLabel}
+          >
+            {t('contact.copy', undefined, locale)}
+          </button>
+          {/*
+            One live region per row, not one for the block: both rows sit on
+            the page together, and "Copied" announced beside the wrong value
+            is a worse answer than none. Present and empty from first render
+            — a live region has to be in the DOM *before* text lands in it to
+            be announced at all.
+          */}
+        </div>
+        <span class="ndn-contact-status" role="status" data-contact-status />
+      </div>
+    ))
+  }
+</div>
+
+<style set:html={contactDetailsCss} />
+
+<script>
+  // A plain, externally-bundled module script — not a `client:*` island.
+  // See this component's frontmatter, and BaseLayout.astro's own
+  // cookie-consent wiring, for why: an island's inline bootstrap is
+  // silently blocked by the CloudFront CSP's `script-src`.
+  //
+  // Astro hoists and dedupes this into one file across the whole site, so
+  // it runs once per page however many contact blocks that page renders —
+  // hence a `querySelectorAll` over every block, rather than anything
+  // scoped to a single instance.
+
+  /**
+   * `navigator.clipboard` needs a secure context, which this site always
+   * is — but it also rejects when the document is not focused, and in
+   * Safari when the call is judged too far from the user's own gesture.
+   * The selection-based fallback covers those without changing what the
+   * button does; when both fail the visitor is told, rather than left
+   * looking at a control that appeared to work.
+   */
+  async function copyToClipboard(value: string): Promise<boolean> {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // Fall through to the selection-based path below.
+    }
+
+    const scratch = document.createElement('textarea');
+    scratch.value = value;
+    scratch.setAttribute('readonly', '');
+    // Positioned off-screen rather than `hidden`: the selection APIs below
+    // only act on an element the browser considers rendered.
+    scratch.style.position = 'fixed';
+    scratch.style.insetInlineStart = '-9999px';
+    document.body.append(scratch);
+    try {
+      scratch.select();
+      return document.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      scratch.remove();
+    }
+  }
+
+  for (const block of document.querySelectorAll<HTMLElement>('[data-contact-details]')) {
+    const copiedLabel = block.dataset.copiedLabel ?? '';
+    const failedLabel = block.dataset.copyFailedLabel ?? '';
+
+    for (const button of block.querySelectorAll<HTMLButtonElement>('[data-contact-copy]')) {
+      const value = button.getAttribute('data-contact-copy') ?? '';
+      if (value === '') continue;
+
+      // The status line is a sibling of the field the button sits in, not a
+      // child of it — see the stylesheet's note on why it moved out.
+      const status =
+        button.closest<HTMLElement>('.ndn-contact-detail')?.querySelector<HTMLElement>(
+          '[data-contact-status]',
+        ) ?? undefined;
+      button.hidden = false;
+
+      let clearTimer: ReturnType<typeof setTimeout> | undefined;
+      button.addEventListener('click', () => {
+        void copyToClipboard(value).then((ok) => {
+          if (!status) return;
+          // Blanked first: copying the same value twice would otherwise
+          // write identical text into the live region, which a screen
+          // reader reads as no change and never announces.
+          status.textContent = '';
+          status.textContent = ok ? copiedLabel : failedLabel;
+          if (clearTimer !== undefined) clearTimeout(clearTimer);
+          clearTimer = setTimeout(() => {
+            status.textContent = '';
+          }, 4000);
+        });
+      });
+    }
+  }
+</script>

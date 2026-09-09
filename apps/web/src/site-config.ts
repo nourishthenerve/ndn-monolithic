@@ -32,7 +32,8 @@ export const contentApiUrl = 'https://m4ptz0to5m.execute-api.eu-west-2.amazonaws
 // documents, applied to the one `wss://` origin this site calls. Called
 // from the browser, not at build time — a signalling connection has no
 // meaning until a signed-in caller opens one.
-export const signallingWebSocketUrl = 'wss://93im3xehxh.execute-api.eu-west-2.amazonaws.com/$default';
+export const signallingWebSocketUrl =
+  'wss://93im3xehxh.execute-api.eu-west-2.amazonaws.com/$default';
 
 // TASK 1.3.2: every blog post is implicitly tagged with this keyword at
 // creation (services/api/src/content-repository.ts's withContentTypeKeyword)
@@ -54,8 +55,24 @@ export const turnstileSiteKey = '0x4AAAAAAEiDaB79oLUw9LNz'; // gitleaks:allow �
 // a direct link to the clinic's WhatsApp Business number, the same
 // human-staffed channel D-29 already established for patient account
 // creation (docs/runbooks/patient-account-provisioning.md). The real
-// number, provided by the owner 2026-08-30.
-export const whatsappBusinessNumber = '+91 88611 11636';
+// number, provided by the owner 2026-08-30 and **corrected by the owner
+// 2026-09-09** — the last three digits were transposed (…11636 → …11363),
+// so every WhatsApp link this site has ever rendered pointed at a number
+// that is not the clinic's.
+export const whatsappBusinessNumber = '+91 88611 11363';
+
+// 2026-09-09: the clinic's own mailbox — the Zoho address (ADR-0009) that
+// the deleted contact form used to relay into (`CONTACT_FORM_TO_EMAIL`,
+// infra/src/config.ts), and the principal clinician's own sign-in
+// identity. Published here because D-32 left the site with exactly one
+// way to reach anyone, and the owner asked for the address to be on the
+// page beside the WhatsApp number rather than behind a form.
+export const contactEmail = 'contact@nourishthenerve.com';
+
+/** `mailto:` for the clinic's mailbox — no subject/body prefill, so a visitor's own mail client decides everything about the message. */
+export function contactEmailUrl(email: string): string {
+  return `mailto:${email}`;
+}
 
 /** `https://wa.me/<digits>` — wa.me accepts digits only, no `+`/spaces/hyphens. */
 export function whatsappChatUrl(number: string): string {
