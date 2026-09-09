@@ -118,3 +118,49 @@ describe('a paste from somewhere else', () => {
     expect(sanitizeRichText('   ')).toBe('');
   });
 });
+
+// 2026-09-09: the colour chain, end to end through the sanitiser.
+//
+// Every assertion here corresponds to something observed in Chromium while
+// building the palette, not to something imagined: the engine returns
+// `rgb()` whatever notation it was given, it wraps runs in `<span>`, and
+// "remove highlight" is implemented by handing it a value the policy
+// refuses so that the span unwraps on the next pass.
+describe('colour', () => {
+  const clean = (html: string) => sanitizeRichText(html);
+
+  it('keeps a palette colour a browser handed back as rgb()', () => {
+    // What Chromium actually produces for the lavender swatch.
+    expect(clean('<p><span style="color: rgb(101, 85, 143);">Hello</span></p>')).toBe(
+      '<p><span style="color: rgb(101, 85, 143);">Hello</span></p>',
+    );
+  });
+
+  it('keeps a palette highlight the same way', () => {
+    expect(clean('<p><span style="background-color: rgb(227, 233, 215);">Hi</span></p>')).toBe(
+      '<p><span style="background-color: rgb(227, 233, 215);">Hi</span></p>',
+    );
+  });
+
+  it('drops a colour outside the palette and the span with it', () => {
+    // The contrast guarantee in one line: an ink nobody checked cannot
+    // reach the page, however it got into the markup.
+    expect(clean('<p><span style="color: rgb(255, 0, 0);">Hello</span></p>')).toBe('<p>Hello</p>');
+  });
+
+  it('removes a highlight by unwrapping the span it lived in', () => {
+    // This is how the "Remove highlight" button works — see
+    // `REMOVE_HIGHLIGHT_VALUE`. If `transparent` ever became a palette
+    // entry, or spans stopped unwrapping, the highlight would silently
+    // persist instead.
+    expect(clean('<p><span style="background-color: transparent;">Hello</span></p>')).toBe(
+      '<p>Hello</p>',
+    );
+  });
+
+  it('still strips a span that is carrying layout', () => {
+    expect(clean('<p><span style="position: fixed; inset: 0;">Hello</span></p>')).toBe(
+      '<p>Hello</p>',
+    );
+  });
+});

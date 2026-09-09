@@ -28,11 +28,16 @@
 //
 // ## The shape of the list
 //
-// Structure and emphasis, no layout and no scripting. What is *absent* is as
-// deliberate as what is here: no `<div>`, `<span>`, `<script>`, `<style>`,
-// `<iframe>`, `<form>`, no `class`, no `id`, no event handler, no arbitrary
-// `style`. A post is prose, and prose that can position itself is prose that
-// can cover the site's own navigation.
+// Structure, emphasis and colour; no layout and no scripting. What is
+// *absent* is as deliberate as what is here: no `<div>`, `<script>`,
+// `<style>`, `<iframe>`, `<form>`, no `class`, no `id`, no event handler, no
+// arbitrary `style`. A post is prose, and prose that can position itself is
+// prose that can cover the site's own navigation.
+//
+// 2026-09-09 admits `<span>` and two colour properties, and the sentence
+// above is still the rule rather than an exception to it: the only style
+// declarations that pass are complete, literal, and drawn from a nine-entry
+// palette this file owns. See `TEXT_COLORS`.
 
 /**
  * Elements a stored body may contain.
@@ -45,6 +50,21 @@
 export const ALLOWED_TAGS: ReadonlySet<string> = new Set([
   'p',
   'br',
+  // 2026-09-09: `<span>` is here for exactly one reason - colour. The owner:
+  // *"there is no way to change the color of the text."* Colour is an inline
+  // run inside a paragraph, so it needs an inline element, and there is no
+  // semantic element meaning "this text is red".
+  //
+  // The header above says this list carries no `<div>` and no `<span>`
+  // because "prose that can position itself is prose that can cover the
+  // site's own navigation". That reasoning is intact. A span here may carry
+  // `style` and nothing else, and `isAllowedStyle` admits only complete
+  // declarations drawn from `TEXT_COLORS`/`HIGHLIGHT_COLORS` (plus the
+  // alignments that were already allowed). There is no length, no position,
+  // no `url()` and no free-form property in that set, so a span cannot lay
+  // anything out - it can only be one of nine colours. A span left with no
+  // surviving attribute is unwrapped by `sanitize.ts` rather than kept.
+  'span',
   'h2',
   'h3',
   'h4',
@@ -130,23 +150,115 @@ export const ALLOWED_ATTRIBUTES: Readonly<Record<string, readonly string[]>> = {
   figcaption: ['style'],
   td: ['style'],
   th: ['style'],
+  // Colour only - a span has no alignment to carry, because alignment is a
+  // block property and this element never is one.
+  span: ['style'],
 };
 
 /**
- * The alignments the toolbar can produce, and the only declarations any
- * `style` attribute may carry.
+ * The ink an author may set text in.
+ *
+ * The owner asked for colour: *"there is no way to change the color of the
+ * text."* `rich-text-controls.ts` used to answer that request with a single
+ * fixed highlight and a note explaining the refusal — that a free colour well
+ * is the one control on a toolbar like this which can produce a page failing
+ * the contrast gate the rest of the site is held to.
+ *
+ * **That objection was to a colour *well*, not to colour.** A closed palette
+ * has neither problem: every entry below is one of `tokens/color.ts`'s own
+ * inks, and `policy.contrast.test.ts` walks this map against both grounds an
+ * article is ever painted on — `--ndn-color-surface` and
+ * `--ndn-color-surface-raised` — asserting 4.5:1 for each. So the author gets
+ * seven real choices and cannot reach an unreadable one, which is a better
+ * answer to the request than either a free well or a refusal.
+ *
+ * Literal hex, and the reason is the same one `HIGHLIGHT_COLOR` already
+ * carries: `document.execCommand('foreColor', false, ...)` is handed a colour
+ * value by the browser's own editing engine and has no way to resolve a
+ * custom property.
+ */
+export const TEXT_COLORS: Readonly<Record<string, string>> = {
+  text: '#232821',
+  textMuted: '#56604d',
+  brand: '#4e6136',
+  brandStrong: '#3a4a26',
+  accent: '#65558f',
+  error: '#a62a20',
+  warning: '#7a5209',
+};
+
+/**
+ * The grounds a highlight may paint behind text.
+ *
+ * Tints rather than saturated colours, and every one of them is checked
+ * against `--ndn-color-text` in the same test: a highlight changes the
+ * *background* under body copy, so the pair that has to clear 4.5:1 is the
+ * tint and the body ink, not the tint and the page.
+ *
+ * `accentSoft` is the colour the single `<mark>` control used before this
+ * palette existed, so a post written yesterday highlights in exactly the
+ * shade it did.
+ */
+export const HIGHLIGHT_COLORS: Readonly<Record<string, string>> = {
+  accentSoft: '#e9e2f4',
+  brandSoft: '#e3e9d7',
+  warningSoft: '#f4e8cf',
+  errorSoft: '#f7e0dd',
+  neutralSoft: '#e8e9e3',
+};
+
+/**
+ * The alignments the toolbar can produce.
  *
  * A general `style` allowance would be a general layout allowance —
  * `position: fixed` over the site header is a one-line defacement — so the
  * check is against a closed set of complete declarations rather than a parse
- * of arbitrary CSS.
+ * of arbitrary CSS. Colour is admitted the same way, one literal declaration
+ * at a time, by `ALLOWED_STYLE_DECLARATIONS` below.
  */
-const ALLOWED_STYLE_DECLARATIONS: ReadonlySet<string> = new Set([
+const ALLOWED_ALIGNMENTS: readonly string[] = [
   'text-align:left',
   'text-align:center',
   'text-align:right',
   'text-align:justify',
+];
+
+/** Every complete declaration a `style` attribute may carry, alignments and palette together. */
+const ALLOWED_STYLE_DECLARATIONS: ReadonlySet<string> = new Set([
+  ...ALLOWED_ALIGNMENTS,
+  ...Object.values(TEXT_COLORS).map((hex) => `color:${hex}`),
+  ...Object.values(HIGHLIGHT_COLORS).map((hex) => `background-color:${hex}`),
 ]);
+
+/**
+ * `rgb(35, 40, 33)` -> `#232821`.
+ *
+ * Not a convenience: **every browser serialises a colour it was given as
+ * `rgb()`**, whatever notation the caller used, so a `style` attribute read
+ * back out of the editor never contains the hex that went in. Confirmed in
+ * Chromium — the lavender swatch comes back as `rgb(101, 85, 143)`. Without
+ * this the palette would be an allowlist that matches nothing it had just
+ * allowed: every colour would be stripped on the next keystroke, and the
+ * feature would look like it did not work.
+ *
+ * Only the three-integer form is accepted. `rgba()` is not normalised and so
+ * does not match — deliberate: a translucent ink is one whose contrast
+ * depends on what is behind it, which is the thing the palette exists to
+ * pin down.
+ */
+function normaliseColor(declaration: string): string {
+  const match = /^([a-z-]+):rgb\((\d{1,3}),(\d{1,3}),(\d{1,3})\)$/.exec(declaration);
+  if (!match) {
+    return declaration;
+  }
+  const [, property, r, g, b] = match;
+  const channels = [r, g, b].map((value) => Number(value));
+  if (channels.some((value) => value > 255)) {
+    return declaration;
+  }
+  const hex = channels.map((value) => value.toString(16).padStart(2, '0')).join('');
+  return `${property}:#${hex}`;
+}
 
 /**
  * `true` for a `style` value made only of allowed declarations.
@@ -158,7 +270,7 @@ const ALLOWED_STYLE_DECLARATIONS: ReadonlySet<string> = new Set([
 export function isAllowedStyle(value: string): boolean {
   const declarations = value
     .split(';')
-    .map((part) => part.replace(/\s+/g, '').toLowerCase())
+    .map((part) => normaliseColor(part.replace(/\s+/g, '').toLowerCase()))
     .filter((part) => part.length > 0);
   if (declarations.length === 0) {
     return false;

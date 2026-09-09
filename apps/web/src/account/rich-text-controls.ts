@@ -32,14 +32,17 @@
 // keystroke, so a browser that decides to emit `<span style="font-weight:700">`
 // for bold gets normalised the same as one that emits `<strong>`.
 
+import { HIGHLIGHT_COLORS, TEXT_COLORS } from '../rich-text/policy.js';
+
 /** Which run of the toolbar a control belongs to. The groups are separated visually and by `role="group"`, so a screen-reader user can skip a run they do not need. */
-export type RichTextGroup = 'history' | 'block' | 'inline' | 'list' | 'align' | 'insert' | 'view';
+export type RichTextGroup =
+  'history' | 'block' | 'inline' | 'color' | 'list' | 'align' | 'insert' | 'view';
 
 /**
  * Controls that do something this component has to implement itself, rather
  * than hand to `execCommand` — each opens a panel or toggles a mode.
  */
-export type RichTextAction = 'link' | 'image' | 'table' | 'preview';
+export type RichTextAction = 'link' | 'image' | 'table' | 'preview' | 'textColor' | 'highlight';
 
 export interface RichTextControl {
   readonly id: string;
@@ -191,27 +194,40 @@ export const RICH_TEXT_CONTROLS: readonly RichTextControl[] = [
     command: 'subscript',
     stateCommand: 'subscript',
   },
-  // `<mark>` rather than a colour picker. The owner asked for rich, and a
-  // free colour well is the one control on a toolbar like this that can
-  // produce a page failing the contrast gate the rest of the site is held
-  // to — grey-on-white body text, chosen in good faith by someone who could
-  // read it on their own screen. One highlight, styled by the site's own
-  // stylesheet, says "this part matters" and cannot be set to an unreadable
-  // pair.
-  {
-    id: 'highlight',
-    group: 'inline',
-    labelKey: 'richText.highlight',
-    glyph: '▨',
-    command: 'hiliteColor',
-    stateCommand: 'hiliteColor',
-  },
   {
     id: 'clearFormatting',
     group: 'inline',
     labelKey: 'richText.clearFormatting',
     glyph: 'T×',
     command: 'removeFormat',
+  },
+
+  // 2026-09-09: colour, which this toolbar used to refuse.
+  //
+  // The refusal was a fixed `<mark>` and a note saying a free colour well is
+  // the one control here that can produce a page failing the site's contrast
+  // gate — grey-on-white body text, chosen in good faith by someone who
+  // could read it on their own screen. The owner asked again, plainly:
+  // *"there is no way to change the color of the text."*
+  //
+  // The objection was to a *well*, and it survives: neither of these opens
+  // one. Each opens a panel of swatches drawn from `policy.ts`'s palette,
+  // every entry of which `policy.contrast.test.ts` proves clears 4.5:1 on
+  // both grounds a post is rendered on. Twelve choices, none of them
+  // unreadable, and a thirteenth that was unreadable would fail the build.
+  {
+    id: 'textColor',
+    group: 'color',
+    labelKey: 'richText.textColor',
+    glyph: 'A',
+    action: 'textColor',
+  },
+  {
+    id: 'highlight',
+    group: 'color',
+    labelKey: 'richText.highlight',
+    glyph: '▨',
+    action: 'highlight',
   },
 
   {
@@ -299,24 +315,78 @@ export const RICH_TEXT_GROUPS: readonly RichTextGroup[] = [
 ];
 
 /**
- * The highlight colour `hiliteColor` is given.
+ * One swatch on a colour panel: the value `execCommand` is handed, and the
+ * catalogue key for the name a screen reader and a tooltip get.
  *
- * A pale accent tint rather than the browser default of bright yellow, and
- * fixed rather than chosen — see the `highlight` control's own note. What the
- * command emits varies by engine (`<span style="background-color:…">` or a
- * `<font>`); `sanitize.ts` unwraps both, which is why the published page
- * takes its highlight styling from `<mark>` and this value only ever affects
- * what the author sees while typing.
+ * A swatch is never named by its hex. "#65558f" tells a person nothing and
+ * tells a screen-reader user less; the catalogue calls it "Lavender".
+ */
+export interface ColorSwatch {
+  readonly id: string;
+  readonly hex: string;
+  readonly labelKey: string;
+}
+
+function swatches(palette: Readonly<Record<string, string>>): readonly ColorSwatch[] {
+  return Object.entries(palette).map(([id, hex]) => ({
+    id,
+    hex,
+    labelKey: `richText.color.${id}`,
+  }));
+}
+
+/**
+ * The inks and the highlights the two colour panels offer, **derived from
+ * `policy.ts` rather than restated**.
  *
- * A literal hex, and the one colour in apps/web that still is one:
- * `document.execCommand('hiliteColor', false, …)` is handed a colour value by
- * the browser's own editing engine and has no way to resolve a custom
+ * That direction matters. The palette is a security-and-accessibility
+ * boundary — it is what `isAllowedStyle` admits and what
+ * `policy.contrast.test.ts` proves readable — so the toolbar reads from the
+ * boundary rather than the boundary trusting the toolbar. A swatch that was
+ * not in the policy would produce a colour the sanitiser strips on the next
+ * keystroke, which is the "it does not work" bug this arrangement makes
+ * impossible to write.
+ */
+export const TEXT_COLOR_SWATCHES: readonly ColorSwatch[] = swatches(TEXT_COLORS);
+export const HIGHLIGHT_SWATCHES: readonly ColorSwatch[] = swatches(HIGHLIGHT_COLORS);
+
+/**
+ * What "no highlight" is handed to `hiliteColor`.
+ *
+ * `transparent` is deliberately **not** in the palette, and that is the
+ * mechanism rather than an oversight: the browser emits
+ * `background-color: transparent`, `isAllowedStyle` refuses it, the attribute
+ * is dropped, and `sanitize.ts` then unwraps the now-attribute-less `<span>`.
+ * The highlight and the element it lived in both disappear, which is exactly
+ * what removing a highlight should leave behind. `sanitize.test.ts` pins the
+ * whole chain so a future change to any link in it fails loudly.
+ */
+export const REMOVE_HIGHLIGHT_VALUE = 'transparent';
+
+/**
+ * The mark on a swatch.
+ *
+ * Decorative and `aria-hidden`, exactly like a toolbar control's `glyph` and
+ * exempt from the copy rule for the same reason: the accessible name comes
+ * from `labelKey`, and this letter is a specimen of the colour rather than
+ * something anyone reads.
+ */
+export const COLOR_SWATCH_GLYPH = 'A';
+
+/**
+ * The default highlight — the colour the single fixed `<mark>` control used
+ * before the palette existed, so a post highlighted yesterday is the shade it
+ * always was.
+ *
+ * A literal hex, and one of the few in apps/web:
+ * `document.execCommand('hiliteColor', false, ...)` is handed a colour value
+ * by the browser's own editing engine and has no way to resolve a custom
  * property. It must equal `--ndn-color-accent-soft`, which is what
  * `rich-text/styles.ts` paints `<mark>` with — otherwise a highlight changes
  * colour the moment the post is published. This file's test asserts the two
  * agree rather than trusting whoever edits the palette next.
  */
-export const HIGHLIGHT_COLOR = '#e9e2f4';
+export const HIGHLIGHT_COLOR = HIGHLIGHT_COLORS.accentSoft as string;
 
 /**
  * The markup the table control inserts.

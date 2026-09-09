@@ -9,11 +9,19 @@
 import { colorSchemeCssVariables } from '@ndn/ui';
 import { describe, expect, it } from 'vitest';
 
-import { ALLOWED_TAGS } from '../rich-text/policy.js';
+import { ALLOWED_TAGS, HIGHLIGHT_COLORS, TEXT_COLORS } from '../rich-text/policy.js';
 import { isSafeRichText } from '../rich-text/render.js';
 import { proseStylesCss } from '../rich-text/styles.js';
 
-import { HIGHLIGHT_COLOR, RICH_TEXT_CONTROLS, RICH_TEXT_GROUPS, TABLE_HTML } from './rich-text-controls.js';
+import {
+  HIGHLIGHT_COLOR,
+  HIGHLIGHT_SWATCHES,
+  REMOVE_HIGHLIGHT_VALUE,
+  RICH_TEXT_CONTROLS,
+  RICH_TEXT_GROUPS,
+  TABLE_HTML,
+  TEXT_COLOR_SWATCHES,
+} from './rich-text-controls.js';
 
 describe('every control', () => {
   it('has an id of its own', () => {
@@ -77,9 +85,9 @@ describe('the block controls', () => {
   });
 
   it('covers the three heading levels the stylesheet renders, and no more', () => {
-    const headings = RICH_TEXT_CONTROLS.filter((control) =>
-      control.blockTag?.startsWith('h'),
-    ).map((control) => control.blockTag);
+    const headings = RICH_TEXT_CONTROLS.filter((control) => control.blockTag?.startsWith('h')).map(
+      (control) => control.blockTag,
+    );
     expect(headings).toEqual(['h2', 'h3', 'h4']);
   });
 });
@@ -93,12 +101,14 @@ describe('what the insert controls produce', () => {
   });
 
   it('uses a fixed highlight rather than a colour the author picks', () => {
-    // A free colour well is the one control on a toolbar like this that can
-    // produce a page failing the contrast gate the rest of the site is held
-    // to. See the `highlight` control's own note.
+    // 2026-09-09: colour arrived, and the guarantee changed shape rather
+    // than going away. What must stay impossible is a *free* colour well —
+    // a control that hands `execCommand` a value the author typed. Both
+    // colour controls are `action`s opening a panel of fixed swatches, so
+    // neither carries a `command` at all.
     expect(HIGHLIGHT_COLOR).toMatch(/^#[0-9a-f]{6}$/);
     const colourControls = RICH_TEXT_CONTROLS.filter((control) =>
-      ['foreColor', 'backColor'].includes(control.command ?? ''),
+      ['foreColor', 'backColor', 'hiliteColor'].includes(control.command ?? ''),
     );
     expect(colourControls).toEqual([]);
   });
@@ -111,5 +121,40 @@ describe('what the insert controls produce', () => {
   it('matches the accent tint <mark> is published with', () => {
     expect(HIGHLIGHT_COLOR).toBe(colorSchemeCssVariables('light')['--ndn-color-accent-soft']);
     expect(proseStylesCss).toContain('background-color: var(--ndn-color-accent-soft)');
+  });
+});
+
+// 2026-09-09: the palette is a boundary (`policy.ts`) and the swatches are a
+// view of it. These assert the direction of that dependency holds, because
+// the failure it prevents is invisible: a swatch the policy does not know
+// paints a colour the sanitiser strips on the next keystroke, so the button
+// works, the text changes, and the change vanishes a moment later.
+describe('the colour swatches', () => {
+  it('offer exactly what the policy admits, and nothing else', () => {
+    expect(TEXT_COLOR_SWATCHES.map((swatch) => swatch.hex)).toEqual(Object.values(TEXT_COLORS));
+    expect(HIGHLIGHT_SWATCHES.map((swatch) => swatch.hex)).toEqual(Object.values(HIGHLIGHT_COLORS));
+  });
+
+  it('names every swatch from the catalogue rather than by its hex', () => {
+    for (const swatch of [...TEXT_COLOR_SWATCHES, ...HIGHLIGHT_SWATCHES]) {
+      expect(swatch.labelKey).toBe(`richText.color.${swatch.id}`);
+      expect(swatch.hex).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+
+  // "Remove highlight" works by handing the engine a value the policy
+  // refuses, so the attribute is dropped and the span unwrapped. If this
+  // ever became a palette entry the highlight would persist instead.
+  it('removes a highlight with a value the policy will not keep', () => {
+    expect(Object.values(HIGHLIGHT_COLORS)).not.toContain(REMOVE_HIGHLIGHT_VALUE);
+  });
+
+  it('gives each colour control a panel rather than a command', () => {
+    for (const id of ['textColor', 'highlight']) {
+      const control = RICH_TEXT_CONTROLS.find((entry) => entry.id === id);
+      expect(control, `no "${id}" control`).toBeDefined();
+      expect(control?.command).toBeUndefined();
+      expect(control?.action).toBe(id);
+    }
   });
 });

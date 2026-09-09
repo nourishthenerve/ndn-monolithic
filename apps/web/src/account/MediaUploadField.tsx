@@ -20,6 +20,7 @@
 // when the form is submitted. Those can fail independently, and the
 // failure that matters — a record pointing at an object that is not there
 // — is the one this ordering makes impossible.
+import { Button } from '@ndn/ui';
 import { useId, useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 
@@ -140,10 +141,20 @@ export function MediaUploadField({
   const preview = value ? mediaUrl(value) : undefined;
 
   return (
-    <>
-      <p>
-        <label htmlFor={inputId}>{strings.label}</label>
+    <div className="ndn-authoring-media">
+      {/* 2026-09-09: the same three `packages/ui` classes every other form on
+          these pages uses, so the label sits above its control instead of
+          beside it. The input stays a real `<input type="file">` — its
+          "Browse" button is styled through `::file-selector-button` in
+          `authoring-styles.ts` rather than replaced by a label dressed as a
+          button, which is the usual trick and costs the keyboard semantics
+          the native control already has. */}
+      <p className="ndn-input-wrapper">
+        <label className="ndn-input-label" htmlFor={inputId}>
+          {strings.label}
+        </label>
         <input
+          className="ndn-authoring-file"
           id={inputId}
           ref={inputRef}
           type="file"
@@ -153,7 +164,9 @@ export function MediaUploadField({
           onChange={(event) => void handleChange(event)}
         />
       </p>
-      <p id={hintId}>{strings.hint}</p>
+      <p className="ndn-authoring-hint" id={hintId}>
+        {strings.hint}
+      </p>
       {state === 'uploading' && (
         <p role="status" aria-live="polite">
           {strings.uploading}
@@ -169,14 +182,21 @@ export function MediaUploadField({
               proofread by reading the form. `mediaUrl` returns undefined
               for a key outside the public prefix, and nothing is rendered
               rather than a broken `src`. */}
-          {preview && <img src={preview} alt={strings.previewAlt} width={240} />}
-          <p>
-            <button type="button" onClick={handleRemove} disabled={disabled}>
+          {preview && (
+            <img
+              className="ndn-authoring-media-preview"
+              src={preview}
+              alt={strings.previewAlt}
+              width={240}
+            />
+          )}
+          <p className="ndn-panel-actions">
+            <Button size="sm" variant="secondary" onClick={handleRemove} disabled={disabled}>
               {strings.remove}
-            </button>
+            </Button>
           </p>
         </>
       )}
-    </>
+    </div>
   );
 }

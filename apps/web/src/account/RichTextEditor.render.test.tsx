@@ -32,12 +32,13 @@ const STRINGS: RichTextEditorStrings = {
   imageTooLarge: 'Too large.',
   imageWrongType: 'Wrong type.',
   cancel: 'Cancel',
+  colorTextLabel: 'Choose a text colour',
+  colorHighlightLabel: 'Choose a highlight colour',
+  colorRemoveHighlight: 'Remove highlight',
   previewNotice: 'Preview: this is how the published page will look.',
 };
 
-function renderEditor(
-  overrides: Partial<React.ComponentProps<typeof RichTextEditor>> = {},
-) {
+function renderEditor(overrides: Partial<React.ComponentProps<typeof RichTextEditor>> = {}) {
   const exec = vi.fn();
   const onChange = vi.fn();
   render(
@@ -231,8 +232,57 @@ describe('the preview', () => {
   it('shows nothing for a body the validator would refuse, rather than a friendlier version of it', () => {
     // The preview runs the same two passes a published page does, so an
     // author cannot be shown something a reader would not get.
+    //
+    // 2026-09-09: the article is now a child of the preview box rather than
+    // the box itself — the box is the width of the toolbar, the article
+    // inside it keeps the published 68ch measure. The guarantee is
+    // unchanged; the element holding it moved, so the query follows it.
     renderEditor({ value: '<script>alert(1)</script>' });
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
-    expect(document.querySelector('.ndn-rte-preview')?.innerHTML).toBe('');
+    expect(document.querySelector('.ndn-rte-preview-body')?.innerHTML).toBe('');
+  });
+});
+
+// 2026-09-09: colour. jsdom implements neither `execCommand` nor selection
+// well enough to prove what lands in the document — that is checked in
+// `sanitize.test.ts` against real Chromium output — so what is asserted here
+// is the half this component owns: that the swatches are offered, named, and
+// hand the engine a palette value with `styleWithCSS` on.
+describe('colour', () => {
+  it('offers a swatch per palette entry, named rather than hexed', () => {
+    renderEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Text colour' }));
+    const group = screen.getByRole('group', { name: STRINGS.colorTextLabel });
+    expect(group).toBeDefined();
+    // Named from the catalogue: "Lavender", not "#65558f".
+    expect(screen.getByRole('button', { name: 'Lavender' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /#/ })).toBeNull();
+  });
+
+  it('paints with styleWithCSS on, because colour has no element of its own', () => {
+    const { exec } = renderEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Text colour' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Lavender' }));
+    expect(exec).toHaveBeenCalledWith('styleWithCSS', 'true');
+    expect(exec).toHaveBeenCalledWith('foreColor', '#65558f');
+  });
+
+  it('removes a highlight with the value the policy refuses', () => {
+    // The span unwraps on the next sanitise — see `REMOVE_HIGHLIGHT_VALUE`.
+    const { exec } = renderEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Highlight' }));
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.colorRemoveHighlight }));
+    expect(exec).toHaveBeenCalledWith('hiliteColor', 'transparent');
+  });
+
+  it('keeps the caret when a swatch is pressed', () => {
+    // Same reason as every toolbar button: a `<button>` takes focus on
+    // mousedown, which collapses the selection the colour is meant for.
+    renderEditor();
+    fireEvent.click(screen.getByRole('button', { name: 'Text colour' }));
+    const swatch = screen.getByRole('button', { name: 'Olive' });
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    swatch.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 });

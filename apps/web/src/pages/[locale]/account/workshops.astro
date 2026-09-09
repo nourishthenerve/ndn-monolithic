@@ -12,6 +12,7 @@ import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
 import { AuthoredContentList } from '../../../account/AuthoredContentList.js';
+import { authoringStylesCss } from '../../../account/authoring-styles.js';
 import { WorkshopComposer } from '../../../account/WorkshopComposer.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
@@ -42,6 +43,9 @@ const editorStrings = {
   imageTooLarge: t('authoring.mediaTooLarge', undefined, locale),
   imageWrongType: t('authoring.mediaWrongType', undefined, locale),
   cancel: t('richText.cancel', undefined, locale),
+  colorTextLabel: t('richText.colorTextPanel', undefined, locale),
+  colorHighlightLabel: t('richText.colorHighlightPanel', undefined, locale),
+  colorRemoveHighlight: t('richText.colorRemoveHighlight', undefined, locale),
   previewNotice: t('richText.previewNotice', undefined, locale),
 };
 ---
@@ -132,3 +136,10 @@ const editorStrings = {
 {/* See `account/blog.astro` for why both stylesheets, and why `set:html`. */}
 <style set:html={proseStylesCss} />
 <style set:html={richTextEditorStylesCss} />
+{/* 2026-09-09: the page around the editor — the composer's own sheet, the
+    Browse button inside its file inputs, and the table of what has already
+    been written. Third rather than folded into either of the two above: it
+    belongs to this page, while `proseStylesCss` belongs to every page that
+    renders a post and `richTextEditorStylesCss` to the editor wherever it is
+    mounted. */}
+<style set:html={authoringStylesCss} />
