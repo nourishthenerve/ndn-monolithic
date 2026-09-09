@@ -93,6 +93,7 @@ const assessmentStrings = {
   uploadingLabel: t('assessment.uploading', undefined, locale),
   uploadFailedLabel: t('assessment.uploadFailed', undefined, locale),
   downloadLabel: t('assessment.download', undefined, locale),
+  uploadedAtTemplate: t('assessment.uploadedAt', { when: '{when}' }, locale),
   addRowLabel: t('assessment.addRow', undefined, locale),
   removeRowLabel: t('assessment.removeRow', undefined, locale),
   addRowAriaTemplate: t('assessment.addRowAria', { field: '{field}' }, locale),
@@ -189,6 +190,7 @@ const assessmentStrings = {
       />
       <AssessmentForm
         client:only="react"
+        locale={locale}
         fieldSets={['general']}
         showTitles={false}
         headingLevel={PANEL_HEADING_LEVEL}
@@ -209,6 +211,7 @@ const assessmentStrings = {
         </Heading>
         <AssessmentForm
           client:only="react"
+          locale={locale}
           fieldSets={['private']}
           showTitles={false}
           showVersion={false}
@@ -233,6 +236,7 @@ const assessmentStrings = {
         </Heading>
         <AssessmentForm
           client:only="react"
+          locale={locale}
           fieldSets={['prescription']}
           showTitles={false}
           showVersion={false}
@@ -322,6 +326,7 @@ const assessmentStrings = {
       </RequireAuth>
       <AssessmentForm
         client:only="react"
+        locale={locale}
         fieldSets={['calendar']}
         showTitles={false}
         showVersion={false}

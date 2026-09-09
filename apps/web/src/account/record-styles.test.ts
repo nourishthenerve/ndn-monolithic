@@ -32,7 +32,17 @@ const EMITTED_CLASSES = [
   'ndn-record-actions--bottom',
   'ndn-record-attachments',
   'ndn-record-attachment-list',
+  'ndn-record-attachment',
+  'ndn-record-attachment-thumb',
+  'ndn-record-attachment-image',
+  'ndn-record-attachment-text',
+  'ndn-record-attachment-name',
+  'ndn-record-attachment-time',
+  'ndn-record-file',
   'ndn-record-backlink',
+  // account/index.astro, handed to the placement holding the patient's
+  // lead appointment figures
+  'ndn-record-lead',
 ];
 
 describe('patientRecordStylesCss', () => {

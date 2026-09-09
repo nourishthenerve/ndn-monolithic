@@ -139,7 +139,12 @@ export function CallScreen({
           taken during the conversation can be finished after it. */}
       {withAssessment ? (
         <div style={ASSESSMENT_COLUMN_STYLE}>
-          <AssessmentForm strings={assessmentStrings} patientId={patientId} client={client} />
+          <AssessmentForm
+            strings={assessmentStrings}
+            patientId={patientId}
+            client={client}
+            locale={locale}
+          />
         </div>
       ) : null}
     </div>

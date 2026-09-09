@@ -466,6 +466,19 @@ describe('WebStack — security headers policy', () => {
     expect(connectSrc).toMatch(/https:\/\/\$\{GetAtt:MediaBucket\w*\.RegionalDomainName\}/);
   });
 
+  // 2026-09-09, the same defect one hop further along again: an assessment
+  // attachment is only ever served through a presigned `GetObject` URL on
+  // S3's own host, so the record's picture thumbnails are `<img>` elements
+  // pointing at that origin. With `img-src 'self' data:` the browser drops
+  // them and reports nothing the page can see.
+  it('allows the media bucket origin for img-src, so an attachment thumbnail renders', () => {
+    const [imgSrc] = cspOf(synth()).split('img-src ')[1]?.split(';') ?? [];
+
+    expect(imgSrc).toContain("'self'");
+    expect(imgSrc).toContain('data:');
+    expect(imgSrc).toMatch(/https:\/\/\$\{GetAtt:MediaBucket\w*\.RegionalDomainName\}/);
+  });
+
   // The two `execute-api` hosts are hardcoded because they live in another
   // stack this one cannot reference. The bucket is this stack's own, and
   // hardcoding *its* generated name would hand every ephemeral PR
