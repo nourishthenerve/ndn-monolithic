@@ -412,6 +412,71 @@ export const patientRecordStylesCss = `
 }
 
 /* ------------------------------------------------------------------ *
+ * The lead figures — 2026-09-09.
+ *
+ * *"move 'Next appointment' and 'Next appointment length (minutes)' above
+ * the 'My Calender' with slightly bigger font (subtly highlighted) so that
+ * that's what the patient sees first before checking the actual calender."*
+ *
+ * A placement of the calendar section holding those two fields alone, in a
+ * wrapper the page writes (account/index.astro). Everything here is a
+ * restatement of .ndn-record-facts one step louder — a tinted panel, a
+ * brand rule down its leading edge, and an answer at 1.375rem against the
+ * 0.9375rem the same pair takes anywhere else on the sheet.
+ *
+ * "Subtly": the panel is brand-wash, not brand. What makes it the first
+ * thing read is the size of the answer and the fact that it is above the
+ * calendar, not a colour competing with the area's own heading band.
+ * ------------------------------------------------------------------ */
+.ndn-record-lead {
+  margin-block: 0 1.5rem;
+  padding-block: 1rem;
+  padding-inline: 1.25rem;
+  border-inline-start: 3px solid var(--ndn-color-brand);
+  border-radius: 0.5rem;
+  background-color: var(--ndn-color-brand-wash);
+}
+
+/* The two answers side by side rather than ruled one under the other: two
+   figures are a pair to read at a glance, and the ruled list this sheet
+   uses elsewhere is for a column of twenty. */
+.ndn-record-lead .ndn-record-facts {
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0 2rem;
+  margin-block: 0;
+  border-block-start: 0;
+}
+
+.ndn-record-lead .ndn-record-facts dt {
+  padding-block: 0 0.125rem;
+  padding-inline-end: 0;
+  border-block-end: 0;
+  font-size: 0.75rem;
+  color: var(--ndn-color-brand-strong);
+}
+
+.ndn-record-lead .ndn-record-facts dd {
+  padding-block: 0;
+  border-block-end: 0;
+  font-family: var(--ndn-font-family-display);
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ndn-color-text);
+}
+
+/* "No appointment is booked yet" sits directly under the empty figure it
+   explains, and it is a caption there rather than the boxed aside the same
+   class is on the sheet — a panel inside a panel is one border too many. */
+.ndn-record-lead .ndn-record-note {
+  margin-block: 0.625rem 0;
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  color: var(--ndn-color-brand-strong);
+}
+
+/* ------------------------------------------------------------------ *
  * Attachments — the one thing on the sheet that is not a field.
  * ------------------------------------------------------------------ */
 .ndn-record-attachments {
@@ -425,25 +490,142 @@ export const patientRecordStylesCss = `
   margin-block-start: 0;
 }
 
+/* 2026-09-09: a grid of cards, not a run of pills. A pill held a file
+   name; a card holds a preview, the name and the moment it was uploaded,
+   which is what the owner asked each file to answer without being opened.
+   auto-fill with a 17rem floor, so one file does not stretch to the width
+   of the sheet and eight do not become a column. */
 .ndn-record-attachment-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.75rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.ndn-record-attachment-list li {
+.ndn-record-attachment {
   display: flex;
   align-items: center;
-  gap: 0.625rem;
-  padding-block: 0.375rem;
+  gap: 0.75rem;
+  padding-block: 0.625rem;
   padding-inline: 0.75rem;
   border: 1px solid var(--ndn-color-border);
-  border-radius: 999px;
+  border-radius: 0.625rem;
   background-color: var(--ndn-color-surface-muted);
   font-size: 0.875rem;
+}
+
+/* Fixed, square and never allowed to shrink: the whole point of the row is
+   that the eye runs down a column of previews of one size. It is also what
+   reserves the space before a presigned URL has arrived, so a card does not
+   jump sideways when its picture lands. */
+.ndn-record-attachment-thumb {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  width: 3rem;
+  height: 3rem;
+  border: 1px solid var(--ndn-color-border);
+  border-radius: 0.5rem;
+  background-color: var(--ndn-color-surface-raised);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ndn-color-text-muted);
+}
+
+/* cover, not contain: a preview this small is a texture rather than a
+   picture to read, and letterboxing a portrait scan inside 3rem leaves a
+   thumbnail two thirds background. */
+.ndn-record-attachment-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ndn-record-attachment-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  /* A flex item's default min-width is auto, so a long file name would
+     push the button off the card rather than being clipped by it. */
+  min-width: 0;
+  margin-inline-end: auto;
+}
+
+.ndn-record-attachment-name {
+  font-weight: 500;
+  color: var(--ndn-color-text);
+  overflow-wrap: anywhere;
+}
+
+.ndn-record-attachment-time {
+  font-size: 0.75rem;
+  color: var(--ndn-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------ *
+ * "Add a file" — 2026-09-09.
+ *
+ * *"make the button bootstrapped beautiful (just like other buttons in the
+ * theme)."* The control stays a real <input type="file"> and the pill the
+ * person clicks is the browser's own ::file-selector-button, styled to
+ * match .ndn-button--primary declaration for declaration. It cannot share
+ * that class: the element lives in the input's shadow tree, where no class
+ * of ours reaches. authoring-styles.ts makes the same trade for the same
+ * reason, in the secondary colours its own sheet wants.
+ * ------------------------------------------------------------------ */
+.ndn-record-file {
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ndn-color-text-muted);
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.ndn-record-file::file-selector-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.25rem;
+  margin-inline-end: 0.75rem;
+  padding-block: 0.375rem;
+  padding-inline: 1.375rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-color: var(--ndn-color-brand);
+  color: var(--ndn-color-surface-raised);
+  font-family: var(--ndn-font-family-base);
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  cursor: pointer;
+  transition: background-color var(--ndn-motion-duration-fast) ease,
+    border-color var(--ndn-motion-duration-fast) ease,
+    color var(--ndn-motion-duration-fast) ease;
+}
+
+.ndn-record-file::file-selector-button:hover {
+  background-color: var(--ndn-color-brand-strong);
+}
+
+.ndn-record-file:disabled::file-selector-button {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Hand-written control again, so it carries none of .ndn-interactive's
+   focus ring — the same restatement .ndn-record-fields makes above. */
+.ndn-record-file:focus-visible {
+  outline: 2px solid var(--ndn-color-focus-ring);
+  outline-offset: 2px;
 }
 
 /* ------------------------------------------------------------------ *

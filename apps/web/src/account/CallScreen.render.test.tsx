@@ -89,6 +89,7 @@ const ASSESSMENT_STRINGS: AssessmentFormStrings = {
   uploadingLabel: 'Uploading…',
   uploadFailedLabel: 'That upload failed.',
   downloadLabel: 'Download',
+  uploadedAtTemplate: 'Uploaded {when}',
   addRowLabel: 'Add a row',
   removeRowLabel: 'Remove this row',
   addRowAriaTemplate: 'Add a row to {field}',

@@ -7,9 +7,20 @@
 // "signed in", never role, and the server-side `can()` check
 // (services/api/src/patient.ts) is the real boundary.
 //
-// Only `personal{}` is editable here — `fullName`, `phone`,
-// `marketingOptIn` — never `email` (bound to the signed-in identity) and
-// never `clinical{}` (a clinician's own patch, not built into this page).
+// Only `personal{}` is editable here — `fullName` and `phone` — never
+// `email` (bound to the signed-in identity) and never `clinical{}` (a
+// clinician's own patch, not built into this page).
+//
+// **2026-09-09: the marketing opt-in tick box is gone from this panel.**
+// The owner, of their own patient account: *"under personal details I dont
+// want this checkbox I would like to receive news and updates."* The field
+// itself is untouched — `PatientAdminPanel` still sets it when staff create
+// an account and `PatientRecordPanel` still shows it on the staff copy of
+// the record — and because a `PATCH` here now simply never names it, a
+// patient saving their name or phone leaves whatever consent is stored
+// exactly as it was. Dropping it from the patch is the whole of that
+// guarantee: sending `false` for a box that is no longer on screen would
+// have withdrawn a consent nobody asked to withdraw.
 import { Button } from '@ndn/ui';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
@@ -45,7 +56,6 @@ export interface PatientProfileStrings {
   readonly fullNameLabel: string;
   readonly emailLabel: string;
   readonly phoneLabel: string;
-  readonly marketingOptInLabel: string;
   readonly saveLabel: string;
   readonly savingLabel: string;
 }
@@ -97,7 +107,6 @@ export function PatientProfile({
   const [state, setState] = useState<ViewState>({ status: 'loading' });
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
-  const [marketingOptIn, setMarketingOptIn] = useState(false);
 
   const load = useCallback(async () => {
     setState({ status: 'loading' });
@@ -123,7 +132,6 @@ export function PatientProfile({
       }
       setFullName(payload.item.personal.fullName);
       setPhone(payload.item.personal.phone ?? '');
-      setMarketingOptIn(payload.item.personal.marketingOptIn);
       setState({ status: 'ready', profile: payload.item });
     } catch {
       setState({ status: 'error' });
@@ -147,7 +155,7 @@ export function PatientProfile({
     }
     try {
       const response = await savePatch(accessToken, {
-        personal: { fullName, phone: phone || undefined, marketingOptIn },
+        personal: { fullName, phone: phone || undefined },
       });
       if (response.status === 403 || response.status === 401) {
         setState({ status: 'forbidden' });
@@ -194,13 +202,13 @@ export function PatientProfile({
       {/* 2026-09-08: the three classes below are packages/ui's own — the
           ones its `Input` primitive already emits — rather than new ones
           invented here. This panel writes its fields by hand because two of
-          them are `disabled readOnly` and one is a checkbox, which that
-          primitive does not model; borrowing its classes is what keeps a
-          hand-written field looking like every other field on the site. */}
-      {/* 2026-09-08: the four fields sit in the record's own field grid, so
-          the patient's copy of "Patient Details" is laid out the same way
-          the staff copy on `patient-record` is — two or more across rather
-          than one per line down a 68rem column. See `record-styles.ts`. */}
+          them are `disabled readOnly`, which that primitive does not model;
+          borrowing its classes is what keeps a hand-written field looking
+          like every other field on the site. */}
+      {/* 2026-09-08: the fields sit in the record's own field grid, so the
+          patient's copy of "Patient Details" is laid out the same way the
+          staff copy on `patient-record` is — two or more across rather than
+          one per line down a 68rem column. See `record-styles.ts`. */}
       <div className="ndn-record-fields">
         <p className="ndn-input-wrapper">
           <label className="ndn-input-label" htmlFor="patient-email">
@@ -241,18 +249,6 @@ export function PatientProfile({
             onChange={(event) => setPhone(event.target.value)}
             disabled={isSaving}
           />
-        </p>
-        <p className="ndn-record-field ndn-record-field--checkbox">
-          <label className="ndn-checkbox" htmlFor="patient-marketing-opt-in">
-            <input
-              id="patient-marketing-opt-in"
-              type="checkbox"
-              checked={marketingOptIn}
-              onChange={(event) => setMarketingOptIn(event.target.checked)}
-              disabled={isSaving}
-            />
-            {strings.marketingOptInLabel}
-          </label>
         </p>
       </div>
       <p className="ndn-panel-actions">

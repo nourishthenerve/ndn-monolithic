@@ -43,6 +43,7 @@ const STRINGS: AssessmentFormStrings = {
   uploadingLabel: 'Uploading…',
   uploadFailedLabel: 'That file could not be uploaded.',
   downloadLabel: 'Open',
+  uploadedAtTemplate: 'Uploaded {when}',
   addRowLabel: 'Add a row',
   removeRowLabel: 'Remove this row',
   addRowAriaTemplate: 'Add a row to {field}',
@@ -74,6 +75,12 @@ const CALENDAR_SECTION = {
   fieldSet: 'calendar',
   title: 'Patient Appointments',
   fields: [
+    // 2026-09-09: `nextAppointmentAt` is in the fixture because the real
+    // template has always had it and one rendering decision now depends on
+    // it — "no appointment is booked yet" is rendered by the placement
+    // showing this field, not by every placement of the section. See
+    // `showReadOnlyNote`'s own note in AssessmentForm.tsx.
+    { id: 'nextAppointmentAt', label: 'Next appointment', type: 'datetime', derived: true },
     { id: 'sessionsCompleted', label: 'Sessions so far', type: 'number', derived: true },
     { id: 'schedulingNotes', label: 'Scheduling notes', type: 'textarea' },
   ],
@@ -111,6 +118,35 @@ function payloadFor(options: {
     permissions: options.permissions,
     calendarSummary: options.calendarSummary,
     items: options.items ?? [],
+  };
+}
+
+const PDF_ATTACHMENT = {
+  key: 'assessments/pat-1/intake-v1/general/uuid-scan.pdf',
+  fileName: 'scan.pdf',
+  contentType: 'application/pdf',
+  uploadedAt: '2026-09-01T09:00:00.000Z',
+};
+
+const IMAGE_ATTACHMENT = {
+  key: 'assessments/pat-1/intake-v1/general/uuid-photo.png',
+  fileName: 'photo.png',
+  contentType: 'image/png',
+  uploadedAt: '2026-09-01T09:00:00.000Z',
+};
+
+/** One writable general section carrying one file — the shape every attachment test below wants. */
+function withAttachment(attachment: unknown) {
+  return {
+    template: [GENERAL_SECTION],
+    permissions: [{ fieldSet: 'general', read: true, write: true }],
+    items: [
+      {
+        version: 1,
+        updated_at: '2026-09-01T09:00:00.000Z',
+        general: { responses: {}, attachments: [attachment] },
+      },
+    ],
   };
 }
 
@@ -283,6 +319,155 @@ describe('what each role is shown', () => {
   });
 });
 
+// 2026-09-09: the patient dashboard mounts the calendar section twice —
+// two figures above `AppointmentCalendar`, the rest below it, with three
+// fields the owner cut showing in neither. What each mount renders is the
+// whole of that arrangement, so it is asserted here rather than inferred
+// from `placementSections`.
+describe('a placement narrowed to fields', () => {
+  const calendarPayload = (write = false) =>
+    payloadFor({
+      template: [CALENDAR_SECTION],
+      permissions: [{ fieldSet: 'calendar', read: true, write }],
+      calendarSummary: {
+        nextAppointmentAt: '2026-09-20T10:00:00.000Z',
+        sessionsCompleted: 3,
+        appointmentsAwaitingApproval: 2,
+      },
+    });
+
+  it('renders only the fields it named', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        onlyFields={['nextAppointmentAt']}
+        showAttachments={false}
+        fetchForm={() => ok(calendarPayload())}
+      />,
+    );
+
+    await screen.findByText('Next appointment');
+    expect(screen.queryByText('Sessions so far')).toBeNull();
+    expect(screen.queryByText('Scheduling notes')).toBeNull();
+  });
+
+  it('renders everything but the fields it hid', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        hideFields={['nextAppointmentAt', 'schedulingNotes']}
+        showAttachments={false}
+        fetchForm={() => ok(calendarPayload())}
+      />,
+    );
+
+    await screen.findByText('Sessions so far');
+    expect(screen.queryByText('Next appointment')).toBeNull();
+    expect(screen.queryByText('Scheduling notes')).toBeNull();
+  });
+
+  it('cannot reach a field the server did not send', async () => {
+    // The rule the header claims for both placement filters. `private` is
+    // absent from this template because the server refused it, and naming
+    // one of its fields renders nothing rather than reaching for it.
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        onlyFields={['clinicianImpression']}
+        fetchForm={() => ok(calendarPayload())}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText(STRINGS.loadingLabel)).toBeNull();
+    });
+    expect(screen.queryByText('Patient Appointments')).toBeNull();
+    expect(screen.queryByText('Clinical impression')).toBeNull();
+  });
+
+  it('does not save a hidden field, even one a draft could name', async () => {
+    // A hidden field renders no control, so nothing can put it in the
+    // drafts — but the save reads the *narrowed* section, which is what
+    // makes that structural rather than incidental.
+    const saveSection = vi.fn(() => ok({ item: {} }));
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        hideFields={['schedulingNotes']}
+        saveSection={saveSection}
+        fetchForm={() => ok(calendarPayload(true))}
+      />,
+    );
+
+    await screen.findByText('Patient Appointments');
+    expect(screen.queryByLabelText('Scheduling notes')).toBeNull();
+    // The section's own save button is still offered — the caller may write
+    // this section — and pressing it sends nothing, because the narrowed
+    // section has no writable field left to send.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save this section' })[0] as Element);
+    await waitFor(() => {
+      expect(saveSection).not.toHaveBeenCalled();
+    });
+  });
+
+  it('leaves the read-only note to the placement that was told to carry it', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        showReadOnlyNote={false}
+        showAttachments={false}
+        fetchForm={() => ok(calendarPayload())}
+      />,
+    );
+
+    await screen.findByText('Patient Appointments');
+    expect(screen.queryByText(STRINGS.readOnlyLabel)).toBeNull();
+  });
+
+  it('says "no appointment booked" only where the figure it explains is', async () => {
+    const empty = payloadFor({
+      template: [CALENDAR_SECTION],
+      permissions: [{ fieldSet: 'calendar', read: true, write: false }],
+      calendarSummary: { sessionsCompleted: 0, appointmentsAwaitingApproval: 0 },
+    });
+    const { unmount } = render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        onlyFields={['nextAppointmentAt']}
+        showAttachments={false}
+        fetchForm={() => ok(empty)}
+      />,
+    );
+    expect(await screen.findByText(STRINGS.noNextAppointmentLabel)).toBeDefined();
+    unmount();
+
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        hideFields={['nextAppointmentAt']}
+        showAttachments={false}
+        fetchForm={() => ok(empty)}
+      />,
+    );
+    await screen.findByText('Sessions so far');
+    expect(screen.queryByText(STRINGS.noNextAppointmentLabel)).toBeNull();
+  });
+});
+
 describe('attachments', () => {
   it("lists a section's files with a way to open each", async () => {
     render(
@@ -342,6 +527,129 @@ describe('attachments', () => {
     );
     await screen.findByText('Patient Details');
     expect(screen.getByText(STRINGS.attachmentsEmpty)).toBeDefined();
+    expect(screen.queryByLabelText('Add a file')).toBeNull();
+  });
+
+  // 2026-09-09: *"whatever file the patient uploads, I need a timestamp as
+  // well so that I know when it was uploaded."*
+  it('says when each file was uploaded, in the site locale rather than the browser one', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        locale="en"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() => ok(payloadFor(withAttachment(PDF_ATTACHMENT)))}
+      />,
+    );
+
+    await screen.findByText('scan.pdf');
+    // The template's own `{when}` is spent, and what replaces it is a
+    // formatted instant rather than the stored ISO string.
+    const stamp = screen.getByText(/^Uploaded /);
+    expect(stamp.textContent).not.toContain('{when}');
+    expect(stamp.textContent).not.toContain('2026-09-01T09:00:00.000Z');
+    expect(stamp.textContent).toContain('2026');
+  });
+
+  // *"if possible a small thumbnail so that I dont have to option it to get
+  // a feel what's in there."*
+  it('draws a picture attachment as a thumbnail, through the same signed-URL route', async () => {
+    const requestDownloadUrl = vi.fn(() =>
+      ok({ downloadUrl: 'https://media.example/x.png?sig=1' }),
+    );
+    const { container } = render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        requestDownloadUrl={requestDownloadUrl}
+        fetchForm={() => ok(payloadFor(withAttachment(IMAGE_ATTACHMENT)))}
+      />,
+    );
+
+    await screen.findByText('photo.png');
+    await waitFor(() => {
+      expect(container.querySelector('img.ndn-record-attachment-image')).not.toBeNull();
+    });
+    const image = container.querySelector('img.ndn-record-attachment-image');
+    expect(image?.getAttribute('src')).toBe('https://media.example/x.png?sig=1');
+    // An attachment has no URL of its own: the preview is minted by the
+    // same authorised route the Open button uses.
+    expect(requestDownloadUrl).toHaveBeenCalledWith(UNKNOWN_POOL_TOKEN, 'pat-1', {
+      section: 'general',
+      key: 'assessments/pat-1/intake-v1/general/uuid-photo.png',
+    });
+  });
+
+  it('asks once per picture, however often the form re-reads', async () => {
+    const requestDownloadUrl = vi.fn(() =>
+      ok({ downloadUrl: 'https://media.example/x.png?sig=1' }),
+    );
+    const { container } = render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        requestDownloadUrl={requestDownloadUrl}
+        fetchForm={() => ok(payloadFor(withAttachment(IMAGE_ATTACHMENT)))}
+      />,
+    );
+    await waitFor(() => {
+      expect(container.querySelector('img.ndn-record-attachment-image')).not.toBeNull();
+    });
+
+    // What a sibling placement's save fires, thirty seconds of autosave
+    // fires, and what a second presign per tick would turn into a leak.
+    window.dispatchEvent(new Event(ASSESSMENT_SAVED_EVENT));
+    await waitFor(() => {
+      expect(requestDownloadUrl).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('mints no preview for a file no browser would draw', async () => {
+    const requestDownloadUrl = vi.fn(() => ok({ downloadUrl: 'https://media.example/x?sig=1' }));
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        requestDownloadUrl={requestDownloadUrl}
+        fetchForm={() =>
+          ok(
+            payloadFor(
+              withAttachment({
+                key: 'assessments/pat-1/intake-v1/general/uuid-snap.heic',
+                fileName: 'snap.heic',
+                contentType: 'image/heic',
+                uploadedAt: '2026-09-01T09:00:00.000Z',
+              }),
+            ),
+          )
+        }
+      />,
+    );
+
+    await screen.findByText('snap.heic');
+    // The lettered tile stands in, and nothing was signed for it.
+    expect(screen.getByText('HEIC')).toBeDefined();
+    expect(requestDownloadUrl).not.toHaveBeenCalled();
+  });
+
+  it('leaves the Files block out of a placement that asked for no attachments', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        showAttachments={false}
+        client={client(UNKNOWN_POOL_TOKEN)}
+        fetchForm={() => ok(payloadFor(withAttachment(PDF_ATTACHMENT)))}
+      />,
+    );
+
+    await screen.findByText('Patient Details');
+    expect(screen.queryByText(STRINGS.attachmentsHeading)).toBeNull();
+    expect(screen.queryByText('scan.pdf')).toBeNull();
     expect(screen.queryByLabelText('Add a file')).toBeNull();
   });
 

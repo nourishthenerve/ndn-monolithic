@@ -38,6 +38,7 @@ const STRINGS: AssessmentFormStrings = {
   uploadingLabel: 'Uploading…',
   uploadFailedLabel: 'Upload failed.',
   downloadLabel: 'Open',
+  uploadedAtTemplate: 'Uploaded {when}',
   addRowLabel: 'Add a row',
   removeRowLabel: 'Remove this row',
   addRowAriaTemplate: 'Add a row to {field}',

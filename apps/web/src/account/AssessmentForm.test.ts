@@ -19,7 +19,11 @@ import {
   bmiFromHeightAndWeight,
   draftKey,
   fieldValue,
+  fileTypeBadge,
   isFieldEditable,
+  isThumbnailable,
+  placementFields,
+  placementSections,
   responsesToSave,
   sectionOf,
 } from './AssessmentForm.js';
@@ -106,7 +110,13 @@ describe('fieldValue', () => {
 
   it('prefers a touched draft over the stored answer', () => {
     expect(
-      fieldValue('general', NAME_FIELD, { [draftKey('general', 'preferredName')]: 'Sammy' }, latest, undefined),
+      fieldValue(
+        'general',
+        NAME_FIELD,
+        { [draftKey('general', 'preferredName')]: 'Sammy' },
+        latest,
+        undefined,
+      ),
     ).toBe('Sammy');
   });
 
@@ -146,9 +156,9 @@ describe('responsesToSave', () => {
   };
 
   it('sends only the fields that were touched', () => {
-    expect(
-      responsesToSave(section, { [draftKey('general', 'preferredName')]: 'Sammy' }),
-    ).toEqual({ preferredName: 'Sammy' });
+    expect(responsesToSave(section, { [draftKey('general', 'preferredName')]: 'Sammy' })).toEqual({
+      preferredName: 'Sammy',
+    });
   });
 
   it('sends nothing when nothing was touched', () => {
@@ -167,7 +177,9 @@ describe('responsesToSave', () => {
   it('ignores a draft belonging to a different section', () => {
     // Drafts are one flat map across the whole form; the key prefix is what
     // keeps a prescription-section edit out of a general-section save.
-    expect(responsesToSave(section, { [draftKey('prescription', 'preferredName')]: 'x' })).toEqual({});
+    expect(responsesToSave(section, { [draftKey('prescription', 'preferredName')]: 'x' })).toEqual(
+      {},
+    );
   });
 });
 
@@ -501,8 +513,133 @@ describe('fieldValue blanks a grid as no rows', () => {
       fields: [GRID_FIELD],
     };
     const rows = [{ drug: 'Gabapentin', dose: '300 mg' }];
+    expect(responsesToSave(section, { [draftKey('private', 'medications')]: rows })).toEqual({
+      medications: rows,
+    });
+  });
+});
+
+// 2026-09-09: the second placement filter. `fieldSets` chose sections; this
+// chooses fields inside them, and the property worth pinning is the one the
+// component's header claims for both — **a filter can only narrow.** A page
+// that names a field the server did not send gets nothing, never a field it
+// was not authorised to see.
+describe('placementFields', () => {
+  const fields = [TAG_FIELD, NAME_FIELD, SESSIONS_FIELD];
+
+  it('is every field when neither filter is given', () => {
+    expect(placementFields(fields, undefined, undefined)).toEqual(fields);
+  });
+
+  it('keeps only the named fields, in the template order rather than the caller order', () => {
     expect(
-      responsesToSave(section, { [draftKey('private', 'medications')]: rows }),
-    ).toEqual({ medications: rows });
+      placementFields(fields, ['sessionsCompleted', 'tag'], undefined).map((field) => field.id),
+    ).toEqual(['tag', 'sessionsCompleted']);
+  });
+
+  it('cannot add a field the section does not have', () => {
+    expect(placementFields(fields, ['schedulingNotes'], undefined)).toEqual([]);
+  });
+
+  it('removes the named fields', () => {
+    expect(placementFields(fields, undefined, ['tag']).map((field) => field.id)).toEqual([
+      'preferredName',
+      'sessionsCompleted',
+    ]);
+  });
+
+  it('applies the exclusion after the inclusion', () => {
+    expect(placementFields(fields, ['tag', 'preferredName'], ['tag']).map((f) => f.id)).toEqual([
+      'preferredName',
+    ]);
+  });
+});
+
+describe('placementSections', () => {
+  const general: AssessmentSectionDef = {
+    fieldSet: 'general',
+    title: 'Patient Details',
+    fields: [TAG_FIELD, NAME_FIELD],
+  };
+  const calendar: AssessmentSectionDef = {
+    fieldSet: 'calendar',
+    title: 'Patient Appointments',
+    fields: [SESSIONS_FIELD, { id: 'schedulingNotes', label: 'Notes', type: 'textarea' }],
+  };
+  const template = [general, calendar];
+
+  it('is the whole template when no filter is given', () => {
+    expect(placementSections(template, undefined, undefined, undefined)).toEqual(template);
+  });
+
+  it('narrows to the named sections', () => {
+    expect(
+      placementSections(template, ['calendar'], undefined, undefined).map((s) => s.fieldSet),
+    ).toEqual(['calendar']);
+  });
+
+  it('narrows each section it keeps to its own named fields', () => {
+    const [section] = placementSections(template, ['calendar'], ['sessionsCompleted'], undefined);
+    expect(section?.fields.map((field) => field.id)).toEqual(['sessionsCompleted']);
+  });
+
+  it('drops a section a field filter emptied', () => {
+    // The patient dashboard's own case: one mount asks the calendar section
+    // for two figures, and a caller who asked for fields this section has
+    // none of should render nothing rather than a heading over a blank.
+    expect(placementSections(template, undefined, ['sessionsCompleted'], undefined)).toHaveLength(
+      1,
+    );
+  });
+
+  it('keeps an empty section when no field filter was given at all', () => {
+    // A section with no fields still has attachments, and no caller asked
+    // for that to stop rendering.
+    const empty: AssessmentSectionDef = { fieldSet: 'private', title: 'Notes', fields: [] };
+    expect(placementSections([empty], undefined, undefined, undefined)).toHaveLength(1);
+  });
+
+  it('never mutates the template it was given', () => {
+    placementSections(template, undefined, undefined, ['tag']);
+    expect(general.fields.map((field) => field.id)).toEqual(['tag', 'preferredName']);
+  });
+});
+
+// 2026-09-09: which attachments get a preview, and what the rest show
+// instead. `image/heic` is the one worth an assertion of its own — an
+// accepted upload (it is what an iPhone produces) that almost no browser
+// decodes, so a thumbnail for one is a broken image.
+describe('isThumbnailable', () => {
+  it.each(['image/jpeg', 'image/png', 'image/webp'])('draws %s', (contentType) => {
+    expect(isThumbnailable(contentType)).toBe(true);
+  });
+
+  it('is case-insensitive, since a content type is', () => {
+    expect(isThumbnailable('IMAGE/JPEG')).toBe(true);
+  });
+
+  it.each(['image/heic', 'application/pdf', 'audio/mpeg', 'video/mp4', ''])(
+    'does not draw %s',
+    (contentType) => {
+      expect(isThumbnailable(contentType)).toBe(false);
+    },
+  );
+});
+
+describe('fileTypeBadge', () => {
+  it('is the extension, upper-cased', () => {
+    expect(fileTypeBadge('scan.pdf')).toBe('PDF');
+  });
+
+  it('takes the last extension of a doubled one', () => {
+    expect(fileTypeBadge('report.final.docx')).toBe('DOCX');
+  });
+
+  it('falls back to a glyph when there is no usable extension', () => {
+    // Not a word: it is `aria-hidden` decoration beside a file name that
+    // already says everything, so it stays out of the message catalogue.
+    for (const name of ['notes', 'archive.tarball', 'trailing.', '.hidden']) {
+      expect(fileTypeBadge(name)).toBe('\u{1F4C4}');
+    }
   });
 });

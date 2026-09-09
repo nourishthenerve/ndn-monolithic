@@ -204,6 +204,7 @@ const assessmentStrings = {
   uploadingLabel: t('assessment.uploading', undefined, locale),
   uploadFailedLabel: t('assessment.uploadFailed', undefined, locale),
   downloadLabel: t('assessment.download', undefined, locale),
+  uploadedAtTemplate: t('assessment.uploadedAt', { when: '{when}' }, locale),
   addRowLabel: t('assessment.addRow', undefined, locale),
   removeRowLabel: t('assessment.removeRow', undefined, locale),
   addRowAriaTemplate: t('assessment.addRowAria', { field: '{field}' }, locale),
@@ -384,19 +385,72 @@ const changePasswordStrings = {
     <RequireAuth client:only="react" allowRoles={['patient']}>
       {/* ## 1. Patient Appointments — the calendar (*"Inside 'My Calender'
           we already have a nice looking calender"*), with the record's own
-          `calendar{}` figures below it. Both are read-only for a patient.
+          `calendar{}` figures around it. Both are read-only for a patient.
 
           A second placement of `AppointmentCalendar`; the staff one above is
           gated to the three staff roles and this to `patient`, so exactly
-          one of the two ever renders. */}
+          one of the two ever renders.
+
+          **2026-09-09: the section's own figures now sit on both sides of
+          the calendar**, at the owner's word: *"move 'Next appointment' and
+          'Next appointment length (minutes)' above the 'My Calender' with
+          slightly bigger font (subtly highlighted) so that that's what the
+          patient sees first before checking the actual calender."*
+
+          So the `calendar{}` section is mounted twice — once above with
+          `onlyFields` naming those two, once below with `hideFields` naming
+          them and the three the same message cut (*"I dont want 'Files',
+          'Scheduling notes', 'Appointments awaiting the principal
+          clinician’s approval'"*). Both are placement filters over what the
+          server sent, so nothing here changes what a *clinician* sees on
+          `patient-record.astro`: they still write the scheduling notes and
+          still attach files to this section.
+
+          Neither mount is the odd one out on this page — a patient's
+          dashboard has mounted this form three times since 2026-09-07 and
+          they resync to each other after any save. The lower one keeps the
+          appointment totals and the section's "you can read this but not
+          change it" note; the upper one is told to leave that note alone,
+          because a caveat under two large figures reads as a caveat about
+          the figures. "No appointment is booked yet" needs no such
+          instruction — it follows the field it explains, so it appears in
+          the panel above and nowhere else.
+
+          `.ndn-record-lead` is the "subtly highlighted" half — a class this
+          page hands the upper placement rather than a wrapper it draws
+          around it, because a `client:only` island renders nothing
+          server-side and a styled wrapper would paint an empty tinted box
+          on first paint and on every loading, forbidden or empty render
+          after it. See `record-styles.ts` for what the class does. */}
       <section class="ndn-record-area" aria-labelledby="patient-appointments-heading">
         <Heading level={2} id="patient-appointments-heading">
           {t('account.section.patientAppointments', undefined, locale)}
         </Heading>
+        <AssessmentForm
+          client:only="react"
+          className="ndn-record-lead"
+          locale={locale}
+          fieldSets={['calendar']}
+          onlyFields={['nextAppointmentAt', 'nextAppointmentDurationMinutes']}
+          showAttachments={false}
+          showReadOnlyNote={false}
+          showTitles={false}
+          showVersion={false}
+          headingLevel={PANEL_HEADING_LEVEL}
+          strings={assessmentStrings}
+        />
         <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
         <AssessmentForm
           client:only="react"
+          locale={locale}
           fieldSets={['calendar']}
+          hideFields={[
+            'nextAppointmentAt',
+            'nextAppointmentDurationMinutes',
+            'appointmentsAwaitingApproval',
+            'schedulingNotes',
+          ]}
+          showAttachments={false}
           showTitles={false}
           showVersion={false}
           headingLevel={PANEL_HEADING_LEVEL}
@@ -428,7 +482,6 @@ const changePasswordStrings = {
             fullNameLabel: t('patientProfile.fullName', undefined, locale),
             emailLabel: t('patientProfile.email', undefined, locale),
             phoneLabel: t('patientProfile.phone', undefined, locale),
-            marketingOptInLabel: t('patientProfile.marketingOptIn', undefined, locale),
             saveLabel: t('patientProfile.save', undefined, locale),
             savingLabel: t('patientProfile.saving', undefined, locale),
           }}
@@ -439,6 +492,7 @@ const changePasswordStrings = {
             out rather than offering an input the save would refuse. */}
         <AssessmentForm
           client:only="react"
+          locale={locale}
           fieldSets={['general']}
           showTitles={false}
           headingLevel={PANEL_HEADING_LEVEL}
@@ -455,6 +509,7 @@ const changePasswordStrings = {
         </Heading>
         <AssessmentForm
           client:only="react"
+          locale={locale}
           fieldSets={['prescription']}
           showTitles={false}
           showVersion={false}

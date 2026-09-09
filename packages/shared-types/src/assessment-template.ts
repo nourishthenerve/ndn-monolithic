@@ -210,11 +210,18 @@ export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
       // date of birth above is the fact; this is a view of it, recomputed
       // on every render. See `ageFromDateOfBirth` in `AssessmentForm.tsx`.
       { id: 'age', label: 'Age (years)', type: 'number', derived: true },
+      // 2026-09-09: three options, not four. The owner, of the patient's
+      // own copy of this form: *"under 'Sex recorded at birth' remove
+      // Intersex as an option."* A stored answer of `Intersex` on a version
+      // already written is untouched — the template is what the form
+      // *offers*, never what the record holds, which is the same
+      // template-is-not-history rule `assessment.ts` states of the
+      // prescription placeholders this file dropped on 2026-09-07.
       {
         id: 'sexAtBirth',
         label: 'Sex recorded at birth',
         type: 'select',
-        options: ['Female', 'Male', 'Intersex', 'Prefer not to say'],
+        options: ['Female', 'Male', 'Prefer not to say'],
       },
       { id: 'genderIdentity', label: 'Gender identity', type: 'text' },
       { id: 'pronouns', label: 'Pronouns', type: 'text' },

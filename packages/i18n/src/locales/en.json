@@ -499,6 +499,7 @@
   "assessment.uploading": "Uploading…",
   "assessment.uploadFailed": "That file could not be uploaded. Please try again.",
   "assessment.download": "Open",
+  "assessment.uploadedAt": "Uploaded {when}",
   "assessment.addRow": "Add a row",
   "assessment.removeRow": "Remove this row",
   "assessment.addRowAria": "Add a row to {field}",

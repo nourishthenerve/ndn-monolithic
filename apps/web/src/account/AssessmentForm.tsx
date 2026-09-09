@@ -44,6 +44,37 @@
 // `template` came back without that section. Nothing here decides who sees
 // what — that is still, entirely, the paragraph above.
 //
+// ## 2026-09-09 — a placement can narrow to *fields*, not only sections
+//
+// The owner, of the patient's own dashboard: *"Under Patient Appointments I
+// dont want 'Files', 'Scheduling notes', 'Appointments awaiting the
+// principal clinician’s approval'. Also, move 'Next appointment' and
+// 'Next appointment length (minutes)' above the 'My Calender'."*
+//
+// Both halves are placement, not permission, and so both are answered the
+// way `fieldSets` already was — by props the *page* passes, leaving the
+// template, the API and the staff copy of the same record untouched. A
+// clinician still writes scheduling notes and still attaches files to the
+// appointments section; what changed is which of that a patient's own
+// screen puts in front of them.
+//
+//   * `onlyFields` / `hideFields` filter a section's fields by id, exactly
+//     as `fieldSets` filters sections. Same rule, restated because it is
+//     the one that keeps this safe: **a filter can only narrow what the
+//     server already chose to send.** Naming a field a caller may not read
+//     shows nothing, because it was never in `template`.
+//   * `showAttachments={false}` drops the Files block from *this*
+//     placement.
+//
+// "Above the calendar" is the page's business rather than this component's:
+// `index.astro` mounts the calendar section twice, once with `onlyFields`
+// naming the two next-appointment figures (above `AppointmentCalendar`) and
+// once with `hideFields` naming them and the two the owner cut (below it).
+// Two mounts rather than one wrapping the calendar, because a form that
+// rendered the calendar as its children would take the calendar down with
+// it whenever the record failed to load — and the calendar is the one thing
+// on that screen that does not depend on the record at all.
+//
 // **Instances resync after any save**, via a `window` event rather than
 // shared React state: Astro mounts each `client:only` island as its own
 // React root, so there is no tree for a context to span. Without it, two
@@ -52,6 +83,8 @@
 // concurrency check meant for two *people* editing at once — a conflict
 // the person would have to resolve by re-reading a page they never left.
 // The listener is the whole fix: one save, every mounted section re-reads.
+import { defaultLocale, formatDateTime } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
 import { Button, Heading } from '@ndn/ui';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -77,6 +110,9 @@ export const ASSESSMENT_SAVED_EVENT = 'ndn:assessment-saved';
 
 /** The owner asked for thirty seconds. Exported so a test can assert the interval rather than wait one out. */
 export const AUTOSAVE_INTERVAL_MS = 30_000;
+
+/** The one variable in `uploadedAtTemplate`. Written once so the catalogue entry and the substitution cannot drift. */
+const UPLOADED_AT_PLACEHOLDER = '{when}';
 
 // The response shapes, declared locally rather than imported from
 // `@ndn/shared-types` — the same choice `PatientRecordPanel.tsx` and every
@@ -190,6 +226,8 @@ export interface AssessmentFormStrings {
   readonly uploadingLabel: string;
   readonly uploadFailedLabel: string;
   readonly downloadLabel: string;
+  /** `{when}` — the moment the file was uploaded, already formatted for the locale. */
+  readonly uploadedAtTemplate: string;
   readonly addRowLabel: string;
   readonly removeRowLabel: string;
   /** `{field}` — the grid's own label. */
@@ -226,6 +264,52 @@ export interface AssessmentFormProps {
    * three areas of one record should say it once.
    */
   readonly showVersion?: boolean;
+  /**
+   * Field ids this placement renders, out of whatever the server sent. A
+   * second placement filter under `fieldSets`, and the same rule: it can
+   * only narrow. Omitted means every field of the sections named above.
+   */
+  readonly onlyFields?: readonly string[];
+  /**
+   * Field ids this placement leaves out. Applied after `onlyFields`, so a
+   * placement that names both gets the intersection minus the exclusions —
+   * though no caller needs both today.
+   */
+  readonly hideFields?: readonly string[];
+  /**
+   * `false` drops the "Files" block from this placement — the list, the
+   * empty line and the upload control together. A placement filter like the
+   * two above: the attachments are still on the record, still served, and
+   * still shown wherever another placement asks for them.
+   */
+  readonly showAttachments?: boolean;
+  /**
+   * `false` drops "you can read this section but not change it".
+   *
+   * It is a fact about the *section*, so a page that mounts one section
+   * twice must not say it twice — and the copy that goes is the one in the
+   * emphasised lead panel, where a caveat under two large figures reads as
+   * a caveat about the figures.
+   *
+   * The section's other standing note, "no appointment is booked yet",
+   * needs no prop: it explains an empty `nextAppointmentAt`, so it is
+   * rendered by whichever placement renders that field and by no other.
+   */
+  readonly showReadOnlyNote?: boolean;
+  /** The locale a timestamp is rendered in. Defaults to the site's own, which is the only one today (`@ndn/i18n`). */
+  readonly locale?: Locale;
+  /**
+   * An extra class on every section element this placement renders, for a
+   * page that wants one of its placements to look different from the rest.
+   *
+   * A class rather than the wrapper `<div>` the first cut used, and the
+   * reason is what a `client:only` island *is*: it renders nothing at all
+   * server-side, so a styled wrapper around one paints an empty tinted box
+   * on first paint and again whenever the form is loading, forbidden or
+   * absent. A class travels with the content it decorates and cannot
+   * outlive it.
+   */
+  readonly className?: string;
   /** Injectable for tests. Defaults to `?id=` on the URL, or `me` when the viewer is a patient. */
   readonly patientId?: string;
   readonly client?: SessionClient;
@@ -393,6 +477,8 @@ export function isFieldEditable(
  * return when they cannot compute.
  */
 const DATE_OF_BIRTH_FIELD_ID = 'dateOfBirth';
+/** The calendar figure "no appointment is booked yet" is about. Named here for the same reason the five below are. */
+const NEXT_APPOINTMENT_FIELD_ID = 'nextAppointmentAt';
 const AGE_FIELD_ID = 'age';
 const HEIGHT_FIELD_ID = 'heightCm';
 const WEIGHT_FIELD_ID = 'weightKg';
@@ -553,6 +639,91 @@ export function groupsOf(
 }
 
 /**
+ * The content types a browser will actually draw in an `<img>`.
+ *
+ * A narrowing of `ASSESSMENT_ATTACHMENT_CONTENT_TYPES`
+ * (services/api/src/assessment-attachments.ts), and deliberately not the
+ * whole of its "Pictures" group: `image/heic` is an accepted *upload* — it
+ * is what an iPhone produces — and is decoded by almost no browser, so a
+ * thumbnail for one would be a broken image rather than a preview. Those
+ * fall through to the same lettered tile every audio, video and document
+ * attachment gets.
+ */
+export const THUMBNAIL_CONTENT_TYPES: readonly string[] = ['image/jpeg', 'image/png', 'image/webp'];
+
+export function isThumbnailable(contentType: string): boolean {
+  return THUMBNAIL_CONTENT_TYPES.includes(contentType.toLowerCase());
+}
+
+/**
+ * The tile shown where there is no picture to show: the file's own
+ * extension, upper-cased and clipped, or a document glyph when the name
+ * carries none.
+ *
+ * `aria-hidden` wherever it is rendered — the file name is right beside it
+ * and says the same thing in full — so this is decoration, and returning a
+ * glyph rather than a word is what keeps it out of the message catalogue.
+ */
+export function fileTypeBadge(fileName: string): string {
+  const dot = fileName.lastIndexOf('.');
+  const extension = dot > 0 ? fileName.slice(dot + 1) : '';
+  return /^[A-Za-z0-9]{1,4}$/.test(extension) ? extension.toUpperCase() : '\u{1F4C4}';
+}
+
+/**
+ * One placement's fields, out of one section's.
+ *
+ * **Narrowing only.** `onlyFields` intersects — a field id that is not in
+ * the section renders nothing, because the section is the server's answer
+ * about what this caller may read and this is a page's answer about what
+ * belongs in this part of the screen. `hideFields` then removes. Neither
+ * given is every field, which is what every placement written before
+ * 2026-09-09 gets.
+ */
+export function placementFields(
+  fields: readonly AssessmentFieldDef[],
+  onlyFields: readonly string[] | undefined,
+  hideFields: readonly string[] | undefined,
+): readonly AssessmentFieldDef[] {
+  return fields.filter(
+    (field) =>
+      (onlyFields === undefined || onlyFields.includes(field.id)) &&
+      (hideFields === undefined || !hideFields.includes(field.id)),
+  );
+}
+
+/**
+ * The sections this placement renders, each already narrowed to its own
+ * fields — the one list `render`, the autosave sweep and every save read,
+ * so a hidden field cannot be saved by one path while being invisible to
+ * another.
+ *
+ * A section left with no fields is dropped **only when a field filter was
+ * actually given**. Without that condition a section whose template is
+ * genuinely empty would stop rendering its attachments, which is a
+ * behaviour no caller asked to change; with it, a placement that named two
+ * fields and got none of them renders nothing at all rather than an empty
+ * heading.
+ */
+export function placementSections(
+  template: readonly AssessmentSectionDef[],
+  fieldSets: readonly AssessmentFieldSet[] | undefined,
+  onlyFields: readonly string[] | undefined,
+  hideFields: readonly string[] | undefined,
+): readonly AssessmentSectionDef[] {
+  const filtered = fieldSets
+    ? template.filter((section) => fieldSets.includes(section.fieldSet))
+    : template;
+  const narrowing = onlyFields !== undefined || hideFields !== undefined;
+  return filtered
+    .map((section) => ({
+      ...section,
+      fields: placementFields(section.fields, onlyFields, hideFields),
+    }))
+    .filter((section) => !narrowing || section.fields.length > 0);
+}
+
+/**
  * The `responses` a save sends: **only what was touched, and never a
  * derived field.** Both halves matter. Sending untouched fields would turn
  * every save into a full-section overwrite, which would let two people
@@ -579,6 +750,12 @@ export function AssessmentForm({
   fieldSets,
   showTitles = true,
   showVersion = true,
+  onlyFields,
+  hideFields,
+  showAttachments = true,
+  showReadOnlyNote = true,
+  locale = defaultLocale,
+  className,
   patientId,
   client = defaultClient,
   fetchForm = defaultFetchForm,
@@ -613,6 +790,21 @@ export function AssessmentForm({
     {},
   );
   const fileInputs = useRef<Partial<Record<AssessmentFieldSet, HTMLInputElement | null>>>({});
+  /**
+   * Presigned `GET` URLs for the picture attachments this placement is
+   * showing, keyed by object key. Empty until the effect below has asked
+   * for them, and a key that is missing simply renders the lettered tile —
+   * a preview is a nicety, and a failure to get one is not worth a word on
+   * screen.
+   */
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  /**
+   * The keys already asked about, so a re-render (or the resync a sibling
+   * placement's save fires) does not mint a second URL for a picture that
+   * already has one. A ref rather than state: it is read and written inside
+   * the effect and nothing renders from it.
+   */
+  const requestedThumbnails = useRef<Set<string>>(new Set());
 
   /**
    * `silent` is the resync path, and it differs in exactly two ways that
@@ -701,6 +893,94 @@ export function AssessmentForm({
     window.addEventListener(ASSESSMENT_SAVED_EVENT, resync);
     return () => window.removeEventListener(ASSESSMENT_SAVED_EVENT, resync);
   }, [load]);
+
+  /**
+   * The three placement filters as one string, so the effect below can
+   * depend on *what they say* rather than on the identity of three arrays a
+   * caller may or may not rebuild between renders. Every mount site is an
+   * Astro island whose props are built once, so the arrays are stable
+   * today; this is what keeps that from being load-bearing.
+   */
+  const placementKey = [fieldSets, onlyFields, hideFields]
+    .map((list) => (list ? list.join(',') : '*'))
+    .join('|');
+
+  /**
+   * **Thumbnails — 2026-09-09.** The owner: *"if possible a small thumbnail
+   * so that I dont have to option it to get a feel what's in there."*
+   *
+   * An attachment has no URL of its own by design (see
+   * `assessment-upload-handler.ts`: the `/media/*` behaviour serves the
+   * bucket to anyone holding the path, which would be catastrophic for a
+   * clinical recording), so a preview costs exactly what opening the file
+   * costs — one presigned `GET`, minted through the same route and the same
+   * `can(principal, 'read', …)` check. That is the whole reason this is an
+   * effect and not a `src` attribute.
+   *
+   * Three things keep it cheap. Only picture types are asked for; only the
+   * sections this placement actually renders are looked at, so the four
+   * mounts on a patient's dashboard do not each fetch every section's
+   * pictures; and every key is asked about once, tracked in a ref, so the
+   * thirty-second resync does not re-mint what is already on screen.
+   *
+   * A URL that fails, or a response that never arrives, leaves the tile
+   * where it was. Nothing here can put the panel into an error state.
+   */
+  useEffect(() => {
+    if (!payload || !resolvedId) {
+      return;
+    }
+    const newest = payload.items[0];
+    const wanted = placementSections(payload.template, fieldSets, onlyFields, hideFields)
+      .flatMap((section) =>
+        sectionOf(newest, section.fieldSet).attachments.map((attachment) => ({
+          fieldSet: section.fieldSet,
+          key: attachment.key,
+          contentType: attachment.contentType,
+        })),
+      )
+      .filter(
+        (attachment) =>
+          isThumbnailable(attachment.contentType) &&
+          !requestedThumbnails.current.has(attachment.key),
+      );
+    if (wanted.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const accessToken = await client.authorization();
+      if (!accessToken || cancelled) {
+        return;
+      }
+      for (const attachment of wanted) {
+        if (cancelled) {
+          return;
+        }
+        requestedThumbnails.current.add(attachment.key);
+        try {
+          const response = await requestDownloadUrl(accessToken, resolvedId, {
+            section: attachment.fieldSet,
+            key: attachment.key,
+          });
+          if (!response.ok) {
+            continue;
+          }
+          const { downloadUrl } = (await response.json()) as { downloadUrl: string };
+          if (cancelled) {
+            return;
+          }
+          setThumbnails((current) => ({ ...current, [attachment.key]: downloadUrl }));
+        } catch {
+          // A preview nobody gets is a tile with two letters on it.
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `placementKey` stands in for the three filter arrays — see above.
+  }, [payload, resolvedId, client, requestDownloadUrl, placementKey]);
 
   /** One section's drafts, dropped. The bag is keyed `<fieldSet>.<fieldId>`, so a section's own entries are a prefix match. */
   const clearDraftsFor = (fieldSet: AssessmentFieldSet) => {
@@ -812,10 +1092,11 @@ export function AssessmentForm({
     if (state !== 'ready' || !payload || !resolvedId || autosaving.current) {
       return;
     }
-    const candidates = (
-      fieldSets
-        ? payload.template.filter((section) => fieldSets.includes(section.fieldSet))
-        : payload.template
+    const candidates = placementSections(
+      payload.template,
+      fieldSets,
+      onlyFields,
+      hideFields,
     ).filter(
       (section) =>
         payload.permissions.find((permission) => permission.fieldSet === section.fieldSet)
@@ -942,6 +1223,30 @@ export function AssessmentForm({
     } catch {
       fail();
     }
+  };
+
+  /**
+   * A preview that will not draw, dropped back to its lettered tile.
+   *
+   * The URL behind it is a five-minute capability
+   * (`assessment-upload-handler.ts`), so the one way this happens is a card
+   * painted for the first time long after the page loaded — and the fallout
+   * of doing nothing is the browser's own broken-image glyph in a 3rem box,
+   * which reads as a corrupted file rather than an expired link. It is not
+   * re-requested: `requestedThumbnails` still holds the key, and a preview
+   * that failed once is not worth a second presign on a page that is
+   * evidently being left open.
+   *
+   * Deliberately **not** `loading="lazy"` on the image, for the same
+   * reason: lazily deferring a load past the URL's own lifetime is asking
+   * for exactly this.
+   */
+  const forgetThumbnail = (key: string) => {
+    setThumbnails((current) =>
+      current[key] === undefined
+        ? current
+        : Object.fromEntries(Object.entries(current).filter(([held]) => held !== key)),
+    );
   };
 
   const handleDownload = async (fieldSet: AssessmentFieldSet, key: string) => {
@@ -1320,10 +1625,41 @@ export function AssessmentForm({
         {attachments.length === 0 ? (
           <p>{strings.attachmentsEmpty}</p>
         ) : (
+          /* 2026-09-09: a card per file rather than a pill holding a file
+             name, because the owner asked the two questions a bare name
+             cannot answer — *"I need a timestamp as well so that I know
+             when it was uploaded"* and *"a small thumbnail so that I dont
+             have to option it to get a feel what's in there."*
+
+             The picture is `alt=""` and the tile beside it `aria-hidden`:
+             both are the file this card already names in full, so a screen
+             reader that announced either would read the same file twice.
+             The card's text is the name and the moment; the button is
+             unchanged. */
           <ul className="ndn-record-attachment-list">
             {attachments.map((attachment) => (
-              <li key={attachment.key}>
-                {attachment.fileName}{' '}
+              <li className="ndn-record-attachment" key={attachment.key}>
+                <span className="ndn-record-attachment-thumb">
+                  {thumbnails[attachment.key] === undefined ? (
+                    <span aria-hidden="true">{fileTypeBadge(attachment.fileName)}</span>
+                  ) : (
+                    <img
+                      alt=""
+                      className="ndn-record-attachment-image"
+                      src={thumbnails[attachment.key]}
+                      onError={() => forgetThumbnail(attachment.key)}
+                    />
+                  )}
+                </span>
+                <span className="ndn-record-attachment-text">
+                  <span className="ndn-record-attachment-name">{attachment.fileName}</span>
+                  <span className="ndn-record-attachment-time">
+                    {strings.uploadedAtTemplate.replace(
+                      UPLOADED_AT_PLACEHOLDER,
+                      formatDateTime(attachment.uploadedAt, locale),
+                    )}
+                  </span>
+                </span>
                 <Button
                   size="sm"
                   variant="secondary"
@@ -1336,11 +1672,24 @@ export function AssessmentForm({
           </ul>
         )}
         {writable && (
+          /* 2026-09-09: *"for 'Add a file' make the button bootstrapped
+             beautiful (just like other buttons in the theme)."*
+
+             It is still a real `<input type="file">`, and its "Browse"
+             half is styled through `::file-selector-button` in
+             `record-styles.ts` — the same choice, for the same reason,
+             `MediaUploadField` already documents: a `<label>` dressed up as
+             a button is the usual trick and costs the keyboard and
+             assistive-tech semantics the native control has for free. What
+             the class buys is that the generated button is
+             `.ndn-button--primary` in every respect a stylesheet can
+             reach. */
           <p className="ndn-input-wrapper">
             <label className="ndn-input-label" htmlFor={`assessment-file-${section.fieldSet}`}>
               {strings.addFileLabel}
             </label>
             <input
+              className="ndn-record-file"
               id={`assessment-file-${section.fieldSet}`}
               type="file"
               ref={(element) => {
@@ -1413,11 +1762,10 @@ export function AssessmentForm({
     );
   };
 
-  // The placement filter. `template` already holds only what this caller
-  // may read, so this can narrow and never widen — see the header.
-  const shown = fieldSets
-    ? payload.template.filter((section) => fieldSets.includes(section.fieldSet))
-    : payload.template;
+  // The placement filter — sections, then each section's own fields.
+  // `template` already holds only what this caller may read, so this can
+  // narrow and never widen; see the header.
+  const shown = placementSections(payload.template, fieldSets, onlyFields, hideFields);
 
   // A placement whose section the server did not send has nothing to say.
   // Rendering the version line alone would be a stray "Version 3" under a
@@ -1440,7 +1788,7 @@ export function AssessmentForm({
         const saveState = saveStates[section.fieldSet] ?? 'idle';
         return (
           <section
-            className="ndn-record-section"
+            className={className ? `ndn-record-section ${className}` : 'ndn-record-section'}
             key={section.fieldSet}
             aria-labelledby={showTitles ? `assessment-${section.fieldSet}-heading` : undefined}
           >
@@ -1449,9 +1797,16 @@ export function AssessmentForm({
                 {section.title}
               </Heading>
             )}
-            {!writable && <p className="ndn-record-note">{strings.readOnlyLabel}</p>}
+            {showReadOnlyNote && !writable && (
+              <p className="ndn-record-note">{strings.readOnlyLabel}</p>
+            )}
+            {/* Tied to the field rather than to the section — see
+                `showReadOnlyNote`. A placement that has filtered
+                `nextAppointmentAt` out is not the placement that should be
+                explaining why it is blank. */}
             {section.fieldSet === 'calendar' &&
-              payload.calendarSummary?.nextAppointmentAt === undefined && (
+              payload.calendarSummary?.nextAppointmentAt === undefined &&
+              section.fields.some((field) => field.id === NEXT_APPOINTMENT_FIELD_ID) && (
                 <p className="ndn-record-note">{strings.noNextAppointmentLabel}</p>
               )}
             {saveControls(section, saveState, 'top')}
@@ -1508,7 +1863,7 @@ export function AssessmentForm({
               );
             })}
             {saveControls(section, saveState, 'bottom')}
-            {renderAttachments(section)}
+            {showAttachments && renderAttachments(section)}
           </section>
         );
       })}

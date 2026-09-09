@@ -864,8 +864,22 @@ export class WebStack extends Stack {
           // presigns with a default-region `S3Client`, which signs the
           // regional endpoint — and a CSP origin must match the host the
           // browser actually calls, character for character.
+          // **2026-09-09: `img-src` gained the same origin `connect-src`
+          // has.** An assessment attachment has no URL of its own — it is
+          // reachable only through a presigned `GetObject` URL on S3's own
+          // host (`assessment-upload-handler.ts`) — so the moment the
+          // record started drawing a thumbnail for a picture attachment,
+          // the `<img>` was pointing at an origin this policy had never
+          // named, and the browser dropped it silently. The fourth hop on
+          // the path the three comments above trace, and the same shape as
+          // the third: the far end was willing, the document was not
+          // permitted to ask. No CORS rule is involved this time — an
+          // `<img>` with no `crossorigin` is not a CORS request — so this
+          // one line is the whole of it.
           contentSecurityPolicy:
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+            "default-src 'self'; " +
+            `img-src 'self' data: https://${mediaBucket.bucketRegionalDomainName}; ` +
+            "style-src 'self' 'unsafe-inline'; " +
             "script-src 'self' https://challenges.cloudflare.com https://js.stripe.com " +
             "'sha256-eIXWvAmxkr251LJZkjniEK5LcPF3NkapbJepohwYRIc=' " +
             "'sha256-Ya0pUYrC7nM5Cn/056TyVuEiz6dFGrzmkWzgON0pF0U=' " +
