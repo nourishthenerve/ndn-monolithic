@@ -499,15 +499,225 @@ describe('AuthStack — managed login branding (found missing live, 2026-08-27)'
     }
   });
 
-  it('carries a favicon for both light and dark mode, ICO and SVG', () => {
+  // Amendment, 2026-09-09: `FORM_LOGO` joins the favicons — the brand mark
+  // at the top of the sign-in card, the same `logo-mark.png` `Nav.astro`
+  // renders. Cognito wants a LIGHT and a DARK entry for every category, so
+  // the list is exact rather than a `toContain`: a logo supplied for one
+  // colour mode only is the mistake this shape catches.
+  it('carries a favicon and the form logo, each in both colour modes', () => {
     for (const branding of brandings()) {
       const categories = (branding.Properties.Assets ?? []).map(
         (asset) => `${asset.Category}:${asset.ColorMode}`,
       );
       expect(categories.sort()).toEqual(
-        ['FAVICON_ICO:DARK', 'FAVICON_ICO:LIGHT', 'FAVICON_SVG:DARK', 'FAVICON_SVG:LIGHT'].sort(),
+        [
+          'FAVICON_ICO:DARK',
+          'FAVICON_ICO:LIGHT',
+          'FAVICON_SVG:DARK',
+          'FAVICON_SVG:LIGHT',
+          'FORM_LOGO:DARK',
+          'FORM_LOGO:LIGHT',
+        ].sort(),
       );
     }
+  });
+
+  // A logo asset that is never rendered is the failure mode this pairs with:
+  // `assets` accepted a custom entry silently for the whole of the
+  // `useCognitoProvidedValues` era (see above), and `form.logo.enabled`
+  // defaulting to `false` in Cognito's captured document is the settings-side
+  // version of the same silence.
+  it('turns the form logo on in settings, not merely uploads one', () => {
+    for (const branding of brandings()) {
+      const settings = branding.Properties.Settings as {
+        components: { form: { logo: { enabled: boolean; formInclusion: string } } };
+      };
+      expect(settings.components.form.logo.enabled).toBe(true);
+      expect(settings.components.form.logo.formInclusion).toBe('IN');
+    }
+  });
+
+  // Found by the owner, 2026-09-09: the sign-in page was still Cloudscape
+  // blue on Cloudscape white, because the settings document was Cognito's own
+  // defaults replayed verbatim (`auth-stack.ts`'s 2026-08-30 amendment). The
+  // custom domain made the URL read as ours; nothing made the page do so.
+  //
+  // Every colour in the document is now a token from
+  // `packages/ui/src/tokens/color.ts`. That file cannot be imported here —
+  // `@ndn/ui`'s only export is its React barrel, and a CDK app run under
+  // `tsx` should not be pulling React in to read six hex strings — so the
+  // palette is restated below and this test is a *guard*, not a derivation:
+  // it fails on any colour that is not one of these, which is what catches
+  // both a hex invented by hand and a Cloudscape value pasted back in from a
+  // fresh `describe-managed-login-branding-by-client` capture.
+  describe('the palette is the site\'s own, not the AWS console\'s', () => {
+    // tokens/color.ts, light then dark, plus the two neutrals that file does
+    // not name (`ffffff` is `surfaceRaised` on light and the only foreground
+    // the brand olive is worn with; `141711` is `surface` on dark).
+    const ndnPalette = new Set(
+      [
+        // surfaces
+        'f8f6f1',
+        'ffffff',
+        'edf0e6',
+        'f1ecf7',
+        '141711',
+        '1c2018',
+        '232922',
+        '232032',
+        // foregrounds
+        '232821',
+        '56604d',
+        '4e6136',
+        '3a4a26',
+        '65558f',
+        '3f3487',
+        'a62a20',
+        '7a5209',
+        'eef1e9',
+        'b4bdaa',
+        'a7c383',
+        'c6dda6',
+        'c3b4e8',
+        'a99cf0',
+        'ff9d92',
+        'e8ba6b',
+        // tints
+        'e3e9d7',
+        'f2f5ea',
+        'e9e2f4',
+        'f4e8cf',
+        'f7e0dd',
+        'e8e9e3',
+        'e5e3d9',
+        'd0d2c3',
+        '2b3720',
+        '1e2419',
+        '2a2440',
+        '3a2e15',
+        '3b1f1c',
+        '2a2d27',
+        '2c3128',
+        '3c4237',
+      ].map((hex) => `${hex}ff`),
+    );
+
+    /** Every string in the settings document that is an 8-digit RRGGBBAA colour, with the key path that holds it. */
+    function colorEntries(): { path: string; value: string }[] {
+      const found: { path: string; value: string }[] = [];
+      const walk = (node: unknown, path: string): void => {
+        if (typeof node === 'string') {
+          if (/^[0-9a-fA-F]{8}$/.test(node)) found.push({ path, value: node.toLowerCase() });
+          return;
+        }
+        if (Array.isArray(node)) {
+          node.forEach((item, index) => walk(item, `${path}[${index}]`));
+          return;
+        }
+        if (node !== null && typeof node === 'object') {
+          for (const [key, value] of Object.entries(node)) walk(value, `${path}.${key}`);
+        }
+      };
+      walk(brandings()[0]?.Properties.Settings, 'settings');
+      return found;
+    }
+
+    it('finds colours to check at all, so a restructured document cannot pass vacuously', () => {
+      expect(colorEntries().length).toBeGreaterThan(40);
+    });
+
+    it('draws every colour from tokens/color.ts', () => {
+      const foreign = colorEntries().filter((entry) => !ndnPalette.has(entry.value));
+      expect(foreign, 'colours not in packages/ui/src/tokens/color.ts').toEqual([]);
+    });
+
+    // The specific pixels the owner was looking at, named rather than left to
+    // the set membership above — a document that swapped primary and
+    // secondary would still pass a palette check.
+    it('paints the primary button in the brand olive the site uses', () => {
+      const settings = brandings()[0]?.Properties.Settings as {
+        components: {
+          primaryButton: { lightMode: { defaults: { backgroundColor: string } } };
+          pageBackground: { lightMode: { color: string } };
+        };
+      };
+      expect(settings.components.primaryButton.lightMode.defaults.backgroundColor).toBe('4e6136ff');
+      expect(settings.components.pageBackground.lightMode.color).toBe('f8f6f1ff');
+    });
+
+    // AWS's own illustration beside the credential fields. No repaint makes
+    // it ours, and it is most of what the page reads as at a glance.
+    it('drops the stock AWS graphics rather than recolouring around them', () => {
+      const settings = brandings()[0]?.Properties.Settings as {
+        categories: { form: { displayGraphics: boolean } };
+        components: { pageBackground: { image: { enabled: boolean } } };
+      };
+      expect(settings.categories.form.displayGraphics).toBe(false);
+      expect(settings.components.pageBackground.image.enabled).toBe(false);
+    });
+
+    // Both pools read the same document, so a patient and a clinician cannot
+    // end up signing in to two differently-themed clinics.
+    it('gives both pools the identical document', () => {
+      const [patient, clinician] = brandings();
+      expect(JSON.stringify(patient?.Properties.Settings)).toBe(
+        JSON.stringify(clinician?.Properties.Settings),
+      );
+    });
+  });
+
+  // Found live, 2026-09-09, deploying the themed sign-in page. The first cut
+  // pointed `FORM_LOGO` straight at `apps/web/public/logo-mark.png` — the
+  // site's own mark, on the reasoning that not duplicating brand artwork was
+  // worth more than a derived file. Cognito refused the whole stack:
+  //
+  //   Invalid assets provided. Validation errors: [{category: FORM_LOGO,
+  //   extension: PNG, colorMode: LIGHT, errorMessage: "Invalid file
+  //   dimension. Assets of SubType LOGO must have a width:height ratio
+  //   between 1:1 and 4:1. Detected width: 480.0; height: 570.0"}, …]
+  //
+  // The mark is portrait and always will be, so `managed-login-form-logo.png`
+  // is it on a 420x400 transparent canvas (`auth-stack.ts` carries the
+  // regeneration command). This reads the dimensions out of the PNG header in
+  // the bytes the template actually carries — the same "assert what is sent,
+  // not what is on disk" shape as the SVG check below — so redrawing the
+  // artwork and forgetting to re-pad fails here instead of at 9pm against
+  // CloudFormation.
+  it('sends a logo whose aspect ratio is inside the 1:1-to-4:1 window Cognito enforces', () => {
+    // IHDR is the first chunk of every PNG: 8-byte signature, 4-byte length,
+    // 4-byte type, then width and height as big-endian uint32s.
+    function pngDimensions(bytes: Buffer): { width: number; height: number } {
+      expect(bytes.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+      expect(bytes.subarray(12, 16).toString('ascii')).toBe('IHDR');
+      return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+    }
+
+    for (const branding of brandings()) {
+      const logos = (branding.Properties.Assets ?? []).filter(
+        (asset) => asset.Category === 'FORM_LOGO',
+      );
+      expect(logos.length).toBeGreaterThan(0);
+
+      for (const logo of logos) {
+        expect(logo.Extension).toBe('PNG');
+        const { width, height } = pngDimensions(Buffer.from(logo.Bytes, 'base64'));
+        const ratio = width / height;
+        expect(ratio, `${width}x${height} is outside Cognito's 1:1-to-4:1 window`).toBeGreaterThanOrEqual(1);
+        expect(ratio, `${width}x${height} is outside Cognito's 1:1-to-4:1 window`).toBeLessThanOrEqual(4);
+      }
+    }
+  });
+
+  // The branding resources are ~99% of this stack's synthesized bytes, and
+  // the logo lands in the template four times (two pools, two colour modes).
+  // CloudFormation's ceiling for an S3-uploaded template is 1 MB; the source
+  // artwork alone would have spent 445 kB of it. Nothing else here grows, so
+  // this is the number to watch.
+  it('keeps the branding assets small enough that the template has room left', () => {
+    const assetBytes = brandings()
+      .flatMap((branding) => branding.Properties.Assets ?? [])
+      .reduce((total, asset) => total + asset.Bytes.length, 0);
+    expect(assetBytes).toBeLessThan(200_000);
   });
 
   // Found live, 2026-09-08, on the production deploy of the olive-and-lavender
