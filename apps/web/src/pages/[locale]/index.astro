@@ -34,6 +34,7 @@ import { Card, Heading, Link, VisuallyHidden } from '@ndn/ui';
 
 import { fetchPublishedBlogPosts } from '../../blog/content-client.js';
 import { LiveBlogList } from '../../blog/LiveBlogList.js';
+import ContactDetails from '../../components/ContactDetails.astro';
 import { services } from '../../config/services.js';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import {
@@ -356,12 +357,17 @@ const homeStylesCss = `
   color: var(--ndn-color-surface-raised);
 }
 
-.ndn-home-contact-number {
-  font-family: var(--ndn-font-family-display);
-  font-size: 1.75rem;
-  font-weight: var(--ndn-font-weight-display);
-  letter-spacing: 0.01em;
-  margin-block: 0 1.5rem;
+/* 2026-09-09: this band used to be one line — the number, set large in the
+   display serif. It now carries the email address as well, through the same
+   ContactDetails block the contact and legal pages use, so there is one
+   place the clinic's details are written. Constrained to a readable measure
+   and start-aligned inside the 68rem inner band: two full-width boxes across
+   a wide desktop would read as a form, which this is not.
+
+   No backticks anywhere in this string, deliberately — it is the body of a
+   JS template literal, so one would end the stylesheet mid-rule. */
+.ndn-home-contact-details {
+  margin-block: 0 1.75rem;
 }
 `;
 ---
@@ -557,7 +563,7 @@ const homeStylesCss = `
           {t('common.getInTouch', undefined, locale)}
         </Heading>
         <p class="ndn-home-intro">{t('home.contact.body', undefined, locale)}</p>
-        <p class="ndn-home-contact-number">{whatsappBusinessNumber}</p>
+        <ContactDetails locale={locale} className="ndn-home-contact-details" />
         <div class="ndn-home-cta-row">
           <Link
             href={whatsappChatUrl(whatsappBusinessNumber)}

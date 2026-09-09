@@ -8,10 +8,18 @@
 // now a static link to the clinic's WhatsApp Business number, the
 // identical human-staffed channel D-29 already established for patient
 // account creation.
+//
+// 2026-09-09: and the email address beside it. D-32 left this page — and
+// the site — with exactly one channel; the clinic's own mailbox
+// (`contact@nourishthenerve.com`, the address that form used to relay
+// into) is now published next to the number, both through the shared
+// `ContactDetails` block so this page and the five legal pages cannot
+// drift apart on what the clinic's contact details are.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading, Link } from '@ndn/ui';
 
+import ContactDetails from '../../components/ContactDetails.astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { siteName, whatsappBusinessNumber, whatsappChatUrl } from '../../site-config.js';
 
@@ -30,8 +38,40 @@ const heading = t('contact.heading', undefined, locale);
 >
   <Heading level={1}>{heading}</Heading>
   <p>{t('contact.intro', undefined, locale)}</p>
-  <p>{t('contact.whatsappNumberLabel', undefined, locale)}: {whatsappBusinessNumber}</p>
-  <Link href={whatsappChatUrl(whatsappBusinessNumber)} external>
-    {t('contact.whatsappCta', undefined, locale)}
-  </Link>
+  <ContactDetails locale={locale} />
+  <p class="ndn-contact-page-cta">
+    <Link
+      href={whatsappChatUrl(whatsappBusinessNumber)}
+      external
+      className="ndn-button ndn-button--primary ndn-contact-page-cta-link"
+    >
+      {t('contact.whatsappCta', undefined, locale)}
+    </Link>
+  </p>
 </BaseLayout>
+
+<style>
+  /* The `Link` above wears `.ndn-button` so the page still ends in one
+     obvious primary action, as it did when this was the only control here.
+     A pill with a paragraph's line-height around it sits badly, hence the
+     wrapper's own block spacing rather than the browser's. */
+  .ndn-contact-page-cta {
+    margin-block: 1.75rem 0;
+  }
+
+  /* An `a` wearing both `.ndn-link` and `.ndn-button--primary` is two
+     single-class rules setting `color`, and the one that wins is whichever
+     packages/ui happens to declare later — which is `.ndn-link`, so the
+     label came out in the brand green *on* the brand green: a filled pill
+     with no readable text on it. `a.` makes this (0,2,0) and settles it,
+     the same way the landing page's own `.ndn-home a.ndn-home-cta--primary`
+     does for the identical collision. */
+  a.ndn-contact-page-cta-link {
+    color: var(--ndn-color-surface-raised);
+    text-decoration: none;
+  }
+
+  a.ndn-contact-page-cta-link:hover {
+    color: var(--ndn-color-surface-raised);
+  }
+</style>

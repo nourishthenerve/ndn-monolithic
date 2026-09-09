@@ -1,18 +1,25 @@
 ---
 // TASK 1.2.2: shared body for every `/legal/*` page — each file under
 // pages/[locale]/legal/ is a thin per-slug wrapper around this component,
-// so the placeholder banner and the "get in touch" CTA are guaranteed
+// so the placeholder banner and the "get in touch" card are guaranteed
 // present on all five pages rather than re-authored five times with room
 // for one copy to quietly drop the banner.
+//
+// 2026-09-09: that card's `<Button>Contact us</Button>` was a dead control
+// — no `href`, no handler, no form — left behind when D-32 deleted the
+// contact form it was authored against, and shipped on all five pages.
+// It is now `ContactDetails.astro`, which shows the address and the number
+// here instead of promising a page that would only repeat them.
 import { t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Button, Card, Heading } from '@ndn/ui';
+import { Card, Heading } from '@ndn/ui';
 
 import type { LegalPageSlug } from '../config/legal-pages.js';
 import { legalPages } from '../config/legal-pages.js';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { siteName } from '../site-config.js';
 
+import ContactDetails from './ContactDetails.astro';
 import PlaceholderBanner from './PlaceholderBanner.astro';
 
 interface Props {
@@ -42,6 +49,6 @@ const heading = t(page.headingKey, undefined, locale);
   <Card>
     <Heading level={2}>{t('common.getInTouch', undefined, locale)}</Heading>
     <p>{t('common.contactCtaBody', undefined, locale)}</p>
-    <Button>{t('common.contactCta', undefined, locale)}</Button>
+    <ContactDetails locale={locale} />
   </Card>
 </BaseLayout>
