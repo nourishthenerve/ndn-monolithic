@@ -100,6 +100,7 @@ import { appointmentCalendarStylesCss } from '../../../account/calendar-styles.j
 import { caseloadStylesCss } from '../../../account/caseload-styles.js';
 import { CaseloadView } from '../../../account/CaseloadView.js';
 import { ChangePasswordPanel } from '../../../account/ChangePasswordPanel.js';
+import { ClinicianNextAppointment } from '../../../account/ClinicianNextAppointment.js';
 import { accountDashboardStylesCss } from '../../../account/dashboard-styles.js';
 import { OwnDetailsPanel } from '../../../account/OwnDetailsPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
@@ -280,10 +281,33 @@ const changePasswordStrings = {
         session never downloads the island at all. No `forbidden` slot: a
         role with no calendar should see no trace of one, not an explanation
         of its absence. The section heading is the component's own. */}
+    {/* 2026-09-10: the next appointment above the calendar, as the patient
+        already has it. The owner: *"for clinician landing dashboard, show the
+        next appointment above My Calender just like how it's being shown for
+        patient."*
+
+        `ClinicianNextAppointment` derives the same figure the patient's own
+        lead shows — the three zoned times and the live countdown of
+        `NextAppointmentWhen` — from the calendar the clinician already reads
+        (`GET /clinicians/me/calendar`), since a clinician has no assessment
+        record to carry a `calendarSummary`. It shares the calendar's own
+        three-role gate: for a helpdesk the server answers "me" with the
+        practice's calendar, so their lead is the practice's next appointment,
+        matching the calendar directly below it. It renders nothing until its
+        own fetch lands, so it never paints an empty box above the calendar. */}
     <RequireAuth
       client:only="react"
       allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk']}
     >
+      <ClinicianNextAppointment
+        client:only="react"
+        locale={locale}
+        strings={{
+          appointmentLabel: t('clinicianNextAppointment.appointmentLabel', undefined, locale),
+          durationLabel: t('clinicianNextAppointment.durationLabel', undefined, locale),
+          emptyLabel: t('assessment.noNextAppointment', undefined, locale),
+        }}
+      />
       <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
     </RequireAuth>
 
@@ -600,7 +624,15 @@ const changePasswordStrings = {
       client:only="react"
       allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk', 'visitor']}
     >
-      <section aria-labelledby="staff-account-heading">
+      {/* 2026-09-10: `ndn-record-area`, the same sheet the patient's own
+          Account section carries. Without it this was a bare `<section>` — the
+          heading and the two panels stacked on the page ground with default
+          margins, which the owner saw as *"bad vertical spacing"*. The class
+          is the whole difference: the sheet, the tinted heading band and the
+          rhythm the patient's Account already reads with, and a two-island
+          area (display name + password) is the same shape Patient Details
+          already is. */}
+      <section class="ndn-record-area" aria-labelledby="staff-account-heading">
         <Heading level={2} id="staff-account-heading">
           {t('account.accountSectionHeading', undefined, locale)}
         </Heading>
