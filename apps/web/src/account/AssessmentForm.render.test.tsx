@@ -15,6 +15,7 @@
 // The toolchain is not new to the repo — `packages/ui` has rendered its
 // primitives with @testing-library/react since TASK 1.1.1. What is new is
 // `apps/web` depending on it.
+import { defaultLocale, formatDateTime } from '@ndn/i18n';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -351,6 +352,32 @@ describe('a placement narrowed to fields', () => {
     await screen.findByText('Next appointment');
     expect(screen.queryByText('Sessions so far')).toBeNull();
     expect(screen.queryByText('Scheduling notes')).toBeNull();
+  });
+
+  // 2026-09-10: the owner, of the patient's own next appointment — *"make it
+  // more human readable. dont show it in 2026-09-22T08:33:00.000Z format."*
+  // A read-only `datetime` field is the value's only path onto the screen
+  // (`nextAppointmentAt` is derived), and it was rendered as `String(value)`
+  // — the raw UTC ISO. It now runs through `formatDateTime`, the one
+  // rendering of an instant the rest of the site uses. Asserted with the
+  // same formatter so the expectation follows the runner's zone rather than
+  // pinning one.
+  it('renders the next appointment as a formatted date, never the raw ISO', async () => {
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        onlyFields={['nextAppointmentAt']}
+        showAttachments={false}
+        fetchForm={() => ok(calendarPayload())}
+      />,
+    );
+
+    const term = await screen.findByText('Next appointment');
+    const value = term.nextElementSibling;
+    expect(value?.textContent).toBe(formatDateTime('2026-09-20T10:00:00.000Z', defaultLocale));
+    expect(value?.textContent).not.toContain('2026-09-20T10:00:00.000Z');
   });
 
   it('renders everything but the fields it hid', async () => {

@@ -421,20 +421,37 @@ export const patientRecordStylesCss = `
  * A placement of the calendar section holding those two fields alone, in a
  * wrapper the page writes (account/index.astro). Everything here is a
  * restatement of .ndn-record-facts one step louder — a tinted panel, a
- * brand rule down its leading edge, and an answer at 1.375rem against the
- * 0.9375rem the same pair takes anywhere else on the sheet.
+ * rule down its leading edge, and an answer larger than the 0.9375rem the
+ * same pair takes anywhere else on the sheet.
  *
- * "Subtly": the panel is brand-wash, not brand. What makes it the first
- * thing read is the size of the answer and the fact that it is above the
- * calendar, not a colour competing with the area's own heading band.
+ * 2026-09-10: two changes the owner asked for on the patient's own next
+ * appointment.
+ *
+ *   * **Lavender, not olive.** The palette is olive-and-lavender
+ *     (tokens/color.ts); the lead was drawn in the olive brand family like
+ *     the rest of the sheet, and the owner wanted this one panel in the
+ *     lavender accent family so the next appointment reads as its own thing
+ *     above the calendar. Every colour below is now an accent token — the
+ *     soft wash it sits on, the rule down its edge and the label caps — a
+ *     set the palette already pairs for contrast.
+ *   * **The answer in the sans face, not the serif.** It carried the
+ *     Cormorant display face like an area title, and a full timestamp —
+ *     "22 September 2026 at 09:33 GMT+1", now that it is formatted rather
+ *     than a raw ISO string (see AssessmentForm.tsx's renderReadOnly) —
+ *     reads more plainly in Inter. Still 1.375rem, so it stays the first
+ *     figure the eye lands on; only the face changed.
+ *
+ * "Subtly": the panel is the soft accent wash, not the accent itself. What
+ * makes it the first thing read is the size of the answer and that it is
+ * above the calendar, not a colour competing with the area's heading band.
  * ------------------------------------------------------------------ */
 .ndn-record-lead {
   margin-block: 0 1.5rem;
   padding-block: 1rem;
   padding-inline: 1.25rem;
-  border-inline-start: 3px solid var(--ndn-color-brand);
+  border-inline-start: 3px solid var(--ndn-color-accent);
   border-radius: 0.5rem;
-  background-color: var(--ndn-color-brand-wash);
+  background-color: var(--ndn-color-accent-soft);
 }
 
 /* The two answers side by side rather than ruled one under the other: two
@@ -452,13 +469,13 @@ export const patientRecordStylesCss = `
   padding-inline-end: 0;
   border-block-end: 0;
   font-size: 0.75rem;
-  color: var(--ndn-color-brand-strong);
+  color: var(--ndn-color-accent-strong);
 }
 
 .ndn-record-lead .ndn-record-facts dd {
   padding-block: 0;
   border-block-end: 0;
-  font-family: var(--ndn-font-family-display);
+  font-family: var(--ndn-font-family-base);
   font-size: 1.375rem;
   font-weight: 600;
   line-height: 1.3;
@@ -473,7 +490,7 @@ export const patientRecordStylesCss = `
   padding: 0;
   border: 0;
   background-color: transparent;
-  color: var(--ndn-color-brand-strong);
+  color: var(--ndn-color-accent-strong);
 }
 
 /* ------------------------------------------------------------------ *
