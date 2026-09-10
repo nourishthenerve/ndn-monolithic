@@ -79,6 +79,22 @@ export const patientRecordStylesCss = `
   display: block;
 }
 
+/* Air between two islands stacked in one sheet — the display-name form and
+   the password form of the Account section, say. 2026-09-10, the owner:
+   *"clinician dashboard has this spacing which is too tight"*, of the Save
+   button of the first form sitting hard against the heading of the second.
+   The cause is that each panel is its own client:only island, and the
+   second one opens with a heading whose top margin the primitive rule
+   .ndn-heading:first-child resets to 0 — right, when the heading really is
+   the first thing on a sheet, but wrong when the sheet has already shown a
+   whole form above it. A margin on the island rather than the heading
+   sidesteps that reset and cannot be undone by it; it collapses with the
+   trailing margin of the island above, so a section whose panels already
+   carry their own spacing (the lead's 1.5rem, say) does not gain it twice. */
+.ndn-record-area > astro-island + astro-island {
+  margin-block-start: 2rem;
+}
+
 /* The band across the top of the sheet. Full bleed by a negative inline
    margin against the sheet's own padding, so the rule under it reaches
    both edges; the radius is the sheet's less its 1px border, or the
