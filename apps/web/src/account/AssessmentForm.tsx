@@ -96,6 +96,7 @@ import { contentApiUrl } from '../site-config.js';
 
 import type { PanelHeadingLevel } from './heading-level.js';
 import { nestedHeadingLevel } from './heading-level.js';
+import { NextAppointmentWhen } from './NextAppointmentWhen.js';
 import { PanelPlaceholder } from './PanelPlaceholder.js';
 
 /** The form every patient's record is instantiated from. One template, one form per patient — `assessment-repository.ts`'s `DEFAULT_ASSESSMENT_ID`. */
@@ -1285,20 +1286,41 @@ export function AssessmentForm({
    */
   const renderReadOnly = (section: AssessmentSectionDef, field: AssessmentFieldDef): ReactNode => {
     const value = valueOf(section, field);
+    // The next appointment is the one value that is not a plain string on the
+    // screen: it reads in three zones with a live countdown under it
+    // (`NextAppointmentWhen`), which is why that field alone renders a
+    // component here rather than formatted text. Only when it actually holds
+    // an instant \u2014 an empty one falls through to the "\u2014" and the "no
+    // appointment is booked yet" note the placement shows beside it.
+    if (
+      section.fieldSet === 'calendar' &&
+      field.id === NEXT_APPOINTMENT_FIELD_ID &&
+      typeof value === 'string' &&
+      value !== ''
+    ) {
+      return (
+        <Fragment key={field.id}>
+          <dt>{field.label}</dt>
+          <dd>
+            <NextAppointmentWhen iso={value} locale={locale} />
+          </dd>
+        </Fragment>
+      );
+    }
     const shown =
       field.type === 'checkbox'
         ? String(value === true)
         : value === '' || value === undefined
           ? '\u2014'
-          : // A `datetime` field holds a UTC ISO instant (`nextAppointmentAt`
-            // is the only one, and it is derived \u2014 so this is the sole path
-            // that ever shows it). `String(value)` here was rendering the raw
-            // `2026-09-22T08:33:00.000Z` on the patient's own dashboard;
-            // `formatDateTime` is the one rendering of an instant the rest of
-            // the site uses \u2014 a spelled month, the reader's own zone, named.
-            // A `date` field is left as its stored `YYYY-MM-DD`: it is already
-            // legible, and parsing it through a zone-aware formatter would
-            // shift the day for a reader west of UTC.
+          : // A `datetime` field holds a UTC ISO instant. `String(value)` here
+            // rendered the raw `2026-09-22T08:33:00.000Z`; `formatDateTime` is
+            // the one rendering of an instant the rest of the site uses \u2014 a
+            // spelled month, the reader's own zone, named. (The next
+            // appointment, the only datetime the template ships, is handled
+            // above; this stands for any datetime a later template adds.) A
+            // `date` field keeps its stored `YYYY-MM-DD`: it is already
+            // legible, and a zone-aware formatter would shift the day for a
+            // reader west of UTC.
             field.type === 'datetime'
             ? formatDateTime(String(value), locale)
             : String(value);

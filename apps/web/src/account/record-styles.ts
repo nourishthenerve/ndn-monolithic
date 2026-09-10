@@ -456,16 +456,27 @@ export const patientRecordStylesCss = `
 
 /* The two answers side by side rather than ruled one under the other: two
    figures are a pair to read at a glance, and the ruled list this sheet
-   uses elsewhere is for a column of twenty. */
+   uses elsewhere is for a column of twenty.
+
+   2026-09-10, the owner: the label and its value sat too far apart. The
+   list is a flat run of dt, dd, dt, dd, and in a plain row layout the gap
+   from a label to its own value is the same as the gap to the next fact —
+   so nothing reads as a pair. Column flow over two fixed rows places them
+   as (label / value)(label / value): each label directly above its value
+   with a tight row gap, the two facts held apart by a wider column gap. */
 .ndn-record-lead .ndn-record-facts {
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  gap: 0 2rem;
+  grid-template-columns: none;
+  grid-template-rows: auto auto;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(11rem, max-content);
+  gap: 0.25rem 2.75rem;
   margin-block: 0;
   border-block-start: 0;
 }
 
 .ndn-record-lead .ndn-record-facts dt {
-  padding-block: 0 0.125rem;
+  align-self: end;
+  padding-block: 0;
   padding-inline-end: 0;
   border-block-end: 0;
   font-size: 0.75rem;
@@ -480,6 +491,45 @@ export const patientRecordStylesCss = `
   font-weight: 600;
   line-height: 1.3;
   color: var(--ndn-color-text);
+}
+
+/* ------------------------------------------------------------------ *
+ * The next appointment as three zoned times and a live countdown —
+ * 2026-09-10.
+ *
+ * *"make datetime to be shown in India, UK and Middle East (Dubai) time and
+ * make it dynamic so that it's decreasing with each passing minute."*
+ *
+ * NextAppointmentWhen renders this inside the lead panel's nextAppointmentAt
+ * value cell, so it overrides the 1.375rem single figure that dd carries: a
+ * date reads three times over here, and three lines at 1.375rem would be a
+ * wall. Each zone is a comfortable read with its region in the accent hand;
+ * the countdown sits just beneath, tight to the times it counts down to
+ * (the owner asked for that gap closed too), in the same accent as the
+ * region names so the two brand-coloured cues frame the plain times between.
+ * ------------------------------------------------------------------ */
+.ndn-appt-when {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.ndn-appt-zone {
+  font-size: 1.0625rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.ndn-appt-region {
+  font-weight: 700;
+  color: var(--ndn-color-accent-strong);
+}
+
+.ndn-appt-countdown {
+  margin-block-start: 0.375rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ndn-color-accent-strong);
 }
 
 /* "No appointment is booked yet" sits directly under the empty figure it
@@ -677,6 +727,30 @@ export const patientRecordStylesCss = `
 
   .ndn-record-facts dd {
     padding-block: 0 0.5rem;
+  }
+
+  /* The lead's two facts stop standing side by side and stack — two 11rem
+     columns will not both fit a phone. Back to a flat single column, the
+     label above each value the same way, so the appointment's three zoned
+     times and the duration read one under the other. Its own rule because
+     the lead overrides .ndn-record-facts on specificity above and the
+     flat-column rule there does not reach it. */
+  .ndn-record-lead .ndn-record-facts {
+    grid-template-rows: none;
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  .ndn-record-lead .ndn-record-facts dt {
+    align-self: auto;
+  }
+
+  /* The duration label needs air above it once the facts stack, or it reads
+     as another line of the appointment rather than the start of a new fact. */
+  .ndn-record-lead .ndn-record-facts dt ~ dt {
+    margin-block-start: 0.75rem;
   }
 }
 `;
