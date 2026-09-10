@@ -322,6 +322,8 @@
   "nextAppointment.empty": "You have no upcoming appointment scheduled.",
   "nextAppointment.duration": "Duration (minutes):",
   "nextAppointment.joinCall": "Join this call",
+  "clinicianNextAppointment.appointmentLabel": "Next appointment",
+  "clinicianNextAppointment.durationLabel": "Next appointment length (minutes)",
   "assignedContent.heading": "Content shared with you",
   "assignedContent.description": "Articles your clinician has shared with you.",
   "assignedContent.loading": "Loading your content…",
