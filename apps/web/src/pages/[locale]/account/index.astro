@@ -294,21 +294,38 @@ const changePasswordStrings = {
         three-role gate: for a helpdesk the server answers "me" with the
         practice's calendar, so their lead is the practice's next appointment,
         matching the calendar directly below it. It renders nothing until its
-        own fetch lands, so it never paints an empty box above the calendar. */}
+        own fetch lands, so it never paints an empty box above the calendar.
+
+        **2026-09-10, second pass: the staff calendar is a sheet now, like the
+        patient's.** The owner, comparing the two dashboards: *"that green
+        heading is missing almost entirely in clinician landing dashboard.
+        Make it follow exactly the same style as happening in patients
+        profile."* A patient's calendar lives inside a `ndn-record-area` sheet
+        under a tinted "Patient Appointments" band; the staff one floated bare
+        on the page ground. It now carries the same wrapper and band — the
+        lead and the calendar sit inside it exactly as they do for a patient.
+        The band's own title is "Appointments" (the patient's is "Patient
+        Appointments"), and the calendar keeps its own "My calendar" heading
+        inside, the same two-heading shape the patient reads. */}
     <RequireAuth
       client:only="react"
       allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk']}
     >
-      <ClinicianNextAppointment
-        client:only="react"
-        locale={locale}
-        strings={{
-          appointmentLabel: t('clinicianNextAppointment.appointmentLabel', undefined, locale),
-          durationLabel: t('clinicianNextAppointment.durationLabel', undefined, locale),
-          emptyLabel: t('assessment.noNextAppointment', undefined, locale),
-        }}
-      />
-      <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
+      <section class="ndn-record-area" aria-labelledby="clinician-appointments-heading">
+        <Heading level={2} id="clinician-appointments-heading">
+          {t('account.section.appointments', undefined, locale)}
+        </Heading>
+        <ClinicianNextAppointment
+          client:only="react"
+          locale={locale}
+          strings={{
+            appointmentLabel: t('clinicianNextAppointment.appointmentLabel', undefined, locale),
+            durationLabel: t('clinicianNextAppointment.durationLabel', undefined, locale),
+            emptyLabel: t('assessment.noNextAppointment', undefined, locale),
+          }}
+        />
+        <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
+      </section>
     </RequireAuth>
 
     {/* ## 1a. Patient dashboard — the caseload table itself, not a link to it.
@@ -342,7 +359,13 @@ const changePasswordStrings = {
       client:only="react"
       allowRoles={['principal-clinician', 'sub-clinician', 'helpdesk', 'visitor']}
     >
-      <section aria-labelledby="caseload-heading">
+      {/* 2026-09-10: the same `ndn-record-area` sheet the patient's sections
+          carry — the owner wanted the staff dashboard to *"follow exactly the
+          same style as happening in patients profile"*, and a bare section
+          under a floating heading was the odd one out. The band now reads
+          "Patient dashboard" over the caseload the way "Patient Appointments"
+          reads over the calendar above it. */}
+      <section class="ndn-record-area" aria-labelledby="caseload-heading">
         <Heading level={2} id="caseload-heading">
           {t('account.dashboardLink', undefined, locale)}
         </Heading>
