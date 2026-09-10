@@ -1290,7 +1290,18 @@ export function AssessmentForm({
         ? String(value === true)
         : value === '' || value === undefined
           ? '\u2014'
-          : String(value);
+          : // A `datetime` field holds a UTC ISO instant (`nextAppointmentAt`
+            // is the only one, and it is derived \u2014 so this is the sole path
+            // that ever shows it). `String(value)` here was rendering the raw
+            // `2026-09-22T08:33:00.000Z` on the patient's own dashboard;
+            // `formatDateTime` is the one rendering of an instant the rest of
+            // the site uses \u2014 a spelled month, the reader's own zone, named.
+            // A `date` field is left as its stored `YYYY-MM-DD`: it is already
+            // legible, and parsing it through a zone-aware formatter would
+            // shift the day for a reader west of UTC.
+            field.type === 'datetime'
+            ? formatDateTime(String(value), locale)
+            : String(value);
     return (
       <Fragment key={field.id}>
         <dt>{field.label}</dt>

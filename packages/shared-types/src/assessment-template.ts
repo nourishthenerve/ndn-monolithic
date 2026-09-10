@@ -203,7 +203,7 @@ export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
       // second field-level rule in the system, and the first that is not
       // about authorisation — see this file's header.
       { id: 'fileNumber', label: 'Hospital / MRN / file no.', type: 'text', staffOnly: true },
-      { id: 'nationalId', label: 'National ID / NHS no.', type: 'text' },
+      { id: 'nationalId', label: 'National ID / NHS no. / Aadhar no.', type: 'text' },
       { id: 'dateOfBirth', label: 'Date of birth', type: 'date' },
       // Derived, not typed: the form has an "Age: ___ yrs" box, and a
       // stored age is wrong from the patient's next birthday onward. The
@@ -223,8 +223,11 @@ export const ASSESSMENT_TEMPLATE: readonly AssessmentSectionDef[] = [
         type: 'select',
         options: ['Female', 'Male', 'Prefer not to say'],
       },
-      { id: 'genderIdentity', label: 'Gender identity', type: 'text' },
-      { id: 'pronouns', label: 'Pronouns', type: 'text' },
+      // 2026-09-10: the owner cut "Gender identity" and "Pronouns" from the
+      // patient's own details. A template is not history — an answer already
+      // stored under either id survives untouched (`assessment.ts`); this
+      // stops the form from *offering* the two boxes, on the patient's
+      // dashboard and on the clinician's copy of the same record alike.
       { id: 'heightCm', label: 'Height (cm)', type: 'number' },
       { id: 'weightKg', label: 'Weight (kg)', type: 'number' },
       // Derived for the same reason as `age`: two stored copies of one
