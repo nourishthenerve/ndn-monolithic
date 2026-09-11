@@ -6,7 +6,7 @@
 // list of what to bring and a link to directions all belong in one field, and
 // none of those survived a plain textarea.
 import type { Locale } from '@ndn/i18n';
-import { Heading } from '@ndn/ui';
+import { Button, Heading } from '@ndn/ui';
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
@@ -121,15 +121,18 @@ export function WorkshopComposer({
   const busy = status === 'submitting';
 
   return (
-    <section aria-labelledby="workshop-composer-heading">
+    <section className="ndn-authoring-sheet" aria-labelledby="workshop-composer-heading">
       <Heading level={2} id="workshop-composer-heading">
         {strings.heading}
       </Heading>
-      <p>{strings.intro}</p>
+      <p className="ndn-authoring-intro">{strings.intro}</p>
       <form onSubmit={(event) => void submit(event)}>
-        <p>
-          <label htmlFor="workshop-title">{strings.titleLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="workshop-title">
+            {strings.titleLabel}
+          </label>
           <input
+            className="ndn-input"
             id="workshop-title"
             type="text"
             required
@@ -143,7 +146,11 @@ export function WorkshopComposer({
           />
         </p>
         {/* Derived from the title, never asked for — see `BlogComposer`. */}
-        {slugError && <p role="alert">{strings.slugError}</p>}
+        {slugError && (
+          <p className="ndn-authoring-alert" role="alert">
+            {strings.slugError}
+          </p>
+        )}
 
         <RichTextEditor
           key={composed}
@@ -160,14 +167,21 @@ export function WorkshopComposer({
           requestUploadUrl={requestImageUrl}
           putFile={putFile}
         />
-        {descriptionError && <p role="alert">{strings.descriptionRequired}</p>}
+        {descriptionError && (
+          <p className="ndn-authoring-alert" role="alert">
+            {strings.descriptionRequired}
+          </p>
+        )}
 
-        <p>
-          <label htmlFor="workshop-datetime">{strings.dateTimeLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="workshop-datetime">
+            {strings.dateTimeLabel}
+          </label>
           {/* Local wall time in, UTC instant out — `toUtcInstant` does the
               conversion in the author's own timezone, which is the one they
               are typing in. */}
           <input
+            className="ndn-input"
             id="workshop-datetime"
             type="datetime-local"
             required
@@ -178,11 +192,18 @@ export function WorkshopComposer({
             }
           />
         </p>
-        {dateError && <p role="alert">{strings.dateTimeError}</p>}
+        {dateError && (
+          <p className="ndn-authoring-alert" role="alert">
+            {strings.dateTimeError}
+          </p>
+        )}
 
-        <p>
-          <label htmlFor="workshop-capacity">{strings.capacityLabel}</label>
+        <p className="ndn-input-wrapper">
+          <label className="ndn-input-label" htmlFor="workshop-capacity">
+            {strings.capacityLabel}
+          </label>
           <input
+            className="ndn-input"
             id="workshop-capacity"
             type="number"
             min={1}
@@ -197,7 +218,9 @@ export function WorkshopComposer({
         {/* D-31 made capacity genuinely optional — workshops are
             announcement-only — so "no limit" and "a limit of nothing" stay
             different facts, and the field says which blank means which. */}
-        <p id="workshop-capacity-hint">{strings.capacityHint}</p>
+        <p className="ndn-authoring-hint" id="workshop-capacity-hint">
+          {strings.capacityHint}
+        </p>
 
         <MediaUploadField
           strings={strings.media}
@@ -210,8 +233,8 @@ export function WorkshopComposer({
           putFile={putFile}
         />
 
-        <p>
-          <label htmlFor="workshop-publish">
+        <p className="ndn-authoring-publish">
+          <label className="ndn-checkbox" htmlFor="workshop-publish">
             <input
               id="workshop-publish"
               type="checkbox"
@@ -225,12 +248,18 @@ export function WorkshopComposer({
             {strings.publishNowLabel}
           </label>
         </p>
-        <p id="workshop-publish-hint">{strings.publishNowHint}</p>
+        <p className="ndn-authoring-hint" id="workshop-publish-hint">
+          {strings.publishNowHint}
+        </p>
 
         <AuthoringMessages status={status} strings={strings} />
-        <button type="submit" disabled={busy}>
-          {busy ? strings.submitting : strings.submitButton}
-        </button>
+        {/* The one action this page is for — the full-size primary pill, as
+            `BlogComposer` gives its own. */}
+        <p className="ndn-panel-actions">
+          <Button type="submit" disabled={busy}>
+            {busy ? strings.submitting : strings.submitButton}
+          </Button>
+        </p>
       </form>
     </section>
   );

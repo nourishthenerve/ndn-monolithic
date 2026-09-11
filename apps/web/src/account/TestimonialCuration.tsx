@@ -302,10 +302,16 @@ export function TestimonialCuration({
   const landingFull = featured.length >= maxFeatured;
 
   return (
-    <section aria-labelledby="testimonial-curation-heading" className="ndn-curation">
-      <h2 id="testimonial-curation-heading">{strings.heading}</h2>
+    <section aria-labelledby="testimonial-curation-heading" className="ndn-curation ndn-record-area">
+      <h2 className="ndn-heading" id="testimonial-curation-heading">
+        {strings.heading}
+      </h2>
       <p>{strings.intro}</p>
-      {!curated && <p role="note">{strings.uncuratedNotice}</p>}
+      {!curated && (
+        <p className="ndn-record-note" role="note">
+          {strings.uncuratedNotice}
+        </p>
+      )}
 
       {items.length === 0 ? (
         <p>{strings.empty}</p>
@@ -362,7 +368,9 @@ export function TestimonialCuration({
 
           {featured.length > 0 && (
             <section aria-labelledby="testimonial-order-heading">
-              <h3 id="testimonial-order-heading">{strings.orderHeading}</h3>
+              <h3 className="ndn-heading ndn-record-subheading" id="testimonial-order-heading">
+                {strings.orderHeading}
+              </h3>
               <p>{strings.orderIntro}</p>
               <ol className="ndn-curation-order">
                 {featured.map((id, index) => {
@@ -370,21 +378,25 @@ export function TestimonialCuration({
                   const label = item ? creditOf(item, strings.anonymous) : id;
                   return (
                     <li key={id}>
-                      <span>{label}</span>{' '}
-                      <button
-                        type="button"
-                        disabled={index === 0}
-                        onClick={() => reorder(index, -1)}
-                      >
-                        {fill(strings.moveUp, { name: label })}
-                      </button>{' '}
-                      <button
-                        type="button"
-                        disabled={index === featured.length - 1}
-                        onClick={() => reorder(index, 1)}
-                      >
-                        {fill(strings.moveDown, { name: label })}
-                      </button>
+                      <span className="ndn-curation-order-name">{label}</span>
+                      <span className="ndn-curation-order-actions">
+                        <button
+                          className="ndn-button ndn-button--secondary ndn-button--sm ndn-interactive"
+                          type="button"
+                          disabled={index === 0}
+                          onClick={() => reorder(index, -1)}
+                        >
+                          {fill(strings.moveUp, { name: label })}
+                        </button>
+                        <button
+                          className="ndn-button ndn-button--secondary ndn-button--sm ndn-interactive"
+                          type="button"
+                          disabled={index === featured.length - 1}
+                          onClick={() => reorder(index, 1)}
+                        >
+                          {fill(strings.moveDown, { name: label })}
+                        </button>
+                      </span>
                     </li>
                   );
                 })}
@@ -392,8 +404,13 @@ export function TestimonialCuration({
             </section>
           )}
 
-          <p>
-            <button type="button" disabled={saveState === 'saving'} onClick={() => void save()}>
+          <p className="ndn-panel-actions">
+            <button
+              className="ndn-button ndn-button--primary ndn-interactive"
+              type="button"
+              disabled={saveState === 'saving'}
+              onClick={() => void save()}
+            >
               {saveState === 'saving' ? strings.saving : strings.save}
             </button>
           </p>
