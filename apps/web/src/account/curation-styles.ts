@@ -66,10 +66,20 @@ export const curationStylesCss = `
 }
 
 /* The placement radios, gathered into their own small panel so the choice
-   reads as one control rather than three stray options. */
+   reads as one control rather than three stray options.
+
+   display: flex on the fieldset itself is what fixes the legend: a
+   default fieldset straddles its own top border with the legend, so it read
+   as sitting on the box edge. Making the fieldset a flex column takes the
+   legend out of that special placement — the border closes into a clean
+   rectangle and the legend becomes a normal item stacked above the radios,
+   like every other field label on the site. (A float would do it too, but
+   the first radio then has to clear the float or it escapes the box.) */
 .ndn-curation-item fieldset {
+  display: flex;
+  flex-direction: column;
   margin: 0;
-  padding-block: 0.625rem 0.75rem;
+  padding-block: 0.875rem 0.75rem;
   padding-inline: 1rem;
   border: 1px solid var(--ndn-color-border);
   border-radius: 0.625rem;
@@ -77,7 +87,8 @@ export const curationStylesCss = `
 }
 
 .ndn-curation-item legend {
-  padding-inline: 0.375rem;
+  margin-block-end: 0.5rem;
+  padding: 0;
   font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.07em;
