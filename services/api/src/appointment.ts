@@ -161,6 +161,24 @@ export function createAppointmentHandler(
     // fire their own read for the same id before any of them resolved.
     const patientNameCache = new Map<string, Promise<string | undefined>>();
     const clinicianNameCache = new Map<string, Promise<string | undefined>>();
+    const assignedClinicianNameCache = new Map<string, Promise<string | undefined>>();
+
+    // The patient record, fetched once per id and shared by the name lookup
+    // and the assigned-clinician lookup below — both read it, and one
+    // `findById` per patient beats two. A read that fails is `undefined`, the
+    // same posture the name lookups take: a directory hiccup must not turn a
+    // working calendar into a 500.
+    type PatientRecord = Awaited<ReturnType<typeof deps.patients.findById>>;
+    const patientRecordCache = new Map<string, Promise<PatientRecord>>();
+    const patientRecordFor = (id: string): Promise<PatientRecord> => {
+      const cached = patientRecordCache.get(id);
+      if (cached) {
+        return cached;
+      }
+      const pending = deps.patients.findById(id).catch(() => undefined);
+      patientRecordCache.set(id, pending);
+      return pending;
+    };
 
     /**
      * The patient's name — **only if this caller could read that patient's
@@ -181,7 +199,7 @@ export function createAppointmentHandler(
         return cached;
       }
       const pending = (async () => {
-        const record = await deps.patients.findById(id);
+        const record = await patientRecordFor(id);
         if (!record) {
           return undefined;
         }
@@ -227,6 +245,46 @@ export function createAppointmentHandler(
         // working calendar into a 500.
         .catch(() => undefined);
       clinicianNameCache.set(id, pending);
+      return pending;
+    };
+
+    /**
+     * The name of the clinician a patient is **assigned to** — a different
+     * fact from the clinician on any one appointment (who conducts it), which
+     * `clinicianNameFor` already gives. The principal's next-appointment lead
+     * shows this so a principal covering someone else's session can see whose
+     * patient it really is.
+     *
+     * Gated on the same care-relationship read `patientNameFor` uses: the
+     * assignment is a fact about the patient, disclosed only to a caller who
+     * may read that patient's profile — which is exactly the role
+     * `caseload-repository.ts` already returns `assignedClinicianName` to.
+     * Only ever asked for a principal (see the calendar route), but the gate
+     * is here rather than there so the field can never leak past it.
+     */
+    const assignedClinicianNameFor = (patientId: string): Promise<string | undefined> => {
+      const cached = assignedClinicianNameCache.get(patientId);
+      if (cached) {
+        return cached;
+      }
+      const pending = (async () => {
+        const record = await patientRecordFor(patientId);
+        if (!record) {
+          return undefined;
+        }
+        const profile = {
+          entityType: PATIENT_PROFILE_ENTITY_TYPE,
+          ownerPatientId: patientId,
+          assignedClinicianId: record.assigned_clinician_id,
+        } as const;
+        if (!can(principal, 'read', profile).allowed) {
+          return undefined;
+        }
+        return record.assigned_clinician_id
+          ? clinicianNameFor(record.assigned_clinician_id)
+          : undefined;
+      })();
+      assignedClinicianNameCache.set(patientId, pending);
       return pending;
     };
 
@@ -336,7 +394,24 @@ export function createAppointmentHandler(
               from,
               to,
             );
-      const items = projectAllFor(principal, await withNames(appointments), resource);
+      const named = await withNames(appointments);
+      // **The principal alone** also gets, per row, the clinician the patient
+      // is *assigned* to. The owner: *"since it's a principal clinician show
+      // the clinician name this patient has assigned to as well."* A
+      // sub-clinician is that clinician, so the field would only ever name
+      // themselves; a helpdesk is not asking. Enriched before projection, the
+      // same as the names above, and absent (never blank) where the assignment
+      // could not be resolved or disclosed.
+      const enriched =
+        principal.role === 'principal-clinician'
+          ? await Promise.all(
+              named.map(async (appointment) => {
+                const assignedClinicianName = await assignedClinicianNameFor(appointment.patientId);
+                return assignedClinicianName ? { ...appointment, assignedClinicianName } : appointment;
+              }),
+            )
+          : named;
+      const items = projectAllFor(principal, enriched, resource);
       return respond(200, { items });
     }
 

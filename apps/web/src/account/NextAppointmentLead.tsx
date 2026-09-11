@@ -72,6 +72,13 @@ export type LeadAudience = 'patient' | 'clinician';
 export interface LeadAppointment extends AppointmentEntry {
   readonly patientName?: string;
   readonly clinicianName?: string;
+  /**
+   * The clinician the *patient* is assigned to — a different fact from
+   * `clinicianName` (who conducts this appointment). The server attaches it
+   * only for a principal (`appointment.ts`), so it is present, and the line
+   * shown, on a principal's box alone.
+   */
+  readonly assignedClinicianName?: string;
 }
 
 type ViewState =
@@ -85,6 +92,12 @@ export interface NextAppointmentLeadStrings {
   readonly durationLabel: string;
   /** The counterparty — "Patient" on a clinician's box, "Clinician" on a patient's. */
   readonly personLabel: string;
+  /**
+   * The clinician the patient is assigned to — a principal-only extra fact.
+   * Passed on the clinician mount; the line renders only when the server also
+   * sent `assignedClinicianName`, which it does for a principal alone.
+   */
+  readonly assignedClinicianLabel?: string;
   /** Shown when there is no upcoming appointment. */
   readonly emptyLabel: string;
 }
@@ -199,6 +212,12 @@ export function NextAppointmentLead({
           <>
             <dt>{strings.personLabel}</dt>
             <dd>{counterpartyName}</dd>
+          </>
+        )}
+        {next?.assignedClinicianName && strings.assignedClinicianLabel && (
+          <>
+            <dt>{strings.assignedClinicianLabel}</dt>
+            <dd>{next.assignedClinicianName}</dd>
           </>
         )}
         <dt>{strings.durationLabel}</dt>
