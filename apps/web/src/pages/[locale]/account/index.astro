@@ -100,8 +100,8 @@ import { appointmentCalendarStylesCss } from '../../../account/calendar-styles.j
 import { caseloadStylesCss } from '../../../account/caseload-styles.js';
 import { CaseloadView } from '../../../account/CaseloadView.js';
 import { ChangePasswordPanel } from '../../../account/ChangePasswordPanel.js';
-import { ClinicianNextAppointment } from '../../../account/ClinicianNextAppointment.js';
 import { accountDashboardStylesCss } from '../../../account/dashboard-styles.js';
+import { NextAppointmentLead } from '../../../account/NextAppointmentLead.js';
 import { OwnDetailsPanel } from '../../../account/OwnDetailsPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
 import { patientRecordStylesCss } from '../../../account/record-styles.js';
@@ -286,15 +286,17 @@ const changePasswordStrings = {
         next appointment above My Calender just like how it's being shown for
         patient."*
 
-        `ClinicianNextAppointment` derives the same figure the patient's own
-        lead shows — the three zoned times and the live countdown of
-        `NextAppointmentWhen` — from the calendar the clinician already reads
-        (`GET /clinicians/me/calendar`), since a clinician has no assessment
-        record to carry a `calendarSummary`. It shares the calendar's own
-        three-role gate: for a helpdesk the server answers "me" with the
-        practice's calendar, so their lead is the practice's next appointment,
-        matching the calendar directly below it. It renders nothing until its
-        own fetch lands, so it never paints an empty box above the calendar.
+        `NextAppointmentLead` (`audience="clinician"`) derives the same figure
+        the patient's own lead shows — the three zoned times and the live
+        countdown of `NextAppointmentWhen` — from the calendar the clinician
+        already reads (`GET /clinicians/me/calendar`), since a clinician has no
+        assessment record to carry a `calendarSummary`, and names the patient
+        the appointment is with. It shares the calendar's own three-role gate:
+        for a helpdesk the server answers "me" with the practice's calendar, so
+        their lead is the practice's next appointment, matching the calendar
+        directly below it — with the patient name withheld, the same two facts
+        a patient's own box shows. It renders nothing until its own fetch
+        lands, so it never paints an empty box above the calendar.
 
         **2026-09-10, second pass: the staff calendar is a sheet now, like the
         patient's.** The owner, comparing the two dashboards: *"that green
@@ -315,13 +317,14 @@ const changePasswordStrings = {
         <Heading level={2} id="clinician-appointments-heading">
           {t('account.section.appointments', undefined, locale)}
         </Heading>
-        <ClinicianNextAppointment
+        <NextAppointmentLead
           client:only="react"
+          audience="clinician"
           locale={locale}
           strings={{
-            appointmentLabel: t('clinicianNextAppointment.appointmentLabel', undefined, locale),
-            durationLabel: t('clinicianNextAppointment.durationLabel', undefined, locale),
-            patientLabel: t('clinicianNextAppointment.patientLabel', undefined, locale),
+            appointmentLabel: t('nextAppointmentLead.appointmentLabel', undefined, locale),
+            durationLabel: t('nextAppointmentLead.durationLabel', undefined, locale),
+            personLabel: t('nextAppointmentLead.patientLabel', undefined, locale),
             emptyLabel: t('assessment.noNextAppointment', undefined, locale),
           }}
         />
@@ -445,47 +448,43 @@ const changePasswordStrings = {
           slightly bigger font (subtly highlighted) so that that's what the
           patient sees first before checking the actual calender."*
 
-          So the `calendar{}` section is mounted twice — once above with
-          `onlyFields` naming those two, once below with `hideFields` naming
-          them and the three the same message cut (*"I dont want 'Files',
+          The **lower** figures are still a `calendar{}` placement of
+          `AssessmentForm`, mounted with `hideFields` naming the two lead
+          fields and the three the same message cut (*"I dont want 'Files',
           'Scheduling notes', 'Appointments awaiting the principal
-          clinician’s approval'"*). Both are placement filters over what the
-          server sent, so nothing here changes what a *clinician* sees on
+          clinician’s approval'"*). A placement filter over what the server
+          sent, so nothing here changes what a *clinician* sees on
           `patient-record.astro`: they still write the scheduling notes and
-          still attach files to this section.
+          still attach files to this section. It keeps the appointment totals
+          and the section's "you can read this but not change it" note.
 
-          Neither mount is the odd one out on this page — a patient's
-          dashboard has mounted this form three times since 2026-09-07 and
-          they resync to each other after any save. The lower one keeps the
-          appointment totals and the section's "you can read this but not
-          change it" note; the upper one is told to leave that note alone,
-          because a caveat under two large figures reads as a caveat about
-          the figures. "No appointment is booked yet" needs no such
-          instruction — it follows the field it explains, so it appears in
-          the panel above and nowhere else.
-
-          `.ndn-record-lead` is the "subtly highlighted" half — a class this
-          page hands the upper placement rather than a wrapper it draws
-          around it, because a `client:only` island renders nothing
-          server-side and a styled wrapper would paint an empty tinted box
-          on first paint and on every loading, forbidden or empty render
-          after it. See `record-styles.ts` for what the class does. */}
+          **2026-09-11: the lead is `NextAppointmentLead`, not an
+          `AssessmentForm` placement.** The owner: *"on patient's landing
+          dashboard … also show the name of the clinician with whom he will
+          have appointment with."* That name is not in the record's
+          `calendarSummary` — the derived figures the form reads — so the box
+          could not have carried it. The same component the clinician's box
+          uses reads the patient's own appointments (`GET
+          /patients/me/appointments`, the endpoint the calendar below already
+          reads) and names the clinician off the next one; `audience` is the
+          only thing that differs between the two dashboards. The next
+          appointment and its length are the same instant the old placement
+          showed, computed the same way (`findNext`), and the "No appointment
+          is booked yet" note comes with it. */}
       <section class="ndn-record-area" aria-labelledby="patient-appointments-heading">
         <Heading level={2} id="patient-appointments-heading">
           {t('account.section.patientAppointments', undefined, locale)}
         </Heading>
-        <AssessmentForm
+        <NextAppointmentLead
           client:only="react"
-          className="ndn-record-lead"
+          audience="patient"
           locale={locale}
-          fieldSets={['calendar']}
-          onlyFields={['nextAppointmentAt', 'nextAppointmentDurationMinutes']}
-          showAttachments={false}
-          showReadOnlyNote={false}
-          showTitles={false}
-          showVersion={false}
-          headingLevel={PANEL_HEADING_LEVEL}
-          strings={assessmentStrings}
+          strings={{
+            appointmentLabel: t('nextAppointmentLead.appointmentLabel', undefined, locale),
+            durationLabel: t('nextAppointmentLead.durationLabel', undefined, locale),
+            personLabel: t('nextAppointmentLead.clinicianLabel', undefined, locale),
+            emptyLabel: t('assessment.noNextAppointment', undefined, locale),
+          }}
         />
         <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
         <AssessmentForm

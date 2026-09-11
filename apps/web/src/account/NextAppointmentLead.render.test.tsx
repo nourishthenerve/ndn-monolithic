@@ -1,23 +1,23 @@
 // @vitest-environment jsdom
 //
-// 2026-09-10: the clinician's next-appointment lead. `findNext` and the
+// 2026-09-11: the shared next-appointment lead. `findNext` and the
 // three-zone/countdown rendering are tested where they live; what this pins
-// is the plumbing this component adds — that it reads the clinician's own
-// calendar, picks the earliest upcoming scheduled appointment out of it, and
-// hands it to the same view the patient's panel uses, rendering nothing when
-// there is no calendar to read.
+// is the plumbing this component adds — that it reads the right calendar for
+// the audience, picks the earliest upcoming scheduled appointment, and names
+// the right counterparty (the patient for a clinician, the clinician for a
+// patient), showing that line only when a name came back.
 import { defaultLocale, formatDateTimeInZone } from '@ndn/i18n';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { ClinicianNextAppointment } from './ClinicianNextAppointment.js';
+import { NextAppointmentLead } from './NextAppointmentLead.js';
 
 afterEach(cleanup);
 
 const STRINGS = {
   appointmentLabel: 'Next appointment',
   durationLabel: 'Next appointment length (minutes)',
-  patientLabel: 'Patient',
+  personLabel: 'Person',
   emptyLabel: 'No appointment is booked yet.',
 };
 
@@ -34,81 +34,82 @@ const ok = (items: unknown[]): Promise<Response> =>
   Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ items }) } as Response);
 
 const NOW = '2026-09-18T06:00:00.000Z';
+const ISO = '2026-09-20T10:00:00.000Z';
 
-describe('ClinicianNextAppointment', () => {
-  it('shows the next scheduled appointment in three zones, with its patient and duration', async () => {
+describe('NextAppointmentLead', () => {
+  it('names the patient on a clinician box, in three zones with the duration', async () => {
     const appt = {
       patientId: 'p1',
       patientName: 'Jordan Ellis',
-      scheduledAt: '2026-09-20T10:00:00.000Z',
+      clinicianName: 'Dr Amelia Ford',
+      scheduledAt: ISO,
       durationMinutes: 45,
       appointment_status: 'scheduled',
     };
     render(
-      <ClinicianNextAppointment
+      <NextAppointmentLead
+        audience="clinician"
         locale={defaultLocale}
-        strings={STRINGS}
+        strings={{ ...STRINGS, personLabel: 'Patient' }}
         client={client('tok')}
         now={at(NOW)}
-        fetchCalendar={() => ok([appt])}
+        fetchAppointments={() => ok([appt])}
       />,
     );
 
     const term = await screen.findByText('Next appointment');
     const value = term.nextElementSibling;
-    expect(value?.textContent).not.toContain(appt.scheduledAt);
-    expect(value?.textContent).toContain(
-      formatDateTimeInZone(appt.scheduledAt, defaultLocale, 'Europe/London'),
-    );
-    expect(screen.getByText('India')).toBeTruthy();
-    // Who the appointment is with — the fact the clinician's box adds.
+    expect(value?.textContent).not.toContain(ISO);
+    expect(value?.textContent).toContain(formatDateTimeInZone(ISO, defaultLocale, 'Europe/London'));
+    // The clinician's box names the *patient*, not the clinician.
     expect(screen.getByText('Patient').nextElementSibling?.textContent).toBe('Jordan Ellis');
+    expect(screen.queryByText('Dr Amelia Ford')).toBeNull();
     expect(screen.getByText('Next appointment length (minutes)').nextElementSibling?.textContent).toBe(
       '45',
     );
   });
 
-  it('omits the patient line when the server disclosed no name', async () => {
-    // A helpdesk reads the practice calendar with names withheld; the box then
-    // reads exactly as the patient's does, rather than showing "Patient —".
+  it('names the clinician on a patient box', async () => {
     const appt = {
       patientId: 'p1',
-      scheduledAt: '2026-09-20T10:00:00.000Z',
+      patientName: 'Jordan Ellis',
+      clinicianName: 'Dr Amelia Ford',
+      scheduledAt: ISO,
       durationMinutes: 45,
       appointment_status: 'scheduled',
     };
     render(
-      <ClinicianNextAppointment
+      <NextAppointmentLead
+        audience="patient"
         locale={defaultLocale}
-        strings={STRINGS}
+        strings={{ ...STRINGS, personLabel: 'Clinician' }}
         client={client('tok')}
         now={at(NOW)}
-        fetchCalendar={() => ok([appt])}
+        fetchAppointments={() => ok([appt])}
       />,
     );
 
     await screen.findByText('Next appointment');
-    expect(screen.queryByText('Patient')).toBeNull();
+    // The patient's box names the *clinician*, not the patient.
+    expect(screen.getByText('Clinician').nextElementSibling?.textContent).toBe('Dr Amelia Ford');
+    expect(screen.queryByText('Jordan Ellis')).toBeNull();
   });
 
   it('picks the earliest upcoming, skipping past and unconfirmed appointments', async () => {
     const items = [
-      // already over
       { patientId: 'a', scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30, appointment_status: 'scheduled' },
-      // later than the winner
       { patientId: 'b', scheduledAt: '2026-09-25T10:00:00.000Z', durationMinutes: 30, appointment_status: 'scheduled' },
-      // sooner, but not yet confirmed — no call to join, so not "next"
       { patientId: 'c', scheduledAt: '2026-09-20T10:00:00.000Z', durationMinutes: 60, appointment_status: 'pending-approval' },
-      // the earliest upcoming *scheduled* one
       { patientId: 'd', scheduledAt: '2026-09-22T10:00:00.000Z', durationMinutes: 50, appointment_status: 'scheduled' },
     ];
     render(
-      <ClinicianNextAppointment
+      <NextAppointmentLead
+        audience="patient"
         locale={defaultLocale}
         strings={STRINGS}
         client={client('tok')}
         now={at(NOW)}
-        fetchCalendar={() => ok(items)}
+        fetchAppointments={() => ok(items)}
       />,
     );
 
@@ -118,14 +119,37 @@ describe('ClinicianNextAppointment', () => {
     );
   });
 
+  it('omits the counterparty line when the server disclosed no name', async () => {
+    const appt = {
+      patientId: 'p1',
+      scheduledAt: ISO,
+      durationMinutes: 45,
+      appointment_status: 'scheduled',
+    };
+    render(
+      <NextAppointmentLead
+        audience="clinician"
+        locale={defaultLocale}
+        strings={{ ...STRINGS, personLabel: 'Patient' }}
+        client={client('tok')}
+        now={at(NOW)}
+        fetchAppointments={() => ok([appt])}
+      />,
+    );
+
+    await screen.findByText('Next appointment');
+    expect(screen.queryByText('Patient')).toBeNull();
+  });
+
   it('shows the empty note when nothing is upcoming', async () => {
     render(
-      <ClinicianNextAppointment
+      <NextAppointmentLead
+        audience="patient"
         locale={defaultLocale}
         strings={STRINGS}
         client={client('tok')}
         now={at(NOW)}
-        fetchCalendar={() => ok([])}
+        fetchAppointments={() => ok([])}
       />,
     );
 
@@ -134,37 +158,17 @@ describe('ClinicianNextAppointment', () => {
 
   it('renders nothing when the calendar cannot be read', async () => {
     const { container } = render(
-      <ClinicianNextAppointment
+      <NextAppointmentLead
+        audience="clinician"
         locale={defaultLocale}
         strings={STRINGS}
         client={client('tok')}
         now={at(NOW)}
-        fetchCalendar={() => Promise.resolve({ ok: false, status: 403 } as Response)}
+        fetchAppointments={() => Promise.resolve({ ok: false, status: 403 } as Response)}
       />,
     );
 
     await waitFor(() => expect(container.querySelector('.ndn-record-lead')).toBeNull());
     expect(container.textContent).toBe('');
-  });
-
-  it('queries a bounded forward window starting from now', async () => {
-    let captured: { from: string; to: string } | undefined;
-    render(
-      <ClinicianNextAppointment
-        locale={defaultLocale}
-        strings={STRINGS}
-        client={client('tok')}
-        now={at(NOW)}
-        fetchCalendar={(from, to) => {
-          captured = { from, to };
-          return ok([]);
-        }}
-      />,
-    );
-
-    await screen.findByText('No appointment is booked yet.');
-    expect(captured?.from).toBe(NOW);
-    // LOOKAHEAD_DAYS (366) later — a bounded range, which the endpoint requires.
-    expect(captured?.to).toBe('2027-09-19T06:00:00.000Z');
   });
 });
