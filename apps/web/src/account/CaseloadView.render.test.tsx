@@ -31,6 +31,7 @@ const STRINGS: CaseloadViewStrings = {
   nextPageLabel: 'Next',
   previousPageLabel: 'Previous',
   caption: 'Every patient, with the clinician they are assigned to',
+  captionVisitor: 'Every patient, their address, and how many appointments they have',
   pagerLabel: 'Patient list pages',
   totalPatientsLabel: 'Total patients',
   activePatientsLabel: 'Active patients',
@@ -176,6 +177,38 @@ describe('the counts above the table', () => {
     renderCaseload([patient({ patientId: 'p1', fullName: 'Alex Kim' })]);
     await screen.findByText('Alex Kim');
     expect(screen.queryByText('Total patients')).toBeNull();
+  });
+});
+
+describe('the visitor table', () => {
+  const visitorSession = {
+    resolve: () => Promise.resolve({ status: 'signed-in', session: { viewerRole: 'visitor' } }),
+    authorization: () => Promise.resolve('token'),
+    complete: () => Promise.resolve({ status: 'signed-out' }),
+    signOut: () => Promise.resolve(undefined),
+  } as never;
+
+  it('captions the name/address/appointments table without naming a clinician', async () => {
+    render(
+      <CaseloadView
+        strings={STRINGS}
+        recordHrefBase="/en/account/patient-record"
+        client={visitorSession}
+        fetchPage={vi
+          .fn()
+          .mockResolvedValue(jsonResponse({ items: [patient({ patientId: 'p1', fullName: 'Alex Kim' })] }))}
+        listClinicians={vi.fn().mockResolvedValue(jsonResponse({ items: [] }))}
+      />,
+    );
+    await screen.findByText('Alex Kim');
+    // The caption describes the table the visitor actually sees, not the
+    // clinician one that names an assignment.
+    expect(
+      screen.getByText('Every patient, their address, and how many appointments they have'),
+    ).toBeDefined();
+    expect(
+      screen.queryByText('Every patient, with the clinician they are assigned to'),
+    ).toBeNull();
   });
 });
 

@@ -397,6 +397,9 @@ const changePasswordStrings = {
             // the table contains, and the owner's own reason for wanting this
             // table is the sentence it now carries.
             caption: t('caseload.tableCaption', undefined, locale),
+            // A visitor's table is name/address/appointment count, not the
+            // clinician column `caption` describes — so it gets its own.
+            captionVisitor: t('caseload.tableCaptionVisitor', undefined, locale),
             pagerLabel: t('caseload.pagerLabel', undefined, locale),
             totalPatientsLabel: t('caseload.totalPatients', undefined, locale),
             activePatientsLabel: t('caseload.activePatients', undefined, locale),

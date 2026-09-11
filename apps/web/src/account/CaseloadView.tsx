@@ -116,6 +116,14 @@ export interface CaseloadViewStrings {
   readonly previousPageLabel: string;
   readonly caption: string;
   /**
+   * 2026-09-11: a visitor sees a different table — name, address and an
+   * appointment count, with no clinician column at all — so the `caption`
+   * above, which names "the clinician they are assigned to", describes a
+   * table they never see. This is the one they do; the component picks
+   * between the two off `isVisitor`, the same flag that picks the columns.
+   */
+  readonly captionVisitor: string;
+  /**
    * 2026-09-06: the pagination nav's own accessible name.
    *
    * It used to reuse `caption`, which was the page heading repeated — fine
@@ -514,7 +522,9 @@ export function CaseloadView({
           forcing the whole page sideways. */}
       <div className="ndn-caseload-scroll">
       <table className="ndn-caseload-table">
-        <caption className="ndn-caseload-caption">{strings.caption}</caption>
+        <caption className="ndn-caseload-caption">
+          {isVisitor ? strings.captionVisitor : strings.caption}
+        </caption>
         <thead>
           <tr>
             <th scope="col">{strings.patientColumnLabel}</th>
