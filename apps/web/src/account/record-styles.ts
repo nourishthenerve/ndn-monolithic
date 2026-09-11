@@ -272,6 +272,14 @@ export const patientRecordStylesCss = `
   resize: vertical;
 }
 
+/* A note beneath a field — the "who this patient is assigned to" hint on the
+   patient-admin form, say. Small and muted, and stacked under its control by
+   the wrapper's own column flow. */
+.ndn-input-hint {
+  font-size: 0.8125rem;
+  color: var(--ndn-color-text-muted);
+}
+
 /* These are hand-written controls, not packages/ui primitives, so they
    carry none of .ndn-interactive's focus styling. Same restatement, and
    same reason, as caseload-styles.ts makes for its own plain controls. */

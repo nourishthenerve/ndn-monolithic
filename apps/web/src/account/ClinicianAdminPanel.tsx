@@ -194,9 +194,18 @@ function defaultSetClinicianActive(
 function OneTimeSecret({ label, value }: { readonly label: string; readonly value: string }): ReactNode {
   const id = `one-time-secret-${label.replace(/\s+/g, '-').toLowerCase()}`;
   return (
-    <p>
-      <label htmlFor={id}>{label}</label>{' '}
-      <input id={id} type="text" readOnly value={value} onFocus={(event) => event.currentTarget.select()} />
+    <p className="ndn-input-wrapper">
+      <label className="ndn-input-label" htmlFor={id}>
+        {label}
+      </label>
+      <input
+        className="ndn-input"
+        id={id}
+        type="text"
+        readOnly
+        value={value}
+        onFocus={(event) => event.currentTarget.select()}
+      />
     </p>
   );
 }
@@ -361,64 +370,82 @@ export function ClinicianAdminPanel({
 
   return (
     <>
-      <section>
-        <h2>{strings.createHeading}</h2>
+      <section className="ndn-record-area">
+        <h2 className="ndn-heading">{strings.createHeading}</h2>
         <p>{strings.createIntro}</p>
         <form onSubmit={(event) => void handleCreate(event)}>
-          <p>
-            <label htmlFor="create-clinician-email">{strings.emailLabel}</label>
-            <input
-              id="create-clinician-email"
-              type="email"
-              required
-              disabled={isCreating}
-              value={fields.email}
-              onChange={(event) => setFields((f) => ({ ...f, email: event.target.value }))}
-            />
-          </p>
-          <p>
-            <label htmlFor="create-clinician-display-name">{strings.displayNameLabel}</label>
-            <input
-              id="create-clinician-display-name"
-              type="text"
-              required
-              disabled={isCreating}
-              value={fields.displayName}
-              onChange={(event) => setFields((f) => ({ ...f, displayName: event.target.value }))}
-            />
-          </p>
-          <p>
-            <label htmlFor="create-clinician-role">{strings.roleLabel}</label>
-            <select
-              id="create-clinician-role"
-              disabled={isCreating}
-              value={fields.role}
-              onChange={(event) => setFields((f) => ({ ...f, role: asFormRole(event.target.value) }))}
-            >
-              <option value="sub">{strings.roleSubLabel}</option>
-              <option value="helpdesk">{strings.roleHelpdeskLabel}</option>
-              <option value="visitor">{strings.roleVisitorLabel}</option>
-              <option value="principal">{strings.rolePrincipalLabel}</option>
-            </select>
-          </p>
-          <p>
-            <label htmlFor="create-clinician-password">{strings.passwordFieldLabel}</label>
-            {/* `type="text"`, not `password`: the principal is about to
-                read this out over WhatsApp, and a masked field they cannot
-                check is how a colleague ends up locked out of an account
-                nobody can reproduce the password for. Nothing is masked on
-                the success panel either, for the same reason. */}
-            <input
-              id="create-clinician-password"
-              type="text"
-              autoComplete="off"
-              disabled={isCreating}
-              aria-describedby="create-clinician-password-hint"
-              value={fields.password}
-              onChange={(event) => setFields((f) => ({ ...f, password: event.target.value }))}
-            />
-          </p>
-          <p id="create-clinician-password-hint">{strings.passwordFieldHint}</p>
+          <div className="ndn-record-fields">
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-clinician-email">
+                {strings.emailLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="create-clinician-email"
+                type="email"
+                required
+                disabled={isCreating}
+                value={fields.email}
+                onChange={(event) => setFields((f) => ({ ...f, email: event.target.value }))}
+              />
+            </p>
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-clinician-display-name">
+                {strings.displayNameLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="create-clinician-display-name"
+                type="text"
+                required
+                disabled={isCreating}
+                value={fields.displayName}
+                onChange={(event) => setFields((f) => ({ ...f, displayName: event.target.value }))}
+              />
+            </p>
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-clinician-role">
+                {strings.roleLabel}
+              </label>
+              <select
+                className="ndn-input"
+                id="create-clinician-role"
+                disabled={isCreating}
+                value={fields.role}
+                onChange={(event) =>
+                  setFields((f) => ({ ...f, role: asFormRole(event.target.value) }))
+                }
+              >
+                <option value="sub">{strings.roleSubLabel}</option>
+                <option value="helpdesk">{strings.roleHelpdeskLabel}</option>
+                <option value="visitor">{strings.roleVisitorLabel}</option>
+                <option value="principal">{strings.rolePrincipalLabel}</option>
+              </select>
+            </p>
+            <p className="ndn-input-wrapper ndn-record-field--wide">
+              <label className="ndn-input-label" htmlFor="create-clinician-password">
+                {strings.passwordFieldLabel}
+              </label>
+              {/* `type="text"`, not `password`: the principal is about to
+                  read this out over WhatsApp, and a masked field they cannot
+                  check is how a colleague ends up locked out of an account
+                  nobody can reproduce the password for. Nothing is masked on
+                  the success panel either, for the same reason. */}
+              <input
+                className="ndn-input"
+                id="create-clinician-password"
+                type="text"
+                autoComplete="off"
+                disabled={isCreating}
+                aria-describedby="create-clinician-password-hint"
+                value={fields.password}
+                onChange={(event) => setFields((f) => ({ ...f, password: event.target.value }))}
+              />
+              <span className="ndn-input-hint" id="create-clinician-password-hint">
+                {strings.passwordFieldHint}
+              </span>
+            </p>
+          </div>
           {status === 'forbidden' && <p role="alert">{strings.forbidden}</p>}
           {status === 'conflict' && <p role="alert">{strings.createConflictError}</p>}
           {status === 'principalExists' && (
@@ -427,13 +454,19 @@ export function ClinicianAdminPanel({
           {status === 'invalid' && <p role="alert">{strings.createValidationError}</p>}
           {status === 'weakPassword' && <p role="alert">{strings.createWeakPasswordError}</p>}
           {status === 'error' && <p role="alert">{strings.createError}</p>}
-          <button type="submit" disabled={isCreating}>
-            {isCreating ? strings.creating : strings.createButton}
-          </button>
+          <p className="ndn-panel-actions">
+            <button
+              className="ndn-button ndn-button--primary ndn-interactive"
+              type="submit"
+              disabled={isCreating}
+            >
+              {isCreating ? strings.creating : strings.createButton}
+            </button>
+          </p>
         </form>
         {status === 'success' && result && (
-          <div role="alert">
-            <h3>{strings.createSuccessHeading}</h3>
+          <div className="ndn-record-note" role="alert">
+            <h3 className="ndn-heading ndn-record-subheading">{strings.createSuccessHeading}</h3>
             <p>{strings.createSuccessWarning}</p>
             <OneTimeSecret label={strings.passwordLabel} value={result.password} />
             {result.totpSecret && result.otpauthUri && (
@@ -449,8 +482,8 @@ export function ClinicianAdminPanel({
         )}
       </section>
 
-      <section>
-        <h2>{strings.directoryHeading}</h2>
+      <section className="ndn-record-area">
+        <h2 className="ndn-heading">{strings.directoryHeading}</h2>
         <p>{strings.directoryIntro}</p>
         {directoryStatus === 'loading' && (
           <p role="status" aria-live="polite">
@@ -464,50 +497,55 @@ export function ClinicianAdminPanel({
           (clinicians.length === 0 ? (
             <p>{strings.directoryEmpty}</p>
           ) : (
-            <table>
-              <caption>{strings.directoryHeading}</caption>
-              <thead>
-                <tr>
-                  <th scope="col">{strings.nameColumnLabel}</th>
-                  <th scope="col">{strings.roleColumnLabel}</th>
-                  <th scope="col">{strings.statusColumnLabel}</th>
-                  <th scope="col">{strings.actionColumnLabel}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clinicians.map((clinician) => {
-                  const isActive = clinician.account_status === 'active';
-                  const isBusy = pendingId === clinician.id;
-                  return (
-                    <tr key={clinician.id}>
-                      <td>{clinician.displayName}</td>
-                      <td>{roleLabel(clinician.role)}</td>
-                      <td>{isActive ? strings.statusActiveLabel : strings.statusDeactivatedLabel}</td>
-                      <td>
-                        {/* The principal is never offered a control that
-                            would lock themselves out: exactly one principal
-                            exists (clinician-repository.ts's own
-                            invariant), and deactivating them would leave
-                            nobody who can reactivate anyone. */}
-                        {clinician.role === 'principal' ? null : (
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={() => void handleSetActive(clinician, !isActive)}
-                          >
-                            {isBusy
-                              ? strings.working
-                              : isActive
-                                ? strings.deactivateButton
-                                : strings.reactivateButton}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className="ndn-record-scroll">
+              <table className="ndn-record-table">
+                <caption>{strings.directoryHeading}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{strings.nameColumnLabel}</th>
+                    <th scope="col">{strings.roleColumnLabel}</th>
+                    <th scope="col">{strings.statusColumnLabel}</th>
+                    <th scope="col">{strings.actionColumnLabel}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {clinicians.map((clinician) => {
+                    const isActive = clinician.account_status === 'active';
+                    const isBusy = pendingId === clinician.id;
+                    return (
+                      <tr key={clinician.id}>
+                        <td>{clinician.displayName}</td>
+                        <td>{roleLabel(clinician.role)}</td>
+                        <td>
+                          {isActive ? strings.statusActiveLabel : strings.statusDeactivatedLabel}
+                        </td>
+                        <td>
+                          {/* The principal is never offered a control that
+                              would lock themselves out: exactly one principal
+                              exists (clinician-repository.ts's own
+                              invariant), and deactivating them would leave
+                              nobody who can reactivate anyone. */}
+                          {clinician.role === 'principal' ? null : (
+                            <button
+                              className="ndn-button ndn-button--secondary ndn-button--sm ndn-interactive"
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => void handleSetActive(clinician, !isActive)}
+                            >
+                              {isBusy
+                                ? strings.working
+                                : isActive
+                                  ? strings.deactivateButton
+                                  : strings.reactivateButton}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           ))}
       </section>
     </>

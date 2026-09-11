@@ -18,6 +18,7 @@ import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
 import { PatientAdminPanel } from '../../../account/PatientAdminPanel.js';
+import { patientRecordStylesCss } from '../../../account/record-styles.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
@@ -106,3 +107,10 @@ const heading = t('patientAdmin.heading', undefined, locale);
     />
   </RequireAuth>
 </BaseLayout>
+
+{/* The staff record sheet styles — the same `.ndn-record-area`/`.ndn-record-fields`
+    the assessment form and the dashboard use, so this form reads as the same
+    document. Injected here (not in BaseLayout) for the reason the dashboard's
+    own note gives: the page needs it at build time only, and one `<style
+    set:html>` is all this site's CSP admits. */}
+<style set:html={patientRecordStylesCss} />
