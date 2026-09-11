@@ -752,6 +752,25 @@ describe('a helpdesk reads the practice\'s calendar, not their own empty one', (
     expect(body.items[0]?.clinicianId).toBe('cli-1');
   });
 
+  it('names the clinician each patient is assigned to, the same as the principal', async () => {
+    const { handler } = await build();
+    await seedForCli1(handler);
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: RANGE,
+        principal: HELPDESK_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as { items: { assignedClinicianName?: string }[] };
+    expect(body.items).toHaveLength(1);
+    // pat-1 is assigned to cli-1 ("A Clinician"); the helpdesk sees the whole
+    // practice's calendar, so whose patient this is is a real question here.
+    expect(body.items[0]?.assignedClinicianName).toBe('A Clinician');
+  });
+
   it('queries only the treating clinicians, never the helpdesk row beside them', async () => {
     const { handler, appointments } = await build();
     await seedForCli1(handler);

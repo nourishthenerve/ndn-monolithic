@@ -395,22 +395,28 @@ export function createAppointmentHandler(
               to,
             );
       const named = await withNames(appointments);
-      // **The principal alone** also gets, per row, the clinician the patient
-      // is *assigned* to. The owner: *"since it's a principal clinician show
-      // the clinician name this patient has assigned to as well."* A
-      // sub-clinician is that clinician, so the field would only ever name
-      // themselves; a helpdesk is not asking. Enriched before projection, the
-      // same as the names above, and absent (never blank) where the assignment
-      // could not be resolved or disclosed.
-      const enriched =
-        principal.role === 'principal-clinician'
-          ? await Promise.all(
-              named.map(async (appointment) => {
-                const assignedClinicianName = await assignedClinicianNameFor(appointment.patientId);
-                return assignedClinicianName ? { ...appointment, assignedClinicianName } : appointment;
-              }),
-            )
-          : named;
+      // **The principal and the helpdesk** also get, per row, the clinician
+      // the patient is *assigned* to. The owner, first of the principal
+      // (*"since it's a principal clinician show the clinician name this
+      // patient has assigned to as well"*) and then of the helpdesk (*"for
+      // help desk account … also show the name of the clinician this patient
+      // is assigned to. just like principal clinician"*). Both read the
+      // practice's whole calendar, so an appointment they see may be anyone's
+      // patient — which is exactly the question this answers. A sub-clinician
+      // is left out: they read only their own patients, so the field would
+      // name themselves on every row. Enriched before projection like the
+      // names above, and absent (never blank) where the assignment could not
+      // be resolved or disclosed.
+      const showsAssignedClinician =
+        principal.role === 'principal-clinician' || principal.role === 'helpdesk';
+      const enriched = showsAssignedClinician
+        ? await Promise.all(
+            named.map(async (appointment) => {
+              const assignedClinicianName = await assignedClinicianNameFor(appointment.patientId);
+              return assignedClinicianName ? { ...appointment, assignedClinicianName } : appointment;
+            }),
+          )
+        : named;
       const items = projectAllFor(principal, enriched, resource);
       return respond(200, { items });
     }
