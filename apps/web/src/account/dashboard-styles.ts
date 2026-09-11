@@ -35,6 +35,12 @@ export const accountDashboardStylesCss = `
   margin-block-start: 2rem;
 }
 
+/* 2026-09-11: inside a record sheet the nav follows a heading band that
+   already sets the gap below it, so its own top margin would double up. */
+.ndn-record-area .ndn-account-nav {
+  margin-block-start: 0;
+}
+
 /* A row of controls rather than a list of destinations. The bullets and the
    stacked layout were what made these read as a footnote to the dashboard
    instead of as its remaining actions. */

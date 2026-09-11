@@ -19,6 +19,8 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
+import { curationStylesCss } from '../../../account/curation-styles.js';
+import { patientRecordStylesCss } from '../../../account/record-styles.js';
 import { TestimonialCuration } from '../../../account/TestimonialCuration.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
@@ -98,3 +100,12 @@ const heading = t('testimonialCuration.heading', undefined, locale);
     />
   </RequireAuth>
 </BaseLayout>
+
+{/* The record sheet the section sits in, plus this page's own list styles.
+    The section carries `.ndn-record-area`, so the heading band and notes read
+    as the same document the dashboard and assessment form do; `curationStylesCss`
+    dresses the cards and the order list inside it. `set:html` for the reason
+    every other account page states — an island cannot ship its own inline
+    style under this site's CSP. */}
+<style set:html={patientRecordStylesCss} />
+<style set:html={curationStylesCss} />

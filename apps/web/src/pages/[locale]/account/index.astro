@@ -685,64 +685,96 @@ const changePasswordStrings = {
         />
       </section>
     </RequireAuth>
-    <RequireAuth client:only="react" allowRoles={['principal-clinician', 'helpdesk']}>
-      {/* 2026-09-08: *"the buttons on the dashboard are all look quite
-          basic."* Still links — each one navigates, so it has to behave like
-          a link on a middle-click and on hover — but drawn as the controls
-          the owner has called them since they were built. See
-          `dashboard-styles.ts`. */}
-      <nav class="ndn-account-nav" aria-label={t('account.patientAdminLink', undefined, locale)}>
-        <ul>
-          <li>
-            <Link href={`/${locale}/account/patient-admin`}>
-              {t('account.patientAdminLink', undefined, locale)}
-            </Link>
-          </li>
-        </ul>
-      </nav>
-    </RequireAuth>
-    {/* 2026-09-06: *"there are three buttons - patient accounts, clinician
-        accounts and blog and workshops. Split blog and workshops button."*
+    {/* ## Practice tools, in two named boxes — 2026-09-11.
 
-        The third link pointed at `account/authoring`, one page carrying a
-        blog form, a workshop form and a published-item list for each. They
-        are two jobs done at different times — a post is written when there is
-        something to say, a workshop when one is scheduled — and the page that
-        held both made each of them longer. There are two links and two pages
-        now; the page itself is deleted rather than kept as a third way in. */}
+        The owner: *"group add new patient and add new clinician into one box
+        … and group Blog (rename Add New Blog), workshop (rename Add New
+        Workshop), Testimonials on the site into another group."*
+
+        Each group is a `ndn-record-area` sheet like the rest of the dashboard,
+        its links still drawn as the pill buttons `dashboard-styles.ts` gives
+        `.ndn-account-nav` (they navigate to real URLs, so they stay `<a>`s,
+        not `<button>`s — the same call that file's own note makes).
+
+        **Accounts** is rendered twice for disjoint roles: a principal gets
+        both account links, a helpdesk only "Add New Patient" — clinician
+        accounts are the principal's alone, as they were before this grouping.
+        **Site content** is the principal's alone. */}
     <RequireAuth client:only="react" allowRoles={['principal-clinician']}>
-      <nav
-        class="ndn-account-nav"
-        aria-label={t('account.principalToolsHeading', undefined, locale)}
-      >
-        <ul>
-          <li>
-            <Link href={`/${locale}/account/clinician-admin`}>
-              {t('account.clinicianAdminLink', undefined, locale)}
-            </Link>
-          </li>
-          <li>
-            <Link href={`/${locale}/account/blog`}>
-              {t('account.blogLink', undefined, locale)}
-            </Link>
-          </li>
-          <li>
-            <Link href={`/${locale}/account/workshops`}>
-              {t('account.workshopsLink', undefined, locale)}
-            </Link>
-          </li>
-          {/* 2026-09-07: choosing which published testimonials the site
-              shows. A fourth link rather than a section inlined here, unlike
-              the patient panels above: the page is a list of every published
-              testimonial in full, which is not a panel — and it is read at
-              the pace of a marketing decision, not on every sign-in. */}
-          <li>
-            <Link href={`/${locale}/account/testimonials`}>
-              {t('account.testimonialCurationLink', undefined, locale)}
-            </Link>
-          </li>
-        </ul>
-      </nav>
+      <section class="ndn-record-area" aria-labelledby="admin-accounts-heading">
+        <Heading level={2} id="admin-accounts-heading">
+          {t('account.accountsGroupHeading', undefined, locale)}
+        </Heading>
+        <nav
+          class="ndn-account-nav"
+          aria-label={t('account.accountsGroupHeading', undefined, locale)}
+        >
+          <ul>
+            <li>
+              <Link href={`/${locale}/account/patient-admin`}>
+                {t('account.patientAdminLink', undefined, locale)}
+              </Link>
+            </li>
+            <li>
+              <Link href={`/${locale}/account/clinician-admin`}>
+                {t('account.clinicianAdminLink', undefined, locale)}
+              </Link>
+            </li>
+          </ul>
+        </nav>
+      </section>
+      <section class="ndn-record-area" aria-labelledby="admin-content-heading">
+        <Heading level={2} id="admin-content-heading">
+          {t('account.contentGroupHeading', undefined, locale)}
+        </Heading>
+        <nav
+          class="ndn-account-nav"
+          aria-label={t('account.contentGroupHeading', undefined, locale)}
+        >
+          <ul>
+            <li>
+              <Link href={`/${locale}/account/blog`}>
+                {t('account.blogLink', undefined, locale)}
+              </Link>
+            </li>
+            <li>
+              <Link href={`/${locale}/account/workshops`}>
+                {t('account.workshopsLink', undefined, locale)}
+              </Link>
+            </li>
+            {/* Choosing which published testimonials the site shows — a
+                marketing decision, read at that pace rather than on every
+                sign-in, which is why it is a link out and not a panel. */}
+            <li>
+              <Link href={`/${locale}/account/testimonials`}>
+                {t('account.testimonialCurationLink', undefined, locale)}
+              </Link>
+            </li>
+          </ul>
+        </nav>
+      </section>
+    </RequireAuth>
+    {/* A helpdesk keeps its one account link, in the same Accounts box. The
+        roles are disjoint, so exactly one of this and the principal block
+        above ever renders. */}
+    <RequireAuth client:only="react" allowRoles={['helpdesk']}>
+      <section class="ndn-record-area" aria-labelledby="admin-accounts-heading-helpdesk">
+        <Heading level={2} id="admin-accounts-heading-helpdesk">
+          {t('account.accountsGroupHeading', undefined, locale)}
+        </Heading>
+        <nav
+          class="ndn-account-nav"
+          aria-label={t('account.accountsGroupHeading', undefined, locale)}
+        >
+          <ul>
+            <li>
+              <Link href={`/${locale}/account/patient-admin`}>
+                {t('account.patientAdminLink', undefined, locale)}
+              </Link>
+            </li>
+          </ul>
+        </nav>
+      </section>
     </RequireAuth>
   </RequireAuth>
 </BaseLayout>
