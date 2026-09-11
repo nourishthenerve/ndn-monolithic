@@ -140,6 +140,7 @@
   "account.callback.exchanging": "Completing your sign-in…",
   "account.callback.failed": "That sign-in link could not be completed. Please try again.",
   "caseload.tableCaption": "Every patient, with the clinician they are assigned to",
+  "caseload.tableCaptionVisitor": "Every patient, their address, and how many appointments they have",
   "caseload.pagerLabel": "Patient list pages",
   "caseload.loading": "Loading the patient dashboard…",
   "caseload.forbidden": "You do not have access to this page.",
