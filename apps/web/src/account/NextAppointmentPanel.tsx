@@ -124,8 +124,8 @@ export function findNext<T extends AppointmentEntry>(
   now: Date,
 ): T | undefined {
   // Generic so a caller passing a *richer* row than `AppointmentEntry` gets
-  // that richer row back rather than the base one — `ClinicianNextAppointment`
-  // reads `patientName` off the result, a field this panel's own patient rows
+  // that richer row back rather than the base one — `NextAppointmentLead`
+  // reads a counterparty name off the result, a field this panel's own rows
   // never carry. The predicate reads only the four fields `AppointmentEntry`
   // guarantees, so the widening is safe.
   return items.find(
