@@ -294,8 +294,10 @@ const changePasswordStrings = {
         the appointment is with. It shares the calendar's own three-role gate:
         for a helpdesk the server answers "me" with the practice's calendar, so
         their lead is the practice's next appointment, matching the calendar
-        directly below it — with the patient name withheld, the same two facts
-        a patient's own box shows. It renders nothing until its own fetch
+        directly below it. The **principal and the helpdesk** — the two who
+        read the whole practice's calendar — also get the clinician the patient
+        is assigned to (`appointment.ts`), which `NextAppointmentLead` shows
+        whenever the row carries it. It renders nothing until its own fetch
         lands, so it never paints an empty box above the calendar.
 
         **2026-09-10, second pass: the staff calendar is a sheet now, like the
