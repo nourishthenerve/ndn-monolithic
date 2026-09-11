@@ -234,9 +234,18 @@ function OneTimePassword({
   readonly passwordLabel: string;
 }): ReactNode {
   return (
-    <p>
-      <label htmlFor="one-time-password">{passwordLabel}</label>{' '}
-      <input id="one-time-password" type="text" readOnly value={password} onFocus={(event) => event.currentTarget.select()} />
+    <p className="ndn-input-wrapper">
+      <label className="ndn-input-label" htmlFor="one-time-password">
+        {passwordLabel}
+      </label>
+      <input
+        className="ndn-input"
+        id="one-time-password"
+        type="text"
+        readOnly
+        value={password}
+        onFocus={(event) => event.currentTarget.select()}
+      />
     </p>
   );
 }
@@ -470,93 +479,124 @@ export function PatientAdminPanel({
 
   return (
     <>
-      <section>
-        <h2>{strings.createHeading}</h2>
+      <section className="ndn-record-area">
+        <h2 className="ndn-heading">{strings.createHeading}</h2>
         <p>{strings.createIntro}</p>
         <form onSubmit={(event) => void handleCreate(event)}>
-          <p>
-            <label htmlFor="create-email">{strings.emailLabel}</label>
-            <input
-              id="create-email"
-              type="email"
-              required
-              disabled={isCreating}
-              value={createFields.email}
-              onChange={(event) => setCreateFields((f) => ({ ...f, email: event.target.value }))}
-            />
-          </p>
-          <p>
-            <label htmlFor="create-full-name">{strings.fullNameLabel}</label>
-            <input
-              id="create-full-name"
-              type="text"
-              required
-              disabled={isCreating}
-              value={createFields.fullName}
-              onChange={(event) => setCreateFields((f) => ({ ...f, fullName: event.target.value }))}
-            />
-          </p>
-          <p>
-            <label htmlFor="create-phone">{strings.phoneLabel}</label>
-            <input
-              id="create-phone"
-              type="tel"
-              disabled={isCreating}
-              value={createFields.phone}
-              onChange={(event) => setCreateFields((f) => ({ ...f, phone: event.target.value }))}
-            />
-          </p>
-          <p>
-            <label htmlFor="create-address">{strings.addressLabel}</label>
-            <input
-              id="create-address"
-              type="text"
-              disabled={isCreating}
-              value={createFields.address}
-              onChange={(event) => setCreateFields((f) => ({ ...f, address: event.target.value }))}
-            />
-          </p>
-          <p>
-            <label htmlFor="create-tag">{strings.tagLabel}</label>
-            <select
-              id="create-tag"
-              disabled={isCreating}
-              value={createFields.tag}
-              onChange={(event) =>
-                setCreateFields((f) => ({ ...f, tag: event.target.value === 'IIC' ? 'IIC' : 'NDN' }))
-              }
-            >
-              <option value="NDN">{strings.tagNdnLabel}</option>
-              <option value="IIC">{strings.tagIicLabel}</option>
-            </select>
-          </p>
-          <p>
-            <label htmlFor="create-referral-source">{strings.referralSourceLabel}</label>
-            <input
-              id="create-referral-source"
-              type="text"
-              disabled={isCreating}
-              value={createFields.referralSource}
-              onChange={(event) => setCreateFields((f) => ({ ...f, referralSource: event.target.value }))}
-            />
-          </p>
-          <p>
-            <label htmlFor="create-presenting-condition">{strings.presentingConditionLabel}</label>
-            <input
-              id="create-presenting-condition"
-              type="text"
-              disabled={isCreating}
-              value={createFields.presentingCondition}
-              onChange={(event) =>
-                setCreateFields((f) => ({ ...f, presentingCondition: event.target.value }))
-              }
-            />
-          </p>
-          {clinicians.length > 0 && (
-            <>
-              <p>
-                <label htmlFor="create-assign-clinician">{strings.assignClinicianLabel}</label>
+          <div className="ndn-record-fields">
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-email">
+                {strings.emailLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="create-email"
+                type="email"
+                required
+                disabled={isCreating}
+                value={createFields.email}
+                onChange={(event) => setCreateFields((f) => ({ ...f, email: event.target.value }))}
+              />
+            </p>
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-full-name">
+                {strings.fullNameLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="create-full-name"
+                type="text"
+                required
+                disabled={isCreating}
+                value={createFields.fullName}
+                onChange={(event) =>
+                  setCreateFields((f) => ({ ...f, fullName: event.target.value }))
+                }
+              />
+            </p>
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-phone">
+                {strings.phoneLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="create-phone"
+                type="tel"
+                disabled={isCreating}
+                value={createFields.phone}
+                onChange={(event) => setCreateFields((f) => ({ ...f, phone: event.target.value }))}
+              />
+            </p>
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-address">
+                {strings.addressLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="create-address"
+                type="text"
+                disabled={isCreating}
+                value={createFields.address}
+                onChange={(event) => setCreateFields((f) => ({ ...f, address: event.target.value }))}
+              />
+            </p>
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-tag">
+                {strings.tagLabel}
+              </label>
+              <select
+                className="ndn-input"
+                id="create-tag"
+                disabled={isCreating}
+                value={createFields.tag}
+                onChange={(event) =>
+                  setCreateFields((f) => ({
+                    ...f,
+                    tag: event.target.value === 'IIC' ? 'IIC' : 'NDN',
+                  }))
+                }
+              >
+                <option value="NDN">{strings.tagNdnLabel}</option>
+                <option value="IIC">{strings.tagIicLabel}</option>
+              </select>
+            </p>
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-referral-source">
+                {strings.referralSourceLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="create-referral-source"
+                type="text"
+                disabled={isCreating}
+                value={createFields.referralSource}
+                onChange={(event) =>
+                  setCreateFields((f) => ({ ...f, referralSource: event.target.value }))
+                }
+              />
+            </p>
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="create-presenting-condition">
+                {strings.presentingConditionLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="create-presenting-condition"
+                type="text"
+                disabled={isCreating}
+                value={createFields.presentingCondition}
+                onChange={(event) =>
+                  setCreateFields((f) => ({ ...f, presentingCondition: event.target.value }))
+                }
+              />
+            </p>
+            {clinicians.length > 0 && (
+              <p className="ndn-input-wrapper ndn-record-field--wide">
+                <label className="ndn-input-label" htmlFor="create-assign-clinician">
+                  {strings.assignClinicianLabel}
+                </label>
                 <select
+                  className="ndn-input"
                   id="create-assign-clinician"
                   disabled={isCreating}
                   aria-describedby="create-assign-clinician-hint"
@@ -570,35 +610,43 @@ export function PatientAdminPanel({
                     </option>
                   ))}
                 </select>
+                <span className="ndn-input-hint" id="create-assign-clinician-hint">
+                  {strings.assignClinicianHint}
+                </span>
               </p>
-              <p id="create-assign-clinician-hint">{strings.assignClinicianHint}</p>
-            </>
-          )}
-          <p>
-            <label htmlFor="create-marketing-opt-in">
-              <input
-                id="create-marketing-opt-in"
-                type="checkbox"
-                disabled={isCreating}
-                checked={createFields.marketingOptIn}
-                onChange={(event) =>
-                  setCreateFields((f) => ({ ...f, marketingOptIn: event.target.checked }))
-                }
-              />{' '}
-              {strings.marketingOptInLabel}
-            </label>
-          </p>
+            )}
+            <p className="ndn-record-field--checkbox ndn-record-field--wide">
+              <label className="ndn-checkbox" htmlFor="create-marketing-opt-in">
+                <input
+                  id="create-marketing-opt-in"
+                  type="checkbox"
+                  disabled={isCreating}
+                  checked={createFields.marketingOptIn}
+                  onChange={(event) =>
+                    setCreateFields((f) => ({ ...f, marketingOptIn: event.target.checked }))
+                  }
+                />{' '}
+                {strings.marketingOptInLabel}
+              </label>
+            </p>
+          </div>
           {createStatus === 'forbidden' && <p role="alert">{strings.forbidden}</p>}
           {createStatus === 'conflict' && <p role="alert">{strings.createConflictError}</p>}
           {createStatus === 'invalid' && <p role="alert">{strings.createValidationError}</p>}
           {createStatus === 'error' && <p role="alert">{strings.createError}</p>}
-          <button type="submit" disabled={isCreating}>
-            {isCreating ? strings.creating : strings.createButton}
-          </button>
+          <p className="ndn-panel-actions">
+            <button
+              className="ndn-button ndn-button--primary ndn-interactive"
+              type="submit"
+              disabled={isCreating}
+            >
+              {isCreating ? strings.creating : strings.createButton}
+            </button>
+          </p>
         </form>
         {createStatus === 'success' && createResult && (
-          <div role="alert">
-            <h3>{strings.createSuccessHeading}</h3>
+          <div className="ndn-record-note" role="alert">
+            <h3 className="ndn-heading ndn-record-subheading">{strings.createSuccessHeading}</h3>
             <p>{strings.createSuccessWarning}</p>
             <OneTimePassword password={createResult.password} passwordLabel={strings.passwordLabel} />
             <p>
@@ -625,68 +673,96 @@ export function PatientAdminPanel({
         )}
       </section>
 
-      <section>
-        <h2>{strings.findHeading}</h2>
+      <section className="ndn-record-area">
+        <h2 className="ndn-heading">{strings.findHeading}</h2>
         <p>{strings.findIntro}</p>
         <form onSubmit={(event) => void handleFind(event)}>
-          <p>
-            <label htmlFor="find-email">{strings.emailLabel}</label>
-            <input
-              id="find-email"
-              type="email"
-              required
-              disabled={isFinding}
-              value={findEmailInput}
-              onChange={(event) => setFindEmailInput(event.target.value)}
-            />
-          </p>
+          <div className="ndn-record-fields">
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="find-email">
+                {strings.emailLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="find-email"
+                type="email"
+                required
+                disabled={isFinding}
+                value={findEmailInput}
+                onChange={(event) => setFindEmailInput(event.target.value)}
+              />
+            </p>
+          </div>
           {findStatus === 'forbidden' && <p role="alert">{strings.forbidden}</p>}
           {findStatus === 'notFound' && <p role="alert">{strings.findNotFoundError}</p>}
           {findStatus === 'error' && <p role="alert">{strings.findError}</p>}
-          <button type="submit" disabled={isFinding}>
-            {isFinding ? strings.finding : strings.findButton}
-          </button>
+          <p className="ndn-panel-actions">
+            <button
+              className="ndn-button ndn-button--primary ndn-interactive"
+              type="submit"
+              disabled={isFinding}
+            >
+              {isFinding ? strings.finding : strings.findButton}
+            </button>
+          </p>
         </form>
         {findStatus === 'success' && foundPatient && (
-          <div role="status">
+          <div className="ndn-record-note" role="status">
             <p>
               {strings.foundPatientLabel}: {foundPatient.fullName} (<code>{foundPatient.id}</code>)
             </p>
             <p>
               {strings.foundStatusLabel}: {foundPatient.accountStatus}
             </p>
-            <button type="button" onClick={() => setPatientIdInput(foundPatient.id)}>
-              {strings.useIdButton}
-            </button>
+            <p className="ndn-panel-actions">
+              <button
+                className="ndn-button ndn-button--secondary ndn-interactive"
+                type="button"
+                onClick={() => setPatientIdInput(foundPatient.id)}
+              >
+                {strings.useIdButton}
+              </button>
+            </p>
           </div>
         )}
       </section>
 
-      <section>
-        <h2>{strings.resetHeading}</h2>
+      <section className="ndn-record-area">
+        <h2 className="ndn-heading">{strings.resetHeading}</h2>
         <p>{strings.resetIntro}</p>
         <form onSubmit={(event) => void handleReset(event)}>
-          <p>
-            <label htmlFor="reset-patient-id">{strings.patientIdInputLabel}</label>
-            <input
-              id="reset-patient-id"
-              type="text"
-              required
-              disabled={isResetting}
-              value={patientIdInput}
-              onChange={(event) => setPatientIdInput(event.target.value)}
-            />
-          </p>
+          <div className="ndn-record-fields">
+            <p className="ndn-input-wrapper">
+              <label className="ndn-input-label" htmlFor="reset-patient-id">
+                {strings.patientIdInputLabel}
+              </label>
+              <input
+                className="ndn-input"
+                id="reset-patient-id"
+                type="text"
+                required
+                disabled={isResetting}
+                value={patientIdInput}
+                onChange={(event) => setPatientIdInput(event.target.value)}
+              />
+            </p>
+          </div>
           {resetStatus === 'forbidden' && <p role="alert">{strings.forbidden}</p>}
           {resetStatus === 'notFound' && <p role="alert">{strings.resetNotFoundError}</p>}
           {resetStatus === 'error' && <p role="alert">{strings.resetError}</p>}
-          <button type="submit" disabled={isResetting}>
-            {isResetting ? strings.resetting : strings.resetButton}
-          </button>
+          <p className="ndn-panel-actions">
+            <button
+              className="ndn-button ndn-button--primary ndn-interactive"
+              type="submit"
+              disabled={isResetting}
+            >
+              {isResetting ? strings.resetting : strings.resetButton}
+            </button>
+          </p>
         </form>
         {resetStatus === 'success' && resetPasswordResult && (
-          <div role="alert">
-            <h3>{strings.resetSuccessHeading}</h3>
+          <div className="ndn-record-note" role="alert">
+            <h3 className="ndn-heading ndn-record-subheading">{strings.resetSuccessHeading}</h3>
             <p>{strings.resetSuccessWarning}</p>
             <OneTimePassword password={resetPasswordResult} passwordLabel={strings.passwordLabel} />
           </div>
