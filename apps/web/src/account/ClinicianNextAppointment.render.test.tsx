@@ -17,6 +17,7 @@ afterEach(cleanup);
 const STRINGS = {
   appointmentLabel: 'Next appointment',
   durationLabel: 'Next appointment length (minutes)',
+  patientLabel: 'Patient',
   emptyLabel: 'No appointment is booked yet.',
 };
 
@@ -35,9 +36,10 @@ const ok = (items: unknown[]): Promise<Response> =>
 const NOW = '2026-09-18T06:00:00.000Z';
 
 describe('ClinicianNextAppointment', () => {
-  it('shows the next scheduled appointment in three zones with its duration', async () => {
+  it('shows the next scheduled appointment in three zones, with its patient and duration', async () => {
     const appt = {
       patientId: 'p1',
+      patientName: 'Jordan Ellis',
       scheduledAt: '2026-09-20T10:00:00.000Z',
       durationMinutes: 45,
       appointment_status: 'scheduled',
@@ -59,9 +61,34 @@ describe('ClinicianNextAppointment', () => {
       formatDateTimeInZone(appt.scheduledAt, defaultLocale, 'Europe/London'),
     );
     expect(screen.getByText('India')).toBeTruthy();
+    // Who the appointment is with — the fact the clinician's box adds.
+    expect(screen.getByText('Patient').nextElementSibling?.textContent).toBe('Jordan Ellis');
     expect(screen.getByText('Next appointment length (minutes)').nextElementSibling?.textContent).toBe(
       '45',
     );
+  });
+
+  it('omits the patient line when the server disclosed no name', async () => {
+    // A helpdesk reads the practice calendar with names withheld; the box then
+    // reads exactly as the patient's does, rather than showing "Patient —".
+    const appt = {
+      patientId: 'p1',
+      scheduledAt: '2026-09-20T10:00:00.000Z',
+      durationMinutes: 45,
+      appointment_status: 'scheduled',
+    };
+    render(
+      <ClinicianNextAppointment
+        locale={defaultLocale}
+        strings={STRINGS}
+        client={client('tok')}
+        now={at(NOW)}
+        fetchCalendar={() => ok([appt])}
+      />,
+    );
+
+    await screen.findByText('Next appointment');
+    expect(screen.queryByText('Patient')).toBeNull();
   });
 
   it('picks the earliest upcoming, skipping past and unconfirmed appointments', async () => {
