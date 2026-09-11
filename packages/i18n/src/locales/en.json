@@ -327,6 +327,7 @@
   "nextAppointmentLead.durationLabel": "Next appointment length (minutes)",
   "nextAppointmentLead.patientLabel": "Patient",
   "nextAppointmentLead.clinicianLabel": "Clinician",
+  "nextAppointmentLead.assignedClinicianLabel": "Assigned clinician",
   "assignedContent.heading": "Content shared with you",
   "assignedContent.description": "Articles your clinician has shared with you.",
   "assignedContent.loading": "Loading your content…",

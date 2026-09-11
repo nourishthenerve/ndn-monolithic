@@ -325,6 +325,10 @@ const changePasswordStrings = {
             appointmentLabel: t('nextAppointmentLead.appointmentLabel', undefined, locale),
             durationLabel: t('nextAppointmentLead.durationLabel', undefined, locale),
             personLabel: t('nextAppointmentLead.patientLabel', undefined, locale),
+            // Rendered only when the server sent the assigned clinician — a
+            // principal alone gets that, so this label sits idle on a
+            // sub-clinician's or helpdesk's identical mount.
+            assignedClinicianLabel: t('nextAppointmentLead.assignedClinicianLabel', undefined, locale),
             emptyLabel: t('assessment.noNextAppointment', undefined, locale),
           }}
         />

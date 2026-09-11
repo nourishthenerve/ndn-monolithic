@@ -69,6 +69,56 @@ describe('NextAppointmentLead', () => {
     );
   });
 
+  it('adds the assigned clinician on a principal box, when the server sent one', async () => {
+    const appt = {
+      patientId: 'p1',
+      patientName: 'Jordan Ellis',
+      assignedClinicianName: 'Dr Amelia Ford',
+      scheduledAt: ISO,
+      durationMinutes: 45,
+      appointment_status: 'scheduled',
+    };
+    render(
+      <NextAppointmentLead
+        audience="clinician"
+        locale={defaultLocale}
+        strings={{ ...STRINGS, personLabel: 'Patient', assignedClinicianLabel: 'Assigned clinician' }}
+        client={client('tok')}
+        now={at(NOW)}
+        fetchAppointments={() => ok([appt])}
+      />,
+    );
+
+    await screen.findByText('Next appointment');
+    expect(screen.getByText('Patient').nextElementSibling?.textContent).toBe('Jordan Ellis');
+    expect(screen.getByText('Assigned clinician').nextElementSibling?.textContent).toBe(
+      'Dr Amelia Ford',
+    );
+  });
+
+  it('omits the assigned clinician when the server did not send one', async () => {
+    const appt = {
+      patientId: 'p1',
+      patientName: 'Jordan Ellis',
+      scheduledAt: ISO,
+      durationMinutes: 45,
+      appointment_status: 'scheduled',
+    };
+    render(
+      <NextAppointmentLead
+        audience="clinician"
+        locale={defaultLocale}
+        strings={{ ...STRINGS, personLabel: 'Patient', assignedClinicianLabel: 'Assigned clinician' }}
+        client={client('tok')}
+        now={at(NOW)}
+        fetchAppointments={() => ok([appt])}
+      />,
+    );
+
+    await screen.findByText('Next appointment');
+    expect(screen.queryByText('Assigned clinician')).toBeNull();
+  });
+
   it('names the clinician on a patient box', async () => {
     const appt = {
       patientId: 'p1',

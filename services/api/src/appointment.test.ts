@@ -615,6 +615,60 @@ describe('GET /clinicians/me/calendar', () => {
     expect(response.statusCode).toBe(200);
   });
 
+  it('attaches the patient\'s assigned clinician for a principal', async () => {
+    const { handler, patientStore } = await build();
+    // Booked while pat-1 was the principal's own patient, so the appointment
+    // lands on the principal's calendar (clinicianId = principal-sub)…
+    const before = await patientStore.get('pat-1');
+    await patientStore.put('pat-1', { ...before!, assigned_clinician_id: 'principal-sub' });
+    await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: '2026-09-01T10:00:00.000Z', durationMinutes: 30 },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    // …then reassigned to cli-1 ("A Clinician"). The appointment keeps its
+    // clinician; the patient's assignment is now someone else, which is the
+    // fact the principal's box surfaces.
+    const afterBooking = await patientStore.get('pat-1');
+    await patientStore.put('pat-1', { ...afterBooking!, assigned_clinician_id: 'cli-1' });
+
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as {
+      items: { clinicianId: string; assignedClinicianName?: string }[];
+    };
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]?.clinicianId).toBe('principal-sub');
+    expect(body.items[0]?.assignedClinicianName).toBe('A Clinician');
+  });
+
+  it('does not attach the assigned clinician for a sub-clinician — it would only name themselves', async () => {
+    const { handler } = await build();
+    await seedCalendar(handler);
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: CALENDAR_ROUTE,
+        queryStringParameters: { from: '2026-09-01T00:00:00.000Z', to: '2026-09-02T00:00:00.000Z' },
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as { items: { assignedClinicianName?: string }[] };
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]?.assignedClinicianName).toBeUndefined();
+  });
+
   it('is 403 for a patient — this route has no patient-relationship path to grant one', async () => {
     const { handler } = await build();
     const response = await invoke(
