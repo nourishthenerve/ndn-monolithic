@@ -48,15 +48,29 @@ import { useNow } from './useNow.js';
 export const LOOKAHEAD_DAYS = 366;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * The calendar row `AppointmentEntry` plus the one field this panel reads that
+ * a patient's own next-appointment rows never carry: **who the appointment is
+ * with**. `GET /clinicians/me/calendar` joins it on (`appointment.ts`'s
+ * `withNames`) and omits it where it may not be disclosed — so its absence is
+ * meaningful, and the "Patient" line is shown only when a name actually came
+ * back, never as "Patient —".
+ */
+export interface ClinicianAppointment extends AppointmentEntry {
+  readonly patientName?: string;
+}
+
 type ViewState =
   | { readonly status: 'loading' }
   | { readonly status: 'hidden' }
-  | { readonly status: 'ready'; readonly items: readonly AppointmentEntry[] };
+  | { readonly status: 'ready'; readonly items: readonly ClinicianAppointment[] };
 
 export interface ClinicianNextAppointmentStrings {
   /** Matches the patient panel's own field labels, so the two dashboards read the same. */
   readonly appointmentLabel: string;
   readonly durationLabel: string;
+  /** The patient the next appointment is with — the one fact the clinician's box adds over the patient's. */
+  readonly patientLabel: string;
   /** Shown when the clinician has no upcoming appointment — the patient panel's own empty note. */
   readonly emptyLabel: string;
 }
@@ -109,7 +123,7 @@ export function ClinicianNextAppointment({
         setState({ status: 'hidden' });
         return;
       }
-      const payload = (await response.json()) as { items?: readonly AppointmentEntry[] };
+      const payload = (await response.json()) as { items?: readonly ClinicianAppointment[] };
       setState({ status: 'ready', items: payload.items ?? [] });
     } catch {
       setState({ status: 'hidden' });
@@ -136,13 +150,23 @@ export function ClinicianNextAppointment({
 
   // The same markup an `AssessmentForm` lead placement emits, so
   // `record-styles.ts`'s `.ndn-record-lead` rules dress it identically to the
-  // patient's — two facts, label above value, the appointment in three zones
-  // with its countdown.
+  // patient's — label above value, the appointment in three zones with its
+  // countdown. The one addition over the patient's box is a "Patient" fact:
+  // the clinician's box answers *who* the appointment is with, which the
+  // patient's own never needs to. It renders only when the server disclosed a
+  // name, so a helpdesk's practice calendar (names withheld) shows the same
+  // two facts the patient does rather than a column of "Patient —".
   return (
     <section className="ndn-record-section ndn-record-lead">
       <dl className="ndn-record-facts">
         <dt>{strings.appointmentLabel}</dt>
         <dd>{next ? <NextAppointmentWhen iso={next.scheduledAt} locale={locale} /> : '—'}</dd>
+        {next?.patientName && (
+          <>
+            <dt>{strings.patientLabel}</dt>
+            <dd>{next.patientName}</dd>
+          </>
+        )}
         <dt>{strings.durationLabel}</dt>
         <dd>{next ? next.durationMinutes : '—'}</dd>
       </dl>

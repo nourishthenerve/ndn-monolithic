@@ -119,10 +119,15 @@ function defaultFetchAppointments(accessToken: string): Promise<Response> {
  * sort-key order, which is chronological by `scheduledAt` — the first
  * match is therefore the earliest one.
  */
-export function findNext(
-  items: readonly AppointmentEntry[],
+export function findNext<T extends AppointmentEntry>(
+  items: readonly T[],
   now: Date,
-): AppointmentEntry | undefined {
+): T | undefined {
+  // Generic so a caller passing a *richer* row than `AppointmentEntry` gets
+  // that richer row back rather than the base one — `ClinicianNextAppointment`
+  // reads `patientName` off the result, a field this panel's own patient rows
+  // never carry. The predicate reads only the four fields `AppointmentEntry`
+  // guarantees, so the widening is safe.
   return items.find(
     (item) =>
       item.appointment_status === 'scheduled' &&

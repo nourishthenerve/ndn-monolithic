@@ -325,6 +325,7 @@
   "nextAppointment.joinCall": "Join this call",
   "clinicianNextAppointment.appointmentLabel": "Next appointment",
   "clinicianNextAppointment.durationLabel": "Next appointment length (minutes)",
+  "clinicianNextAppointment.patientLabel": "Patient",
   "assignedContent.heading": "Content shared with you",
   "assignedContent.description": "Articles your clinician has shared with you.",
   "assignedContent.loading": "Loading your content…",
