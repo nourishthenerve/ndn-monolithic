@@ -22,9 +22,10 @@ describe('services config', () => {
     expect(services.length).toBeGreaterThan(0);
   });
 
-  it('every entry resolves to a real title in the default locale', () => {
+  it('every entry resolves to a real title and detail in the default locale', () => {
     for (const entry of services) {
       expect(t(entry.titleKey), `${entry.id} has no title`).not.toBe('');
+      expect(t(entry.detailKey), `${entry.id} has no detail`).not.toBe('');
     }
   });
 
@@ -45,6 +46,7 @@ describe('services config', () => {
       serviceConfigSchema.safeParse({
         id: 'speech.therapy',
         titleKey: 'services.item.speech.therapy.title',
+        detailKey: 'services.item.speech.therapy.detail',
         icon: '/nourish_the_nerve_offer_neurorehabilitation.svg',
       }).success,
     ).toBe(false);
@@ -55,6 +57,7 @@ describe('services config', () => {
       serviceConfigSchema.safeParse({
         id: 'assessment',
         titleKey: 'services.item.assessment.title',
+        detailKey: 'services.item.assessment.detail',
         icon: 'nourish_the_nerve_offer_comprehensive_assessment.png',
       }).success,
     ).toBe(false);

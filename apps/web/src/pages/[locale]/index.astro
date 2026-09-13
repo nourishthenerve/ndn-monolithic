@@ -36,6 +36,7 @@ import { fetchPublishedBlogPosts } from '../../blog/content-client.js';
 import { LiveBlogList } from '../../blog/LiveBlogList.js';
 import ContactDetails from '../../components/ContactDetails.astro';
 import { services } from '../../config/services.js';
+import { OfferTiles } from '../../home/OfferTiles.js';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import {
   siteName,
@@ -343,12 +344,38 @@ const homeStylesCss = `
   }
 }
 
+/* Each tile is a real button now (it opens the topic's dialog), so it carries
+   a button reset — no chrome, inherited type and colour — on top of the same
+   centred column the list items had. The whole tile is the target; the label
+   below is its accessible name. */
 .ndn-home-offer {
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
   gap: 0.875rem;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Focus lands on the disc, matching the hover ring, rather than a rectangle
+   around the whole column — the outline is only meaningful around the thing
+   that looks pressable. Keyboard-only (:focus-visible), so a mouse click does
+   not leave a ring behind. */
+.ndn-home-offer:focus-visible {
+  outline: none;
+}
+
+.ndn-home-offer:focus-visible .ndn-home-offer-disc {
+  border-color: var(--ndn-color-brand);
+  outline: 2px solid var(--ndn-color-brand);
+  outline-offset: 3px;
 }
 
 /* The illustration is a square on its own off-white ground, so the disc is
@@ -384,15 +411,109 @@ const homeStylesCss = `
   transform: translateY(-2px);
 }
 
-/* Smaller and centred than the section's default h3 (the card headings),
-   and held to a readable measure so a two-word and a six-word title wrap
-   into tidy blocks rather than one running full width. The selector carries
-   the section's specificity so it wins over that default. */
-.ndn-home .ndn-home-section .ndn-home-offer h3 {
+/* The title under the disc. In the body font (var(--ndn-font-family-base)),
+   not the display serif a heading would carry — the owner asked for these to
+   match the intro sentence above the grid, which is body text. Held to a
+   readable measure so a two-word and a six-word title wrap into tidy blocks
+   rather than one running full width. */
+.ndn-home-offer-label {
+  font-family: var(--ndn-font-family-base);
   font-size: 1rem;
   line-height: 1.35;
-  margin-block: 0;
+  color: var(--ndn-color-text);
   max-width: 16ch;
+}
+
+/* The island's wrapper element sits between .ndn-home-inner and the grid.
+   Left inline (its default) it would not take the block width the grid needs;
+   block makes it behave as the list did as a direct child. (No tag names in
+   angle brackets in this comment: it ships inside the inline stylesheet, and
+   list-structure.test.ts scans that text too.) */
+#services astro-island {
+  display: block;
+}
+
+/* 2026-09-13: the topic detail dialog. A native dialog element, centred,
+   opened with showModal() from OfferTiles — so the backdrop, focus trap and
+   Escape-to-close are the platform's, not ours. No backticks in this block: it
+   is a JS template literal. */
+.ndn-offer-dialog {
+  width: min(32rem, calc(100vw - 2.5rem));
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--ndn-color-border);
+  border-radius: 1rem;
+  background-color: var(--ndn-color-surface-raised);
+  color: var(--ndn-color-text);
+  /* The border token blurred, not a black wash — the same shadow reasoning
+     the card grid documents. Over the scrim below, even this soft lift reads. */
+  box-shadow: 0 24px 60px var(--ndn-color-border-strong);
+}
+
+/* The one raw colour on this page, and deliberately: a modal scrim is a
+   neutral dark veil in both light and dark themes (there is no surface token
+   for translucency), so it is not one of the theme's grounds. */
+.ndn-offer-dialog::backdrop {
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+.ndn-offer-dialog-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 1rem;
+  padding: 2.25rem 2rem 2rem;
+}
+
+/* Reuses the tile disc, a touch larger and with no hover/transform of its own
+   in this context. */
+.ndn-offer-dialog-disc {
+  width: 6rem;
+}
+
+/* The dialog's own heading reads as a heading — the display serif, like the
+   section titles — rather than the body font the tile labels use. A bare h2
+   (not the .ndn-heading primitive) would otherwise inherit the base font. */
+.ndn-offer-dialog-title {
+  font-family: var(--ndn-font-family-display);
+  font-size: 1.5rem;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.ndn-offer-dialog-detail {
+  color: var(--ndn-color-text-muted);
+  line-height: 1.7;
+  margin: 0;
+  max-width: 40ch;
+}
+
+/* The pill matches the page's primary call to action so the one control in the
+   dialog reads as the same family as the buttons elsewhere on the page. */
+.ndn-offer-dialog-close {
+  margin-block-start: 0.5rem;
+  border: 1px solid var(--ndn-color-brand);
+  border-radius: 999px;
+  background-color: var(--ndn-color-brand);
+  color: var(--ndn-color-surface-raised);
+  padding-block: 0.6875rem;
+  padding-inline: 1.5rem;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--ndn-motion-duration-fast) ease,
+    border-color var(--ndn-motion-duration-fast) ease;
+}
+
+.ndn-offer-dialog-close:hover {
+  background-color: var(--ndn-color-brand-strong);
+  border-color: var(--ndn-color-brand-strong);
+}
+
+.ndn-offer-dialog-close:focus-visible {
+  outline: 2px solid var(--ndn-color-brand-strong);
+  outline-offset: 2px;
 }
 
 .ndn-home-cta-row {
@@ -507,23 +628,25 @@ const homeStylesCss = `
           {t('home.services.heading', undefined, locale)}
         </Heading>
         <p class="ndn-home-intro">{t('services.intro', undefined, locale)}</p>
-        {/* A list of topics, not the card grid: each is an illustration in a
-            disc with its title underneath, two rows of four on a wide
-            viewport (see `.ndn-home-offers`). The image is decorative —
-            `alt=""` — because the heading right below it names the topic, so
-            a description would have a screen reader announce it twice. */}
-        <ul class="ndn-home-offers" role="list">
-          {
-            services.map((service) => (
-              <li class="ndn-home-offer">
-                <span class="ndn-home-offer-disc">
-                  <img src={service.icon} alt="" width="144" height="144" loading="lazy" />
-                </span>
-                <Heading level={3}>{t(service.titleKey, undefined, locale)}</Heading>
-              </li>
-            ))
-          }
-        </ul>
+        {/* A grid of topic tiles — an illustration in a disc with its title
+            underneath, two rows of four on a wide viewport (see
+            `.ndn-home-offers`). Each tile is a button that opens a shared
+            dialog with the topic's detail; that behaviour needs client state,
+            so the tiles are an island (`OfferTiles`) seeded with copy `t()`
+            resolves here, the same arrangement as the three content strips
+            below. `client:load`, not `client:visible`: the section sits high
+            on the page, so hydrating it lazily risks a click landing before
+            the handler is attached. */}
+        <OfferTiles
+          client:load
+          offers={services.map((service) => ({
+            id: service.id,
+            title: t(service.titleKey, undefined, locale),
+            detail: t(service.detailKey, undefined, locale),
+            icon: service.icon,
+          }))}
+          closeLabel={t('home.services.close', undefined, locale)}
+        />
       </div>
     </section>
 
