@@ -30,7 +30,7 @@
 // an ephemeral PR environment straight into production.
 import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Card, Heading, Link, VisuallyHidden } from '@ndn/ui';
+import { Heading, Link, VisuallyHidden } from '@ndn/ui';
 
 import { fetchPublishedBlogPosts } from '../../blog/content-client.js';
 import { LiveBlogList } from '../../blog/LiveBlogList.js';
@@ -319,6 +319,82 @@ const homeStylesCss = `
   padding-block-start: 0.5rem;
 }
 
+/* 2026-09-13: "what we offer" is eight topics as circular tiles, not the
+   description cards this section used to hold. A grid of its own, separate
+   from .ndn-home-grid: that one is the blog / workshop / testimonial card
+   strip, and its auto-fill card tracks and hover-lift are the wrong shape for
+   a title under a disc. Two columns on a phone, four on a wide viewport, so
+   the eight always fall as two full rows. No backticks in this block: it is a
+   JS template literal. */
+.ndn-home-offers {
+  list-style: none;
+  margin-block: 2rem 0;
+  margin-inline: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2rem 1.25rem;
+}
+
+@media (min-width: 48rem) {
+  .ndn-home-offers {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2.75rem 1.5rem;
+  }
+}
+
+.ndn-home-offer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.875rem;
+}
+
+/* The illustration is a square on its own off-white ground, so the disc is
+   that square clipped to a circle over a ring in the section's border token.
+   object-fit: cover on a 1:1 image inside a 1:1 box is a no-op scale — the
+   border-radius trims only the four (off-white) corners, leaving the
+   centred emblem. The lift on hover is the card grid's, in motion tokens so
+   prefers-reduced-motion collapses the travel. */
+.ndn-home-offer-disc {
+  display: grid;
+  place-items: center;
+  width: clamp(6.5rem, 20vw, 9rem);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  overflow: hidden;
+  background-color: var(--ndn-color-surface-raised);
+  border: 1px solid var(--ndn-color-border);
+  box-shadow: 0 4px 14px var(--ndn-color-border);
+  transition: border-color var(--ndn-motion-duration-base) ease,
+    box-shadow var(--ndn-motion-duration-base) ease,
+    transform var(--ndn-motion-duration-base) ease;
+}
+
+.ndn-home-offer-disc img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ndn-home-offer:hover .ndn-home-offer-disc {
+  border-color: var(--ndn-color-brand);
+  box-shadow: 0 8px 22px var(--ndn-color-border);
+  transform: translateY(-2px);
+}
+
+/* Smaller and centred than the section's default h3 (the card headings),
+   and held to a readable measure so a two-word and a six-word title wrap
+   into tidy blocks rather than one running full width. The selector carries
+   the section's specificity so it wins over that default. */
+.ndn-home .ndn-home-section .ndn-home-offer h3 {
+  font-size: 1rem;
+  line-height: 1.35;
+  margin-block: 0;
+  max-width: 16ch;
+}
+
 .ndn-home-cta-row {
   display: flex;
   flex-wrap: wrap;
@@ -431,16 +507,23 @@ const homeStylesCss = `
           {t('home.services.heading', undefined, locale)}
         </Heading>
         <p class="ndn-home-intro">{t('services.intro', undefined, locale)}</p>
-        <div class="ndn-home-grid">
+        {/* A list of topics, not the card grid: each is an illustration in a
+            disc with its title underneath, two rows of four on a wide
+            viewport (see `.ndn-home-offers`). The image is decorative —
+            `alt=""` — because the heading right below it names the topic, so
+            a description would have a screen reader announce it twice. */}
+        <ul class="ndn-home-offers" role="list">
           {
             services.map((service) => (
-              <Card>
+              <li class="ndn-home-offer">
+                <span class="ndn-home-offer-disc">
+                  <img src={service.icon} alt="" width="144" height="144" loading="lazy" />
+                </span>
                 <Heading level={3}>{t(service.titleKey, undefined, locale)}</Heading>
-                <p>{t(service.bodyKey, undefined, locale)}</p>
-              </Card>
+              </li>
             ))
           }
-        </div>
+        </ul>
       </div>
     </section>
 
