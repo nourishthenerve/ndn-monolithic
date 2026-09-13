@@ -19,10 +19,15 @@
 import { z } from 'zod';
 
 export interface ServiceConfig {
-  /** Stable identifier, and the middle segment of this entry's title i18n key. */
+  /** Stable identifier, and the middle segment of this entry's i18n keys. */
   readonly id: string;
   /** i18n key for the tile's heading. */
   readonly titleKey: string;
+  /**
+   * i18n key for the longer copy shown in the tile's detail dialog (opened by
+   * clicking the tile). Placeholder wording for now — see the catalogue.
+   */
+  readonly detailKey: string;
   /**
    * Public-root path to this topic's circular illustration. Decorative on the
    * page (`alt=""`) — the heading beside it already names the topic.
@@ -38,6 +43,7 @@ export const serviceConfigSchema = z.object({
     .min(1)
     .regex(/^[a-z][a-z0-9]*$/),
   titleKey: z.string().min(1),
+  detailKey: z.string().min(1),
   // A path from the public root (leading slash) to an `.svg` file — the shape
   // Astro serves `apps/web/public/*` at. `services.test.ts` additionally
   // proves each of these resolves to a file that actually exists.
@@ -47,9 +53,14 @@ export const serviceConfigSchema = z.object({
     .regex(/^\/[\w./-]+\.svg$/),
 });
 
-/** The title key is derived from the id, so the two can never drift apart. */
+/** Both keys are derived from the id, so they can never drift apart. */
 function service(id: string, iconFile: string): ServiceConfig {
-  return { id, titleKey: `services.item.${id}.title`, icon: `/${iconFile}` };
+  return {
+    id,
+    titleKey: `services.item.${id}.title`,
+    detailKey: `services.item.${id}.detail`,
+    icon: `/${iconFile}`,
+  };
 }
 
 const rawServices: readonly ServiceConfig[] = [
