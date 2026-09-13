@@ -184,6 +184,79 @@ describe('the homepage strip', () => {
   });
 });
 
+// 2026-09-13: the owner: *"I want these blogs to be sorted by published
+// timestamp in reverse order … the latest blog post to be the first one."*
+// The order lives in the DOM, so it is asserted on the DOM: the titles in
+// document order are the leftmost/top card first.
+describe('newest first', () => {
+  const titlesInOrder = (): readonly string[] =>
+    screen.getAllByRole('heading').map((heading) => heading.textContent ?? '');
+
+  function atDate(id: string, publishedAt: string): LiveBlogPost {
+    return {
+      id,
+      publishedAt,
+      translations: { en: { title: `${id} title`, excerpt: `${id} excerpt`, body: `${id} body` } },
+    };
+  }
+
+  it('renders the whole /blog listing latest first, whatever order the API returned', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        // Deliberately out of order, as an unspecified API response may be.
+        initialPosts={[
+          atDate('sep-01', '2026-09-01T09:00:00.000Z'),
+          atDate('sep-13', '2026-09-13T09:00:00.000Z'),
+          atDate('sep-07', '2026-09-07T09:00:00.000Z'),
+        ]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(titlesInOrder()).toEqual(['sep-13 title', 'sep-07 title', 'sep-01 title']);
+  });
+
+  it('re-sorts once a newer post reconciles in from the fetch', async () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[atDate('sep-07', '2026-09-07T09:00:00.000Z')]}
+        fetchPosts={() =>
+          Promise.resolve([
+            atDate('sep-07', '2026-09-07T09:00:00.000Z'),
+            atDate('sep-20', '2026-09-20T09:00:00.000Z'),
+          ])
+        }
+      />,
+    );
+    await screen.findByText('sep-20 title');
+    // The just-published post takes the top, not the bottom where it arrived.
+    expect(titlesInOrder()).toEqual(['sep-20 title', 'sep-07 title']);
+  });
+
+  it('shows the three most recent on the homepage strip, newest leftmost', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        limit={3}
+        initialPosts={[
+          atDate('sep-01', '2026-09-01T09:00:00.000Z'),
+          atDate('sep-13', '2026-09-13T09:00:00.000Z'),
+          atDate('sep-05', '2026-09-05T09:00:00.000Z'),
+          atDate('sep-09', '2026-09-09T09:00:00.000Z'),
+        ]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    // The three latest, in order; the oldest (sep-01) drops off, not whichever
+    // three the response happened to list first.
+    expect(titlesInOrder()).toEqual(['sep-13 title', 'sep-09 title', 'sep-05 title']);
+  });
+});
+
 // 2026-09-07: the byline. The owner: *"for blog post and workshops also show
 // the date of publication on the thumbnail box at websites landing page as
 // well as when someone clicks read more."*

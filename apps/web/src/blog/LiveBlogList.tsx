@@ -200,6 +200,47 @@ export function themeTagsFor(
   });
 }
 
+/**
+ * The posts newest first, by the date each one tells a reader it went up —
+ * `publicationDateOf` (`publishedAt`, or `created_at` for a post from before
+ * that field existed). This is the order the owner asked for on both
+ * surfaces: the homepage's "latest three" strip and the `/blog` archive, so
+ * the newest post is the leftmost card and the top of the list.
+ *
+ * Sorted here rather than trusting the content API's order, which is
+ * unspecified — and sorted *before* `takeAtMost`, so the homepage's three are
+ * the three most *recent* and not merely the first three the response
+ * happened to carry.
+ *
+ * A post with neither timestamp (`publicationDateOf` → `undefined`, or an
+ * unparseable date) sorts to the end: it has dated posts around it and no
+ * claim to the top, so it never displaces a genuine "latest". Posts published
+ * in the same instant keep their incoming order — `Array.prototype.sort` is
+ * stable (ES2019) — so a real tie is never reshuffled.
+ */
+export function sortedByPublishedDesc(
+  posts: readonly LiveBlogPost[],
+): readonly LiveBlogPost[] {
+  return [...posts].sort((a, b) => {
+    const first = publishedInstant(a);
+    const second = publishedInstant(b);
+    // Guard the both-dateless case: -Infinity - -Infinity is NaN, and a NaN
+    // comparator return is undefined behaviour. Equal instants keep order.
+    return first === second ? 0 : second - first;
+  });
+}
+
+/**
+ * A post's publication date as a millisecond instant for comparison, or
+ * `-Infinity` when it has no usable date — an absent or unparseable timestamp
+ * — which sorts it to the end of a newest-first list.
+ */
+function publishedInstant(post: LiveBlogPost): number {
+  const iso = publicationDateOf(post);
+  const instant = iso ? Date.parse(iso) : Number.NaN;
+  return Number.isNaN(instant) ? Number.NEGATIVE_INFINITY : instant;
+}
+
 /** A post appears on a locale's listing only once it has a translation for it. */
 export function postsForLocale(
   posts: readonly LiveBlogPost[],
@@ -268,7 +309,9 @@ export function LiveBlogList({
     };
   }, [fetchPosts]);
 
-  const entries = takeAtMost(postsForLocale(posts, locale), limit);
+  // Newest first, then trimmed: the homepage's three are the three most
+  // recent, and the leftmost card / top of the list is the latest post.
+  const entries = takeAtMost(postsForLocale(sortedByPublishedDesc(posts), locale), limit);
 
   if (entries.length === 0) {
     return <p>{strings.empty}</p>;

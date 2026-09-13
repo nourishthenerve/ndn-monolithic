@@ -4,7 +4,7 @@
 // gets**, because getting that wrong sends a reader to a 404.
 import { describe, expect, it } from 'vitest';
 
-import { hrefFor, postsForLocale, prerenderedIds } from './LiveBlogList.js';
+import { hrefFor, postsForLocale, prerenderedIds, sortedByPublishedDesc } from './LiveBlogList.js';
 import type { LiveBlogPost } from './LiveBlogList.js';
 
 function post(id: string, locales: readonly string[] = ['en']): LiveBlogPost {
@@ -14,6 +14,10 @@ function post(id: string, locales: readonly string[] = ['en']): LiveBlogPost {
       locales.map((locale) => [locale, { title: `${id} title`, excerpt: `${id} excerpt` }]),
     ),
   };
+}
+
+function dated(id: string, dates: { publishedAt?: string; created_at?: string }): LiveBlogPost {
+  return { ...post(id), ...dates };
 }
 
 describe('hrefFor', () => {
@@ -48,6 +52,56 @@ describe('prerenderedIds', () => {
   it('is empty when the build found nothing, so every post takes the fallback', () => {
     const prerendered = prerenderedIds([]);
     expect(hrefFor('en', 'anything', prerendered)).toBe('/en/blog/post?slug=anything');
+  });
+});
+
+describe('sortedByPublishedDesc', () => {
+  const ids = (posts: readonly LiveBlogPost[]): readonly string[] => posts.map((p) => p.id);
+
+  it('orders posts newest first by publication date', () => {
+    const posts = [
+      dated('older', { publishedAt: '2026-09-01T09:00:00.000Z' }),
+      dated('newest', { publishedAt: '2026-09-13T09:00:00.000Z' }),
+      dated('middle', { publishedAt: '2026-09-07T09:00:00.000Z' }),
+    ];
+    expect(ids(sortedByPublishedDesc(posts))).toEqual(['newest', 'middle', 'older']);
+  });
+
+  it('falls back to created_at for a post from before publishedAt existed', () => {
+    // The same date `publicationDateOf` bylines with — a legacy post sorts by
+    // the date it actually shows, not off the end.
+    const posts = [
+      dated('has-published', { publishedAt: '2026-09-05T09:00:00.000Z' }),
+      dated('legacy', { created_at: '2026-09-10T09:00:00.000Z' }),
+    ];
+    expect(ids(sortedByPublishedDesc(posts))).toEqual(['legacy', 'has-published']);
+  });
+
+  it('sorts a post with no usable date to the end, behind every dated one', () => {
+    const posts = [
+      dated('dateless', {}),
+      dated('dated', { publishedAt: '2026-09-05T09:00:00.000Z' }),
+    ];
+    expect(ids(sortedByPublishedDesc(posts))).toEqual(['dated', 'dateless']);
+  });
+
+  it('keeps the incoming order for posts published in the same instant', () => {
+    const same = '2026-09-05T09:00:00.000Z';
+    const posts = [
+      dated('first', { publishedAt: same }),
+      dated('second', { publishedAt: same }),
+      dated('third', { publishedAt: same }),
+    ];
+    expect(ids(sortedByPublishedDesc(posts))).toEqual(['first', 'second', 'third']);
+  });
+
+  it('does not mutate the array it is given', () => {
+    const posts = [
+      dated('a', { publishedAt: '2026-09-01T09:00:00.000Z' }),
+      dated('b', { publishedAt: '2026-09-09T09:00:00.000Z' }),
+    ];
+    sortedByPublishedDesc(posts);
+    expect(ids(posts)).toEqual(['a', 'b']);
   });
 });
 
