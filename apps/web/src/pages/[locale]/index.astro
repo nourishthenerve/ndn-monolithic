@@ -35,6 +35,7 @@ import { Heading, Link, VisuallyHidden } from '@ndn/ui';
 import { fetchPublishedBlogPosts } from '../../blog/content-client.js';
 import { LiveBlogList } from '../../blog/LiveBlogList.js';
 import ContactDetails from '../../components/ContactDetails.astro';
+import { blogThemeLabels } from '../../config/blog-themes.js';
 import { services } from '../../config/services.js';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import {
@@ -538,6 +539,7 @@ const homeStylesCss = `
           <LiveBlogList
             client:load
             locale={locale}
+            themeLabels={blogThemeLabels(locale)}
             initialPosts={postsForLocale}
             limit={HOME_LIST_LIMIT}
             headingLevel={3}

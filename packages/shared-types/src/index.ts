@@ -2,6 +2,7 @@ export * from './appointment.js';
 export * from './assessment.js';
 export * from './assessment-template.js';
 export * from './assignment.js';
+export * from './blog-themes.js';
 export * from './clinical-record.js';
 export * from './clinician.js';
 export * from './connection.js';

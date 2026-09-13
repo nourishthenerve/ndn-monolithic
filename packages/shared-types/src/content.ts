@@ -16,6 +16,19 @@ export interface ContentItem extends BaseRecord<ContentStatus> {
   status: ContentStatus;
   keywords: string[];
   /**
+   * 2026-09-13: the post's themes — a subset of `blog-themes.ts`'s fixed
+   * twelve, chosen from a checklist in the composer and shown as tags on each
+   * card. Distinct from `keywords`: those are free text and a search key, these
+   * are a closed vocabulary and a label. See `blog-themes.ts` for the why.
+   *
+   * Optional because every post written before this field existed has none;
+   * every reader of the record treats its absence as "no themes" (an empty
+   * list), never as an error — the same tolerance `imageKey`/`publishedAt`
+   * already rely on, and the same reason (a required field here would fail to
+   * parse every older record and empty the blog).
+   */
+  themes?: string[];
+  /**
    * 2026-09-02: an optional lead image, the blog counterpart of
    * `Workshop.posterKey` and stored the same way — a media-bucket object
    * key, never a URL, so the site builds its own `/media/…` path and the

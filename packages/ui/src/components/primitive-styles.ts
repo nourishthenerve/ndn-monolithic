@@ -441,6 +441,33 @@ body {
   margin: 0;
 }
 
+/* 2026-09-13: a blog card's themes, as tags. A soft brand wash with the
+   strong-brand text token on it, so the pills read as one quiet family
+   rather than competing with the title above them, and each keeps the
+   contrast its tokens guarantee. A flex-wrap row: any number of themes on a
+   post falls into as many lines as it needs. (No backticks in this block:
+   it is a JS template literal.) */
+.ndn-card-themes {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-block: 0 0.75rem;
+  padding: 0;
+}
+
+.ndn-tag {
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  padding-block: 0.1875rem;
+  padding-inline: 0.5rem;
+  border-radius: 999px;
+  background-color: var(--ndn-color-brand-wash);
+  color: var(--ndn-color-brand-strong);
+  border: 1px solid var(--ndn-color-border);
+}
+
 /* The display serif, on every heading the site renders — packages/ui's
    Heading is the only way a heading is written here, so this one rule is the
    whole of it. Sizes are set per level below rather than left to the browser,

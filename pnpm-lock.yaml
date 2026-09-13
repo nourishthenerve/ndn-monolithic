@@ -77,6 +77,9 @@ importers:
       '@ndn/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
+      '@ndn/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       '@ndn/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -12070,7 +12073,7 @@ snapshots:
   vite@8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(tsx@4.23.11):
     dependencies:
       lightningcss: 1.33.0
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       postcss: 8.5.26
       rolldown: 1.2.3
       tinyglobby: 0.2.17
@@ -12084,7 +12087,7 @@ snapshots:
   vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(tsx@4.23.11):
     dependencies:
       lightningcss: 1.33.0
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       postcss: 8.5.26
       rolldown: 1.2.3
       tinyglobby: 0.2.17

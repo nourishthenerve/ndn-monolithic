@@ -57,6 +57,13 @@ export interface LiveBlogPost {
   /** 2026-09-07: the byline date. See `publication-date.ts` for why there are two fields and why both are optional. */
   readonly publishedAt?: string;
   readonly created_at?: string;
+  /**
+   * 2026-09-13: the post's theme ids (a subset of `blogThemeIds`), shown as
+   * tags on the card. Optional — a post from before the field existed has none
+   * — and rendered through `themeLabels`, so an id with no label is skipped
+   * rather than shown raw.
+   */
+  readonly themes?: readonly string[];
   readonly translations: Readonly<
     Record<
       string,
@@ -91,6 +98,14 @@ export interface LiveBlogListStrings {
 export interface LiveBlogListProps {
   readonly strings: LiveBlogListStrings;
   readonly locale: Locale;
+  /**
+   * 2026-09-13: theme id → label, for the tags on each card. Resolved by the
+   * page from the catalogue (the island cannot call `t()`), and covering the
+   * whole set so a post reconciled in from a fetch since the last build finds
+   * its labels too. Optional — a page that does not pass it shows no tags,
+   * which is how a listing opts out.
+   */
+  readonly themeLabels?: Readonly<Record<string, string>>;
   /** The build-time list, rendered into the HTML and used as the seed. */
   readonly initialPosts: readonly LiveBlogPost[];
   readonly fetchPosts?: () => Promise<readonly LiveBlogPost[] | undefined>;
@@ -166,6 +181,25 @@ export function readingTimeLine(
   return minutes === undefined ? undefined : template.replace('{minutes}', String(minutes));
 }
 
+/**
+ * A post's themes as display labels, in the post's own order, dropping any id
+ * `themeLabels` has no entry for — an unknown or retired theme — rather than
+ * showing a raw id. Returns `[]` when the post has no themes or the page
+ * passed no label map (a listing that opts out of tags).
+ */
+export function themeTagsFor(
+  post: LiveBlogPost,
+  themeLabels: Readonly<Record<string, string>> | undefined,
+): readonly { readonly id: string; readonly label: string }[] {
+  if (!themeLabels || !post.themes) {
+    return [];
+  }
+  return post.themes.flatMap((id) => {
+    const label = themeLabels[id];
+    return label === undefined ? [] : [{ id, label }];
+  });
+}
+
 /** A post appears on a locale's listing only once it has a translation for it. */
 export function postsForLocale(
   posts: readonly LiveBlogPost[],
@@ -213,6 +247,7 @@ async function defaultFetchPosts(): Promise<readonly LiveBlogPost[] | undefined>
 export function LiveBlogList({
   strings,
   locale,
+  themeLabels,
   initialPosts,
   fetchPosts = defaultFetchPosts,
   limit,
@@ -244,6 +279,7 @@ export function LiveBlogList({
       {entries.map(({ post, title, excerpt, body }) => {
         const published = publishedLine(post, strings.publishedOnTemplate, locale);
         const reading = readingTimeLine(body, strings.readingTimeTemplate);
+        const tags = themeTagsFor(post, themeLabels);
         return (
           <Card key={post.id}>
             <Heading level={headingLevel}>{title}</Heading>
@@ -265,6 +301,18 @@ export function LiveBlogList({
               </p>
             )}
             <p>{excerpt}</p>
+            {/* The post's themes, as tags. A list because it is one — and
+                below the excerpt, where a reader looks after deciding the
+                post is roughly relevant, not before reading what it is. */}
+            {tags.length > 0 && (
+              <ul className="ndn-card-themes">
+                {tags.map((tag) => (
+                  <li key={tag.id} className="ndn-tag">
+                    {tag.label}
+                  </li>
+                ))}
+              </ul>
+            )}
             <Link href={hrefFor(locale, post.id, prerendered)}>{strings.readMore}</Link>
           </Card>
         );

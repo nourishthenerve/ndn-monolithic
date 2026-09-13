@@ -162,6 +162,41 @@ export const authoringStylesCss = `
   margin-block: 1.5rem 0.25rem;
 }
 
+/* 2026-09-13: the themes checklist. A fieldset, reset to no chrome (a
+   browser draws it a border and inset padding a form like this does not
+   want), with its legend styled as one of the field labels. min-inline-size
+   is the fieldset-specific reset: its default min-width is min-content, which
+   would stop the grid inside from shrinking on a narrow screen. */
+.ndn-authoring-themes {
+  margin-block: 0 1.5rem;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+
+.ndn-authoring-themes .ndn-authoring-hint {
+  display: block;
+  margin-block: 0.5rem 0.75rem;
+}
+
+/* Two or three columns of tick boxes where there is room, one on a phone —
+   twelve stacked in a single column would be a long scroll before the image
+   and publish controls below. */
+.ndn-authoring-theme-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The tick boxes wrap two-line labels without the box drifting to the middle
+   of them. */
+.ndn-authoring-theme-list .ndn-checkbox {
+  align-items: flex-start;
+}
+
 /* ------------------------------------------------------------------ *
  * The lead image, and the Browse button inside its input.
  * ------------------------------------------------------------------ */

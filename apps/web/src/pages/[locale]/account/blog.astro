@@ -20,6 +20,7 @@ import { authoringStylesCss } from '../../../account/authoring-styles.js';
 import { BlogComposer } from '../../../account/BlogComposer.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
+import { blogThemeOptions } from '../../../config/blog-themes.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { proseStylesCss, richTextEditorStylesCss } from '../../../rich-text/styles.js';
 import { siteName } from '../../../site-config.js';
@@ -80,6 +81,7 @@ const editorStrings = {
     <BlogComposer
       client:only="react"
       locale={locale}
+      themeOptions={blogThemeOptions(locale)}
       strings={{
         heading: t('authoring.blogHeading', undefined, locale),
         intro: t('authoring.blogIntro', undefined, locale),
@@ -88,6 +90,8 @@ const editorStrings = {
         excerptHint: t('authoring.excerptHint', undefined, locale),
         keywordsLabel: t('authoring.keywordsLabel', undefined, locale),
         keywordsHint: t('authoring.keywordsHint', undefined, locale),
+        themesLabel: t('authoring.themesLabel', undefined, locale),
+        themesHint: t('authoring.themesHint', undefined, locale),
         bodyRequired: t('authoring.bodyRequired', undefined, locale),
         slugError: t('authoring.slugError', undefined, locale),
         publishNowLabel: t('authoring.publishNowLabel', undefined, locale),

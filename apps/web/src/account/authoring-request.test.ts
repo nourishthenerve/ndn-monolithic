@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCreateBlogRequestBody,
   buildCreateWorkshopRequestBody,
+  dedupeThemes,
   EMPTY_BLOG,
   EMPTY_WORKSHOP,
   isValidSlug,
@@ -73,6 +74,18 @@ describe('toUtcInstant', () => {
   });
 });
 
+describe('dedupeThemes', () => {
+  it('returns known themes in catalogue order, deduplicated, dropping unknown ids', () => {
+    expect(
+      dedupeThemes(['womens-health', 'not-a-theme', 'neurorehabilitation', 'womens-health']),
+    ).toEqual(['neurorehabilitation', 'womens-health']);
+  });
+
+  it('is empty for no themes', () => {
+    expect(dedupeThemes([])).toEqual([]);
+  });
+});
+
 describe('buildCreateBlogRequestBody', () => {
   const fields = {
     id: ' winter-tips ',
@@ -80,6 +93,7 @@ describe('buildCreateBlogRequestBody', () => {
     excerpt: ' Stay mobile ',
     body: 'The body, with its own  spacing kept.',
     keywords: 'mobility, Mobility',
+    themes: [],
     publishNow: false,
   };
 
@@ -99,6 +113,20 @@ describe('buildCreateBlogRequestBody', () => {
   it('maps the publish checkbox to a status, defaulting to a draft', () => {
     expect(buildCreateBlogRequestBody(fields).status).toBe('draft');
     expect(buildCreateBlogRequestBody({ ...fields, publishNow: true }).status).toBe('published');
+  });
+
+  it('carries the ticked themes, deduplicated and in catalogue order', () => {
+    const body = buildCreateBlogRequestBody({
+      ...fields,
+      // Out of order and with a repeat — the checklist can produce neither,
+      // but the request must be clean whatever it is handed.
+      themes: ['pain-science', 'neurorehabilitation', 'pain-science'],
+    });
+    expect(body.themes).toEqual(['neurorehabilitation', 'pain-science']);
+  });
+
+  it('sends an empty themes array when nothing is ticked', () => {
+    expect(buildCreateBlogRequestBody(fields).themes).toEqual([]);
   });
 
   // 2026-09-02: the lead image. Omitted rather than sent empty, the same

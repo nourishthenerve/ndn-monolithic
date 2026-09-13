@@ -15,6 +15,7 @@
 // parses an untrusted HTTP body; content-read-handler.ts only ever reads a
 // query-string keyword.
 import { supportedLocales } from '@ndn/i18n';
+import { isBlogThemeId } from '@ndn/shared-types';
 import type { ContentItem, Principal } from '@ndn/shared-types';
 import type {
   APIGatewayProxyEventV2,
@@ -82,11 +83,21 @@ const imageKeySchema = z
     message: 'imageKey must be a key issued by POST /content/media-upload-url',
   });
 
+// 2026-09-13: the post's themes, each validated against `blog-themes.ts`'s
+// closed set (shared with apps/web through @ndn/shared-types, so the checklist
+// the author sees and the values this accepts can never drift). An id the list
+// does not know is a 400, not a silently-stored dead tag. Unlike `keywords`,
+// which are free text.
+const themesSchema = z.array(
+  z.string().refine(isBlogThemeId, { message: 'themes must be known blog theme ids' }),
+);
+
 const createContentBodySchema = z.object({
   id: z.string().min(1),
   contentType: z.literal('blog'),
   status: z.enum(['draft', 'published', 'unpublished']),
   keywords: z.array(z.string().min(1)),
+  themes: themesSchema.optional(),
   imageKey: imageKeySchema.optional(),
   translations: translationsSchema,
 });
@@ -94,15 +105,17 @@ const createContentBodySchema = z.object({
 const updateContentBodySchema = z
   .object({
     keywords: z.array(z.string().min(1)).optional(),
+    themes: themesSchema.optional(),
     translations: translationsSchema.optional(),
     imageKey: imageKeySchema.optional(),
   })
   .refine(
     (patch) =>
       patch.keywords !== undefined ||
+      patch.themes !== undefined ||
       patch.translations !== undefined ||
       patch.imageKey !== undefined,
-    { message: 'at least one of keywords, translations or imageKey must be given' },
+    { message: 'at least one of keywords, themes, translations or imageKey must be given' },
   );
 
 function parseJsonBody(event: APIGatewayProxyEventV2): unknown {

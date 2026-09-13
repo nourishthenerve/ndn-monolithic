@@ -21,6 +21,13 @@ const translationSchema = z.object({
 const blogPostSchema = z.object({
   id: z.string(),
   keywords: z.array(z.string()),
+  // 2026-09-13: the post's themes, shown as tags on each card. Optional and
+  // tolerant of absence for the same reason `imageKey` is — every post written
+  // before the field existed has none, and a stricter shape here would fail
+  // the whole parse and empty the blog. Any unknown id is dropped at render
+  // (blog-themes.ts has no label for it), so the schema need only know it is a
+  // list of strings.
+  themes: z.array(z.string()).optional(),
   // 2026-09-02: the lead image, as a media-bucket key. Optional, and the
   // schema stays tolerant of its absence because every post written
   // before today has none — a stricter shape here would empty the blog.
