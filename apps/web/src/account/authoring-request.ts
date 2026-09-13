@@ -9,6 +9,8 @@
 // and all; what did not exist was any way to reach them. This is the
 // shaping half of that.
 
+import { blogThemeIds } from '@ndn/shared-types';
+
 /** The slug a reader sees in the URL, and the record's own id. */
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -19,6 +21,12 @@ export interface BlogFormFields {
   readonly body: string;
   /** Free text: comma- or newline-separated, however the author likes to type it. */
   readonly keywords: string;
+  /**
+   * The themes ticked in the composer's checklist — ids from
+   * `@ndn/shared-types`'s `blogThemeIds`, a closed set, unlike the free-text
+   * `keywords` above. Empty when nothing is ticked.
+   */
+  readonly themes: readonly string[];
   /** Media-bucket key of an uploaded lead image, once one has been uploaded. Absent until then, and absent for a post that has none. */
   readonly imageKey?: string;
   readonly publishNow: boolean;
@@ -62,6 +70,7 @@ export const EMPTY_BLOG: BlogFormFields = {
   excerpt: '',
   body: '',
   keywords: '',
+  themes: [],
   publishNow: true,
 };
 
@@ -80,6 +89,7 @@ export interface CreateBlogRequestBody {
   readonly contentType: 'blog';
   readonly status: 'draft' | 'published';
   readonly keywords: readonly string[];
+  readonly themes: readonly string[];
   readonly imageKey?: string;
   readonly translations: Readonly<Record<string, { title: string; body: string; excerpt: string }>>;
 }
@@ -120,6 +130,18 @@ export function parseKeywords(raw: string): string[] {
     keywords.push(keyword);
   }
   return keywords;
+}
+
+/**
+ * The ticked themes, deduplicated and returned in the catalogue's own order,
+ * with any id the catalogue does not know dropped. Filtering `blogThemeIds`
+ * by membership gives all three at once: order, uniqueness, and a closed set —
+ * the same guarantees the API re-checks, made here so the request is already
+ * clean.
+ */
+export function dedupeThemes(themes: readonly string[]): string[] {
+  const selected = new Set(themes);
+  return blogThemeIds.filter((id) => selected.has(id));
 }
 
 /** `true` when this is a usable slug — lowercase words joined by single hyphens, which is what every published URL on this site already looks like. */
@@ -187,6 +209,12 @@ export function buildCreateBlogRequestBody(fields: BlogFormFields): CreateBlogRe
     contentType: 'blog',
     status: fields.publishNow ? 'published' : 'draft',
     keywords: parseKeywords(fields.keywords),
+    // A checklist already yields clean ids, but it deduplicates for the same
+    // reason `parseKeywords` does — an array is what the API stores, and one
+    // theme listed twice is a tag shown twice. Kept in the catalogue's own
+    // order rather than the click order, so two posts with the same themes
+    // read the same.
+    themes: dedupeThemes(fields.themes),
     // Omitted rather than sent empty, the same discipline `capacity`
     // keeps below: the API's schema makes it optional, and "no image" is
     // a different fact from "an image whose key is the empty string".

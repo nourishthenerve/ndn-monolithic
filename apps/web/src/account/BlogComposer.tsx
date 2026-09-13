@@ -61,6 +61,8 @@ export interface BlogComposerStrings extends AuthoringMessageStrings {
   readonly excerptHint: string;
   readonly keywordsLabel: string;
   readonly keywordsHint: string;
+  readonly themesLabel: string;
+  readonly themesHint: string;
   readonly bodyRequired: string;
   readonly slugError: string;
   readonly publishNowLabel: string;
@@ -73,6 +75,8 @@ export interface BlogComposerStrings extends AuthoringMessageStrings {
 
 export interface BlogComposerProps {
   readonly strings: BlogComposerStrings;
+  /** The twelve themes as `{ id, label }`, in display order — the page resolves the labels from the catalogue. */
+  readonly themeOptions: readonly { readonly id: string; readonly label: string }[];
   readonly locale: Locale;
   readonly client?: SessionClient;
   /** Injectable for tests; defaults to a real same-origin-authorised fetch against `contentApiUrl`. */
@@ -89,6 +93,7 @@ export const BLOG_PRESIGN_PATH = '/content/media-upload-url';
 
 export function BlogComposer({
   strings,
+  themeOptions,
   locale,
   client = defaultClient,
   createBlog = post('/content'),
@@ -150,6 +155,15 @@ export function BlogComposer({
 
   const busy = status === 'submitting';
   const previewKeywords = parseKeywords(blog.keywords);
+
+  const toggleTheme = (id: string, checked: boolean) => {
+    setBlog((fields) => ({
+      ...fields,
+      themes: checked
+        ? [...fields.themes, id]
+        : fields.themes.filter((theme) => theme !== id),
+    }));
+  };
 
   return (
     // 2026-09-09: a sheet, the same one the patient record is drawn on
@@ -265,6 +279,30 @@ export function BlogComposer({
             ))}
           </ul>
         )}
+
+        {/* The themes, as a checklist rather than the free-text box above:
+            these are a closed set (blog-themes.ts), the tags a reader sees on
+            a card, so the author picks from them rather than spelling them.
+            A fieldset/legend because that is what a group of checkboxes with
+            one shared question is. */}
+        <fieldset className="ndn-authoring-themes" disabled={busy}>
+          <legend className="ndn-input-label">{strings.themesLabel}</legend>
+          <span className="ndn-authoring-hint">{strings.themesHint}</span>
+          <ul className="ndn-authoring-theme-list">
+            {themeOptions.map((theme) => (
+              <li key={theme.id}>
+                <label className="ndn-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={blog.themes.includes(theme.id)}
+                    onChange={(event) => toggleTheme(theme.id, event.target.checked)}
+                  />{' '}
+                  {theme.label}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </fieldset>
 
         {/* The lead image — the one at the top of the article, distinct from
             any image the author drops into the body. Placed after the words

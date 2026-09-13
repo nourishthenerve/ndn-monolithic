@@ -340,3 +340,59 @@ describe('the reading estimate', () => {
     return screen.findByText(/5 min read/);
   });
 });
+
+describe('a post shows its themes as tags', () => {
+  const THEME_LABELS = {
+    'pain-science': 'Pain Science',
+    neurorehabilitation: 'Neurorehabilitation',
+  };
+
+  function tagged(themes: readonly string[]): LiveBlogPost {
+    return {
+      id: 'tagged',
+      publishedAt: '2026-09-03T09:00:00.000Z',
+      themes,
+      translations: { en: { title: 'Tagged post', excerpt: 'excerpt', body: 'body' } },
+    };
+  }
+
+  it('renders a tag for each theme when a label map is given', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        themeLabels={THEME_LABELS}
+        initialPosts={[tagged(['pain-science', 'neurorehabilitation'])]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getByText('Pain Science')).toBeDefined();
+    expect(screen.getByText('Neurorehabilitation')).toBeDefined();
+  });
+
+  it('shows no tags when the page passes no label map, even if the post has themes', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        initialPosts={[tagged(['pain-science'])]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.queryByText('Pain Science')).toBeNull();
+  });
+
+  it('skips a theme id the label map does not know, rather than showing the raw id', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        themeLabels={THEME_LABELS}
+        initialPosts={[tagged(['pain-science', 'retired-theme'])]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getByText('Pain Science')).toBeDefined();
+    expect(screen.queryByText('retired-theme')).toBeNull();
+  });
+});
