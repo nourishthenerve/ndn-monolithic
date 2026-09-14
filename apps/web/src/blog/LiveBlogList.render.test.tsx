@@ -6,7 +6,7 @@
 // is on screen before the fetch resolves, after it resolves, and when it
 // never resolves at all.
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LiveBlogList } from './LiveBlogList.js';
 import type { LiveBlogPost } from './LiveBlogList.js';
@@ -472,8 +472,18 @@ describe('a post shows its themes as tags', () => {
 });
 
 describe('a recently published post is marked "New"', () => {
-  // A fixed clock so the 30-day window is exact rather than the test machine's.
-  const now = () => Date.parse('2026-09-14T00:00:00.000Z');
+  // A fixed instant so the 30-day window is exact rather than the test
+  // machine's. Passed as the build-time `now` (the initial render) and mocked
+  // onto `Date.now()` (the after-mount refine), so both agree and the marker
+  // is stable — and, like in production, present on the very first render.
+  const NOW = Date.parse('2026-09-14T00:00:00.000Z');
+
+  beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   function dated(id: string, publishedAt: string): LiveBlogPost {
     return {
@@ -483,43 +493,41 @@ describe('a recently published post is marked "New"', () => {
     };
   }
 
-  it('shows the marker on a post published within the last 30 days', async () => {
+  it('shows the marker on a post published within the last 30 days', () => {
     render(
       <LiveBlogList
         strings={STRINGS}
         locale="en"
-        now={now}
+        now={NOW}
         initialPosts={[dated('fresh', '2026-09-10T09:00:00.000Z')]}
         fetchPosts={() => new Promise(() => {})}
       />,
     );
-    // Appears after mount — the marker is decided against the reader's clock,
-    // not at render — so it is awaited rather than asserted synchronously.
-    expect(await screen.findByText('New')).toBeDefined();
+    // On the first render, not only after mount — the badge must be in the
+    // server HTML, not wait for JavaScript.
+    expect(screen.getByText('New')).toBeDefined();
   });
 
-  it('does not show the marker on a post older than 30 days', async () => {
+  it('does not show the marker on a post older than 30 days', () => {
     render(
       <LiveBlogList
         strings={STRINGS}
         locale="en"
-        now={now}
+        now={NOW}
         initialPosts={[dated('old', '2026-07-01T09:00:00.000Z')]}
         fetchPosts={() => new Promise(() => {})}
       />,
     );
-    // The card is on screen…
-    expect(await screen.findByText('old title')).toBeDefined();
-    // …and it carries no marker.
+    expect(screen.getByText('old title')).toBeDefined();
     expect(screen.queryByText('New')).toBeNull();
   });
 
-  it('marks only the posts that are actually recent when a list mixes both', async () => {
+  it('marks only the posts that are actually recent when a list mixes both', () => {
     render(
       <LiveBlogList
         strings={STRINGS}
         locale="en"
-        now={now}
+        now={NOW}
         initialPosts={[
           dated('fresh', '2026-09-12T09:00:00.000Z'),
           dated('old', '2026-01-01T09:00:00.000Z'),
@@ -527,7 +535,6 @@ describe('a recently published post is marked "New"', () => {
         fetchPosts={() => new Promise(() => {})}
       />,
     );
-    await screen.findByText('fresh title');
     // One marker across the two cards.
     expect(screen.getAllByText('New')).toHaveLength(1);
   });

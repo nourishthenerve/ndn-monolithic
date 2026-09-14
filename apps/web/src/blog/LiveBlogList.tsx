@@ -125,11 +125,16 @@ export interface LiveBlogListProps {
    */
   readonly themeFilter?: string;
   /**
-   * 2026-09-14: the current time, for deciding the "New" marker. Injectable so
-   * a test can pin the date the window is measured against; defaults to the
-   * reader's own clock. Read once, after mount — see `nowMs` below.
+   * 2026-09-14: the build-time instant (ms) the "New" marker is measured
+   * against for the server render and the first client paint. Passed by the
+   * page as `Date.now()`, so it is a fixed value that serializes into the
+   * island and is identical on the server and on hydration — which is what
+   * lets the badge be rendered into the HTML (see `nowMs`) rather than only
+   * appearing once JavaScript runs. After mount it is refined to the reader's
+   * own clock. A test pins it directly. Omitted, the marker simply waits for
+   * mount, as it used to.
    */
-  readonly now?: () => number;
+  readonly now?: number;
   /**
    * 2026-09-06: how many to show, for the homepage's "latest three" strip.
    * Unset — the `/blog` listing — shows everything, so that page is
@@ -285,9 +290,6 @@ export function postsForLocale(
   });
 }
 
-/** A stable default clock, at module scope so its identity never changes between renders — see `nowMs`'s effect. */
-const defaultNow = (): number => Date.now();
-
 async function defaultFetchPosts(): Promise<readonly LiveBlogPost[] | undefined> {
   try {
     const response = await fetch(
@@ -314,7 +316,7 @@ export function LiveBlogList({
   initialPosts,
   fetchPosts = defaultFetchPosts,
   themeFilter,
-  now = defaultNow,
+  now,
   limit,
   headingLevel = 2,
 }: LiveBlogListProps): ReactNode {
@@ -322,19 +324,25 @@ export function LiveBlogList({
   const prerendered = prerenderedIds(initialPosts);
 
   /**
-   * The current time, or `undefined` until this list has mounted in a browser.
+   * The time the "New" window is measured against.
    *
-   * "New" is measured against the *reader's* clock, and the seed is rendered
-   * server-side at build time — so deciding the marker during render would
-   * both use the wrong "now" (the build's) and make the server HTML disagree
-   * with the client's first paint, a hydration mismatch. Left `undefined`
-   * through the server render and the first client render (no marker either
-   * place, so they match), then filled on mount with the reader's real time.
+   * Seeded with the build-time `now` the page passed, so the marker is decided
+   * during the server render and again identically on the first client paint
+   * (same serialized value) — no hydration mismatch, and the badge is in the
+   * HTML rather than waiting for JavaScript. This matters: `/blog` is a
+   * long-lived URL a reader may load from a stale or slow cache, and the badge
+   * has to be there without the island having reconciled yet.
+   *
+   * After mount it is refined to the reader's *own* clock — a page built weeks
+   * ago must not keep calling a now-old post "New" — and that also covers a
+   * post reconciled in from the fetch, which the build never saw. With no
+   * build-time `now` (a caller that opts out), it simply stays unset until
+   * mount, the behaviour this had before.
    */
-  const [nowMs, setNowMs] = useState<number | undefined>(undefined);
+  const [nowMs, setNowMs] = useState<number | undefined>(now);
   useEffect(() => {
-    setNowMs(now());
-  }, [now]);
+    setNowMs(Date.now());
+  }, []);
 
   useEffect(() => {
     let cancelled = false;

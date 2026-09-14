@@ -59,6 +59,7 @@ const heading = t('blog.index.heading', undefined, locale);
     locale={locale}
     themeLabels={blogThemeLabels(locale)}
     initialPosts={postsForLocale.map(({ post }) => post)}
+    now={Date.now()}
     strings={{
       empty: t('blog.index.empty', undefined, locale),
       readMore: t('blog.index.readMore', undefined, locale),
