@@ -36,6 +36,16 @@ export interface Workshop extends BaseRecord<WorkshopStatus> {
   priceMinorUnits?: number;
   posterKey?: string;
   /**
+   * 2026-09-14: where an attendee joins the workshop — a meeting link (Zoom,
+   * Google Meet, and the like), shown as a "Join" link on the public
+   * announcement. An absolute `https://` URL when set; optional and tolerant
+   * of absence, like `posterKey`, because most workshops written before this
+   * field existed have none. Replaced the composer's old "Places" (capacity)
+   * field, which was collected but never shown — `capacity` itself stays on
+   * the type for the dead Stripe code that still reads it (see above).
+   */
+  joinLink?: string;
+  /**
    * 2026-09-07: when this workshop was **announced** — the date the listing
    * went up, not `dateTimeUtc`, which is when the workshop itself happens.
    * The two are different facts and the site labels them differently; see

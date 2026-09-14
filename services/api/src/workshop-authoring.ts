@@ -82,6 +82,29 @@ const posterKeySchema = z
     message: 'posterKey must be a key issued by POST /workshops/media-upload-url',
   });
 
+// 2026-09-14: the meeting link an attendee joins the workshop by, echoed into
+// an `<a href>` on a public announcement page. Restricted to absolute
+// `https://` here rather than a bare `z.string().url()`: `url()` accepts
+// `javascript:`, `data:` and plain `http:`, none of which belong in a link the
+// site publishes — the same posture `rich-text/policy.ts`'s `isSafeHref` takes
+// for links inside a post. The web page guards on render too, but the boundary
+// is where a bad value is kept out.
+const joinLinkSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2048)
+  .refine(
+    (value) => {
+      try {
+        return new URL(value).protocol === 'https:';
+      } catch {
+        return false;
+      }
+    },
+    { message: 'joinLink must be an absolute https:// URL' },
+  );
+
 const createWorkshopBodySchema = z.object({
   id: z.string().min(1),
   status: z.enum(['draft', 'published', 'cancelled']),
@@ -95,6 +118,7 @@ const createWorkshopBodySchema = z.object({
   capacity: z.number().int().positive().optional(),
   priceMinorUnits: z.number().int().nonnegative().optional(),
   posterKey: posterKeySchema.optional(),
+  joinLink: joinLinkSchema.optional(),
   details: detailsSchema,
 });
 
@@ -104,6 +128,7 @@ const updateWorkshopBodySchema = z
     capacity: z.number().int().positive().optional(),
     priceMinorUnits: z.number().int().nonnegative().optional(),
     posterKey: posterKeySchema.optional(),
+    joinLink: joinLinkSchema.optional(),
     details: detailsSchema.optional(),
   })
   .refine((patch) => Object.values(patch).some((value) => value !== undefined), {

@@ -47,10 +47,11 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { takeAtMost } from '../list-limit.js';
-import { publicationDateOf } from '../publication-date.js';
+import { isRecentlyPublished, publicationDateOf } from '../publication-date.js';
 import { blogContentType, contentApiUrl } from '../site-config.js';
 
 import { readingMinutes } from './reading-time.js';
+import { resolveBlogThemeTags } from './theme-tags.js';
 
 export interface LiveBlogPost {
   readonly id: string;
@@ -81,6 +82,12 @@ export interface LiveBlogListStrings {
   readonly empty: string;
   readonly readMore: string;
   /**
+   * 2026-09-14: the word on the "New" marker a card carries when its post was
+   * published within the last 30 days. Just "New" today; a string so the day a
+   * second locale ships it is translated with everything else.
+   */
+  readonly newLabel: string;
+  /**
    * 2026-09-07: `"Published {date}"`, with the placeholder still in it —
    * `t()` runs at build time in the surrounding page and cannot format a
    * date for a post the build has never seen. Same arrangement as
@@ -109,6 +116,20 @@ export interface LiveBlogListProps {
   /** The build-time list, rendered into the HTML and used as the seed. */
   readonly initialPosts: readonly LiveBlogPost[];
   readonly fetchPosts?: () => Promise<readonly LiveBlogPost[] | undefined>;
+  /**
+   * 2026-09-14: a theme id to narrow the list to — the topic pages
+   * (`/blog/topic/{id}`) show only the posts carrying that theme. Applied to
+   * both the seed and the reconciled fetch, so a post published since the last
+   * build appears under its topic the moment it is live, exactly as it does on
+   * the full archive. Unset — every listing but a topic page — shows all posts.
+   */
+  readonly themeFilter?: string;
+  /**
+   * 2026-09-14: the current time, for deciding the "New" marker. Injectable so
+   * a test can pin the date the window is measured against; defaults to the
+   * reader's own clock. Read once, after mount — see `nowMs` below.
+   */
+  readonly now?: () => number;
   /**
    * 2026-09-06: how many to show, for the homepage's "latest three" strip.
    * Unset — the `/blog` listing — shows everything, so that page is
@@ -186,18 +207,16 @@ export function readingTimeLine(
  * `themeLabels` has no entry for — an unknown or retired theme — rather than
  * showing a raw id. Returns `[]` when the post has no themes or the page
  * passed no label map (a listing that opts out of tags).
+ *
+ * The card's own view of `resolveBlogThemeTags` — that shared helper is what
+ * the article pages (`blog/[slug].astro`, `LiveBlogPost`) resolve their tags
+ * with too, so a post's tags read identically on the card and in the article.
  */
 export function themeTagsFor(
   post: LiveBlogPost,
   themeLabels: Readonly<Record<string, string>> | undefined,
 ): readonly { readonly id: string; readonly label: string }[] {
-  if (!themeLabels || !post.themes) {
-    return [];
-  }
-  return post.themes.flatMap((id) => {
-    const label = themeLabels[id];
-    return label === undefined ? [] : [{ id, label }];
-  });
+  return resolveBlogThemeTags(post.themes, themeLabels);
 }
 
 /**
@@ -266,6 +285,9 @@ export function postsForLocale(
   });
 }
 
+/** A stable default clock, at module scope so its identity never changes between renders — see `nowMs`'s effect. */
+const defaultNow = (): number => Date.now();
+
 async function defaultFetchPosts(): Promise<readonly LiveBlogPost[] | undefined> {
   try {
     const response = await fetch(
@@ -291,11 +313,28 @@ export function LiveBlogList({
   themeLabels,
   initialPosts,
   fetchPosts = defaultFetchPosts,
+  themeFilter,
+  now = defaultNow,
   limit,
   headingLevel = 2,
 }: LiveBlogListProps): ReactNode {
   const [posts, setPosts] = useState<readonly LiveBlogPost[]>(initialPosts);
   const prerendered = prerenderedIds(initialPosts);
+
+  /**
+   * The current time, or `undefined` until this list has mounted in a browser.
+   *
+   * "New" is measured against the *reader's* clock, and the seed is rendered
+   * server-side at build time — so deciding the marker during render would
+   * both use the wrong "now" (the build's) and make the server HTML disagree
+   * with the client's first paint, a hydration mismatch. Left `undefined`
+   * through the server render and the first client render (no marker either
+   * place, so they match), then filled on mount with the reader's real time.
+   */
+  const [nowMs, setNowMs] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    setNowMs(now());
+  }, [now]);
 
   useEffect(() => {
     let cancelled = false;
@@ -309,9 +348,15 @@ export function LiveBlogList({
     };
   }, [fetchPosts]);
 
+  // On a topic page, only the posts carrying that theme; everywhere else, all
+  // of them. Filtered before the sort and the limit so a topic strip, if it
+  // ever had one, would still show its own most-recent posts.
+  const visiblePosts = themeFilter
+    ? posts.filter((post) => (post.themes ?? []).includes(themeFilter))
+    : posts;
   // Newest first, then trimmed: the homepage's three are the three most
   // recent, and the leftmost card / top of the list is the latest post.
-  const entries = takeAtMost(postsForLocale(sortedByPublishedDesc(posts), locale), limit);
+  const entries = takeAtMost(postsForLocale(sortedByPublishedDesc(visiblePosts), locale), limit);
 
   if (entries.length === 0) {
     return <p>{strings.empty}</p>;
@@ -323,6 +368,9 @@ export function LiveBlogList({
         const published = publishedLine(post, strings.publishedOnTemplate, locale);
         const reading = readingTimeLine(body, strings.readingTimeTemplate);
         const tags = themeTagsFor(post, themeLabels);
+        // Decided after mount only (see `nowMs`), so it is measured against the
+        // reader's clock and never disagrees with the server render.
+        const isNew = nowMs !== undefined && isRecentlyPublished(published?.iso, nowMs);
         return (
           <Card key={post.id}>
             <Heading level={headingLevel}>{title}</Heading>
@@ -336,8 +384,15 @@ export function LiveBlogList({
                 clicking — and two stacked lines of grey would crowd a card
                 that is mostly excerpt. Separated by a middle dot, and each
                 still legible on its own if the other is missing. */}
-            {(published || reading) && (
+            {(isNew || published || reading) && (
               <p className="ndn-card-meta">
+                {/* A small green capsule, first on the line, for a post
+                    published within the last 30 days. Its own element so a
+                    screen reader reads the word, and separated from the date
+                    by a real space rather than the middle dot the date and
+                    reading estimate share. */}
+                {isNew && <span className="ndn-new-badge">{strings.newLabel}</span>}
+                {isNew && (published || reading) ? ' ' : ''}
                 {published && <time dateTime={published.iso}>{published.text}</time>}
                 {published && reading ? ' · ' : ''}
                 {reading}

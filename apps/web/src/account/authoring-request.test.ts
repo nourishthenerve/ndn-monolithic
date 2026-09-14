@@ -10,6 +10,7 @@ import {
   dedupeThemes,
   EMPTY_BLOG,
   EMPTY_WORKSHOP,
+  isValidJoinLink,
   isValidSlug,
   parseKeywords,
   slugify,
@@ -56,6 +57,26 @@ describe('isValidSlug', () => {
     ['empty', ''],
   ])('rejects %s', (_label, slug) => {
     expect(isValidSlug(slug)).toBe(false);
+  });
+});
+
+describe('isValidJoinLink', () => {
+  it.each(['https://zoom.us/j/123', 'https://meet.google.com/abc-defg-hij', '  https://a.example  '])(
+    'accepts the https URL %s',
+    (link) => {
+      expect(isValidJoinLink(link)).toBe(true);
+    },
+  );
+
+  it.each([
+    ['plain http', 'http://insecure.example'],
+    ['a javascript: URL', 'javascript:alert(1)'],
+    ['a data: URL', 'data:text/html,<script>'],
+    ['not a URL at all', 'zoom link please'],
+    ['empty', ''],
+    ['a bare host', 'meet.google.com/xyz'],
+  ])('rejects %s', (_label, link) => {
+    expect(isValidJoinLink(link)).toBe(false);
   });
 });
 
@@ -149,29 +170,28 @@ describe('buildCreateWorkshopRequestBody', () => {
     title: 'Spring clinic',
     description: 'An afternoon session.',
     dateTimeLocal: '2026-09-01T10:00',
-    capacity: '',
+    joinLink: '',
     publishNow: true,
   };
 
-  // D-31 made capacity genuinely optional — "no limit" and "a limit of
-  // nothing" must stay different facts.
-  it('omits capacity entirely when the box is blank or nonsense', () => {
+  // "No join link" and "a link that is the empty string" are different facts,
+  // and only one of them is true — the same discipline `posterKey` keeps.
+  it('omits joinLink entirely when the box is blank', () => {
     expect(buildCreateWorkshopRequestBody(fields, '2026-09-01T09:00:00.000Z')).not.toHaveProperty(
-      'capacity',
+      'joinLink',
     );
     expect(
-      buildCreateWorkshopRequestBody({ ...fields, capacity: 'lots' }, '2026-09-01T09:00:00.000Z'),
-    ).not.toHaveProperty('capacity');
-    expect(
-      buildCreateWorkshopRequestBody({ ...fields, capacity: '0' }, '2026-09-01T09:00:00.000Z'),
-    ).not.toHaveProperty('capacity');
+      buildCreateWorkshopRequestBody({ ...fields, joinLink: '   ' }, '2026-09-01T09:00:00.000Z'),
+    ).not.toHaveProperty('joinLink');
   });
 
-  it('sends a real capacity as a number', () => {
+  it('carries a join link, trimmed', () => {
     expect(
-      buildCreateWorkshopRequestBody({ ...fields, capacity: ' 12 ' }, '2026-09-01T09:00:00.000Z')
-        .capacity,
-    ).toBe(12);
+      buildCreateWorkshopRequestBody(
+        { ...fields, joinLink: '  https://example.com/meet/123  ' },
+        '2026-09-01T09:00:00.000Z',
+      ).joinLink,
+    ).toBe('https://example.com/meet/123');
   });
 
   it('carries an uploaded poster key, and omits the field entirely without one', () => {

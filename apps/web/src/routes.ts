@@ -18,6 +18,7 @@
 // a11y gate whether or not anything in a header points at it.
 import { supportedLocales } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
+import { blogThemeIds } from '@ndn/shared-types';
 
 import { legalPages } from './config/legal-pages.js';
 
@@ -42,6 +43,12 @@ const routeSegments: readonly RouteSegment[] = [
   // stable id known ahead of any content existing, so they can't be listed
   // here the way a fixed route can.
   { segment: 'blog' },
+  // 2026-09-14: the twelve topic archives (`blog/topic/{theme}`), linked from
+  // the landing page's "Topics" grid. Unlike the per-post `blog/[slug]` pages
+  // above, a topic id is a fixed, known value — `blogThemeIds` is a closed set
+  // — so these enumerate the same way the legal pages do, and each still has
+  // to clear 1.1.3's a11y/keyboard gate.
+  ...blogThemeIds.map((theme): RouteSegment => ({ segment: `blog/topic/${theme}` })),
   // TASK 1.5.1: only the fixed listing page, same reasoning as 'blog'
   // above — `workshops/[slug].astro`'s pages are generated per published
   // workshop (getStaticPaths, apps/web/src/workshops/workshop-client.ts)

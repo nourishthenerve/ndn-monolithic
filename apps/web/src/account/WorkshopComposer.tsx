@@ -17,12 +17,13 @@ import { isEmptyRichText } from '../rich-text/render.js';
 import {
   buildCreateWorkshopRequestBody,
   EMPTY_WORKSHOP,
+  isValidJoinLink,
   isValidSlug,
   slugify,
   toUtcInstant,
 } from './authoring-request.js';
 import type { WorkshopFormFields } from './authoring-request.js';
-import { post, statusFor } from './authoring-submit.js';
+import { announceContentSaved, post, statusFor } from './authoring-submit.js';
 import type { SubmitStatus } from './authoring-submit.js';
 import { AuthoringMessages } from './AuthoringMessages.js';
 import type { AuthoringMessageStrings } from './AuthoringMessages.js';
@@ -37,8 +38,9 @@ export interface WorkshopComposerStrings extends AuthoringMessageStrings {
   readonly intro: string;
   readonly titleLabel: string;
   readonly dateTimeLabel: string;
-  readonly capacityLabel: string;
-  readonly capacityHint: string;
+  readonly joinLinkLabel: string;
+  readonly joinLinkHint: string;
+  readonly joinLinkError: string;
   readonly descriptionRequired: string;
   readonly slugError: string;
   readonly dateTimeError: string;
@@ -76,6 +78,7 @@ export function WorkshopComposer({
   const [status, setStatus] = useState<SubmitStatus>('idle');
   const [slugError, setSlugError] = useState(false);
   const [dateError, setDateError] = useState(false);
+  const [joinLinkError, setJoinLinkError] = useState(false);
   const [descriptionError, setDescriptionError] = useState(false);
   /** See `BlogComposer`'s own note: a contenteditable will not clear itself. */
   const [composed, setComposed] = useState(0);
@@ -98,6 +101,15 @@ export function WorkshopComposer({
       return;
     }
     setDescriptionError(false);
+    // Optional, so a blank box is fine; a non-blank one must be a link the
+    // site can publish. Checked here rather than left to the API's 400 for the
+    // same reason the slug is — "that is not a valid link" is a more useful
+    // thing to say than "invalid body".
+    if (workshop.joinLink.trim() !== '' && !isValidJoinLink(workshop.joinLink)) {
+      setJoinLinkError(true);
+      return;
+    }
+    setJoinLinkError(false);
     setStatus('submitting');
     const accessToken = await client.authorization();
     if (!accessToken) {
@@ -112,6 +124,9 @@ export function WorkshopComposer({
       if (outcome === 'success') {
         setWorkshop(EMPTY_WORKSHOP);
         setComposed((current) => current + 1);
+        // Tell the list below to re-read, so the new workshop appears without
+        // a manual page refresh — see `announceContentSaved`.
+        announceContentSaved('workshop');
       }
     } catch {
       setStatus('error');
@@ -198,28 +213,36 @@ export function WorkshopComposer({
           </p>
         )}
 
+        {/* 2026-09-14: replaced the old "Places" (capacity) field, which was
+            collected and never shown. A join link *is* shown — a "Join" link
+            on the public announcement — so it is the useful thing to ask for.
+            `type="url"` gives the browser's own keyboard and hint; the real
+            check is `isValidJoinLink` on submit, since an empty box is fine. */}
         <p className="ndn-input-wrapper">
-          <label className="ndn-input-label" htmlFor="workshop-capacity">
-            {strings.capacityLabel}
+          <label className="ndn-input-label" htmlFor="workshop-join-link">
+            {strings.joinLinkLabel}
           </label>
           <input
             className="ndn-input"
-            id="workshop-capacity"
-            type="number"
-            min={1}
+            id="workshop-join-link"
+            type="url"
+            inputMode="url"
             disabled={busy}
-            aria-describedby="workshop-capacity-hint"
-            value={workshop.capacity}
-            onChange={(event) =>
-              setWorkshop((fields) => ({ ...fields, capacity: event.target.value }))
-            }
+            aria-describedby="workshop-join-link-hint"
+            value={workshop.joinLink}
+            onChange={(event) => {
+              setWorkshop((fields) => ({ ...fields, joinLink: event.target.value }));
+              setJoinLinkError(false);
+            }}
           />
         </p>
-        {/* D-31 made capacity genuinely optional — workshops are
-            announcement-only — so "no limit" and "a limit of nothing" stay
-            different facts, and the field says which blank means which. */}
-        <p className="ndn-authoring-hint" id="workshop-capacity-hint">
-          {strings.capacityHint}
+        {joinLinkError && (
+          <p className="ndn-authoring-alert" role="alert">
+            {strings.joinLinkError}
+          </p>
+        )}
+        <p className="ndn-authoring-hint" id="workshop-join-link-hint">
+          {strings.joinLinkHint}
         </p>
 
         <MediaUploadField

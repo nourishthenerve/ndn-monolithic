@@ -61,6 +61,28 @@ describe('fetchPublishedWorkshops', () => {
     expect(workshop).not.toHaveProperty('priceMinorUnits');
   });
 
+  it('parses joinLink when the API returns one — unlike capacity, it is displayed', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          items: [
+            {
+              id: 'workshop-1',
+              dateTimeUtc: '2026-07-01T10:00:00.000Z',
+              joinLink: 'https://zoom.us/j/123',
+              details: { en: { title: 'Balance & Falls Prevention', description: 'A workshop.' } },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const [workshop] = await fetchPublishedWorkshops();
+
+    expect(workshop?.joinLink).toBe('https://zoom.us/j/123');
+  });
+
   it('returns [] on a non-2xx response rather than throwing', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({}, false)));
     expect(await fetchPublishedWorkshops()).toEqual([]);

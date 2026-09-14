@@ -41,3 +41,41 @@ export interface Publishable {
 export function publicationDateOf(item: Publishable): string | undefined {
   return item.publishedAt ?? item.created_at;
 }
+
+/** Milliseconds in a day — the unit the "New" window is measured in. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How recent a post or workshop must be to be marked "New" on a card — the
+ * owner asked for "less than 30 days from current date".
+ */
+export const NEW_WINDOW_DAYS = 30;
+
+/**
+ * 2026-09-14: whether `iso` — a publication date from `publicationDateOf` — is
+ * within the last `withinDays` days of `now`, which is what a card's "New"
+ * marker is shown for.
+ *
+ * `now` is passed in rather than read from the clock here: it is the reader's
+ * own current time at render (a build-time "now" would be wrong for a reader
+ * looking weeks later — see `LiveBlogList`'s own note on why the marker is
+ * decided after mount), and a test can pin it. A missing or unparseable date,
+ * or one in the future, is not "recent" — the first because there is nothing
+ * to measure, the last because a not-yet-published date is not new, it is
+ * wrong.
+ */
+export function isRecentlyPublished(
+  iso: string | undefined,
+  now: number,
+  withinDays: number = NEW_WINDOW_DAYS,
+): boolean {
+  if (!iso) {
+    return false;
+  }
+  const published = Date.parse(iso);
+  if (Number.isNaN(published)) {
+    return false;
+  }
+  const age = now - published;
+  return age >= 0 && age < withinDays * DAY_MS;
+}

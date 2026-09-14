@@ -43,7 +43,7 @@ import {
   slugify,
 } from './authoring-request.js';
 import type { BlogFormFields } from './authoring-request.js';
-import { post, statusFor } from './authoring-submit.js';
+import { announceContentSaved, post, statusFor } from './authoring-submit.js';
 import type { SubmitStatus } from './authoring-submit.js';
 import { AuthoringMessages } from './AuthoringMessages.js';
 import type { AuthoringMessageStrings } from './AuthoringMessages.js';
@@ -63,6 +63,7 @@ export interface BlogComposerStrings extends AuthoringMessageStrings {
   readonly keywordsHint: string;
   readonly themesLabel: string;
   readonly themesHint: string;
+  readonly themesRequired: string;
   readonly bodyRequired: string;
   readonly slugError: string;
   readonly publishNowLabel: string;
@@ -104,6 +105,7 @@ export function BlogComposer({
   const [status, setStatus] = useState<SubmitStatus>('idle');
   const [slugError, setSlugError] = useState(false);
   const [bodyError, setBodyError] = useState(false);
+  const [themesError, setThemesError] = useState(false);
   /**
    * Bumped on every successful save, and used as the editor's `key`.
    *
@@ -133,6 +135,15 @@ export function BlogComposer({
       return;
     }
     setBodyError(false);
+    // At least one theme is required — the owner: a post cannot be published
+    // without a tag. It is what files the post under the landing page's
+    // Topics, so a post with none would be published but reachable from no
+    // topic. Checked here so the button refuses rather than the API 400-ing.
+    if (blog.themes.length === 0) {
+      setThemesError(true);
+      return;
+    }
+    setThemesError(false);
     setStatus('submitting');
     const accessToken = await client.authorization();
     if (!accessToken) {
@@ -147,6 +158,9 @@ export function BlogComposer({
       if (outcome === 'success') {
         setBlog(EMPTY_BLOG);
         setComposed((current) => current + 1);
+        // Tell the list below to re-read, so the new post appears without a
+        // manual page refresh — see `announceContentSaved`.
+        announceContentSaved('blog');
       }
     } catch {
       setStatus('error');
@@ -157,6 +171,7 @@ export function BlogComposer({
   const previewKeywords = parseKeywords(blog.keywords);
 
   const toggleTheme = (id: string, checked: boolean) => {
+    setThemesError(false);
     setBlog((fields) => ({
       ...fields,
       themes: checked
@@ -303,6 +318,11 @@ export function BlogComposer({
             ))}
           </ul>
         </fieldset>
+        {themesError && (
+          <p className="ndn-authoring-alert" role="alert">
+            {strings.themesRequired}
+          </p>
+        )}
 
         {/* The lead image — the one at the top of the article, distinct from
             any image the author drops into the body. Placed after the words

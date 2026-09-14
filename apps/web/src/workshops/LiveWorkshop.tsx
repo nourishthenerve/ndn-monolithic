@@ -11,11 +11,12 @@
 // workshop that has a prerendered page of its own.
 import { formatDayMonthYear } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Heading } from '@ndn/ui';
+import { Heading, interactiveClassName } from '@ndn/ui';
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { publicationDateOf } from '../publication-date.js';
+import { isSafeHref } from '../rich-text/policy.js';
 import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { contentApiUrl, workshopPosterUrl } from '../site-config.js';
 
@@ -36,6 +37,8 @@ export interface LiveWorkshopRecord {
   readonly publishedAt?: string;
   readonly created_at?: string;
   readonly posterKey?: string;
+  /** 2026-09-14: the meeting link an attendee joins by, rendered as a "Join" link when set and safe. */
+  readonly joinLink?: string;
   readonly details: Readonly<
     Record<string, { readonly title: string; readonly description: string } | undefined>
   >;
@@ -52,6 +55,8 @@ export interface LiveWorkshopStrings {
   readonly zoneLabels: Readonly<Record<WorkshopTimeZoneKey, string>>;
   /** 2026-09-07: the label on the announcement date, beside the three time rows. */
   readonly announcedLabel: string;
+  /** 2026-09-14: the text of the "Join" link, shown only when the workshop carries a join link. */
+  readonly joinLabel: string;
   readonly posterAltTemplate: string;
 }
 
@@ -192,6 +197,29 @@ export function LiveWorkshop({
           </>
         )}
       </dl>
+      {/* The join link, if there is one — a call to action after the reader
+          knows when it is. Guarded on `isSafeHref` (not just presence): the
+          value is validated as `https://` at both boundaries, and this is the
+          last check before it becomes a live link, so a `javascript:`/`data:`
+          value that ever slipped through renders as nothing. Opens in a new
+          tab — a meeting link is somewhere the reader goes, not away from the
+          announcement. */}
+      {record.joinLink && isSafeHref(record.joinLink) && (
+        <p className="ndn-workshop-join">
+          {/* A link, styled as the site's primary pill — the same
+              `.ndn-button` classes `packages/ui`'s Button composes, so the
+              call to action matches every other button rather than being a
+              second kind of button invented here. */}
+          <a
+            className={`ndn-button ndn-button--primary ${interactiveClassName}`}
+            href={record.joinLink}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {strings.joinLabel}
+          </a>
+        </p>
+      )}
     </article>
   );
 }

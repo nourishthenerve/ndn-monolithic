@@ -16,6 +16,7 @@ afterEach(cleanup);
 const STRINGS = {
   empty: 'No posts yet.',
   readMore: 'Read more',
+  newLabel: 'New',
   publishedOnTemplate: 'Published {date}',
   readingTimeTemplate: '{minutes} min read',
 };
@@ -467,5 +468,113 @@ describe('a post shows its themes as tags', () => {
     );
     expect(screen.getByText('Pain Science')).toBeDefined();
     expect(screen.queryByText('retired-theme')).toBeNull();
+  });
+});
+
+describe('a recently published post is marked "New"', () => {
+  // A fixed clock so the 30-day window is exact rather than the test machine's.
+  const now = () => Date.parse('2026-09-14T00:00:00.000Z');
+
+  function dated(id: string, publishedAt: string): LiveBlogPost {
+    return {
+      id,
+      publishedAt,
+      translations: { en: { title: `${id} title`, excerpt: 'x', body: 'body' } },
+    };
+  }
+
+  it('shows the marker on a post published within the last 30 days', async () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        initialPosts={[dated('fresh', '2026-09-10T09:00:00.000Z')]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    // Appears after mount — the marker is decided against the reader's clock,
+    // not at render — so it is awaited rather than asserted synchronously.
+    expect(await screen.findByText('New')).toBeDefined();
+  });
+
+  it('does not show the marker on a post older than 30 days', async () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        initialPosts={[dated('old', '2026-07-01T09:00:00.000Z')]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    // The card is on screen…
+    expect(await screen.findByText('old title')).toBeDefined();
+    // …and it carries no marker.
+    expect(screen.queryByText('New')).toBeNull();
+  });
+
+  it('marks only the posts that are actually recent when a list mixes both', async () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        initialPosts={[
+          dated('fresh', '2026-09-12T09:00:00.000Z'),
+          dated('old', '2026-01-01T09:00:00.000Z'),
+        ]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    await screen.findByText('fresh title');
+    // One marker across the two cards.
+    expect(screen.getAllByText('New')).toHaveLength(1);
+  });
+});
+
+describe('a topic page shows only the posts carrying that theme', () => {
+  function themed(id: string, themes: readonly string[]): LiveBlogPost {
+    return {
+      id,
+      publishedAt: '2026-09-03T09:00:00.000Z',
+      themes,
+      translations: { en: { title: `${id} title`, excerpt: 'x', body: 'body' } },
+    };
+  }
+
+  it('keeps the posts that include the filtered theme and drops the rest', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        themeFilter="pain-science"
+        initialPosts={[
+          themed('has-it', ['pain-science', 'womens-health']),
+          themed('also-has-it', ['pain-science']),
+          themed('not-tagged', ['neurorehabilitation']),
+          themed('no-themes', []),
+        ]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getByText('has-it title')).toBeDefined();
+    expect(screen.getByText('also-has-it title')).toBeDefined();
+    expect(screen.queryByText('not-tagged title')).toBeNull();
+    expect(screen.queryByText('no-themes title')).toBeNull();
+  });
+
+  it('shows the empty message when no post carries the filtered theme', () => {
+    render(
+      <LiveBlogList
+        strings={STRINGS}
+        locale="en"
+        themeFilter="lifestyle-medicine"
+        initialPosts={[themed('other', ['pain-science'])]}
+        fetchPosts={() => new Promise(() => {})}
+      />,
+    );
+    expect(screen.getByText(STRINGS.empty)).toBeDefined();
+    expect(screen.queryByText('other title')).toBeNull();
   });
 });

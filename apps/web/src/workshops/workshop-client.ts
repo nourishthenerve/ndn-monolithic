@@ -25,6 +25,13 @@ const workshopSchema = z.object({
   id: z.string(),
   dateTimeUtc: z.string(),
   posterKey: z.string().optional(),
+  // 2026-09-14: the meeting link an attendee joins by, shown as a "Join" link
+  // on the workshop page. Parsed here — unlike `capacity`/`priceMinorUnits`
+  // above, this one is displayed. Optional and tolerant of absence, for the
+  // same reason the timestamps below are: a required field would fail the
+  // whole parse and empty the listing. Rendered only after an `isSafeHref`
+  // guard, so a malformed stored value never becomes a live link.
+  joinLink: z.string().optional(),
   // 2026-09-07: when the workshop was announced — distinct from
   // `dateTimeUtc`, which is when it happens, and labelled distinctly
   // wherever both appear. Both optional for the reason

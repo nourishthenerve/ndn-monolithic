@@ -38,7 +38,14 @@ export interface WorkshopFormFields {
   readonly description: string;
   /** `<input type="datetime-local">`'s own value — local wall time, no zone. */
   readonly dateTimeLocal: string;
-  readonly capacity: string;
+  /**
+   * 2026-09-14: the meeting link an attendee joins by (Zoom, Meet, and the
+   * like), shown as a "Join" link on the public announcement. Free text as the
+   * author types it; validated as an absolute `https://` URL before the
+   * request is built (`isValidJoinLink`), and omitted when blank. Replaced the
+   * old "Places" (capacity) field, which was collected but never displayed.
+   */
+  readonly joinLink: string;
   /** Media-bucket key of an uploaded poster, once one has been uploaded. */
   readonly posterKey?: string;
   readonly publishNow: boolean;
@@ -80,7 +87,7 @@ export const EMPTY_WORKSHOP: WorkshopFormFields = {
   title: '',
   description: '',
   dateTimeLocal: '',
-  capacity: '',
+  joinLink: '',
   publishNow: true,
 };
 
@@ -98,7 +105,7 @@ export interface CreateWorkshopRequestBody {
   readonly id: string;
   readonly status: 'draft' | 'published';
   readonly dateTimeUtc: string;
-  readonly capacity?: number;
+  readonly joinLink?: string;
   readonly posterKey?: string;
   readonly details: Readonly<Record<string, { title: string; description: string }>>;
 }
@@ -147,6 +154,23 @@ export function dedupeThemes(themes: readonly string[]): string[] {
 /** `true` when this is a usable slug — lowercase words joined by single hyphens, which is what every published URL on this site already looks like. */
 export function isValidSlug(id: string): boolean {
   return SLUG_PATTERN.test(id.trim());
+}
+
+/**
+ * `true` when this is a join link the site can publish: an absolute `https://`
+ * URL. The empty string is *not* valid here — the caller treats "blank" as
+ * "no link" before ever asking this — so a non-empty value that fails is a
+ * value the author needs to fix, not a field they left alone. `https:` only,
+ * for the reason the API's own `joinLinkSchema` and `rich-text/policy.ts`'s
+ * `isSafeHref` give: `javascript:`, `data:` and plain `http:` have no business
+ * in a link the site renders.
+ */
+export function isValidJoinLink(value: string): boolean {
+  try {
+    return new URL(value.trim()).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 /** A slug is a URL segment; anything longer than this is unreadable and no more unique. */
@@ -233,15 +257,16 @@ export function buildCreateWorkshopRequestBody(
   fields: WorkshopFormFields,
   dateTimeUtc: string,
 ): CreateWorkshopRequestBody {
-  const capacity = Number.parseInt(fields.capacity.trim(), 10);
+  const joinLink = fields.joinLink.trim();
   return {
     id: fields.id.trim(),
     status: fields.publishNow ? 'published' : 'draft',
     dateTimeUtc,
-    // Omitted, never sent as `0` or `NaN` — D-31 made capacity genuinely
-    // optional (workshops are announcement-only), so "no limit" and "a
-    // limit of nothing" must stay different facts.
-    ...(Number.isFinite(capacity) && capacity > 0 ? { capacity } : {}),
+    // Omitted rather than sent empty, the same discipline `posterKey` keeps:
+    // "no join link" and "a link that is the empty string" are different
+    // facts. Sent verbatim once present — the composer has already checked it
+    // is a valid `https://` URL (`isValidJoinLink`), and the API re-checks.
+    ...(joinLink ? { joinLink } : {}),
     ...(fields.posterKey ? { posterKey: fields.posterKey } : {}),
     details: {
       [DEFAULT_LOCALE]: {

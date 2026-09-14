@@ -23,6 +23,7 @@ import type { SessionClient } from '../auth/session.js';
 import { createSessionClient } from '../auth/session.js';
 import { contentApiUrl } from '../site-config.js';
 
+import { CONTENT_SAVED_EVENT } from './authoring-submit.js';
 import type { PanelHeadingLevel } from './heading-level.js';
 
 /** Which of the two authoring surfaces a list is for. They differ only in their URLs and their title field. */
@@ -150,6 +151,24 @@ export function AuthoredContentList({
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Re-read when the composer on this same page saves a new item, so the row
+   * appears without a manual refresh — the owner's request. The composer and
+   * this list are separate Astro islands, so the channel is a `window` event
+   * (`CONTENT_SAVED_EVENT`) rather than a shared callback. Only this list's
+   * own kind reloads; a save of the other kind is ignored.
+   */
+  useEffect(() => {
+    const onSaved = (event: Event) => {
+      const detail = (event as CustomEvent<{ kind?: string }>).detail;
+      if (!detail || detail.kind === kind) {
+        void load();
+      }
+    };
+    window.addEventListener(CONTENT_SAVED_EVENT, onSaved);
+    return () => window.removeEventListener(CONTENT_SAVED_EVENT, onSaved);
+  }, [load, kind]);
 
   const toggle = async (id: string, published: boolean) => {
     setBusyId(id);
