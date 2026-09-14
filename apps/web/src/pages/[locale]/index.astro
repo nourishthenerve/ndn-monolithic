@@ -36,6 +36,7 @@ import { fetchPublishedBlogPosts } from '../../blog/content-client.js';
 import { LiveBlogList } from '../../blog/LiveBlogList.js';
 import ContactDetails from '../../components/ContactDetails.astro';
 import { blogThemeLabels } from '../../config/blog-themes.js';
+import { blogTopics } from '../../config/blog-topics.js';
 import { services } from '../../config/services.js';
 import { OfferTiles } from '../../home/OfferTiles.js';
 import BaseLayout from '../../layouts/BaseLayout.astro';
@@ -345,10 +346,11 @@ const homeStylesCss = `
   }
 }
 
-/* Each tile is a real button now (it opens the topic's dialog), so it carries
-   a button reset — no chrome, inherited type and colour — on top of the same
-   centred column the list items had. The whole tile is the target; the label
-   below is its accessible name. */
+/* A tile is a button in the "what we offer" grid (it opens a dialog) and a
+   link in the "Topics" grid (it navigates to a topic archive). The same class
+   dresses both: a reset — no chrome, inherited type and colour, no underline —
+   on top of the centred column the list items had. The whole tile is the
+   target; the label below is its accessible name. */
 .ndn-home-offer {
   display: flex;
   flex-direction: column;
@@ -362,6 +364,7 @@ const homeStylesCss = `
   background: none;
   color: inherit;
   font: inherit;
+  text-decoration: none;
   cursor: pointer;
 }
 
@@ -669,6 +672,7 @@ const homeStylesCss = `
             strings={{
               empty: t('blog.index.empty', undefined, locale),
               readMore: t('blog.index.readMore', undefined, locale),
+              newLabel: t('blog.new', undefined, locale),
               // The placeholder survives into the island: `t()` runs here,
               // at build time, and cannot format a date for a post
               // published since. Same arrangement as `posterAltTemplate`.
@@ -685,9 +689,38 @@ const homeStylesCss = `
       </div>
     </section>
 
+    <section id="topics" class="ndn-home-section ndn-home-section--tinted" aria-labelledby="topics-heading">
+      <div class="ndn-home-inner">
+        <Heading level={2} id="topics-heading">
+          {t('home.topics.heading', undefined, locale)}
+        </Heading>
+        <p class="ndn-home-intro">{t('home.topics.intro', undefined, locale)}</p>
+        {/* The twelve blog themes as circular tiles — the same look as "what
+            we offer" above (`.ndn-home-offer*`), four to a row so the twelve
+            fall as three rows on a wide viewport. Each tile is a link to that
+            topic's archive rather than a dialog, so this is plain markup, not
+            an island — no client state to open, nothing to hydrate. */}
+        <ul class="ndn-home-offers" role="list">
+          {
+            blogTopics(locale).map((topic) => (
+              <li>
+                <a class="ndn-home-offer" href={topic.href}>
+                  <span class="ndn-home-offer-disc">
+                    {/* Decorative: the label below is the tile's accessible name. */}
+                    <img src={topic.icon} alt="" width={144} height={144} loading="lazy" />
+                  </span>
+                  <span class="ndn-home-offer-label">{topic.label}</span>
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </section>
+
     <section
       id="workshops"
-      class="ndn-home-section ndn-home-section--tinted"
+      class="ndn-home-section"
       aria-labelledby="workshops-heading"
     >
       <div class="ndn-home-inner">

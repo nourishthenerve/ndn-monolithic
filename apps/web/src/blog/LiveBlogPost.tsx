@@ -25,6 +25,7 @@ import { renderableRichText, toPlainParagraphs } from '../rich-text/render.js';
 import { blogContentType, contentApiUrl, mediaUrl } from '../site-config.js';
 
 import { readingMinutes } from './reading-time.js';
+import { resolveBlogThemeTags } from './theme-tags.js';
 
 interface Translation {
   readonly title: string;
@@ -39,6 +40,13 @@ export interface LiveBlogPostRecord {
   /** 2026-09-07: the byline date — see `publication-date.ts`. */
   readonly publishedAt?: string;
   readonly created_at?: string;
+  /**
+   * 2026-09-14: the post's theme ids, shown as tags at the foot of the
+   * article — the same set the listing card carries. Optional and tolerant of
+   * absence, exactly as `imageKey` is: a post written before the field existed
+   * has none, and an id with no label is dropped at render (`theme-tags.ts`).
+   */
+  readonly themes?: readonly string[];
   readonly translations: Readonly<Record<string, Translation | undefined>>;
 }
 
@@ -64,6 +72,13 @@ export interface LiveBlogPostStrings {
 export interface LiveBlogPostProps {
   readonly strings: LiveBlogPostStrings;
   readonly locale: Locale;
+  /**
+   * 2026-09-14: theme id → label, for the tags at the foot of the article.
+   * Resolved by the page from the catalogue and passed in, the same way
+   * `LiveBlogList` receives it — an island is handed plain strings rather than
+   * calling `t()` at runtime. Optional: a page that passes none shows no tags.
+   */
+  readonly themeLabels?: Readonly<Record<string, string>>;
   /** Injectable for tests; defaults to `?slug=` on the current URL. */
   readonly slug?: string;
   readonly fetchPosts?: () => Promise<readonly LiveBlogPostRecord[] | undefined>;
@@ -105,6 +120,7 @@ async function defaultFetchPosts(): Promise<readonly LiveBlogPostRecord[] | unde
 export function LiveBlogPost({
   strings,
   locale,
+  themeLabels,
   slug,
   fetchPosts = defaultFetchPosts,
 }: LiveBlogPostProps): ReactNode {
@@ -113,6 +129,7 @@ export function LiveBlogPost({
   const [translation, setTranslation] = useState<Translation | undefined>();
   const [imageKey, setImageKey] = useState<string | undefined>();
   const [publishedIso, setPublishedIso] = useState<string | undefined>();
+  const [themes, setThemes] = useState<readonly string[] | undefined>();
 
   useEffect(() => {
     if (!id) {
@@ -146,6 +163,9 @@ export function LiveBlogPost({
       // Same reasoning as the image: a date belongs to the post, not to a
       // language, and the post itself is not held in state.
       setPublishedIso(post ? publicationDateOf(post) : undefined);
+      // And the themes, for the same reason — they belong to the post, not to
+      // one of its translations.
+      setThemes(post?.themes);
       setState('ready');
     });
     return () => {
@@ -179,6 +199,10 @@ export function LiveBlogPost({
   // Counted from the body this page is about to render, so the estimate and
   // the article can never be out of step.
   const minutes = readingMinutes(translation.body);
+  // The post's themes as tags, through the same shared helper the prerendered
+  // page uses, so this fallback and the canonical article render one post's
+  // tags one way.
+  const themeTags = resolveBlogThemeTags(themes, themeLabels);
 
   return (
     <article>
@@ -209,6 +233,18 @@ export function LiveBlogPost({
         toParagraphs(translation.body).map((paragraph, index) => (
           <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>
         ))
+      )}
+      {/* The themes, at the foot of the article — the same `ndn-card-themes`/
+          `ndn-tag` pills the listing card and the prerendered page use, in the
+          same place. */}
+      {themeTags.length > 0 && (
+        <ul className="ndn-card-themes">
+          {themeTags.map((tag) => (
+            <li key={tag.id} className="ndn-tag">
+              {tag.label}
+            </li>
+          ))}
+        </ul>
       )}
     </article>
   );

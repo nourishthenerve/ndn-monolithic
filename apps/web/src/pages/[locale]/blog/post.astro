@@ -24,6 +24,7 @@ import { supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
 
 import { LiveBlogPost } from '../../../blog/LiveBlogPost.js';
+import { blogThemeLabels } from '../../../config/blog-themes.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { proseStylesCss } from '../../../rich-text/styles.js';
 import { siteName } from '../../../site-config.js';
@@ -45,6 +46,7 @@ const heading = t('blog.index.heading', undefined, locale);
   <LiveBlogPost
     client:only="react"
     locale={locale}
+    themeLabels={blogThemeLabels(locale)}
     strings={{
       loading: t('blog.post.loading', undefined, locale),
       notFound: t('blog.post.notFound', undefined, locale),

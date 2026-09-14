@@ -1,0 +1,86 @@
+---
+// 2026-09-14: one archive page per topic — every published post carrying a
+// given theme, newest first, exactly as the `/blog` archive reads. Reached
+// from the landing page's "Topics" grid (`config/blog-topics.ts`), where each
+// tile links here.
+//
+// Built statically, one path per (locale, theme) pair — the twelve themes are
+// a closed, known set (`@ndn/shared-types`'s `blogThemeIds`), unlike a post
+// slug, so unlike `blog/[slug]` these *can* be enumerated ahead of any content
+// existing, the same way the legal pages are. A post that carries several
+// themes appears on each of their pages; that is the point of a theme.
+//
+// The list is the same `LiveBlogList` island the archive and the homepage use,
+// seeded server-side and reconciled on the client — so a post published since
+// the last deploy shows up under its topic immediately. `themeFilter` narrows
+// it to this theme on both the seed and the fetch.
+import { supportedLocales, t } from '@ndn/i18n';
+import type { Locale } from '@ndn/i18n';
+import { blogThemeIds, isBlogThemeId } from '@ndn/shared-types';
+import { Heading, Link } from '@ndn/ui';
+
+import { fetchPublishedBlogPosts } from '../../../../blog/content-client.js';
+import { LiveBlogList } from '../../../../blog/LiveBlogList.js';
+import { blogThemeLabelKey, blogThemeLabels } from '../../../../config/blog-themes.js';
+import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import { siteName } from '../../../../site-config.js';
+
+export async function getStaticPaths() {
+  const posts = await fetchPublishedBlogPosts();
+  return supportedLocales.flatMap((locale) =>
+    blogThemeIds.map((topic) => ({ params: { locale, topic }, props: { posts } })),
+  );
+}
+
+const { locale, topic } = Astro.params as { locale: Locale; topic: string };
+const { posts } = Astro.props as {
+  posts: Awaited<ReturnType<typeof fetchPublishedBlogPosts>>;
+};
+
+if (!isBlogThemeId(topic)) {
+  // Unreachable given getStaticPaths only ever generates a path for a known
+  // theme id — a loud failure here would mean that invariant broke, not a
+  // normal "content not ready" state (the posture `blog/[slug].astro` takes).
+  throw new Error(`blog/topic/[topic].astro: "${topic}" is not a known blog theme`);
+}
+
+// Same filter the `/blog` archive applies to its own seed: a post appears on a
+// locale's listing only once it has a translation for it. `LiveBlogList`'s
+// `themeFilter` does the theme narrowing, on both this seed and the fetch.
+const postsForLocale = posts
+  .filter((post) => post.translations[locale])
+  .map((post) => post);
+
+const label = t(blogThemeLabelKey(topic), undefined, locale);
+const heading = t('blog.topic.heading', { topic: label }, locale);
+---
+
+<BaseLayout
+  locale={locale}
+  title={`${heading} — ${siteName}`}
+  description={t('blog.topic.description', { topic: label }, locale)}
+>
+  <Heading level={1}>{heading}</Heading>
+  {/* Back to the full archive — a topic page is a filtered view of it, and a
+      reader who lands here from a tile should be able to widen back out. */}
+  <p class="ndn-blog-topic-back">
+    <Link href={`/${locale}/blog`}>{t('blog.topic.allArticles', undefined, locale)}</Link>
+  </p>
+  {/* `client:load`, not `client:only` — the seed must be in the HTML for a
+      crawler and a reader with no JavaScript, the same reasoning the `/blog`
+      listing states. */}
+  <LiveBlogList
+    client:load
+    locale={locale}
+    themeLabels={blogThemeLabels(locale)}
+    themeFilter={topic}
+    initialPosts={postsForLocale}
+    strings={{
+      empty: t('blog.topic.empty', undefined, locale),
+      readMore: t('blog.index.readMore', undefined, locale),
+      newLabel: t('blog.new', undefined, locale),
+      publishedOnTemplate: t('common.publishedOn', { date: '{date}' }, locale),
+      readingTimeTemplate: t('blog.readingTime', { minutes: '{minutes}' }, locale),
+    }}
+  />
+</BaseLayout>

@@ -14,11 +14,12 @@
 // entirely.
 import { formatDayMonthYear, supportedLocales, t } from '@ndn/i18n';
 import type { Locale } from '@ndn/i18n';
-import { Heading } from '@ndn/ui';
+import { Heading, interactiveClassName } from '@ndn/ui';
 
 import { buildHreflangLinks } from '../../../blog/seo.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { publicationDateOf } from '../../../publication-date.js';
+import { isSafeHref } from '../../../rich-text/policy.js';
 import {
   renderableRichText,
   richTextToPlainText,
@@ -76,6 +77,11 @@ const zoneLabels = {
   middleEast: t('workshops.time.middleEast', undefined, locale),
 };
 const posterSrc = workshop.posterKey ? workshopPosterUrl(workshop.posterKey) : undefined;
+// 2026-09-14: the join link, if this workshop has one. Guarded on
+// `isSafeHref` — the same last-check-before-render `LiveWorkshop.tsx` makes,
+// so the two renderings agree and a malformed stored value never becomes a
+// live link.
+const joinLink = workshop.joinLink && isSafeHref(workshop.joinLink) ? workshop.joinLink : undefined;
 // 2026-09-07: when this was announced — not `dateTimeUtc`, and named
 // separately below so the two dates cannot be read as one another. See
 // `apps/web/src/publication-date.ts` for the `created_at` fallback that
@@ -147,6 +153,23 @@ const metaDescription = richTextToPlainText(detail.description);
         )
       }
     </dl>
+    {
+      /* The join link, if any — matching `LiveWorkshop.tsx`'s own markup so
+         the two renderings of this page do not differ. Opens in a new tab: a
+         meeting link is somewhere the reader goes, not away from the page. */
+      joinLink && (
+        <p class="ndn-workshop-join">
+          <a
+            class={`ndn-button ndn-button--primary ${interactiveClassName}`}
+            href={joinLink}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t('workshops.detail.joinLabel', undefined, locale)}
+          </a>
+        </p>
+      )
+    }
   </article>
 </BaseLayout>
 

@@ -20,6 +20,8 @@ import type { BlogPost } from '../../../blog/content-client.js';
 import { fetchPublishedBlogPosts } from '../../../blog/content-client.js';
 import { readingMinutes } from '../../../blog/reading-time.js';
 import { buildHreflangLinks } from '../../../blog/seo.js';
+import { resolveBlogThemeTags } from '../../../blog/theme-tags.js';
+import { blogThemeLabels } from '../../../config/blog-themes.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import { publicationDateOf } from '../../../publication-date.js';
 import { renderableRichText, toPlainParagraphs } from '../../../rich-text/render.js';
@@ -66,6 +68,12 @@ const publishedIso = publicationDateOf(post);
 // Counted from the body this page renders, so the estimate and the article
 // cannot be out of step — see `blog/reading-time.ts`.
 const minutes = readingMinutes(translation.body);
+// 2026-09-14: the post's themes as tags, the same ones the listing card shows
+// — the owner asked why the themes chosen when writing a post never appear on
+// the post itself. Resolved through the shared `resolveBlogThemeTags`, so the
+// article and the card render one post's tags one way, and an unknown or
+// retired id is dropped rather than shown raw.
+const themeTags = resolveBlogThemeTags(post.themes, blogThemeLabels(locale));
 ---
 
 <BaseLayout
@@ -105,6 +113,19 @@ const minutes = readingMinutes(translation.body);
         <div class="ndn-prose" set:html={bodyHtml} />
       ) : (
         bodyParagraphs.map((paragraph) => <p>{paragraph}</p>)
+      )
+    }
+    {
+      /* The themes, at the foot of the article, where a reader looks after
+         reading it rather than before — the same `ndn-card-themes`/`ndn-tag`
+         pills the listing card uses, so the tags read as one family across
+         the two surfaces. */
+      themeTags.length > 0 && (
+        <ul class="ndn-card-themes">
+          {themeTags.map((tag) => (
+            <li class="ndn-tag">{tag.label}</li>
+          ))}
+        </ul>
       )
     }
   </article>

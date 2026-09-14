@@ -60,7 +60,7 @@ export type CreateWorkshopInput = Omit<Workshop, 'created_at' | 'updated_at'>;
 
 /** Patchable by TASK 1.5.1's `PATCH /workshops/:id` — never `status` (publish/cancel own that transition exclusively, same discipline as content/testimonials). */
 export type UpdateWorkshopInput = Partial<
-  Pick<Workshop, 'dateTimeUtc' | 'capacity' | 'priceMinorUnits' | 'posterKey' | 'details'>
+  Pick<Workshop, 'dateTimeUtc' | 'capacity' | 'priceMinorUnits' | 'posterKey' | 'joinLink' | 'details'>
 >;
 
 export class WorkshopRepository {

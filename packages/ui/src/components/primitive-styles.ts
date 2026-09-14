@@ -468,6 +468,29 @@ body {
   border: 1px solid var(--ndn-color-border);
 }
 
+/* 2026-09-14: the "New" marker on a blog card published within the last 30
+   days. A small green capsule — the brand green is olive, so this is the same
+   brand-soft / brand-strong pairing the account area's "published" status
+   badge wears (and which color.test.ts proves clears 4.5:1 in both themes),
+   which is exactly the "this is live / fresh" signal it means here. Sized down
+   from the theme tags and set in its own colours so it reads as a status
+   marker beside the muted date rather than as one of the tags below the
+   excerpt. text-transform is stated, not inherited, so it stays a tidy "NEW"
+   even though ndn-card-meta already uppercases the line.
+   (No backticks in this block: it is a JS template literal.) */
+.ndn-new-badge {
+  display: inline-block;
+  padding-block: 0.0625rem;
+  padding-inline: 0.4375rem;
+  border-radius: 999px;
+  background-color: var(--ndn-color-brand-soft);
+  color: var(--ndn-color-brand-strong);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 /* The display serif, on every heading the site renders — packages/ui's
    Heading is the only way a heading is written here, so this one rule is the
    whole of it. Sizes are set per level below rather than left to the browser,

@@ -171,6 +171,39 @@ describe('createWorkshopAuthoringHandler — POST /workshops', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  it('stores an https join link and returns it on the created item', async () => {
+    const { deps } = buildDeps();
+    const handler = createWorkshopAuthoringHandler(deps);
+
+    const result = await handler(
+      fakeEvent({
+        routeKey: 'POST /workshops',
+        body: { ...validBody, joinLink: 'https://zoom.us/j/123' },
+      }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 201 });
+    const parsed = JSON.parse((result as { body: string }).body) as { item: Workshop };
+    expect(parsed.item.joinLink).toBe('https://zoom.us/j/123');
+  });
+
+  it.each([
+    ['plain http', 'http://insecure.example'],
+    ['a javascript: URL', 'javascript:alert(1)'],
+    ['not a URL', 'join here please'],
+  ])('rejects a non-https joinLink (%s) with 400', async (_label, joinLink) => {
+    const { deps } = buildDeps();
+    const handler = createWorkshopAuthoringHandler(deps);
+
+    const result = await handler(
+      fakeEvent({ routeKey: 'POST /workshops', body: { ...validBody, joinLink } }),
+      {} as never,
+      undefined as never,
+    );
+    expect(result).toMatchObject({ statusCode: 400 });
+  });
+
   it('rejects a negative priceMinorUnits with 400', async () => {
     const { deps } = buildDeps();
     const handler = createWorkshopAuthoringHandler(deps);
