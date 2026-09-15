@@ -23,7 +23,12 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CONNECT_STALL_TIMEOUT_MS, MAX_CALL_MINUTES, VideoCall } from './VideoCall.js';
+import {
+  CONNECT_STALL_TIMEOUT_MS,
+  MAX_CALL_MINUTES,
+  STUCK_REBUILD_TIMEOUT_MS,
+  VideoCall,
+} from './VideoCall.js';
 import type { VideoCallStrings } from './VideoCall.js';
 
 const STRINGS: VideoCallStrings = {
@@ -2268,6 +2273,43 @@ describe('a connection that never completes', () => {
         String(call[0]),
       );
       expect(urls.some((url) => url.includes('/turn-credentials'))).toBe(true);
+    });
+  });
+
+  // The last resort: a peer is present but nothing about the intricate
+  // reconnect handshake ever produces a connected call. Rather than spin for
+  // ever, the whole call is started over from scratch — the flow a page
+  // reload uses, which is known to work.
+  it('starts the whole call over when a peer is present but it never connects', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const id = appointmentIdAt(-60_000);
+    withAppointment({ id, durationMinutes: 30 });
+    renderCall(id);
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
+    await screen.findByRole('button', { name: STRINGS.leaveLabel });
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    await act(async () => {
+      socket.deliver({ type: 'joined' });
+    });
+    // A peer announces itself, so it is provably there — but no answer ever
+    // comes, so no connection forms and descriptions never even cross (so the
+    // relay-escalation watchdog, which waits on a remote description, never
+    // arms). Only the last-resort rebuild can save this.
+    await act(async () => {
+      socket.deliver(peerReady(PEER_ID_LOWER));
+    });
+    const socketsBefore = FakeWebSocket.instances.length;
+
+    await act(async () => {
+      vi.advanceTimersByTime(STUCK_REBUILD_TIMEOUT_MS + 500);
+    });
+
+    // The whole call was torn down and rejoined from nothing: a new socket.
+    await waitFor(() => {
+      expect(FakeWebSocket.instances.length).toBeGreaterThan(socketsBefore);
     });
   });
 

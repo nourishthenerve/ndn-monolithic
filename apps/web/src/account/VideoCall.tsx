@@ -181,6 +181,26 @@ const STALE_OFFER_MS = 6000;
  */
 export const CONNECT_STALL_TIMEOUT_MS = 9000;
 
+/**
+ * 2026-09-15: the last-resort recovery. If a peer is provably present (it has
+ * announced itself) but the call has still not reached `connected` this long
+ * after, stop trying to *patch* the current attempt and start the whole call
+ * over — a fresh socket, a fresh join, a fresh session id — which is exactly
+ * what a page reload does, and a fresh page reliably connects.
+ *
+ * This exists because the reconnect path is intricate (an offerer election,
+ * generation tracking, a nudge loop, glare handling) and any one subtle stall
+ * in it used to leave a caller on "Connecting…" for the rest of the window.
+ * Rather than trust every branch of that to be perfect, this guarantees the
+ * outcome the owner asked for — *"I dont want this connecting state to be in
+ * all the time"* — by falling back to the one flow that is known to work.
+ * Bounded by `MAX_AUTOMATIC_REJOINS` and reset on every successful connect, so
+ * a call that connects, drops, and recovers keeps a full allowance; it is
+ * longer than `CONNECT_STALL_TIMEOUT_MS` so the cheaper relay escalation gets
+ * its turn first.
+ */
+export const STUCK_REBUILD_TIMEOUT_MS = 18_000;
+
 /** When the countdown starts warning rather than merely counting. Announced once, politely — not every second. */
 const ENDING_SOON_MS = 2 * 60_000;
 
@@ -910,6 +930,12 @@ export function VideoCall({
      */
     let connectWatchdog: ReturnType<typeof setTimeout> | undefined;
     /**
+     * The last-resort watchdog (see `STUCK_REBUILD_TIMEOUT_MS`). Armed once a
+     * peer is known to be present, cleared on connect; if it fires, the whole
+     * call is started over from scratch.
+     */
+    let stuckWatchdog: ReturnType<typeof setTimeout> | undefined;
+    /**
      * **The offerer election.** Random per join, exchanged in `ready`, and
      * the greater id offers. Symmetric, decided by both sides from the same
      * two values, and — unlike asking an HTTP route which role you are —
@@ -1006,6 +1032,43 @@ export function VideoCall({
         if (!live || isConnected()) return;
         stateMachine.handleConnectionState('failed');
       }, CONNECT_STALL_TIMEOUT_MS);
+    };
+
+    const clearStuckWatchdog = (): void => {
+      if (stuckWatchdog !== undefined) {
+        clearTimeout(stuckWatchdog);
+        stuckWatchdog = undefined;
+      }
+    };
+
+    /**
+     * Arm the last-resort watchdog the first time a peer is known to be
+     * present (see `STUCK_REBUILD_TIMEOUT_MS`). Only ever one is pending: it
+     * is a deadline on "connected with this peer, ever", not a per-message
+     * timer that a steady stream of nudges could keep pushing back. If it
+     * fires, throw the whole attempt away and rejoin from nothing — the flow
+     * a page reload uses, which is known to work — bounded by the same
+     * `automaticRejoinsRef` budget the relay escalation spends.
+     */
+    const armStuckWatchdog = (): void => {
+      if (stuckWatchdog !== undefined || !live || isConnected()) return;
+      stuckWatchdog = setTimeout(() => {
+        stuckWatchdog = undefined;
+        if (!live || isConnected()) return;
+        if (automaticRejoinsRef.current < MAX_AUTOMATIC_REJOINS && windowOpenRef.current) {
+          automaticRejoinsRef.current += 1;
+          setStageIfLive({ kind: 'call', lifecycle: { kind: 'reconnecting' } });
+          // Re-runs the whole join effect: a new socket, a new join, a new
+          // session id, a fresh peer connection — a clean start on both
+          // sides (the peer sees the new session and rebuilds to match).
+          setJoinAttempt((attempt) => attempt + 1);
+          return;
+        }
+        // The window is closing, or three fresh starts did not take. End
+        // cleanly with a Rejoin rather than spinning for ever.
+        onLifecycleChangeRef.current?.({ kind: 'call-failed' });
+        stopCall({ kind: 'call', lifecycle: { kind: 'call-failed' } });
+      }, STUCK_REBUILD_TIMEOUT_MS);
     };
 
     /** `wantsOffer` is the whole reason a reconnect on a healthy call does not renegotiate it: a peer who is already connected asks for nothing. */
@@ -1147,6 +1210,7 @@ export function VideoCall({
         const peerIsNewSession = incoming !== undefined && known !== undefined && incoming !== known;
         peerSessionId = incoming ?? known;
         peerPresent = true;
+        armStuckWatchdog();
         if (peerIsNewSession) {
           peerGeneration = -1;
           // Rebuild immediately, STUN-first (see `rebuildForNewPeerSession`):
@@ -1199,6 +1263,7 @@ export function VideoCall({
 
       // Anything else from the peer also proves they are there.
       peerPresent = true;
+      armStuckWatchdog();
       scheduleNudge();
       if (!pc) return;
       try {
@@ -1431,9 +1496,10 @@ export function VideoCall({
           automaticRejoinsRef.current = 0;
           nudgeCount = 0;
           cancelNudge();
-          // Connected — there is nothing left for the stall watchdog to
-          // guard against.
+          // Connected — there is nothing left for either watchdog to guard
+          // against.
           clearConnectWatchdog();
+          clearStuckWatchdog();
         }
         if (lifecycle.kind !== 'call-failed') {
           setStageIfLive({ kind: 'call', lifecycle });
@@ -1577,6 +1643,7 @@ export function VideoCall({
       live = false;
       cancelNudge();
       clearConnectWatchdog();
+      clearStuckWatchdog();
       if (rejoinTimer !== undefined) clearTimeout(rejoinTimer);
       stateMachine.dispose();
       // Flushes any still-accumulating TURN time into the total this call
