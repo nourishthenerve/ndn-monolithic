@@ -75,6 +75,7 @@
 // so "joins late" is an ordinary case rather than something that had to
 // happen inside a 30-second budget that, once spent, could never recover.
 import { defaultLocale, t, type Locale } from '@ndn/i18n';
+import { Button } from '@ndn/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 
@@ -581,8 +582,32 @@ export function VideoCall({
     [releaseDevices],
   );
 
+  /**
+   * **2026-09-15: `leave` is sent only when this side deliberately hung up,
+   * never merely because the join effect tore down.**
+   *
+   * The other party reads a `leave` as "the call is over" and goes to a
+   * terminal screen it does not auto-recover from. But the join effect's
+   * teardown runs for reasons that are nothing of the sort — the caller
+   * reloaded the page, navigated to another page and back, or an automatic
+   * rebuild is replacing the connection — and sending `leave` on those told
+   * the peer to end a call that was about to continue. A reload then landed
+   * on "Connecting…" for ever, because the person still on the call had
+   * already been shown "the other participant left" and would not answer the
+   * fresh offer. This flag is set only by a real "Leave call" press; the
+   * teardown consults it, so a reload or a rebuild is silent to the peer and
+   * the peer simply waits for this side to come back (which its own
+   * new-session handling already knows how to reconnect to).
+   */
+  const leaveIntentRef = useRef(false);
+
   const endCall = useCallback(
-    (reason: EndReason) => stopCall({ kind: 'ended', reason }),
+    (reason: EndReason) => {
+      if (reason === 'left') {
+        leaveIntentRef.current = true;
+      }
+      stopCall({ kind: 'ended', reason });
+    },
     [stopCall],
   );
 
@@ -832,6 +857,11 @@ export function VideoCall({
     if (!session || !deviceStream || !joinRequested || !role) return;
     const { appointmentId, accessToken } = session;
     const stream = deviceStream;
+    // Fresh for this attempt: only a real "Leave call" during it makes the
+    // teardown below announce a `leave` (see `leaveIntentRef`). An automatic
+    // rebuild re-runs this effect and so starts clean too — a rebuild must
+    // not tell the peer this side has gone.
+    leaveIntentRef.current = false;
 
     let live = true;
     let pc: RTCPeerConnection | undefined;
@@ -1504,16 +1534,23 @@ export function VideoCall({
       // Flushes any still-accumulating TURN time into the total this call
       // is about to report.
       noteTurnConnectionState('disconnected');
-      // Sent unconditionally, whichever of the ways this effect came down —
-      // this is the notification the other party's own `onRelayMessage`
-      // reads to leave too, not only a best-effort telemetry report.
+      // **Only when this side deliberately hung up.** This is the message
+      // the other party reads to leave the call — so a reload, a navigation
+      // away, or an automatic rebuild (every one of which comes down this
+      // same path) must not send it, or the peer ends a call that is about
+      // to continue and a returning caller is stranded on "Connecting…".
       // `turnDurationSeconds` stays honest: included only when this call
-      // really did accumulate TURN time, never a fabricated zero.
-      send({
-        type: 'leave',
-        appointmentId,
-        payload: turnSecondsAccumulated > 0 ? { turnDurationSeconds: Math.round(turnSecondsAccumulated) } : {},
-      });
+      // really did accumulate TURN time, never a fabricated zero. (TURN
+      // telemetry is therefore reported on a real hang-up, not on every
+      // teardown — the right trade, since the message cannot both notify the
+      // peer and be invisible to them.)
+      if (leaveIntentRef.current) {
+        send({
+          type: 'leave',
+          appointmentId,
+          payload: turnSecondsAccumulated > 0 ? { turnDurationSeconds: Math.round(turnSecondsAccumulated) } : {},
+        });
+      }
       signalling.current?.close();
       discardPeerConnection(pc);
       // **The device stream is deliberately not stopped here.** It belongs
@@ -1530,9 +1567,7 @@ export function VideoCall({
 
   const rejoinButton = canRejoin ? (
     <p>
-      <button type="button" onClick={beginJoin}>
-        {strings.rejoinLabel}
-      </button>
+      <Button onClick={beginJoin}>{strings.rejoinLabel}</Button>
     </p>
   ) : null;
 
@@ -1755,15 +1790,18 @@ export function VideoCall({
         {!cameraOn && <p style={LOCAL_PLACEHOLDER_STYLE}>{strings.cameraOffLabel}</p>}
       </div>
       <div style={CALL_CONTROLS_STYLE}>
-        {/* `aria-pressed` rather than two unrelated buttons: this is one
-            control with a state, and a screen reader should say which state
-            it is in rather than leaving that to be inferred. */}
-        <button type="button" aria-pressed={cameraOn} onClick={() => setCameraOn((on) => !on)}>
+        {/* Themed pills (`@ndn/ui`'s `Button`) rather than bare `<button>`s,
+            so the call controls match the rest of the account UI. Both are
+            equal-weight in-call controls, so both are the outlined
+            `secondary`. `aria-pressed` rather than two unrelated buttons:
+            this is one control with a state, and a screen reader should say
+            which state it is in rather than leaving that to be inferred. */}
+        <Button variant="secondary" aria-pressed={cameraOn} onClick={() => setCameraOn((on) => !on)}>
           {cameraOn ? strings.turnCameraOffLabel : strings.turnCameraOnLabel}
-        </button>
-        <button type="button" onClick={() => endCall('left')}>
+        </Button>
+        <Button variant="secondary" onClick={() => endCall('left')}>
           {strings.leaveLabel}
-        </button>
+        </Button>
       </div>
     </section>
   );
