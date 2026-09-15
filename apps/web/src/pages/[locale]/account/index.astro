@@ -104,6 +104,8 @@ import { accountDashboardStylesCss } from '../../../account/dashboard-styles.js'
 import { NextAppointmentLead } from '../../../account/NextAppointmentLead.js';
 import { OwnDetailsPanel } from '../../../account/OwnDetailsPanel.js';
 import { PatientProfile } from '../../../account/PatientProfile.js';
+import { pendingApprovalsStylesCss } from '../../../account/pending-approvals-styles.js';
+import { PendingApprovalsPanel } from '../../../account/PendingApprovalsPanel.js';
 import { patientRecordStylesCss } from '../../../account/record-styles.js';
 import { TestimonialPanel } from '../../../account/TestimonialPanel.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
@@ -336,6 +338,43 @@ const changePasswordStrings = {
         />
         <AppointmentCalendar client:only="react" locale={locale} strings={calendarStrings} />
       </section>
+    </RequireAuth>
+
+    {/* ## Pending approvals — the principal's queue, above the patient
+        dashboard. 2026-09-14, the owner: *"right above the Patient dashboard
+        section, add a new section for those pending approvals for
+        appointments that principal clinician need to approve … a table like
+        format where he simply has to click Accept … and the rows will
+        collapse as he clicks Accept."*
+
+        Principal-only, and the tightest gate on this page: a booking is
+        approved by the principal alone (`authz-matrix.ts`'s `Appointment
+        approval` row), and the panel's own route 403s anyone else — so this
+        is the one staff section a sub-clinician, helpdesk and visitor never
+        render. The panel supplies its own `ndn-record-area` sheet and heading
+        and renders nothing at all while the queue is empty, so an
+        all-caught-up principal sees their calendar sit straight above the
+        patient dashboard with no empty band between them. */}
+    <RequireAuth client:only="react" allowRoles={['principal-clinician']}>
+      <PendingApprovalsPanel
+        client:only="react"
+        locale={locale}
+        strings={{
+          heading: t('account.pendingApprovalsHeading', undefined, locale),
+          errorLabel: t('pendingApprovals.error', undefined, locale),
+          patientColumnLabel: t('pendingApprovals.patientColumn', undefined, locale),
+          clinicianColumnLabel: t('pendingApprovals.clinicianColumn', undefined, locale),
+          whenColumnLabel: t('pendingApprovals.whenColumn', undefined, locale),
+          decisionColumnLabel: t('pendingApprovals.decisionColumn', undefined, locale),
+          caption: t('pendingApprovals.caption', undefined, locale),
+          acceptButton: t('pendingApprovals.accept', undefined, locale),
+          declineButton: t('pendingApprovals.decline', undefined, locale),
+          working: t('pendingApprovals.working', undefined, locale),
+          decideFailed: t('pendingApprovals.decideFailed', undefined, locale),
+          unnamedPatient: t('pendingApprovals.unnamedPatient', undefined, locale),
+          unassignedLabel: t('pendingApprovals.unassigned', undefined, locale),
+        }}
+      />
     </RequireAuth>
 
     {/* ## 1a. Patient dashboard — the caseload table itself, not a link to it.
@@ -790,6 +829,7 @@ const changePasswordStrings = {
     client JavaScript — see `account/calendar-styles.ts`. */}
 <style set:html={appointmentCalendarStylesCss} />
 <style set:html={caseloadStylesCss} />
+<style set:html={pendingApprovalsStylesCss} />
 <style set:html={accountDashboardStylesCss} />
 {/* The patient's own five sections are the same record `patient-record`
     shows staff, so they are drawn from the same stylesheet — a patient and

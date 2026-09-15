@@ -41,6 +41,20 @@
 // approval changes the patient's *status*, which changes their position in
 // the index, so the honest thing to show afterwards is what the index
 // actually returns now.
+//
+// ## Amendment, 2026-09-14 — the page reads alphabetically
+//
+// The owner: *"wherever there are Patient dashboard with a table showing all
+// patients, sort them alphabetically … it applies both to principal clinician
+// as well as clinician."* The index still hands each page back in its own
+// status-ranked order (active first — the 2026-08-31 amendment above); this
+// sorts the page in hand by name, so a reader scanning for a person finds
+// them where the alphabet puts them. It is a sort of the rows on screen, not
+// of the directory: with more than one page the ranking across pages is still
+// the index's, and only the backend could make the whole directory
+// alphabetical without giving up the "active first" paging cursor and counts
+// this view is built on. For a clinician — who sees only their own patients,
+// almost always one page — that distinction never shows.
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
@@ -502,6 +516,19 @@ export function CaseloadView({
 
   const { counts } = state.page;
 
+  // Alphabetical by name — see this file's 2026-09-14 amendment. Case- and
+  // accent-insensitive so "de Vries" and "Devries" sit together rather than
+  // apart, and a row whose name has not been set yet (a just-registered
+  // patient the API returned an empty `fullName` for) sorts to the end rather
+  // than jumping to the top on an empty string. A copy, never a sort in
+  // place: `state.page.items` is what the last fetch returned and is read
+  // again on the next reload.
+  const sortedItems = [...state.page.items].sort((a, b) => {
+    if (!a.fullName) return 1;
+    if (!b.fullName) return -1;
+    return a.fullName.localeCompare(b.fullName, undefined, { sensitivity: 'base' });
+  });
+
   if (state.page.items.length === 0 && cursorStack.length === 1) {
     return (
       <div className="ndn-caseload">
@@ -544,7 +571,7 @@ export function CaseloadView({
           </tr>
         </thead>
         <tbody>
-          {state.page.items.map((item) => {
+          {sortedItems.map((item) => {
             const isBusy = pendingPatientId === item.patientId;
             const selectId = `assign-${item.patientId}`;
             return (

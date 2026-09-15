@@ -75,6 +75,19 @@ const APPOINTMENT_APPROVAL_ENTITY_TYPE = 'appointment-approval';
 /** The `Patient profile` row, restated as `patient.ts` and `caseload-repository.ts` each restate it — what gates the patient *name* on a read below, which is a different question from what gates the appointment. */
 const PATIENT_PROFILE_ENTITY_TYPE = 'patient-profile';
 
+/**
+ * The window `GET /appointments/pending-approvals` fans out over — the whole
+ * timeline, not a caller-supplied range. A booking awaiting a decision
+ * matters whenever it falls: a slot next month, or one that has already
+ * slipped past unapproved and the principal should still see rather than
+ * lose. It is still a bounded GSI1 `Query` per treating clinician
+ * (`gsi1sk BETWEEN 'APPT#<from>' AND 'APPT#<to>'`), never a table `Scan` —
+ * the identical read the clinician calendar makes, only over an open range.
+ * `1970`/`9999` bracket every ISO instant an appointment could carry.
+ */
+const PENDING_APPROVALS_FROM = '1970-01-01T00:00:00.000Z';
+const PENDING_APPROVALS_TO = '9999-12-31T23:59:59.999Z';
+
 const scheduleBodySchema = z
   .object({
     scheduledAt: z.string().datetime(),
@@ -419,6 +432,54 @@ export function createAppointmentHandler(
         : named;
       const items = projectAllFor(principal, enriched, resource);
       return respond(200, { items });
+    }
+
+    // 2026-09-14: the principal's pending-approvals queue — every booking
+    // across the whole practice that is waiting for a decision, in one list.
+    //
+    // The owner asked for a section, above the patient dashboard, "for those
+    // pending approvals for appointments that principal clinician need to
+    // approve … a table like format where he simply has to click Accept."
+    //
+    // This route exists because nothing else answered the question. A booking
+    // is keyed on the patient's *assigned* clinician (the `clinicianId` line
+    // in the schedule branch below), so a sub-clinician's pending request
+    // lands on that sub-clinician's calendar — the principal's own
+    // `GET /clinicians/me/calendar` returns only their own patients and never
+    // sees it. Approving still happens patient by patient on the existing
+    // `…/approve` route; this is the missing *index* of what is waiting,
+    // gathered the same practice-wide way a helpdesk's calendar already is.
+    if (routeKey === 'GET /appointments/pending-approvals') {
+      // Principal-only, expressed as the `Appointment approval` row's own
+      // grant rather than a role check: only the column that may *approve* a
+      // booking may read the queue of bookings awaiting approval. `update` is
+      // the action the list exists to enable, so gating on it needs no new
+      // matrix row and cannot drift from who may actually act on a row —
+      // every other role's cell on that row is DENIED, so a sub-clinician,
+      // helpdesk, visitor or patient gets a 403 here.
+      if (!can(principal, 'update', { entityType: APPOINTMENT_APPROVAL_ENTITY_TYPE }).allowed) {
+        return respond(403, { error: 'FORBIDDEN' });
+      }
+      const pending = (
+        await practiceCalendar(PENDING_APPROVALS_FROM, PENDING_APPROVALS_TO)
+      ).filter((appointment) => appointment.appointment_status === 'pending-approval');
+      const named = await withNames(pending);
+      // The clinician the patient is assigned to, per row — the same fact the
+      // principal's calendar carries, and the one that tells them whose
+      // session they are approving. Attached before projection and absent
+      // (never blank) where it could not be resolved, exactly as the calendar
+      // route above does it.
+      const enriched = await Promise.all(
+        named.map(async (appointment) => {
+          const assignedClinicianName = await assignedClinicianNameFor(appointment.patientId);
+          return assignedClinicianName ? { ...appointment, assignedClinicianName } : appointment;
+        }),
+      );
+      const resource = {
+        entityType: APPOINTMENT_ENTITY_TYPE,
+        assignedClinicianId: principal.clinicianId,
+      } as const;
+      return respond(200, { items: projectAllFor(principal, enriched, resource) });
     }
 
     const isSchedule = routeKey === 'POST /patients/{id}/appointments';

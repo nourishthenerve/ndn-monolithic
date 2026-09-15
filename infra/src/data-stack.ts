@@ -1939,6 +1939,16 @@ export class DataStack extends Stack {
       methods: [HttpMethod.GET],
       integration: appointmentIntegration,
     });
+    // 2026-09-14: the principal's practice-wide "waiting for your approval"
+    // queue. Same integration and same role — the fan-out reuses the GSI1
+    // calendar query and the GSI2 clinician directory the two statements
+    // above already grant, and `appointment.ts`'s own `Appointment approval`
+    // check is what makes it principal-only, not anything at this layer.
+    httpApi.addRoutes({
+      path: '/appointments/pending-approvals',
+      methods: [HttpMethod.GET],
+      integration: appointmentIntegration,
+    });
     // TASK 3.4.2: cancel — same integration, no new route pattern beyond
     // one more path segment.
     httpApi.addRoutes({
