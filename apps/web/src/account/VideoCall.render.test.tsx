@@ -55,9 +55,8 @@ const STRINGS: VideoCallStrings = {
     previewLabel: 'Preview',
     cameraLabel: 'Camera',
     microphoneLabel: 'Microphone',
-    continueLabel: 'Continue',
+    confirmLabel: 'Confirm',
   },
-  joinCall: { label: 'Join call' },
   leaveLabel: 'Leave call',
   turnCameraOnLabel: 'Turn on camera',
   turnCameraOffLabel: 'Turn off camera',
@@ -383,10 +382,9 @@ function renderCall(appointmentId: string = APPOINTMENT_ID) {
   );
 }
 
-/** Device check → Continue → Join call: the two presses that precede every test below. */
+/** Device check → Confirm: the one press that precedes every test below, now that confirming devices *is* joining. */
 async function joinTheCall() {
-  fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-  fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+  fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
   await screen.findByRole('button', { name: STRINGS.leaveLabel });
 }
 
@@ -587,17 +585,18 @@ describe('before the call', () => {
     expect(await screen.findByText(STRINGS.forbiddenLabel)).toBeDefined();
   });
 
-  it('checks devices before offering to join, and offers to join before opening anything', async () => {
+  it('checks devices first, and confirming them is what opens the call — one press, not two', async () => {
     renderCall();
-    // `DeviceCheck` first: the join button does not exist until a stream
-    // has been handed over.
-    expect(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel })).toBeDefined();
-    expect(screen.queryByRole('button', { name: STRINGS.joinCall.label })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    expect(await screen.findByRole('button', { name: STRINGS.joinCall.label })).toBeDefined();
-    // Nothing has been opened yet — pressing Join is what starts the call.
+    // `DeviceCheck` first: its Confirm button does not exist until a stream
+    // has been handed over, and nothing has been opened while it is on screen.
+    expect(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel })).toBeDefined();
     expect(screen.queryByRole('button', { name: STRINGS.leaveLabel })).toBeNull();
+    expect(FakeWebSocket.last).toBeUndefined();
+
+    // Confirming devices *is* joining now — there is no second "Join call"
+    // button in between, and this one press takes the caller into the call.
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
+    expect(await screen.findByRole('button', { name: STRINGS.leaveLabel })).toBeDefined();
   });
 });
 
@@ -1393,8 +1392,7 @@ describe('a join sequence that fails says so', () => {
       },
     );
     renderCall();
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
 
     // Silence here is what made this class of failure unreportable. And it
     // is the *setup* error rather than "the connection was lost": a socket
@@ -1427,7 +1425,7 @@ describe('the window gate', () => {
     renderCall(id);
 
     expect(await screen.findByText(/has not started yet/i)).toBeDefined();
-    expect(screen.queryByRole('button', { name: STRINGS.joinCall.label })).toBeNull();
+    expect(screen.queryByRole('button', { name: STRINGS.deviceCheck.confirmLabel })).toBeNull();
     // And no camera prompt: nothing asks for a device until there is a call
     // to have.
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
@@ -1439,17 +1437,18 @@ describe('the window gate', () => {
     renderCall(id);
 
     expect(await screen.findByText(STRINGS.expiredLabel)).toBeDefined();
-    expect(screen.queryByRole('button', { name: STRINGS.deviceCheck.continueLabel })).toBeNull();
+    expect(screen.queryByRole('button', { name: STRINGS.deviceCheck.confirmLabel })).toBeNull();
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
   });
 
-  it('offers the join button inside the slot', async () => {
+  it('lets the caller confirm and join inside the slot', async () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
 
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    expect(await screen.findByRole('button', { name: STRINGS.joinCall.label })).toBeDefined();
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
+    // Confirming devices is the one press that starts the call now.
+    expect(await screen.findByRole('button', { name: STRINGS.leaveLabel })).toBeDefined();
   });
 
   // A 15-minute check-in that finished ten minutes ago. The old fixed
@@ -1467,8 +1466,9 @@ describe('the window gate', () => {
     const id = appointmentIdAt(-60 * 60_000);
     withAppointment({ id, durationMinutes: 90 });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    expect(await screen.findByRole('button', { name: STRINGS.joinCall.label })).toBeDefined();
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
+    // Confirming devices is the one press that starts the call now.
+    expect(await screen.findByRole('button', { name: STRINGS.leaveLabel })).toBeDefined();
   });
 
   it('says a booking is still waiting to be confirmed, rather than offering a join button', async () => {
@@ -1478,7 +1478,7 @@ describe('the window gate', () => {
     // `ws-join.ts` would refuse this with `not-confirmed`; saying so before
     // the camera prompt is strictly kinder than saying it after.
     expect(await screen.findByText(STRINGS.joinDeniedLabels['not-confirmed'])).toBeDefined();
-    expect(screen.queryByRole('button', { name: STRINGS.joinCall.label })).toBeNull();
+    expect(screen.queryByRole('button', { name: STRINGS.deviceCheck.confirmLabel })).toBeNull();
   });
 
   it('says a cancelled booking is cancelled', async () => {
@@ -1494,8 +1494,9 @@ describe('the window gate', () => {
   // from the id alone, and the server's own `too-late` for the far end.
   it('still lets a caller try when the appointment row cannot be found', async () => {
     renderCall();
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    expect(await screen.findByRole('button', { name: STRINGS.joinCall.label })).toBeDefined();
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
+    // Confirming devices is the one press that starts the call now.
+    expect(await screen.findByRole('button', { name: STRINGS.leaveLabel })).toBeDefined();
   });
 
   it('opens the join button at the instant the slot starts, not at the next tick', async () => {
@@ -1513,7 +1514,7 @@ describe('the window gate', () => {
       vi.advanceTimersByTime(3_200);
     });
     expect(
-      await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }),
+      await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }),
     ).toBeDefined();
   });
 });
@@ -1526,8 +1527,7 @@ describe('the countdown to the drop', () => {
     const id = appointmentIdAt(startOffsetMs);
     withAppointment({ id, durationMinutes });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
     await screen.findByRole('button', { name: STRINGS.leaveLabel });
     return FakeWebSocket.last as FakeWebSocket;
   }
@@ -1601,8 +1601,9 @@ describe('the countdown to the drop', () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    await screen.findByRole('button', { name: STRINGS.joinCall.label });
+    // On the device-check screen, before Confirm opens the call, there is
+    // nothing to count down to yet.
+    await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel });
     expect(screen.queryByRole('timer')).toBeNull();
   });
 });
@@ -1619,8 +1620,7 @@ describe('coming back', () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
     await screen.findByRole('button', { name: STRINGS.leaveLabel });
     const socket = FakeWebSocket.last as FakeWebSocket;
     await act(async () => {
@@ -1686,8 +1686,7 @@ describe('a socket that drops', () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
     await screen.findByRole('button', { name: STRINGS.leaveLabel });
     const socket = FakeWebSocket.last as FakeWebSocket;
     await act(async () => {
@@ -1806,8 +1805,7 @@ describe('being superseded by a newer connection', () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
     await screen.findByRole('button', { name: STRINGS.leaveLabel });
     const socket = FakeWebSocket.last as FakeWebSocket;
     await act(async () => {
@@ -1840,8 +1838,7 @@ describe('a call that cannot connect', () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
     await screen.findByRole('button', { name: STRINGS.leaveLabel });
     const socket = FakeWebSocket.last as FakeWebSocket;
     await act(async () => {
@@ -1920,8 +1917,7 @@ describe('the other participant reloads their page', () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
     await screen.findByRole('button', { name: STRINGS.leaveLabel });
     const socket = FakeWebSocket.last as FakeWebSocket;
     await act(async () => {
@@ -2007,8 +2003,7 @@ describe('a handshake that stalls', () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
     await screen.findByRole('button', { name: STRINGS.leaveLabel });
     const socket = FakeWebSocket.last as FakeWebSocket;
     await act(async () => {
@@ -2053,8 +2048,7 @@ describe('replacing a peer connection', () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.continueLabel }));
-    fireEvent.click(await screen.findByRole('button', { name: STRINGS.joinCall.label }));
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
     await screen.findByRole('button', { name: STRINGS.leaveLabel });
     const socket = FakeWebSocket.last as FakeWebSocket;
     await act(async () => {

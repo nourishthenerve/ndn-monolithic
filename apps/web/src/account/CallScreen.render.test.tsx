@@ -53,9 +53,8 @@ const CALL_STRINGS: VideoCallStrings = {
     previewLabel: 'Preview',
     cameraLabel: 'Camera',
     microphoneLabel: 'Microphone',
-    continueLabel: 'Continue',
+    confirmLabel: 'Confirm',
   },
-  joinCall: { label: 'Join call' },
   leaveLabel: 'Leave call',
   turnCameraOnLabel: 'Turn on camera',
   turnCameraOffLabel: 'Turn off camera',
@@ -243,10 +242,9 @@ function renderScreen(appointmentId: string | undefined = APPOINTMENT_ID) {
   );
 }
 
-/** Device check → Continue → Join call → the socket accepts the join. */
+/** Device check → Confirm → the socket accepts the join. Confirming devices is joining now. */
 async function joinAndConnect() {
-  fireEvent.click(await screen.findByRole('button', { name: CALL_STRINGS.deviceCheck.continueLabel }));
-  fireEvent.click(await screen.findByRole('button', { name: CALL_STRINGS.joinCall.label }));
+  fireEvent.click(await screen.findByRole('button', { name: CALL_STRINGS.deviceCheck.confirmLabel }));
   await screen.findByRole('button', { name: CALL_STRINGS.leaveLabel });
   const socket = FakeWebSocket.last as FakeWebSocket;
   await act(async () => {
@@ -294,7 +292,7 @@ describe('the clinician’s call screen', () => {
   it('shows nothing but the call until the call actually starts', async () => {
     renderScreen();
     // The device check is not a call, and the patient is not on one yet.
-    await screen.findByRole('button', { name: CALL_STRINGS.deviceCheck.continueLabel });
+    await screen.findByRole('button', { name: CALL_STRINGS.deviceCheck.confirmLabel });
     expect(screen.queryByText(new RegExp(ASSESSMENT_STRINGS.versionLabel))).toBeNull();
   });
 
@@ -372,11 +370,10 @@ describe('the join sequence is not disturbed by the layout', () => {
     // Returning the call bare before the role resolved and wrapped after it
     // changed the element at that position from `VideoCall` to `div`, which
     // React reconciles by unmounting the subtree — the whole call restarted
-    // from "Continue" the instant the role came back.
+    // from the device check the instant the role came back.
     expect(
-      screen.queryByRole('button', { name: CALL_STRINGS.deviceCheck.continueLabel }),
+      screen.queryByRole('button', { name: CALL_STRINGS.deviceCheck.confirmLabel }),
     ).toBeNull();
-    expect(screen.queryByRole('button', { name: CALL_STRINGS.joinCall.label })).toBeNull();
     expect(screen.getByRole('button', { name: CALL_STRINGS.leaveLabel })).toBeDefined();
   });
 
