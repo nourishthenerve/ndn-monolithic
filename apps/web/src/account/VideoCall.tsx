@@ -97,7 +97,6 @@ import {
   parsePatientId,
   parseScheduledAt,
 } from './join-window.js';
-import { JoinCallButton, type JoinCallButtonStrings } from './JoinCallButton.js';
 import type {
   JoinDenialReason,
   OutgoingRelayMessage,
@@ -378,7 +377,6 @@ export interface VideoCallStrings {
   readonly localVideoLabel: string;
   readonly remoteVideoLabel: string;
   readonly deviceCheck: DeviceCheckStrings;
-  readonly joinCall: JoinCallButtonStrings;
   readonly leaveLabel: string;
   /** 2026-09-04: the camera toggle's two labels, and what the self-view says while the camera is off. */
   readonly turnCameraOnLabel: string;
@@ -789,8 +787,8 @@ export function VideoCall({
   const automaticRejoinsRef = useRef(0);
 
   // The actual join sequence — gated on a resolved session, a resolved
-  // role, a device stream `DeviceCheck` has handed off, and the caller
-  // having pressed `JoinCallButton`.
+  // role, and a device stream `DeviceCheck` has handed off (which, since
+  // its Confirm button now begins the call, is also the caller's own go).
   useEffect(() => {
     if (!session || !deviceStream || !joinRequested || !role) return;
     const { appointmentId, accessToken } = session;
@@ -1566,12 +1564,15 @@ export function VideoCall({
         onReady={(stream) => {
           setDevicesConfirmed(true);
           setDeviceStream(stream);
+          // **Confirming devices is joining now — there is no second "Join
+          // call" button.** A first confirm starts the call from here; a
+          // rejoin already set `joinRequested` (its own button did), and
+          // this hand-off is only the silent re-acquire of the camera, so
+          // it must not begin — and re-date — the sitting a second time.
+          if (!joinRequested) beginJoin();
         }}
       />
     );
-  }
-  if (!joinRequested) {
-    return <JoinCallButton strings={strings.joinCall} onJoin={beginJoin} />;
   }
 
   const statusLabel =
