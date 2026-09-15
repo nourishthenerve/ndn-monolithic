@@ -1991,6 +1991,33 @@ describe('the other participant reloads their page', () => {
     });
     expect(FakePeerConnection.instances).toHaveLength(peerConnections);
   });
+
+  // **The reload/rejoin hang.** The rebuild used to `await` a TURN credential
+  // *before* discarding the old peer connection — so for the whole of that
+  // request (seconds, on a cold credentials Lambda) the dying connection was
+  // still current, and a nudge landing in the window made this side offer or
+  // answer on it. The two ends then described different media and never
+  // connected. A reload rebuilds STUN-first and synchronously now, the way
+  // the first connection did, and does not touch the relay endpoint at all.
+  it('rebuilds immediately on a peer reload, without waiting on a TURN credential', async () => {
+    const turnCalls = () =>
+      (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((call) =>
+        String(call[0]).includes('/turn-credentials'),
+      ).length;
+
+    const socket = await connectedWithPeer();
+    const peerConnections = FakePeerConnection.instances.length;
+    const turnBefore = turnCalls();
+
+    await act(async () => {
+      socket.deliver(peerReady('!peer-after-a-reload', 1));
+    });
+
+    // A fresh peer connection went up straight away — not after, and not
+    // gated on, a relay-credential request.
+    expect(FakePeerConnection.instances.length).toBeGreaterThan(peerConnections);
+    expect(turnCalls()).toBe(turnBefore);
+  });
 });
 
 // A message that goes missing without the relay reporting a bounce. The
