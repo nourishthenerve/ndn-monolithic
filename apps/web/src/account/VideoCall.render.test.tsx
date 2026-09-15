@@ -2264,3 +2264,81 @@ describe('a connection that never completes', () => {
     expect(socket.sentOf('leave')).toHaveLength(0);
   });
 });
+
+// 2026-09-15. **`leave` means "I hung up", and nothing else.** The owner:
+// *"when I connect the first time it works, but when I reload the page it goes
+// into Connecting mode and never really connects … reload as well as going
+// back to another page and coming back should auto connect."* The cause: the
+// join effect's teardown sent `leave` on *every* way it came down — a reload,
+// a navigation away, an automatic rebuild — and the peer reads `leave` as the
+// call being over and stops answering, so the returning caller sat on
+// "Connecting…". A `leave` is now sent only for a deliberate "Leave call".
+describe('leaving versus merely going away', () => {
+  async function joinConnected(id = APPOINTMENT_ID) {
+    const view = renderCall(id);
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
+    await screen.findByRole('button', { name: STRINGS.leaveLabel });
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    await act(async () => {
+      socket.deliver({ type: 'joined' });
+    });
+    return { view, socket };
+  }
+
+  it('tells the peer nothing when the page just unmounts — a reload or a navigation away', async () => {
+    const { view, socket } = await joinConnected();
+    // The island goes away without a "Leave call" press. The peer must be
+    // left believing this side will be back, not told the call is over.
+    view.unmount();
+    expect(socket.sentOf('leave')).toHaveLength(0);
+  });
+
+  it('still tells the peer when the caller deliberately leaves', async () => {
+    const { socket } = await joinConnected();
+    fireEvent.click(screen.getByRole('button', { name: STRINGS.leaveLabel }));
+    await waitFor(() => {
+      expect(socket.sentOf('leave')).toHaveLength(1);
+    });
+  });
+
+  it('does not tell the peer it left when it rebuilds the whole call', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const id = appointmentIdAt(-60_000);
+    withAppointment({ id, durationMinutes: 30 });
+    renderCall(id);
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
+    await screen.findByRole('button', { name: STRINGS.leaveLabel });
+    const firstSocket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      firstSocket.open();
+    });
+    await act(async () => {
+      firstSocket.deliver({ type: 'joined' });
+    });
+
+    const fail = async () => {
+      await act(async () => {
+        const pc = FakePeerConnection.last as FakePeerConnection;
+        pc.connectionState = 'failed';
+        pc.onconnectionstatechange?.();
+      });
+    };
+    // The state machine's one retry, then the failure it cannot recover
+    // from — which rebuilds the whole call (a new socket).
+    await fail();
+    await fail();
+    await act(async () => {
+      vi.advanceTimersByTime(2_500);
+    });
+    await waitFor(() => {
+      expect(FakeWebSocket.instances.length).toBeGreaterThan(1);
+    });
+
+    // The rebuild tore the first socket down, but a rebuild is not a
+    // hang-up: the peer was never told to leave.
+    expect(firstSocket.sentOf('leave')).toHaveLength(0);
+  });
+});
