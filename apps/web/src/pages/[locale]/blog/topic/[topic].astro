@@ -75,6 +75,7 @@ const heading = t('blog.topic.heading', { topic: label }, locale);
     themeLabels={blogThemeLabels(locale)}
     themeFilter={topic}
     initialPosts={postsForLocale}
+    now={Date.now()}
     strings={{
       empty: t('blog.topic.empty', undefined, locale),
       readMore: t('blog.index.readMore', undefined, locale),
