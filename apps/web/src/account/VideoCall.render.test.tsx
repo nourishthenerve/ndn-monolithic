@@ -23,7 +23,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MAX_CALL_MINUTES, VideoCall } from './VideoCall.js';
+import { CONNECT_STALL_TIMEOUT_MS, MAX_CALL_MINUTES, VideoCall } from './VideoCall.js';
 import type { VideoCallStrings } from './VideoCall.js';
 
 const STRINGS: VideoCallStrings = {
@@ -2168,5 +2168,99 @@ describe('replacing a peer connection', () => {
       replacement.deliver({ type: 'joined' });
     });
     expect(replacement.sentOf('ice-candidate')).toHaveLength(0);
+  });
+});
+
+// 2026-09-15. **A negotiated connection that never becomes a connected one.**
+// The owner, as a patient on a call with a clinician: *"I am often stuck with
+// this error where either it's connecting or connection lost."* The cause:
+// the first peer connection is STUN-only (the TURN endpoint needs the CALL#
+// row a join creates, so a relay is never in hand before then), and once
+// descriptions are exchanged the nudge loop stops re-offering — so a call
+// whose ICE cannot find a path sits in `connecting` with nothing escalating,
+// because the browser's own `failed` may arrive very late or never. The stall
+// watchdog is what turns that silence into the recovery that already exists.
+describe('a connection that never completes', () => {
+  /** Joined, offer sent (this side won the election), and the peer's answer applied — descriptions exchanged, only ICE left. */
+  async function negotiatedButNotConnected() {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const id = appointmentIdAt(-60_000);
+    withAppointment({ id, durationMinutes: 30 });
+    renderCall(id);
+    fireEvent.click(await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel }));
+    await screen.findByRole('button', { name: STRINGS.leaveLabel });
+    const socket = FakeWebSocket.last as FakeWebSocket;
+    await act(async () => {
+      socket.open();
+    });
+    await act(async () => {
+      socket.deliver({ type: 'joined' });
+    });
+    await act(async () => {
+      socket.deliver(peerReady(PEER_ID_LOWER));
+    });
+    await waitFor(() => {
+      expect(socket.sentOf('offer')).toHaveLength(1);
+    });
+    await act(async () => {
+      socket.deliver({
+        type: 'answer',
+        appointmentId: APPOINTMENT_ID,
+        payload: { type: 'answer', sdp: 'v=0 theirs' },
+      });
+    });
+    return socket;
+  }
+
+  it('escalates a stalled connection instead of waiting for a `failed` the browser may never send', async () => {
+    await negotiatedButNotConnected();
+    const pcsBefore = FakePeerConnection.instances.length;
+
+    // The peer connection never reports `connected` — the exact stall that
+    // used to leave a caller on "Connecting…" for the whole appointment.
+    await act(async () => {
+      vi.advanceTimersByTime(CONNECT_STALL_TIMEOUT_MS + 500);
+    });
+
+    // The watchdog turned that silence into a rebuild: a fresh peer
+    // connection (which, being a retry, asks for a TURN relay this time).
+    await waitFor(() => {
+      expect(FakePeerConnection.instances.length).toBeGreaterThan(pcsBefore);
+    });
+    // And it is honest about what it is doing while it recovers.
+    expect(screen.getAllByText(STRINGS.reconnectingLabel).length).toBeGreaterThan(0);
+  });
+
+  it('reaches for a TURN relay when it escalates', async () => {
+    await negotiatedButNotConnected();
+    await act(async () => {
+      vi.advanceTimersByTime(CONNECT_STALL_TIMEOUT_MS + 500);
+    });
+    await waitFor(() => {
+      const urls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((call) =>
+        String(call[0]),
+      );
+      expect(urls.some((url) => url.includes('/turn-credentials'))).toBe(true);
+    });
+  });
+
+  it('leaves a call that connects normally alone, however long it then runs', async () => {
+    const socket = await negotiatedButNotConnected();
+    await act(async () => {
+      const pc = FakePeerConnection.last as FakePeerConnection;
+      pc.connectionState = 'connected';
+      pc.onconnectionstatechange?.();
+    });
+    await screen.findAllByText(STRINGS.connectedLabel);
+    const pcsWhenConnected = FakePeerConnection.instances.length;
+
+    // Well past the watchdog's own timeout. A connected call has nothing for
+    // it to act on — arming and then clearing it must not cost a rebuild.
+    await act(async () => {
+      vi.advanceTimersByTime(CONNECT_STALL_TIMEOUT_MS * 3);
+    });
+    expect(FakePeerConnection.instances).toHaveLength(pcsWhenConnected);
+    expect(screen.queryByText(STRINGS.reconnectingLabel)).toBeNull();
+    expect(socket.sentOf('leave')).toHaveLength(0);
   });
 });
