@@ -154,6 +154,32 @@ const REJOIN_DELAY_MS = 2000;
  */
 const STALE_OFFER_MS = 6000;
 
+/**
+ * 2026-09-15: how long a connection may sit *negotiated but not connected*
+ * before this side treats it as a failure and escalates — the fix for calls
+ * stuck for ever on "Connecting…" / "Connection lost. Reconnecting…".
+ *
+ * The gap it closes: once both descriptions are exchanged, the nudge loop
+ * stops re-offering (there is nothing left to renegotiate), so the call
+ * depends entirely on `RTCPeerConnection.connectionState` reaching
+ * `connected`. When ICE cannot find a path — the ordinary case on a network
+ * that needs a relay, and the reason the *first* connection (which is
+ * STUN-only; the TURN endpoint needs the `CALL#` row a join creates, so a
+ * relay cannot be in hand before then) so often cannot complete — that state
+ * can sit in `connecting` for tens of seconds and, on some browsers, reach
+ * `failed` only very late or never. Nothing escalated, and the caller waited
+ * out the whole appointment window on a spinner.
+ *
+ * Armed the moment a remote description lands and cleared on `connected`,
+ * this turns that silent stall into the exact `failed` the recovery path
+ * already acts on — which fetches a fresh TURN credential and rebuilds — so
+ * a connection that cannot go peer-to-peer escalates to the relay in seconds
+ * rather than never. Long enough that an ordinary handshake (direct in one
+ * to three seconds, relayed in a few more) is never cut off; short enough
+ * that "it just connects" is true even when the first attempt could not.
+ */
+export const CONNECT_STALL_TIMEOUT_MS = 9000;
+
 /** When the countdown starts warning rather than merely counting. Announced once, politely — not every second. */
 const ENDING_SOON_MS = 2 * 60_000;
 
@@ -196,12 +222,23 @@ function defaultGetAppointmentId(): string | undefined {
   return new URLSearchParams(window.location.search).get('appointmentId') ?? undefined;
 }
 
-/** Never throws — a denial, a flag off, or a provider failure are all the same "no TURN entry for this attempt" outcome to the caller, `turn-credentials.ts`'s own `502`/`403`/`404` responses collapsed into one. */
+/**
+ * How long a TURN-credential request may take before this side gives up on
+ * it and rebuilds STUN-only for now. A relay is the recovery from a stalled
+ * connection, so the request cannot itself be allowed to hang: a cold Lambda
+ * or a slow provider would otherwise turn "reconnect through a relay" into
+ * the very stall it exists to end. The watchdog will simply try again.
+ */
+const TURN_FETCH_TIMEOUT_MS = 5000;
+
+/** Never throws — a denial, a flag off, a provider failure, or a request that timed out are all the same "no TURN entry for this attempt" outcome to the caller, `turn-credentials.ts`'s own `502`/`403`/`404` responses collapsed into one. */
 async function fetchTurnIceServer(accessToken: string, appointmentId: string): Promise<RTCIceServer | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TURN_FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(
       `${contentApiUrl}/calls/${encodeURIComponent(appointmentId)}/turn-credentials`,
-      { method: 'POST', headers: { authorization: `Bearer ${accessToken}` } },
+      { method: 'POST', headers: { authorization: `Bearer ${accessToken}` }, signal: controller.signal },
     );
     if (!response.ok) {
       return undefined;
@@ -212,6 +249,8 @@ async function fetchTurnIceServer(accessToken: string, appointmentId: string): P
     return payload.iceServer;
   } catch {
     return undefined;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -834,6 +873,13 @@ export function VideoCall({
     let nudgeCount = 0;
     let rejoinTimer: ReturnType<typeof setTimeout> | undefined;
     /**
+     * The stall watchdog (see `CONNECT_STALL_TIMEOUT_MS`). Armed when a
+     * remote description lands and this side is not yet connected, cleared
+     * the moment it is — a negotiation that never becomes a connection is
+     * escalated rather than left on screen for ever.
+     */
+    let connectWatchdog: ReturnType<typeof setTimeout> | undefined;
+    /**
      * **The offerer election.** Random per join, exchanged in `ready`, and
      * the greater id offers. Symmetric, decided by both sides from the same
      * two values, and — unlike asking an HTTP route which role you are —
@@ -902,6 +948,34 @@ export function VideoCall({
         clearTimeout(nudgeTimer);
         nudgeTimer = undefined;
       }
+    };
+
+    const clearConnectWatchdog = (): void => {
+      if (connectWatchdog !== undefined) {
+        clearTimeout(connectWatchdog);
+        connectWatchdog = undefined;
+      }
+    };
+
+    /**
+     * Start (or restart) the stall watchdog. Called when a remote
+     * description has just landed — negotiation is complete and the only
+     * thing left is for ICE to find a path. If it has not within
+     * `CONNECT_STALL_TIMEOUT_MS`, feed the state machine the `failed` it
+     * would otherwise be waiting on the browser to report, so the existing
+     * recovery (a fresh TURN credential, a rebuilt peer connection, and — if
+     * that too cannot connect — a whole-call rebuild) runs on a timer this
+     * side controls rather than one the browser may never fire. A no-op once
+     * connected: a healthy call arms this and then clears it a second later.
+     */
+    const armConnectWatchdog = (): void => {
+      clearConnectWatchdog();
+      if (!live || isConnected()) return;
+      connectWatchdog = setTimeout(() => {
+        connectWatchdog = undefined;
+        if (!live || isConnected()) return;
+        stateMachine.handleConnectionState('failed');
+      }, CONNECT_STALL_TIMEOUT_MS);
     };
 
     /** `wantsOffer` is the whole reason a reconnect on a healthy call does not renegotiate it: a peer who is already connected asks for nothing. */
@@ -1122,6 +1196,10 @@ export function VideoCall({
           await pc.setLocalDescription(answer);
           lastAnswer = answer;
           send({ type: 'answer', appointmentId: message.appointmentId, payload: answer });
+          // Negotiation is done from this side; from here it is ICE's to
+          // complete, and the watchdog is what makes sure it does or the
+          // connection is rebuilt.
+          armConnectWatchdog();
         } else if (message.type === 'answer') {
           // **2026-09-05: an answer that cannot be applied is recovered
           // from, not silently dropped.** Skipping on `signalingState`
@@ -1148,6 +1226,9 @@ export function VideoCall({
           remoteDescriptionSet = true;
           offerInFlight = false;
           await flushPendingCandidates();
+          // Same as the answerer above: descriptions are exchanged, so ICE
+          // is now the only thing between here and a connected call.
+          armConnectWatchdog();
         } else if (message.type === 'ice-candidate') {
           await addIceCandidate(message.payload as RTCIceCandidateInit);
         }
@@ -1236,6 +1317,9 @@ export function VideoCall({
         if (!live) return;
         discardPeerConnection(pc);
         remoteDescriptionSet = false;
+        // The negotiation this was watching is being torn down; the rebuilt
+        // one arms a fresh watchdog when its own descriptions land.
+        clearConnectWatchdog();
         pendingCandidates = [];
         offerInFlight = false;
         // Both belonged to the peer connection just closed; re-sending
@@ -1269,6 +1353,9 @@ export function VideoCall({
           automaticRejoinsRef.current = 0;
           nudgeCount = 0;
           cancelNudge();
+          // Connected — there is nothing left for the stall watchdog to
+          // guard against.
+          clearConnectWatchdog();
         }
         if (lifecycle.kind !== 'call-failed') {
           setStageIfLive({ kind: 'call', lifecycle });
@@ -1411,6 +1498,7 @@ export function VideoCall({
     return () => {
       live = false;
       cancelNudge();
+      clearConnectWatchdog();
       if (rejoinTimer !== undefined) clearTimeout(rejoinTimer);
       stateMachine.dispose();
       // Flushes any still-accumulating TURN time into the total this call
