@@ -1149,10 +1149,11 @@ export function VideoCall({
         peerPresent = true;
         if (peerIsNewSession) {
           peerGeneration = -1;
-          // Sends its own `ready` (so they learn this side's id) and offers
-          // if elected.
-          retryConnection();
-          scheduleNudge();
+          // Rebuild immediately, STUN-first (see `rebuildForNewPeerSession`):
+          // a reload reconnects like a first connection, not after a
+          // seconds-long wait on a cold relay-credential request. Sends this
+          // side's own `ready` (so they learn its id) and offers if elected.
+          rebuildForNewPeerSession();
           return;
         }
         // **Answer a peer whose id we did not already have.** The election
@@ -1338,38 +1339,85 @@ export function VideoCall({
       target.close();
     }
 
-    // TASK 4.3.3's own retry: a fresh `RTCPeerConnection` (never the failed
-    // one, renegotiated) over the same already-joined call, with one TURN
-    // attempt in front of it (TASK 4.4.1).
+    /**
+     * **Tears the current peer connection down and negotiation state with
+     * it, synchronously.** Split out so the teardown can happen *before* any
+     * `await` — see `retryConnection`. After this returns, `pc` is
+     * `undefined`, so any relay message that arrives is safely ignored
+     * (`if (!pc) return`) rather than acted on against a connection that no
+     * longer exists.
+     */
+    function teardownForRebuild(): void {
+      discardPeerConnection(pc);
+      pc = undefined;
+      remoteDescriptionSet = false;
+      // The negotiation this was watching is being torn down; the rebuilt
+      // one arms a fresh watchdog when its own descriptions land.
+      clearConnectWatchdog();
+      pendingCandidates = [];
+      offerInFlight = false;
+      // Both belonged to the peer connection just closed; re-sending either
+      // would describe media that no longer exists.
+      lastAnswer = undefined;
+      unsentCandidates = [];
+      // The old peer connection's tracks die with it, so the stream held in
+      // state is now a frozen last frame. Cleared, so the caller sees the
+      // honest "reconnecting" rather than a still image of the other person
+      // that looks like a live call.
+      setRemoteStream(undefined);
+    }
+
+    /**
+     * Builds a fresh peer connection over the same already-joined call and
+     * re-drives the handshake — announce, then offer if this side is the
+     * elected offerer. Synchronous and race-free: it must be called with the
+     * old connection already torn down (`teardownForRebuild`).
+     */
+    function rebuildConnection(turnIceServer?: RTCIceServer): void {
+      usingTurn = Boolean(turnIceServer);
+      pc = buildPeerConnection(turnIceServer);
+      // The answerer cannot re-offer, so it says it is ready again and the
+      // offerer does.
+      sendReady();
+      if (isOfferer()) {
+        void sendOffer(true);
+      }
+      scheduleNudge();
+    }
+
+    /**
+     * **The peer reloaded, or came back on another device: rebuild
+     * immediately, STUN-first, the way the very first connection did.**
+     *
+     * A reload is not a network failure — the path that worked a moment ago
+     * still works — so this does not wait on a TURN credential the way a
+     * genuine ICE failure does. Waiting would be actively harmful: the
+     * credentials endpoint is often cold, its request takes seconds, and the
+     * old code left the dying peer connection current for the whole of that
+     * wait, so a nudge landing in the window made this side answer or offer
+     * on a connection about to be discarded — the two ends then negotiated
+     * against different media and never connected. That was the reload/rejoin
+     * bug. Rebuilding synchronously reconnects peer-to-peer as reliably as
+     * the first attempt; if that genuinely needs a relay, the stall watchdog
+     * escalates to one within seconds.
+     */
+    function rebuildForNewPeerSession(): void {
+      teardownForRebuild();
+      rebuildConnection();
+    }
+
+    // TASK 4.3.3's own retry, hardened: a fresh `RTCPeerConnection` (never
+    // the failed one, renegotiated) over the same already-joined call, with
+    // one TURN attempt (TASK 4.4.1) in front of it — for a connection that
+    // could not be made without a relay. The teardown is synchronous and the
+    // credential fetch follows it, so no `await` ever runs while a peer
+    // connection that is about to be thrown away is still the current one.
     function retryConnection(): void {
+      teardownForRebuild();
       void (async () => {
         const turnIceServer = await fetchTurnIceServer(accessToken, appointmentId);
         if (!live) return;
-        discardPeerConnection(pc);
-        remoteDescriptionSet = false;
-        // The negotiation this was watching is being torn down; the rebuilt
-        // one arms a fresh watchdog when its own descriptions land.
-        clearConnectWatchdog();
-        pendingCandidates = [];
-        offerInFlight = false;
-        // Both belonged to the peer connection just closed; re-sending
-        // either would describe media that no longer exists.
-        lastAnswer = undefined;
-        unsentCandidates = [];
-        usingTurn = Boolean(turnIceServer);
-        // The old peer connection's tracks die with it, so the stream held
-        // in state is now a frozen last frame. Cleared, so the caller sees
-        // the honest "reconnecting" rather than a still image of the other
-        // person that looks like a live call.
-        setRemoteStream(undefined);
-        pc = buildPeerConnection(turnIceServer);
-        // The answerer cannot re-offer, so it says it is ready again and
-        // the offerer does.
-        sendReady();
-        if (isOfferer()) {
-          void sendOffer(true);
-        }
-        scheduleNudge();
+        rebuildConnection(turnIceServer);
       })();
     }
 
