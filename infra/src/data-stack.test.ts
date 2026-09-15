@@ -864,6 +864,11 @@ describe('DataStack — route protection (TASK 2.2.2)', () => {
     // to a clinician's deactivate/reactivate).
     expect(routeKeys('CUSTOM')).toEqual(
       [
+        // 2026-09-14: the principal's practice-wide pending-approvals queue,
+        // served by the same `AppointmentFunction`. Principal-only from
+        // `authz-matrix.ts`'s `Appointment approval` row, behind the real
+        // authorizer like every other authenticated route.
+        'GET /appointments/pending-approvals',
         'GET /audit',
         'GET /caseload',
         'GET /caseload/mine',

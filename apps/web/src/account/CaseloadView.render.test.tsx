@@ -165,6 +165,35 @@ describe('status', () => {
   });
 });
 
+describe('alphabetical order', () => {
+  // 2026-09-14: the owner asked for the table to read alphabetically by name.
+  // The fetch here returns them deliberately out of order; the view is what
+  // puts them right, so a reader scanning for a person finds them where the
+  // alphabet says they are.
+  async function namesInOrder(): Promise<string[]> {
+    await screen.findByText('Alex Kim');
+    return screen.getAllByRole('link').map((link) => link.textContent ?? '');
+  }
+
+  it('sorts rows by name whatever order the page arrived in', async () => {
+    renderCaseload([
+      patient({ patientId: 'p1', fullName: 'Zoe Adams' }),
+      patient({ patientId: 'p2', fullName: 'Alex Kim' }),
+      patient({ patientId: 'p3', fullName: 'Mara Ng' }),
+    ]);
+    expect(await namesInOrder()).toEqual(['Alex Kim', 'Mara Ng', 'Zoe Adams']);
+  });
+
+  it('is case- and accent-insensitive rather than ordering capitals first', async () => {
+    renderCaseload([
+      patient({ patientId: 'p1', fullName: 'bob stone' }),
+      patient({ patientId: 'p2', fullName: 'Alex Kim' }),
+      patient({ patientId: 'p3', fullName: 'Ána Ruiz' }),
+    ]);
+    expect(await namesInOrder()).toEqual(['Alex Kim', 'Ána Ruiz', 'bob stone']);
+  });
+});
+
 describe('the counts above the table', () => {
   it('shows total and active when the first page carries them', async () => {
     renderCaseload([patient({ patientId: 'p1', fullName: 'Alex Kim' })], { total: 12, active: 9 });

@@ -271,6 +271,7 @@ const CANCEL_ROUTE = 'POST /patients/{id}/appointments/{apptId}/cancel';
 
 const APPROVE_ROUTE = 'POST /patients/{id}/appointments/{apptId}/approve';
 const DECLINE_ROUTE = 'POST /patients/{id}/appointments/{apptId}/decline';
+const PENDING_APPROVALS_ROUTE = 'GET /appointments/pending-approvals';
 
 describe('POST /patients/{id}/appointments', () => {
   it('books an appointment for an assigned sub-clinician — pending the principal\'s approval', async () => {
@@ -800,6 +801,102 @@ describe('a helpdesk reads the practice\'s calendar, not their own empty one', (
     expect(listFor.mock.calls.map((call) => call[0])).toEqual(['cli-1']);
     expect(listFor).toHaveBeenCalledTimes(1);
   });
+});
+
+// 2026-09-14: the principal's practice-wide "waiting for your approval"
+// queue. A booking is keyed on the patient's *assigned* clinician, so a
+// sub-clinician's pending request lands on that sub-clinician's calendar and
+// never on the principal's own — this route is the only place the principal
+// sees the whole queue at once, the same fan-out a helpdesk's calendar uses.
+describe("the principal's pending-approvals queue — GET /appointments/pending-approvals", () => {
+  async function bookPending(
+    handler: ReturnType<typeof createAppointmentHandler>,
+    at: string,
+  ) {
+    // Booked by the assigned sub-clinician (the default principal) for their
+    // own patient — every booking starts `pending-approval`, whoever made it.
+    const response = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: SCHEDULE_ROUTE,
+        pathParameters: { id: 'pat-1' },
+        body: { scheduledAt: at, durationMinutes: 30 },
+      }),
+    );
+    expect(response.statusCode).toBe(201);
+  }
+
+  it("gathers a booking the principal's own calendar could never show them", async () => {
+    const { handler } = await build();
+    await bookPending(handler, '2026-09-01T10:00:00.000Z');
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: PENDING_APPROVALS_ROUTE, principal: PRINCIPAL_CONTEXT }),
+    );
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as {
+      items: {
+        appointment_status: string;
+        patientName?: string;
+        assignedClinicianName?: string;
+      }[];
+    };
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]?.appointment_status).toBe('pending-approval');
+    expect(body.items[0]?.patientName).toBe('A Patient');
+    // Whose session it is — pat-1 is assigned to cli-1 ("A Clinician").
+    expect(body.items[0]?.assignedClinicianName).toBe('A Clinician');
+  });
+
+  it('lists only what is still waiting — an approved booking drops out', async () => {
+    const { handler } = await build();
+    await bookPending(handler, '2026-09-01T10:00:00.000Z');
+    await bookPending(handler, '2026-09-02T10:00:00.000Z');
+    // Approve the first; it becomes `scheduled` and leaves the queue.
+    const approved = await invoke(
+      handler,
+      fakeEvent({
+        routeKey: APPROVE_ROUTE,
+        pathParameters: { id: 'pat-1', apptId: '2026-09-01T10:00:00.000Z' },
+        principal: PRINCIPAL_CONTEXT,
+      }),
+    );
+    expect(approved.statusCode).toBe(200);
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: PENDING_APPROVALS_ROUTE, principal: PRINCIPAL_CONTEXT }),
+    );
+    const body = JSON.parse(response.body) as { items: { scheduledAt: string }[] };
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]?.scheduledAt).toBe('2026-09-02T10:00:00.000Z');
+  });
+
+  it('is empty, not an error, when nothing is waiting', async () => {
+    const { handler } = await build();
+    const response = await invoke(
+      handler,
+      fakeEvent({ routeKey: PENDING_APPROVALS_ROUTE, principal: PRINCIPAL_CONTEXT }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect((JSON.parse(response.body) as { items: unknown[] }).items).toEqual([]);
+  });
+
+  it.each([
+    ['a sub-clinician', ASSIGNED_SUB_CONTEXT],
+    ['a helpdesk', HELPDESK_CONTEXT],
+    ['a patient', OWNING_PATIENT_CONTEXT],
+  ])(
+    'is 403 for %s — only the principal may approve, so only they may read the queue',
+    async (_who, principal) => {
+      const { handler } = await build();
+      await bookPending(handler, '2026-09-01T10:00:00.000Z');
+      const response = await invoke(
+        handler,
+        fakeEvent({ routeKey: PENDING_APPROVALS_ROUTE, principal }),
+      );
+      expect(response.statusCode).toBe(403);
+    },
+  );
 });
 
 // 2026-09-06: *"on calender when we click an appointment it should also show
