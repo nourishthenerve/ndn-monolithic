@@ -118,6 +118,33 @@ describe('AssessmentRepository.applySectionPatch', () => {
     expect(v3?.calendar.responses.schedulingNotes).toBe('mornings only');
   });
 
+  it('materialises a section an older record predates, rather than crashing the save', async () => {
+    // The form gains sections over time (`calendar` after `general`/
+    // `prescription`), so a version written before a section existed does not
+    // carry it. Editing any section used to read the missing one's
+    // `.responses` and throw `Cannot read properties of undefined`, which the
+    // form showed as "Something went wrong" on every save against an older
+    // record.
+    const { repository } = build();
+    await repository.instantiate('pat-1', DEFAULT_ASSESSMENT_ID, CLINICIAN, { tag: 'NDN' });
+    const v1 = await repository.latest('pat-1', DEFAULT_ASSESSMENT_ID);
+    const legacy = { ...v1! } as Record<string, unknown>;
+    delete legacy.calendar;
+    delete legacy.prescription;
+
+    const next = await repository.applySectionPatch(
+      legacy as unknown as NonNullable<typeof v1>,
+      2,
+      CLINICIAN,
+      { general: { responses: { preferredName: 'Sam' } } },
+    );
+
+    expect(next.general.responses.preferredName).toBe('Sam');
+    // The absent sections come back as empty, not undefined.
+    expect(next.prescription).toEqual({ responses: {}, attachments: [] });
+    expect(next.calendar).toEqual({ responses: {}, attachments: [] });
+  });
+
   it('merges responses rather than replacing them — an omitted field says nothing about that field', async () => {
     const { repository } = await seeded();
     const v2 = await repository.latest('pat-1', DEFAULT_ASSESSMENT_ID);
