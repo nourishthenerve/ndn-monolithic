@@ -295,8 +295,15 @@ const CALL_STAGE_STYLE: CSSProperties = {
   // and pushing the controls below the fold.
   maxHeight: 'calc(100vh - 14rem)',
   background: '#000',
-  borderRadius: '0.5rem',
+  borderRadius: '0.75rem',
   overflow: 'hidden',
+  // 2026-09-16: a hairline and a soft drop shadow, so the stage reads as
+  // lifted off the warm-paper page rather than a flat black rectangle sat on
+  // it. The border is the theme's own strong hairline; the shadow is a plain
+  // rgba (the palette defines no shadow token) tuned to be a gentle lift, not
+  // a heavy card.
+  border: '1px solid var(--ndn-color-border-strong)',
+  boxShadow: '0 10px 30px rgba(35, 40, 33, 0.16)',
 };
 
 /** The same stage, given the whole of whatever contains it. See `fillWidth`. */
@@ -377,23 +384,67 @@ const CALL_CONTROLS_STYLE: CSSProperties = {
 };
 
 /**
- * The status line and the countdown share a row: the caller reads them
- * together ("Connected · 18:42"), and stacking them pushes the stage down.
+ * 2026-09-16: the status line and, beneath it, a bar that fills as the call's
+ * time runs down — the owner asked for a filling bar in place of a ticking
+ * number. A small dot beside the label makes the state legible at a glance;
+ * its colour is set per lifecycle at the call site.
  */
-const CALL_HEADER_STYLE: CSSProperties = {
+const STATUS_ROW_STYLE: CSSProperties = {
   display: 'flex',
-  flexWrap: 'wrap',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
+  alignItems: 'center',
   gap: '0.5rem',
   margin: 0,
-  marginBlockEnd: '0.5rem',
+  marginBlockEnd: '0.625rem',
 };
 
-/** Tabular figures so the seconds ticking down does not shift the text beside them. */
-const TIMER_STYLE: CSSProperties = { fontVariantNumeric: 'tabular-nums' };
+const STATUS_DOT_STYLE: CSSProperties = {
+  flex: 'none',
+  width: '0.5rem',
+  height: '0.5rem',
+  borderRadius: '50%',
+};
 
-const WARNING_STYLE: CSSProperties = { ...TIMER_STYLE, fontWeight: 600 };
+const STATUS_LABEL_STYLE: CSSProperties = {
+  margin: 0,
+  fontSize: '0.9375rem',
+  fontWeight: 500,
+  color: 'var(--ndn-color-text)',
+};
+
+/** The track the fill sits in — a thin rounded rail in the theme's soft neutral. */
+const PROGRESS_TRACK_STYLE: CSSProperties = {
+  width: '100%',
+  height: '0.375rem',
+  borderRadius: '999px',
+  background: 'var(--ndn-color-neutral-soft)',
+  overflow: 'hidden',
+  marginBlockEnd: '0.75rem',
+};
+
+/**
+ * The fill itself. `width` is set inline from the elapsed fraction and eased
+ * over a second, so it glides forward rather than stepping each tick.
+ */
+const PROGRESS_FILL_STYLE: CSSProperties = {
+  height: '100%',
+  borderRadius: '999px',
+  background: 'var(--ndn-color-brand)',
+  transition: 'width 1s linear, background-color var(--ndn-motion-duration-fast) ease',
+};
+
+/** Turns the fill to the warning tone once the call is close to its end. */
+const PROGRESS_FILL_ENDING_STYLE: CSSProperties = {
+  ...PROGRESS_FILL_STYLE,
+  background: 'var(--ndn-color-warning)',
+};
+
+/** The "ending soon" notice, in the theme's warning colour. */
+const ENDING_SOON_STYLE: CSSProperties = {
+  margin: '0 0 0.75rem',
+  fontSize: '0.875rem',
+  fontWeight: 500,
+  color: 'var(--ndn-color-warning)',
+};
 
 /** Why a call stopped, so the sentence a caller reads is the true one rather than a generic "ended". */
 type EndReason = 'left' | 'peer-left' | 'time-limit' | 'connection-lost';
@@ -504,17 +555,6 @@ export function VideoCall({
   /** Ticks every 15s for the pre-call countdown; a call under way has its own second-by-second clock below. */
   const [now, setNow] = useState(() => new Date());
   const [remainingMs, setRemainingMs] = useState<number | undefined>();
-  /**
-   * 2026-09-16: a compact snapshot of the negotiation's internal state,
-   * sampled once a second while a call is not yet connected, and shown under
-   * the status line. The reconnect path has resisted several fixes precisely
-   * because its failure is invisible from the outside — "Connecting…" looks
-   * the same whether no peer ever arrived, the SDP never crossed, or ICE
-   * could not find a path. This makes the difference legible, so a single
-   * screenshot of a stuck call says which of those it is. Only rendered while
-   * unconnected, so a healthy call never shows it.
-   */
-  const [diag, setDiag] = useState<string | undefined>();
   /** True once the caller has been through the device check, so a rejoin does not make them confirm devices they already chose. */
   const [devicesConfirmed, setDevicesConfirmed] = useState(false);
   /**
@@ -896,8 +936,6 @@ export function VideoCall({
 
     let live = true;
     let pc: RTCPeerConnection | undefined;
-    /** 2026-09-16: the last signalling milestone, for the on-screen diagnostic. */
-    let lastEvent = 'joining';
     /**
      * A holder rather than a plain binding. Every handler below is
      * constructed *before* `connectSignalling` returns, so none of them can
@@ -1043,7 +1081,6 @@ export function VideoCall({
       connectWatchdog = setTimeout(() => {
         connectWatchdog = undefined;
         if (!live || isConnected()) return;
-        lastEvent = 'stall→escalate';
         stateMachine.handleConnectionState('failed');
       }, CONNECT_STALL_TIMEOUT_MS);
     };
@@ -1069,7 +1106,6 @@ export function VideoCall({
       stuckWatchdog = setTimeout(() => {
         stuckWatchdog = undefined;
         if (!live || isConnected()) return;
-        lastEvent = 'stuck→full-rebuild';
         if (automaticRejoinsRef.current < MAX_AUTOMATIC_REJOINS && windowOpenRef.current) {
           automaticRejoinsRef.current += 1;
           setStageIfLive({ kind: 'call', lifecycle: { kind: 'reconnecting' } });
@@ -1184,7 +1220,6 @@ export function VideoCall({
         await pc.setLocalDescription(offer);
         offerSentAtMs = Date.now();
         send({ type: 'offer', appointmentId, payload: offer });
-        lastEvent = 'offer-out';
       } catch {
         // Releasing the flag is the point: a failed attempt must not lock
         // this side out of ever offering again.
@@ -1226,7 +1261,6 @@ export function VideoCall({
         const peerIsNewSession = incoming !== undefined && known !== undefined && incoming !== known;
         peerSessionId = incoming ?? known;
         peerPresent = true;
-        lastEvent = peerIsNewSession ? 'peer-rebuilt' : 'peer-ready';
         armStuckWatchdog();
         if (peerIsNewSession) {
           peerGeneration = -1;
@@ -1309,7 +1343,6 @@ export function VideoCall({
           await pc.setLocalDescription(answer);
           lastAnswer = answer;
           send({ type: 'answer', appointmentId: message.appointmentId, payload: answer });
-          lastEvent = 'offer-in→answered';
           // Negotiation is done from this side; from here it is ICE's to
           // complete, and the watchdog is what makes sure it does or the
           // connection is rebuilt.
@@ -1340,7 +1373,6 @@ export function VideoCall({
           remoteDescriptionSet = true;
           offerInFlight = false;
           await flushPendingCandidates();
-          lastEvent = 'answer-in';
           // Same as the answerer above: descriptions are exchanged, so ICE
           // is now the only thing between here and a connected call.
           armConnectWatchdog();
@@ -1497,7 +1529,6 @@ export function VideoCall({
     // credential fetch follows it, so no `await` ever runs while a peer
     // connection that is about to be thrown away is still the current one.
     function retryConnection(): void {
-      lastEvent = 'retry-turn';
       teardownForRebuild();
       void (async () => {
         const turnIceServer = await fetchTurnIceServer(accessToken, appointmentId);
@@ -1573,7 +1604,6 @@ export function VideoCall({
          * "connecting" over a live conversation is a lie.
          */
         onJoined: () => {
-          lastEvent = 'joined';
           if (!pc) {
             pc = buildPeerConnection();
           }
@@ -1623,7 +1653,6 @@ export function VideoCall({
           // If they really have gone, the next bounce — after the nudge two
           // seconds from now — says so with `wasPresent` false.
           if (!wasPresent) setStageIfLive({ kind: 'waiting-for-peer' });
-          lastEvent = 'peer-unavailable';
           // **Running out of nudges is not a failed call**, and there is no
           // longer a budget to run out of. The socket is open, the join was
           // accepted, and the honest "waiting for the other participant"
@@ -1632,7 +1661,6 @@ export function VideoCall({
         },
         onRelayMessage: (message) => void handleRelayMessage(message),
         onReconnecting: () => {
-          lastEvent = 'socket-reconnecting';
           // Only worth saying if the media has stopped too. A signalling
           // socket reconnecting under a healthy P2P call is invisible to
           // the people on it, and should stay that way.
@@ -1662,38 +1690,8 @@ export function VideoCall({
       },
     });
 
-    // 2026-09-16: sample the negotiation's internal state once a second while
-    // the call is not yet connected, and publish it to `diag` for the
-    // on-screen line. Stops mattering the moment the call connects — the
-    // renderer only shows it while unconnected — but keeps running cheaply so
-    // a call that connects then stalls again is described too. Reads only
-    // closure state; it never drives the join effect (`diag` is not a
-    // dependency of it).
-    const diagTimer = setInterval(() => {
-      if (!live) return;
-      const socketOpen = signalling.current?.isOpen() ? 'open' : 'down';
-      const offererKnown = peerSessionId !== undefined;
-      setDiag(
-        [
-          `role=${role}`,
-          `socket=${socketOpen}`,
-          `last=${lastEvent}`,
-          `peer=${peerPresent ? 'seen' : 'none'}`,
-          `offerer=${offererKnown ? (isOfferer() ? 'me' : 'them') : '?'}`,
-          `sdp=${remoteDescriptionSet ? 'exchanged' : 'no'}`,
-          `pc=${pc?.connectionState ?? 'none'}`,
-          `ice=${pc?.iceConnectionState ?? 'none'}`,
-          `gen=${pcGeneration}/${peerGeneration}`,
-          `nudges=${nudgeCount}`,
-          `rebuilds=${automaticRejoinsRef.current}`,
-          `turn=${usingTurn ? 'yes' : 'no'}`,
-        ].join(' '),
-      );
-    }, 1000);
-
     return () => {
       live = false;
-      clearInterval(diagTimer);
       cancelNudge();
       clearConnectWatchdog();
       clearStuckWatchdog();
@@ -1876,67 +1874,60 @@ export function VideoCall({
           : strings.connectingLabel;
 
   const endingSoon = remainingMs !== undefined && remainingMs <= ENDING_SOON_MS;
+  const connected = stage.kind === 'call' && stage.lifecycle.kind === 'connected';
+  // The dot beside the status: the brand green once connected, the warning
+  // tone while still connecting or reconnecting.
+  const statusDotColor = connected ? 'var(--ndn-color-brand)' : 'var(--ndn-color-warning)';
+  // How much of this sitting has elapsed, as a percentage — the fill of the
+  // bar that replaces the countdown. The whole sitting is `joinedAt` to the
+  // drop `deadline`; the elapsed part is that span less what is left.
+  const totalMs =
+    deadline && joinedAt ? deadline.getTime() - joinedAt.getTime() : undefined;
+  const progressPct =
+    totalMs && totalMs > 0 && remainingMs !== undefined
+      ? Math.min(100, Math.max(0, ((totalMs - remainingMs) / totalMs) * 100))
+      : undefined;
+  const remainingLabel = remainingMs !== undefined ? formatRemaining(remainingMs) : '';
 
   return (
     <section aria-labelledby="video-call-status-heading">
-      <div style={CALL_HEADER_STYLE}>
-        <p id="video-call-status-heading" role="status" aria-live="polite" style={{ margin: 0 }}>
-          {statusLabel}
-        </p>
-        {/* **The timer the owner asked for.** `role="timer"` with no live
-            region: a screen reader must not read a number out once a
-            second. The one thing worth announcing — that the call is about
-            to end — is announced once, politely, below. */}
-        {remainingMs !== undefined && (
-          <p
-            role="timer"
-            // **The label carries the value, and that is the fix for a
-            // defect in the first version of this timer.** An `aria-label`
-            // *replaces* an element's text content for a screen reader, so
-            // naming the countdown without including the number left a
-            // screen-reader user hearing "Time remaining before this call
-            // ends" and never once hearing how long that was. Resolved
-            // here rather than passed in as a prop for the reason the
-            // countdown above it already is: it changes while the page is
-            // open, and every prop on `strings` is resolved once at
-            // page-render time.
-            aria-label={t(
-              'videoCall.timeRemainingLabel',
-              { time: formatRemaining(remainingMs) },
-              locale,
-            )}
-            style={endingSoon ? WARNING_STYLE : TIMER_STYLE}
-          >
-            {t('videoCall.timeRemaining', { time: formatRemaining(remainingMs) }, locale)}
-          </p>
-        )}
-      </div>
-      {/* 2026-09-16: the connection diagnostic. Shown only while the call is
-          not connected — a healthy call never displays it — so a screenshot
-          of a call stuck "Connecting…" / "Reconnecting…" says exactly where
-          it is stuck (no peer, no SDP exchange, or ICE that will not
-          complete) rather than leaving it to be guessed at. Small and muted;
-          `aria-hidden` because the status line above already speaks the
-          human-facing state to a screen reader. */}
-      {diag && !(stage.kind === 'call' && stage.lifecycle.kind === 'connected') && (
-        <p
-          aria-hidden="true"
-          style={{
-            margin: '0 0 0.5rem',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            fontSize: '0.6875rem',
-            lineHeight: 1.4,
-            color: 'var(--ndn-color-text-muted)',
-            wordBreak: 'break-word',
-          }}
+      <p
+        id="video-call-status-heading"
+        role="status"
+        aria-live="polite"
+        style={STATUS_ROW_STYLE}
+      >
+        <span style={{ ...STATUS_DOT_STYLE, background: statusDotColor }} aria-hidden="true" />
+        <span style={STATUS_LABEL_STYLE}>{statusLabel}</span>
+      </p>
+      {/* **The bar the owner asked for, in place of a ticking countdown.** It
+          fills as the call's time runs down. `role="progressbar"` carries the
+          time still left as its accessible value — so a screen-reader user
+          hears how long is left even though the digits are gone — and its
+          value updates each second while the fill glides between them. The
+          one thing worth announcing, that the call is about to end, is
+          announced once, politely, below rather than read out every tick. */}
+      {progressPct !== undefined && (
+        <div
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progressPct)}
+          aria-label={t('videoCall.timeRemainingLabel', { time: remainingLabel }, locale)}
+          style={PROGRESS_TRACK_STYLE}
         >
-          {diag}
-        </p>
+          <div
+            style={{
+              ...(endingSoon ? PROGRESS_FILL_ENDING_STYLE : PROGRESS_FILL_STYLE),
+              width: `${progressPct}%`,
+            }}
+          />
+        </div>
       )}
       {/* Rendered only in the last stretch, so it is announced when it
           appears and not repeatedly. */}
       {endingSoon && (
-        <p role="status" aria-live="polite">
+        <p role="status" aria-live="polite" style={ENDING_SOON_STYLE}>
           {t('videoCall.endingSoon', undefined, locale)}
         </p>
       )}

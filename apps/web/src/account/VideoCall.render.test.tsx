@@ -1537,21 +1537,29 @@ describe('the countdown to the drop', () => {
     return FakeWebSocket.last as FakeWebSocket;
   }
 
-  it('shows how long is left, counting to the end of the booked slot', async () => {
+  it('fills a progress bar as the call runs down, and carries the time left for a screen reader', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     await joinAt(-60_000, 30);
-    const timer = await screen.findByRole('timer');
-    // Twenty-nine minutes of a thirty-minute slot that started a minute
-    // ago — not thirty from the moment this side pressed the button.
-    expect(timer.textContent).toMatch(/^(29:00|28:5\d) left$/);
-  });
+    const bar = await screen.findByRole('progressbar');
+    // The countdown is a filling bar now, not a ticking number. Just joined,
+    // it has barely filled — the sitting runs from now to the drop deadline.
+    expect(Number(bar.getAttribute('aria-valuenow'))).toBeLessThanOrEqual(2);
+    // An `aria-label` replaces an element's text content, so a label without
+    // the value in it would leave a screen-reader user hearing what the bar
+    // means and never hearing how long is left — ~29 min of a thirty-minute
+    // slot that began a minute ago.
+    expect(bar.getAttribute('aria-label') ?? '').toMatch(
+      /^Time remaining before this call ends: (29:00|28:5\d)$/,
+    );
 
-  it('names the countdown for a screen reader *and* gives it the number', async () => {
-    await joinAt(-60_000, 30);
-    // An `aria-label` replaces an element's text content, so a label
-    // without the value in it left a screen-reader user hearing what the
-    // number meant and never hearing the number.
-    const label = (await screen.findByRole('timer')).getAttribute('aria-label') ?? '';
-    expect(label).toMatch(/^Time remaining before this call ends: (29:00|28:5\d)$/);
+    // Fifteen minutes on, roughly half of the ~29-minute sitting has passed
+    // and the bar is filled to about there.
+    await act(async () => {
+      vi.advanceTimersByTime(15 * 60_000);
+    });
+    const mid = Number(bar.getAttribute('aria-valuenow'));
+    expect(mid).toBeGreaterThan(40);
+    expect(mid).toBeLessThan(60);
   });
 
   it('drops the call at the end of the slot, not thirty minutes after joining', async () => {
@@ -1602,14 +1610,14 @@ describe('the countdown to the drop', () => {
     expect(screen.getByRole('button', { name: STRINGS.rejoinLabel })).toBeDefined();
   });
 
-  it('has no timer before the call starts — there is nothing to count', async () => {
+  it('has no progress bar before the call starts — there is nothing to count', async () => {
     const id = appointmentIdAt(-60_000);
     withAppointment({ id, durationMinutes: 30 });
     renderCall(id);
     // On the device-check screen, before Confirm opens the call, there is
     // nothing to count down to yet.
     await screen.findByRole('button', { name: STRINGS.deviceCheck.confirmLabel });
-    expect(screen.queryByRole('timer')).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 });
 
