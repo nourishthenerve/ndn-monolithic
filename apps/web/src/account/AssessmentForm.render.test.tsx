@@ -855,6 +855,65 @@ describe('saving', () => {
     });
   });
 
+  it('keeps a text field showing the edit through the save, not the last-saved value', async () => {
+    let calls = 0;
+    const releases: Array<() => void> = [];
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        saveSection={vi.fn(() => ok({ item: { version: 2 } }))}
+        fetchForm={() => {
+          calls += 1;
+          if (calls === 1) {
+            return ok(
+              payloadFor({
+                template: [GENERAL_SECTION],
+                permissions: [{ fieldSet: 'general', read: true, write: true }],
+                items: [
+                  { version: 1, updated_at: '2026-09-16T09:00:00.000Z', general: { responses: { preferredName: 'Old' }, attachments: [] } },
+                ],
+              }),
+            );
+          }
+          // Every re-read after the save is held open, so the assertion runs
+          // in the window the draft used to be gone from.
+          return new Promise<Response>((resolve) => {
+            releases.push(() =>
+              resolve({
+                ok: true,
+                status: 200,
+                json: () =>
+                  Promise.resolve(
+                    payloadFor({
+                      currentVersion: 2,
+                      template: [GENERAL_SECTION],
+                      permissions: [{ fieldSet: 'general', read: true, write: true }],
+                      items: [
+                        { version: 2, updated_at: '2026-09-16T09:05:00.000Z', general: { responses: { preferredName: 'Sammy' }, attachments: [] } },
+                      ],
+                    }),
+                  ),
+              } as Response),
+            );
+          });
+        }}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText('Preferred name'), { target: { value: 'Sammy' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save this section' })[0]!);
+
+    // Re-read in flight: the field must show the edit, never revert to 'Old'.
+    await waitFor(() => expect(releases.length).toBeGreaterThan(0));
+    expect((screen.getByLabelText('Preferred name') as HTMLInputElement).value).toBe('Sammy');
+
+    releases.forEach((release) => release());
+    expect(await screen.findAllByText('Saved.')).not.toHaveLength(0);
+    expect((screen.getByLabelText('Preferred name') as HTMLInputElement).value).toBe('Sammy');
+  });
+
   it('sends nothing at all when the button is pressed with no change made', async () => {
     const saveSection = vi.fn(() => ok({ item: { version: 2 } }));
     render(
