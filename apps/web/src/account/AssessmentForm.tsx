@@ -1037,12 +1037,21 @@ export function AssessmentForm({
         return;
       }
       window.dispatchEvent(new Event(ASSESSMENT_SAVED_EVENT));
+      // Re-read *before* dropping this section's drafts, not after. The fresh
+      // payload is what carries the just-saved answers — a new grid row, say
+      // — so clearing the drafts first left that row backed by neither the
+      // draft nor the stored value for the second or two the silent re-read
+      // was in flight: it blinked out and then came back once the payload
+      // landed. Ordered this way the row is continuously backed — by the
+      // draft until the payload arrives, by the stored answer after it — and
+      // the clear only ever spends drafts the server has already echoed back.
+      //
       // Only *this* section's drafts are spent. Clearing the whole bag —
-      // which `load()` used to do — threw away typing in every other
-      // section a clinician had open, which on a page that mounts this
-      // form twice is the ordinary case rather than an edge one.
-      clearDraftsFor(section.fieldSet);
+      // which `load()` used to do — threw away typing in every other section
+      // a clinician had open, which on a page that mounts this form twice is
+      // the ordinary case rather than an edge one.
       await load({ silent: true });
+      clearDraftsFor(section.fieldSet);
       setSaveStates((current) => ({
         ...current,
         [section.fieldSet]: automatic ? 'autosaved' : 'saved',

@@ -855,6 +855,65 @@ describe('saving', () => {
     });
   });
 
+  it('keeps a text field showing the edit through the save, not the last-saved value', async () => {
+    let calls = 0;
+    const releases: Array<() => void> = [];
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        saveSection={vi.fn(() => ok({ item: { version: 2 } }))}
+        fetchForm={() => {
+          calls += 1;
+          if (calls === 1) {
+            return ok(
+              payloadFor({
+                template: [GENERAL_SECTION],
+                permissions: [{ fieldSet: 'general', read: true, write: true }],
+                items: [
+                  { version: 1, updated_at: '2026-09-16T09:00:00.000Z', general: { responses: { preferredName: 'Old' }, attachments: [] } },
+                ],
+              }),
+            );
+          }
+          // Every re-read after the save is held open, so the assertion runs
+          // in the window the draft used to be gone from.
+          return new Promise<Response>((resolve) => {
+            releases.push(() =>
+              resolve({
+                ok: true,
+                status: 200,
+                json: () =>
+                  Promise.resolve(
+                    payloadFor({
+                      currentVersion: 2,
+                      template: [GENERAL_SECTION],
+                      permissions: [{ fieldSet: 'general', read: true, write: true }],
+                      items: [
+                        { version: 2, updated_at: '2026-09-16T09:05:00.000Z', general: { responses: { preferredName: 'Sammy' }, attachments: [] } },
+                      ],
+                    }),
+                  ),
+              } as Response),
+            );
+          });
+        }}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText('Preferred name'), { target: { value: 'Sammy' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save this section' })[0]!);
+
+    // Re-read in flight: the field must show the edit, never revert to 'Old'.
+    await waitFor(() => expect(releases.length).toBeGreaterThan(0));
+    expect((screen.getByLabelText('Preferred name') as HTMLInputElement).value).toBe('Sammy');
+
+    releases.forEach((release) => release());
+    expect(await screen.findAllByText('Saved.')).not.toHaveLength(0);
+    expect((screen.getByLabelText('Preferred name') as HTMLInputElement).value).toBe('Sammy');
+  });
+
   it('sends nothing at all when the button is pressed with no change made', async () => {
     const saveSection = vi.fn(() => ok({ item: { version: 2 } }));
     render(
@@ -1317,6 +1376,74 @@ describe('groups and grids', () => {
     fireEvent.change(screen.getByLabelText('Medications — Drug (generic), row 1'), {
       target: { value: 'Gabapentin' },
     });
+    expect(screen.getByDisplayValue('Gabapentin')).toBeDefined();
+  });
+
+  // The owner: adding a row and clicking save made the new row vanish for a
+  // second or two before reappearing once saved. The save cleared this
+  // section's drafts *before* the re-read that carries the stored copy of
+  // the row landed, so for the length of that round trip the row was backed
+  // by neither. It must stay on screen the whole way through.
+  it('keeps a freshly added row on screen through the save, with no flicker to empty', async () => {
+    let calls = 0;
+    const releases: Array<() => void> = [];
+    const savedPayload = () =>
+      payloadFor({
+        currentVersion: 2,
+        template: [ASSESSMENT_SECTION],
+        permissions: PERMISSIONS(true),
+        items: [
+          {
+            version: 2,
+            updated_at: '2026-09-16T09:00:00.000Z',
+            private: { responses: { medications: [{ drug: 'Gabapentin' }] }, attachments: [] },
+          },
+        ],
+      });
+    render(
+      <AssessmentForm
+        strings={STRINGS}
+        patientId="pat-1"
+        client={client(UNKNOWN_POOL_TOKEN)}
+        saveSection={vi.fn(() => ok({ item: { version: 2 } }))}
+        fetchForm={() => {
+          calls += 1;
+          if (calls === 1) {
+            return ok(
+              payloadFor({ template: [ASSESSMENT_SECTION], permissions: PERMISSIONS(true), items: [] }),
+            );
+          }
+          // Every re-read after the save is held open, so the assertion below
+          // looks at the screen during exactly the window where the old
+          // ordering had already dropped the draft.
+          return new Promise<Response>((resolve) => {
+            releases.push(() =>
+              resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve(savedPayload()),
+              } as Response),
+            );
+          });
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a row to Medications' }));
+    fireEvent.change(await screen.findByLabelText('Medications — Drug (generic), row 1'), {
+      target: { value: 'Gabapentin' },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save this section' })[0]!);
+
+    // The re-read is in flight. The row the clinician just typed must still
+    // be here — this is the whole of the fix.
+    await waitFor(() => expect(releases.length).toBeGreaterThan(0));
+    expect(screen.getByDisplayValue('Gabapentin')).toBeDefined();
+
+    // The fresh payload lands, now carrying the saved row; still there, now
+    // backed by the stored answer rather than the draft.
+    releases.forEach((release) => release());
+    expect(await screen.findAllByText('Saved.')).not.toHaveLength(0);
     expect(screen.getByDisplayValue('Gabapentin')).toBeDefined();
   });
 
