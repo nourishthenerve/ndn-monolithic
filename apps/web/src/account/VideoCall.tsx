@@ -504,6 +504,17 @@ export function VideoCall({
   /** Ticks every 15s for the pre-call countdown; a call under way has its own second-by-second clock below. */
   const [now, setNow] = useState(() => new Date());
   const [remainingMs, setRemainingMs] = useState<number | undefined>();
+  /**
+   * 2026-09-16: a compact snapshot of the negotiation's internal state,
+   * sampled once a second while a call is not yet connected, and shown under
+   * the status line. The reconnect path has resisted several fixes precisely
+   * because its failure is invisible from the outside — "Connecting…" looks
+   * the same whether no peer ever arrived, the SDP never crossed, or ICE
+   * could not find a path. This makes the difference legible, so a single
+   * screenshot of a stuck call says which of those it is. Only rendered while
+   * unconnected, so a healthy call never shows it.
+   */
+  const [diag, setDiag] = useState<string | undefined>();
   /** True once the caller has been through the device check, so a rejoin does not make them confirm devices they already chose. */
   const [devicesConfirmed, setDevicesConfirmed] = useState(false);
   /**
@@ -885,6 +896,8 @@ export function VideoCall({
 
     let live = true;
     let pc: RTCPeerConnection | undefined;
+    /** 2026-09-16: the last signalling milestone, for the on-screen diagnostic. */
+    let lastEvent = 'joining';
     /**
      * A holder rather than a plain binding. Every handler below is
      * constructed *before* `connectSignalling` returns, so none of them can
@@ -1030,6 +1043,7 @@ export function VideoCall({
       connectWatchdog = setTimeout(() => {
         connectWatchdog = undefined;
         if (!live || isConnected()) return;
+        lastEvent = 'stall→escalate';
         stateMachine.handleConnectionState('failed');
       }, CONNECT_STALL_TIMEOUT_MS);
     };
@@ -1055,6 +1069,7 @@ export function VideoCall({
       stuckWatchdog = setTimeout(() => {
         stuckWatchdog = undefined;
         if (!live || isConnected()) return;
+        lastEvent = 'stuck→full-rebuild';
         if (automaticRejoinsRef.current < MAX_AUTOMATIC_REJOINS && windowOpenRef.current) {
           automaticRejoinsRef.current += 1;
           setStageIfLive({ kind: 'call', lifecycle: { kind: 'reconnecting' } });
@@ -1169,6 +1184,7 @@ export function VideoCall({
         await pc.setLocalDescription(offer);
         offerSentAtMs = Date.now();
         send({ type: 'offer', appointmentId, payload: offer });
+        lastEvent = 'offer-out';
       } catch {
         // Releasing the flag is the point: a failed attempt must not lock
         // this side out of ever offering again.
@@ -1210,6 +1226,7 @@ export function VideoCall({
         const peerIsNewSession = incoming !== undefined && known !== undefined && incoming !== known;
         peerSessionId = incoming ?? known;
         peerPresent = true;
+        lastEvent = peerIsNewSession ? 'peer-rebuilt' : 'peer-ready';
         armStuckWatchdog();
         if (peerIsNewSession) {
           peerGeneration = -1;
@@ -1292,6 +1309,7 @@ export function VideoCall({
           await pc.setLocalDescription(answer);
           lastAnswer = answer;
           send({ type: 'answer', appointmentId: message.appointmentId, payload: answer });
+          lastEvent = 'offer-in→answered';
           // Negotiation is done from this side; from here it is ICE's to
           // complete, and the watchdog is what makes sure it does or the
           // connection is rebuilt.
@@ -1322,6 +1340,7 @@ export function VideoCall({
           remoteDescriptionSet = true;
           offerInFlight = false;
           await flushPendingCandidates();
+          lastEvent = 'answer-in';
           // Same as the answerer above: descriptions are exchanged, so ICE
           // is now the only thing between here and a connected call.
           armConnectWatchdog();
@@ -1478,6 +1497,7 @@ export function VideoCall({
     // credential fetch follows it, so no `await` ever runs while a peer
     // connection that is about to be thrown away is still the current one.
     function retryConnection(): void {
+      lastEvent = 'retry-turn';
       teardownForRebuild();
       void (async () => {
         const turnIceServer = await fetchTurnIceServer(accessToken, appointmentId);
@@ -1553,6 +1573,7 @@ export function VideoCall({
          * "connecting" over a live conversation is a lie.
          */
         onJoined: () => {
+          lastEvent = 'joined';
           if (!pc) {
             pc = buildPeerConnection();
           }
@@ -1602,6 +1623,7 @@ export function VideoCall({
           // If they really have gone, the next bounce — after the nudge two
           // seconds from now — says so with `wasPresent` false.
           if (!wasPresent) setStageIfLive({ kind: 'waiting-for-peer' });
+          lastEvent = 'peer-unavailable';
           // **Running out of nudges is not a failed call**, and there is no
           // longer a budget to run out of. The socket is open, the join was
           // accepted, and the honest "waiting for the other participant"
@@ -1610,6 +1632,7 @@ export function VideoCall({
         },
         onRelayMessage: (message) => void handleRelayMessage(message),
         onReconnecting: () => {
+          lastEvent = 'socket-reconnecting';
           // Only worth saying if the media has stopped too. A signalling
           // socket reconnecting under a healthy P2P call is invisible to
           // the people on it, and should stay that way.
@@ -1639,8 +1662,38 @@ export function VideoCall({
       },
     });
 
+    // 2026-09-16: sample the negotiation's internal state once a second while
+    // the call is not yet connected, and publish it to `diag` for the
+    // on-screen line. Stops mattering the moment the call connects — the
+    // renderer only shows it while unconnected — but keeps running cheaply so
+    // a call that connects then stalls again is described too. Reads only
+    // closure state; it never drives the join effect (`diag` is not a
+    // dependency of it).
+    const diagTimer = setInterval(() => {
+      if (!live) return;
+      const socketOpen = signalling.current?.isOpen() ? 'open' : 'down';
+      const offererKnown = peerSessionId !== undefined;
+      setDiag(
+        [
+          `role=${role}`,
+          `socket=${socketOpen}`,
+          `last=${lastEvent}`,
+          `peer=${peerPresent ? 'seen' : 'none'}`,
+          `offerer=${offererKnown ? (isOfferer() ? 'me' : 'them') : '?'}`,
+          `sdp=${remoteDescriptionSet ? 'exchanged' : 'no'}`,
+          `pc=${pc?.connectionState ?? 'none'}`,
+          `ice=${pc?.iceConnectionState ?? 'none'}`,
+          `gen=${pcGeneration}/${peerGeneration}`,
+          `nudges=${nudgeCount}`,
+          `rebuilds=${automaticRejoinsRef.current}`,
+          `turn=${usingTurn ? 'yes' : 'no'}`,
+        ].join(' '),
+      );
+    }, 1000);
+
     return () => {
       live = false;
+      clearInterval(diagTimer);
       cancelNudge();
       clearConnectWatchdog();
       clearStuckWatchdog();
@@ -1858,6 +1911,28 @@ export function VideoCall({
           </p>
         )}
       </div>
+      {/* 2026-09-16: the connection diagnostic. Shown only while the call is
+          not connected — a healthy call never displays it — so a screenshot
+          of a call stuck "Connecting…" / "Reconnecting…" says exactly where
+          it is stuck (no peer, no SDP exchange, or ICE that will not
+          complete) rather than leaving it to be guessed at. Small and muted;
+          `aria-hidden` because the status line above already speaks the
+          human-facing state to a screen reader. */}
+      {diag && !(stage.kind === 'call' && stage.lifecycle.kind === 'connected') && (
+        <p
+          aria-hidden="true"
+          style={{
+            margin: '0 0 0.5rem',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            fontSize: '0.6875rem',
+            lineHeight: 1.4,
+            color: 'var(--ndn-color-text-muted)',
+            wordBreak: 'break-word',
+          }}
+        >
+          {diag}
+        </p>
+      )}
       {/* Rendered only in the last stretch, so it is announced when it
           appears and not repeatedly. */}
       {endingSoon && (
