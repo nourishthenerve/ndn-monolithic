@@ -42,6 +42,7 @@ import type { Locale } from '@ndn/i18n';
 import { Heading } from '@ndn/ui';
 
 import { CallScreen } from '../../../account/CallScreen.js';
+import { patientRecordStylesCss } from '../../../account/record-styles.js';
 import { RequireAuth } from '../../../auth/RequireAuth.js';
 import { SignInLink } from '../../../auth/SignInPanel.js';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
@@ -149,3 +150,10 @@ const heading = t('videoCall.heading', undefined, locale);
     />
   </RequireAuth>
 </BaseLayout>
+
+{/* The clinician's call layout shows the patient's assessment beside the
+    video, so this page needs the same record stylesheet the patient-record
+    and dashboard pages inject — without it the assessment's file control, its
+    attachment cards and their spacing render unstyled. One `<style set:html>`,
+    the same shape those pages use and all this site's CSP admits. */}
+<style set:html={patientRecordStylesCss} />

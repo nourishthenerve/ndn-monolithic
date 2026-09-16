@@ -212,9 +212,23 @@ export class AssessmentRepository {
     const next = {
       patientId: previous.patientId,
       assessmentId: previous.assessmentId,
-      general: patchSection(previous.general, patch.general ?? {}, stamp),
-      prescription: patchSection(previous.prescription, patch.prescription ?? {}, stamp),
-      calendar: patchSection(previous.calendar, patch.calendar ?? {}, stamp),
+      // `?? emptyAssessmentSection()` on each, the same guard `private` below
+      // already keeps — and a real bug fix, not defensiveness. A section is
+      // added to this form over time (`calendar` after `general`/
+      // `prescription`), so a version written before a section existed does
+      // not carry it. Reading `previous.<section>.responses` on such a record
+      // threw `Cannot read properties of undefined`, which surfaced as the
+      // form's "Something went wrong" on every save against an older record —
+      // whatever section the caller was actually editing, since all four are
+      // carried forward here. A missing section now simply starts empty and
+      // this save is the one that materialises it.
+      general: patchSection(previous.general ?? emptyAssessmentSection(), patch.general ?? {}, stamp),
+      prescription: patchSection(
+        previous.prescription ?? emptyAssessmentSection(),
+        patch.prescription ?? {},
+        stamp,
+      ),
+      calendar: patchSection(previous.calendar ?? emptyAssessmentSection(), patch.calendar ?? {}, stamp),
       // The one section that may be absent, and it stays absent unless it
       // already existed or this patch is the one creating it. Writing an
       // empty `private{}` onto every version would put the attribute on
