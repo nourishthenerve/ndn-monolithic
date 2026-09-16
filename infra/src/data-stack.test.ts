@@ -1349,13 +1349,19 @@ describe('DataStack — WebSocket signalling (TASK 4.1.1)', () => {
     });
   });
 
-  it('grants WsDefaultFunction UpdateItem only, scoped to CONN#* — for soft-marking a stale relay target (TASK 4.2.2)', () => {
+  it('grants WsDefaultFunction UpdateItem on CONN#* and CALL#* — stale-relay-target soft-mark, plus the rejoin row-retirement and TURN flag', () => {
     const statements = statementsWithSid('MarkStaleConnectionRow');
 
     expect(statements).toHaveLength(1);
     expect(statements[0]?.Action).toEqual('dynamodb:UpdateItem');
+    // CALL#* is load-bearing: `recordCallJoin` retires this principal's
+    // earlier call rows (`SET leftAt`) on every rejoin, and `markTurnActive`
+    // sets a flag on a relay row — both `UpdateItem` on a CALL#* row. Without
+    // it, the first UpdateItem a *rejoin* performs is denied and the join
+    // handler throws before answering, so every reconnect hangs on
+    // "Connecting…" while a first connection works.
     expect(statements[0]?.Condition).toEqual({
-      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] },
+      'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*', 'CALL#*'] },
     });
   });
 

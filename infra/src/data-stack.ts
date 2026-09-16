@@ -2397,10 +2397,8 @@ export class DataStack extends Stack {
         },
       }),
     );
-    // `PutItem` only, on `CALL#*` (the call-participant row, TASK 4.2.1
-    // step 3) and `AUDIT#*` (the join/join-denied audit event) — never
-    // `UpdateItem`, since this function never modifies a row it did not
-    // just create.
+    // `PutItem` on `CALL#*` (the call-participant row, TASK 4.2.1 step 3)
+    // and `AUDIT#*` (the join/join-denied audit event).
     wsDefaultRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'WriteCallParticipantAndAuditRows',
@@ -2427,20 +2425,31 @@ export class DataStack extends Stack {
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CALL#*'] } },
       }),
     );
-    // TASK 4.2.2: `UpdateItem` on `CONN#*` — the identical soft-mark
-    // `WsDisconnectFunction`'s own `UpdateConnectionRow` statement grants,
-    // needed here for the one case this function can discover a stale
-    // connection itself: `PostToConnection` returning `GoneException`
-    // mid-relay. Never `DeleteItem`, never `PutItem` — this function
-    // creates no connection row, only ever marks one already written by
-    // `WsConnectFunction`.
+    // `UpdateItem` on `CONN#*` **and** `CALL#*` — soft-marks only, never a
+    // `DeleteItem` or a `PutItem` of a row this function did not create.
+    //
+    //   * `CONN#*`: the identical soft-mark `WsDisconnectFunction`'s own
+    //     `UpdateConnectionRow` statement grants, for the one case this
+    //     function can discover a stale connection itself — `PostToConnection`
+    //     returning `GoneException` mid-relay.
+    //   * `CALL#*`: **the fix for a reconnect that hangs on "Connecting…".**
+    //     `recordCallJoin` retires this principal's own earlier call rows on
+    //     every rejoin (`markCallParticipantLeft`'s `SET leftAt`), and
+    //     `markTurnActive` sets a flag on a relay-issuing row — both are
+    //     `UpdateItem` on a `CALL#*` row. Without this leading key, the very
+    //     first `UpdateItem` a *rejoin* performs is denied, the join handler
+    //     throws before it can answer, and the caller never receives
+    //     `joined` — a first connection (which retires nothing) works, every
+    //     reconnect after it silently fails. `PutItem` above stays scoped to
+    //     creating a row; this is the separate, deliberate grant for amending
+    //     one, which the row-retirement behaviour now genuinely needs.
     wsDefaultRole.addToPrincipalPolicy(
       new PolicyStatement({
         sid: 'MarkStaleConnectionRow',
         effect: Effect.ALLOW,
         actions: ['dynamodb:UpdateItem'],
         resources: [this.table.tableArn],
-        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*'] } },
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['CONN#*', 'CALL#*'] } },
       }),
     );
     // TASK 4.4.2 (R-03): `cloudwatch:PutMetricData`, for the
