@@ -329,6 +329,27 @@ export function visibleForPatient(
  */
 export type AppointmentAction = 'approve' | 'decline' | 'complete' | 'no-show';
 
+/**
+ * The `appointment_status` each decision leaves the row in.
+ *
+ * These are `appointment-repository.ts`'s own transition targets —
+ * `approve`→`scheduled`, `decline`→`cancelled`, `complete`→`completed`,
+ * `no-show`→`no-show` — and `appointment_status` is the *only* field any of
+ * the four routes changes that this view reads (the time, duration and the
+ * two names are untouched). That is what lets `decide` settle the row in
+ * place the instant the server confirms the write, rather than leave the old
+ * status on screen through a full re-read's round trip. The server returns
+ * the row too, but without the joined `patientName`/`clinicianName` the list
+ * response carries, so patching just this field keeps the names the re-read
+ * would have to fetch again.
+ */
+export const STATUS_AFTER: Readonly<Record<AppointmentAction, string>> = {
+  approve: 'scheduled',
+  decline: 'cancelled',
+  complete: 'completed',
+  'no-show': 'no-show',
+};
+
 type ViewState =
   | { readonly status: 'loading' }
   /** Helpdesk and visitor: not an error, not an empty calendar — no calendar. */
@@ -719,8 +740,26 @@ export function AppointmentCalendar({
         return next;
       });
       // A decision changes the row's status, which changes what this panel
-      // and the grid above it should say — so re-read rather than patch.
-      await load();
+      // and the grid above it should say — but both read from `state.items`,
+      // so patching the one row there settles both at once. The status a
+      // 200 leaves behind is fixed by the action (`STATUS_AFTER`), so this
+      // is the same answer a re-read would bring back, minus the round trip
+      // that left the old row — with its "Mark as attended"/"Mark as
+      // no-show" buttons — on screen for the second or two it took. The row
+      // stays (a clinician's calendar shows every status); it is the
+      // now-answered decision that goes.
+      setState((current) =>
+        current.status === 'ready'
+          ? {
+              status: 'ready',
+              items: current.items.map((item) =>
+                item.patientId === entry.patientId && item.scheduledAt === entry.scheduledAt
+                  ? { ...item, appointment_status: STATUS_AFTER[decision] }
+                  : item,
+              ),
+            }
+          : current,
+      );
     } catch {
       setDeciding((current) => ({ ...current, [rowKey]: 'failed' }));
     }

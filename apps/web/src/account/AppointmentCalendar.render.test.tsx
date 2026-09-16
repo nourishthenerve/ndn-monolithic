@@ -940,6 +940,63 @@ describe('the decisions inherited from the deleted calendar page', () => {
     });
   });
 
+  // The owner: clicking "Mark as attended"/"Mark as no-show" saved, but the
+  // row — buttons and all — sat there for a second or two before the list
+  // caught up. It re-read the whole calendar to learn a status it already
+  // knew, and that round trip was the lag. The row now settles in place the
+  // instant the save lands.
+  it('settles the row in place the moment the save lands, with no second fetch', async () => {
+    const entry = appointment(local(2026, 8, 15, 9, 0));
+    const fetchClinicianCalendar = vi.fn().mockResolvedValue(jsonResponse([entry]));
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('principal-clinician')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={fetchClinicianCalendar}
+        decideAppointment={vi.fn().mockResolvedValue(jsonResponse([]))}
+      />,
+    );
+    (await screen.findByRole('button', { name: 'Mark as attended' })).click();
+
+    // The decision's own buttons go the moment the POST resolves — not after
+    // a re-read brings the new status back.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Mark as attended' })).toBeNull();
+    });
+    expect(screen.queryByRole('button', { name: 'Mark as no-show' })).toBeNull();
+    // The row itself stays — a clinician's calendar shows every status — now
+    // reading the marked one.
+    expect(screen.getByText(/Attended/)).toBeDefined();
+    // One calendar fetch, the initial load. The mark patched the row in place
+    // rather than triggering another read.
+    expect(fetchClinicianCalendar).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a no-show reading "Did not attend", again in place', async () => {
+    const entry = appointment(local(2026, 8, 15, 9, 0));
+    const fetchClinicianCalendar = vi.fn().mockResolvedValue(jsonResponse([entry]));
+    render(
+      <AppointmentCalendar
+        strings={STRINGS}
+        locale="en"
+        now={now}
+        client={sessionFor('principal-clinician')}
+        fetchPatientAppointments={vi.fn()}
+        fetchClinicianCalendar={fetchClinicianCalendar}
+        decideAppointment={vi.fn().mockResolvedValue(jsonResponse([]))}
+      />,
+    );
+    (await screen.findByRole('button', { name: 'Mark as no-show' })).click();
+    await waitFor(() => {
+      expect(screen.getByText(/Did not attend/)).toBeDefined();
+    });
+    expect(screen.queryByRole('button', { name: 'Mark as no-show' })).toBeNull();
+    expect(fetchClinicianCalendar).toHaveBeenCalledTimes(1);
+  });
+
   it('offers approve and decline on a pending slot, to the principal', async () => {
     renderClinician(appointment(local(2026, 8, 15, 9, 0), 'pending-approval'));
     expect(await screen.findByRole('button', { name: 'Approve' })).toBeDefined();
