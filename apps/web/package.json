@@ -21,7 +21,7 @@
     "@ndn/i18n": "workspace:*",
     "@ndn/shared-types": "workspace:*",
     "@ndn/ui": "workspace:*",
-    "astro": "^7.3.1",
+    "astro": "^7.3.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "zod": "^4.4.3"
