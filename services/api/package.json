@@ -29,6 +29,6 @@
     "@ndn/shared-types": "workspace:*",
     "aws-jwt-verify": "^5.2.1",
     "stripe": "^22.5.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.6"
   }
 }
